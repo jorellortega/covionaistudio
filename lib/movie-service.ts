@@ -1,0 +1,101 @@
+import { supabase } from './supabase'
+import { Database } from './supabase'
+
+export type Movie = Database['public']['Tables']['projects']['Row'] & {
+  project_type: 'movie'
+}
+
+export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Insert'], 'id' | 'user_id' | 'created_at' | 'updated_at'> & {
+  project_type: 'movie'
+}
+
+export class MovieService {
+  static async getMovies(): Promise<Movie[]> {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('project_type', 'movie')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching movies:', error)
+      throw error
+    }
+
+    return data as Movie[]
+  }
+
+  static async createMovie(movieData: CreateMovieData): Promise<Movie> {
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    if (!user) {
+      throw new Error('User not authenticated')
+    }
+
+    const { data, error } = await supabase
+      .from('projects')
+      .insert({
+        ...movieData,
+        user_id: user.id,
+        status: 'active'
+      })
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error creating movie:', error)
+      throw error
+    }
+
+    return data as Movie
+  }
+
+  static async updateMovie(id: string, updates: Partial<CreateMovieData>): Promise<Movie> {
+    const { data, error } = await supabase
+      .from('projects')
+      .update(updates)
+      .eq('id', id)
+      .eq('project_type', 'movie')
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error updating movie:', error)
+      throw error
+    }
+
+    return data as Movie
+  }
+
+  static async deleteMovie(id: string): Promise<void> {
+    const { error } = await supabase
+      .from('projects')
+      .delete()
+      .eq('id', id)
+      .eq('project_type', 'movie')
+
+    if (error) {
+      console.error('Error deleting movie:', error)
+      throw error
+    }
+  }
+
+  static async getMovieById(id: string): Promise<Movie | null> {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('*')
+      .eq('id', id)
+      .eq('project_type', 'movie')
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null // No rows returned
+      }
+      console.error('Error fetching movie:', error)
+      throw error
+    }
+
+    return data as Movie
+  }
+}

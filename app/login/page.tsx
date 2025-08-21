@@ -8,26 +8,37 @@ import { Label } from "@/components/ui/label"
 import { Film, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useAuth } from "@/lib/auth-context"
+import { useToast } from "@/hooks/use-toast"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
+  const { signIn } = useAuth()
+  const { toast } = useToast()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
     
-    // Simulate login process
     try {
-      // Here you would typically make an API call to authenticate
-      await new Promise(resolve => setTimeout(resolve, 1000)) // Simulate API delay
-      
-      // For demo purposes, just redirect to dashboard
+      const { error } = await signIn(email, password)
+      if (error) {
+        throw error
+      }
+      toast({
+        title: "Success",
+        description: "Welcome back! You've been successfully signed in.",
+      })
       router.push("/dashboard")
-    } catch (error) {
-      console.error("Login failed:", error)
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to sign in. Please check your credentials.",
+        variant: "destructive",
+      })
     } finally {
       setIsLoading(false)
     }

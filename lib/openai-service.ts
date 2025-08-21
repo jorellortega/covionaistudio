@@ -19,6 +19,9 @@ interface OpenAIResponse {
 export class OpenAIService {
   private static async makeRequest(endpoint: string, data: any, apiKey: string): Promise<OpenAIResponse> {
     try {
+      console.log('Making OpenAI request to:', endpoint)
+      console.log('Request data:', data)
+      
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -28,13 +31,28 @@ export class OpenAIService {
         body: JSON.stringify(data),
       })
 
+      console.log('OpenAI response status:', response.status)
+      console.log('OpenAI response headers:', Object.fromEntries(response.headers.entries()))
+
       if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.status}`)
+        // Try to get the error details from the response
+        let errorDetails = ''
+        try {
+          const errorResponse = await response.text()
+          errorDetails = errorResponse
+          console.log('OpenAI error response body:', errorResponse)
+        } catch (e) {
+          errorDetails = 'Could not read error response'
+        }
+        
+        throw new Error(`OpenAI API error: ${response.status} - ${errorDetails}`)
       }
 
       const result = await response.json()
+      console.log('OpenAI success response:', result)
       return { success: true, data: result }
     } catch (error) {
+      console.error('OpenAI request failed:', error)
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 

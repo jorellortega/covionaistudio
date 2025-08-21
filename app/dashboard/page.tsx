@@ -1,17 +1,56 @@
+"use client"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User } from "lucide-react"
 import Link from "next/link"
+import { useAuth } from "@/lib/auth-context"
+import { Skeleton } from "@/components/ui/skeleton"
 
 export default function DashboardPage() {
+  const { user, isLoading } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto px-4 sm:px-6 py-8">
+        <div className="mb-8">
+          <Skeleton className="h-12 w-96 mb-4" />
+          <Skeleton className="h-6 w-80" />
+        </div>
+        {/* Add more skeleton loaders as needed */}
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="container mx-auto px-4 sm:px-6 py-8">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Please sign in to access your dashboard</h1>
+          <Button asChild>
+            <Link href="/login">Sign In</Link>
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="container mx-auto px-4 sm:px-6 py-8">
-      {/* Header */}
+      {/* Header with User Info */}
       <div className="mb-8">
-        <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-          Welcome back, Filmmaker
-        </h1>
+        <div className="flex items-center gap-4 mb-4">
+          <div className="p-3 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400">
+            <User className="h-8 w-8 text-white" />
+          </div>
+          <div>
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+              Welcome back, {user.name}! 🎬
+            </h1>
+            <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
+          </div>
+        </div>
         <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
 

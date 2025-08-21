@@ -1,694 +1,716 @@
 "use client"
-
-import React from "react"
-import Link from "next/link"
-
-import { useState } from "react"
-import Header from "@/components/header"
+import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import { Label } from "@/components/ui/label"
-import {
-  Search,
-  Grid3X3,
-  List,
-  Upload,
-  Download,
-  Trash2,
-  Edit,
-  Eye,
-  MoreVertical,
-  FolderOpen,
-  ImageIcon,
-  Video,
-  FileText,
-  Music,
-  File,
-  Calendar,
-  Sparkles,
-  Copy,
-  Share,
+  ArrowLeft,
   Play,
+  Edit3,
+  ImageIcon,
+  FileText,
+  MessageSquare,
+  Search,
+  Filter,
+  Plus,
+  Copy,
+  Eye,
+  Calendar,
+  Clock,
+  User,
+  Loader2,
+  RefreshCw,
 } from "lucide-react"
-
-// Mock asset data
-const mockAssets = [
-  {
-    id: 1,
-    name: "Cyberpunk City Concept",
-    type: "image",
-    url: "/cyberpunk-city-concept.png",
-    size: "2.4 MB",
-    dimensions: "1920x1080",
-    format: "PNG",
-    createdAt: "2024-01-20",
-    updatedAt: "2024-01-20",
-    project: "Neon Dreams",
-    tags: ["concept art", "cyberpunk", "city", "neon"],
-    aiModel: "DALL-E 3",
-    prompt: "Futuristic cyberpunk city at night with neon lights and flying cars",
-    versions: 3,
-    description: "Main establishing shot concept for the opening scene",
-  },
-  {
-    id: 2,
-    name: "Main Character Design",
-    type: "image",
-    url: "/character-design.png",
-    size: "1.8 MB",
-    dimensions: "1024x1024",
-    format: "PNG",
-    createdAt: "2024-01-19",
-    updatedAt: "2024-01-19",
-    project: "Neon Dreams",
-    tags: ["character", "design", "cybernetic", "protagonist"],
-    aiModel: "Midjourney",
-    prompt: "Cybernetic enhanced human character in dark clothing",
-    versions: 5,
-    description: "Final character design for Alex Chen",
-  },
-  {
-    id: 3,
-    name: "Opening Scene Script",
-    type: "script",
-    url: "/opening-scene.txt",
-    size: "12 KB",
-    format: "TXT",
-    createdAt: "2024-01-20",
-    updatedAt: "2024-01-20",
-    project: "Neon Dreams",
-    tags: ["script", "opening", "dialogue", "scene"],
-    aiModel: "GPT-4",
-    prompt: "Write opening scene dialogue for cyberpunk thriller",
-    versions: 2,
-    description: "Complete opening scene with dialogue and action",
-  },
-  {
-    id: 4,
-    name: "Chase Sequence Preview",
-    type: "video",
-    url: "/chase-sequence.mp4",
-    size: "45 MB",
-    dimensions: "1920x1080",
-    format: "MP4",
-    duration: "0:30",
-    createdAt: "2024-01-18",
-    updatedAt: "2024-01-18",
-    project: "Neon Dreams",
-    tags: ["video", "chase", "action", "preview"],
-    aiModel: "Runway ML",
-    prompt: "High-speed chase through neon-lit city streets",
-    versions: 1,
-    description: "Previsualization for the main chase sequence",
-  },
-  {
-    id: 5,
-    name: "Ambient City Sounds",
-    type: "audio",
-    url: "/ambient-city.mp3",
-    size: "8.2 MB",
-    format: "MP3",
-    duration: "2:15",
-    createdAt: "2024-01-17",
-    updatedAt: "2024-01-17",
-    project: "Neon Dreams",
-    tags: ["audio", "ambient", "city", "background"],
-    aiModel: "ElevenLabs",
-    prompt: "Cyberpunk city ambient sounds with electronic hum",
-    versions: 1,
-    description: "Background audio for city scenes",
-  },
-  {
-    id: 6,
-    name: "Character Backstory",
-    type: "document",
-    url: "/character-backstory.pdf",
-    size: "156 KB",
-    format: "PDF",
-    createdAt: "2024-01-16",
-    updatedAt: "2024-01-19",
-    project: "Neon Dreams",
-    tags: ["document", "character", "backstory", "development"],
-    aiModel: "Claude",
-    prompt: "Develop detailed backstory for main character",
-    versions: 4,
-    description: "Complete character development document",
-  },
-]
-
-const assetTypes = ["all", "image", "video", "script", "audio", "document"]
-const projects = ["All Projects", "Neon Dreams", "The Last Symphony", "Quantum Heist", "Digital Ghosts"]
-
-const typeIcons = {
-  image: ImageIcon,
-  video: Video,
-  script: FileText,
-  audio: Music,
-  document: File,
-}
-
-const typeColors = {
-  image: "bg-green-500/20 text-green-400 border-green-500/30",
-  video: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  script: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-  audio: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  document: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-}
-
-const mockMovies = [
-  { id: 1, title: "Neon Dreams" },
-  { id: 2, title: "The Last Symphony" },
-  { id: 3, title: "Quantum Heist" },
-  { id: 4, title: "Digital Ghosts" },
-]
+import { useToast } from "@/hooks/use-toast"
+import { AssetService, type Asset } from "@/lib/asset-service"
+import { MovieService, type Movie } from "@/lib/movie-service"
+import { useAuth } from "@/lib/auth-context"
+import Link from "next/link"
 
 export default function AssetsPage() {
-  const [searchQuery, setSearchQuery] = useState("")
-  const [selectedType, setSelectedType] = useState("all")
-  const [selectedProject, setSelectedProject] = useState("All Projects")
-  const [viewMode, setViewMode] = useState("grid")
-  const [selectedAsset, setSelectedAsset] = useState<any>(null)
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false)
-  const [isUploadOpen, setIsUploadOpen] = useState(false)
+  const searchParams = useSearchParams()
+  const projectName = searchParams.get('project')
+  const searchQuery = searchParams.get('search') || ''
 
-  const filteredAssets = mockAssets.filter((asset) => {
-    const matchesSearch =
-      asset.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      asset.tags.some((tag) => tag.toLowerCase().includes(searchQuery.toLowerCase())) ||
-      asset.description.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesType = selectedType === "all" || asset.type === selectedType
-    const matchesProject = selectedProject === "All Projects" || asset.project === selectedProject
-    return matchesSearch && matchesType && matchesProject
+  return <AssetsPageClient projectName={projectName} searchQuery={searchQuery} />
+}
+
+function AssetsPageClient({ projectName, searchQuery }: { projectName: string | null, searchQuery: string }) {
+  const { toast } = useToast()
+  const { user } = useAuth()
+
+  // State variables
+  const [activeTab, setActiveTab] = useState("all")
+  const [assets, setAssets] = useState<Asset[]>([])
+  const [projects, setProjects] = useState<Movie[]>([])
+  const [selectedProject, setSelectedProject] = useState<string>("")
+  const [searchTerm, setSearchTerm] = useState(searchQuery)
+  const [contentTypeFilter, setContentTypeFilter] = useState<string>("all")
+  const [loading, setLoading] = useState(false)
+  const [showAssetDetails, setShowAssetDetails] = useState(false)
+  const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
+
+  // Effect to fetch projects
+  useEffect(() => {
+    const fetchProjects = async () => {
+      try {
+        const fetchedProjects = await MovieService.getMovies()
+        setProjects(fetchedProjects)
+        
+        // Set selected project based on URL param
+        if (projectName) {
+          const project = fetchedProjects.find(p => p.name === projectName)
+          if (project) {
+            setSelectedProject(project.id)
+          }
+        } else if (fetchedProjects.length > 0) {
+          setSelectedProject(fetchedProjects[0].id)
+        }
+      } catch (error) {
+        console.error('Error fetching projects:', error)
+        toast({
+          title: "Error fetching projects",
+          description: "Failed to load projects.",
+          variant: "destructive",
+        })
+      }
+    }
+
+    fetchProjects()
+  }, [projectName, toast])
+
+  // Effect to fetch assets when project changes
+  useEffect(() => {
+    const fetchAssets = async () => {
+      if (!selectedProject) return
+      
+      try {
+        setLoading(true)
+        console.log('Fetching assets for project:', selectedProject)
+        const fetchedAssets = await AssetService.getAssetsForProject(selectedProject)
+        console.log('Fetched assets:', fetchedAssets)
+        setAssets(fetchedAssets)
+        
+        // Check if search term is filtering out all assets
+        if (searchTerm && fetchedAssets.length > 0) {
+          const matchingAssets = fetchedAssets.filter(asset => 
+            asset.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            asset.prompt?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            asset.content?.toLowerCase().includes(searchTerm.toLowerCase())
+          )
+          
+          // If search term filters out all assets, it might be a scene ID or invalid search
+          if (matchingAssets.length === 0) {
+            console.log('Search term filters out all assets. Search term:', searchTerm)
+            console.log('This might be a scene ID or invalid search. Clearing search...')
+            
+            // Check if search term looks like a UUID (scene ID)
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+            if (uuidRegex.test(searchTerm)) {
+              console.log('Search term is a UUID (likely scene ID). Clearing search.')
+              setSearchTerm('')
+              toast({
+                title: "Search Cleared",
+                description: "Search term appeared to be a scene ID and was cleared.",
+                variant: "default",
+              })
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching assets:', error)
+        toast({
+          title: "Error fetching assets",
+          description: "Failed to load project assets.",
+          variant: "destructive",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchAssets()
+  }, [selectedProject, toast, searchTerm])
+
+  // Effect to handle search term changes and show helpful messages
+  useEffect(() => {
+    if (searchTerm && assets.length > 0) {
+      const matchingAssets = assets.filter(asset => 
+        asset.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        asset.prompt?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        asset.content?.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+      
+      if (matchingAssets.length === 0) {
+        // Don't show toast here to avoid spam, just log
+        console.log('No assets match search term:', searchTerm)
+      }
+    }
+  }, [searchTerm, assets])
+
+  // Filter assets based on search and content type
+  const filteredAssets = assets.filter(asset => {
+    const matchesSearch = asset.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         asset.prompt?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         asset.content?.toLowerCase().includes(searchTerm.toLowerCase())
+    
+    const matchesType = contentTypeFilter === "all" || asset.content_type === contentTypeFilter
+    
+    return matchesSearch && matchesType
   })
 
-  const handleViewDetails = (asset: any) => {
+  // Group assets by content type
+  const assetsByType = {
+    script: filteredAssets.filter(a => a.content_type === 'script') || [],
+    image: filteredAssets.filter(a => a.content_type === 'image') || [],
+    video: filteredAssets.filter(a => a.content_type === 'video') || [],
+    audio: filteredAssets.filter(a => a.content_type === 'audio') || [],
+  }
+
+  const refreshAssets = async () => {
+    if (!selectedProject) return
+    
+    try {
+      setLoading(true)
+      const fetchedAssets = await AssetService.getAssetsForProject(selectedProject)
+      setAssets(fetchedAssets)
+      toast({
+        title: "Assets Refreshed",
+        description: "Project assets have been updated.",
+      })
+    } catch (error) {
+      console.error('Error refreshing assets:', error)
+      toast({
+        title: "Error refreshing assets",
+        description: "Failed to refresh project assets.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCopyScript = (content: string) => {
+    navigator.clipboard.writeText(content)
+    toast({
+      title: "Script Copied",
+      description: "Script content copied to clipboard",
+    })
+  }
+
+  const handleViewAsset = (asset: Asset) => {
     setSelectedAsset(asset)
-    setIsDetailsOpen(true)
+    setShowAssetDetails(true)
   }
 
-  const handleDownload = (asset: any) => {
-    // In a real app, this would trigger a download
-    console.log("Downloading asset:", asset.name)
+  const getContentTypeIcon = (type: string) => {
+    switch (type) {
+      case 'script': return <FileText className="h-4 w-4" />
+      case 'image': return <ImageIcon className="h-4 w-4" />
+      case 'video': return <Play className="h-4 w-4" />
+      case 'audio': return <MessageSquare className="h-4 w-4" />
+      default: return <FileText className="h-4 w-4" />
+    }
   }
 
-  const handleDelete = (assetId: number) => {
-    // In a real app, this would delete the asset
-    console.log("Deleting asset:", assetId)
+  const getContentTypeColor = (type: string) => {
+    switch (type) {
+      case 'script': return 'bg-blue-500/20 text-blue-500 border-blue-500/30'
+      case 'image': return 'bg-green-500/20 text-green-500 border-green-500/30'
+      case 'video': return 'bg-purple-500/20 text-purple-500 border-purple-500/30'
+      case 'audio': return 'bg-orange-500/20 text-orange-500 border-orange-500/30'
+      default: return 'bg-muted/20 text-muted-foreground border-muted/30'
+    }
   }
 
-  const formatFileSize = (bytes: string) => {
-    return bytes // Already formatted in mock data
-  }
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString()
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Authentication Required</h1>
+          <p className="text-muted-foreground mb-4">Please log in to view your assets.</p>
+          <Link href="/login">
+            <Button>Go to Login</Button>
+          </Link>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
-
-      <main className="container mx-auto max-w-7xl px-6 py-8">
-        {/* Page Header */}
+    <div className="min-h-screen bg-background text-foreground p-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
         <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              Asset Library
-            </h1>
-            <p className="text-muted-foreground">Manage and organize your AI-generated content</p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Link href="/ai-studio">
-              <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
-                <Sparkles className="mr-2 h-4 w-4" />
-                AI Studio
+          <div className="flex items-center gap-4">
+            <Link href="/dashboard">
+              <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Dashboard
               </Button>
             </Link>
-            <Dialog open={isUploadOpen} onOpenChange={setIsUploadOpen}>
-              <DialogTrigger asChild>
-                <Button className="gradient-button neon-glow text-white">
-                  <Upload className="mr-2 h-5 w-5" />
-                  Upload Assets
+            <div>
+              <h1 className="text-3xl font-bold text-primary">Asset Library</h1>
+              <p className="text-muted-foreground mt-1">Manage and organize your generated content</p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={refreshAssets}
+              disabled={loading}
+              className="border-primary/30 text-primary bg-transparent"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Link href="/ai-studio">
+              <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
+                <Plus className="h-4 w-4 mr-2" />
+                Generate New
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        {/* Debug Info - Development Only */}
+        {process.env.NODE_ENV === 'development' && (
+          <Card className="bg-card border-blue-500/20 mb-6">
+            <CardHeader>
+              <CardTitle className="text-blue-500">Debug Info (Development Only)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2 text-sm">
+                <div><strong>Current Search Term:</strong> "{searchTerm}"</div>
+                <div><strong>Search Term Length:</strong> {searchTerm.length}</div>
+                <div><strong>Is UUID:</strong> {/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchTerm) ? 'Yes' : 'No'}</div>
+                <div><strong>Total Assets:</strong> {assets.length}</div>
+                <div><strong>Filtered Assets:</strong> {filteredAssets.length}</div>
+                <div><strong>Selected Project:</strong> {selectedProject}</div>
+                <div><strong>URL Project Param:</strong> {projectName}</div>
+                <div><strong>URL Search Param:</strong> {searchQuery}</div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Filters and Search */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+          <div>
+            <label className="text-sm font-medium mb-2 block">Project</label>
+            <Select value={selectedProject} onValueChange={setSelectedProject}>
+              <SelectTrigger className="bg-input border-border">
+                <SelectValue placeholder="Select a project" />
+              </SelectTrigger>
+              <SelectContent className="cinema-card border-border">
+                {projects.map((project) => (
+                  <SelectItem key={project.id} value={project.id}>
+                    {project.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-2 block">Content Type</label>
+            <Select value={contentTypeFilter} onValueChange={setContentTypeFilter}>
+              <SelectTrigger className="bg-input border-border">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="cinema-card border-border">
+                <SelectItem value="all">All Types</SelectItem>
+                <SelectItem value="script">Scripts</SelectItem>
+                <SelectItem value="image">Images</SelectItem>
+                <SelectItem value="video">Videos</SelectItem>
+                <SelectItem value="audio">Audio</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium mb-2 block">Search</label>
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search assets..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 pr-10"
+              />
+              {searchTerm && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6 p-0 hover:bg-muted"
+                >
+                  ×
                 </Button>
-              </DialogTrigger>
-              <DialogContent className="cinema-card border-border">
-                <DialogHeader>
-                  <DialogTitle className="text-foreground">Upload New Asset</DialogTitle>
-                  <DialogDescription>Add files to your asset library</DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
-                    <Upload className="h-8 w-8 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-sm text-muted-foreground mb-2">Drag and drop files here, or click to browse</p>
-                    <Button variant="outline" className="bg-transparent">
-                      Choose Files
-                    </Button>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsUploadOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button className="gradient-button text-white">Upload</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
+              )}
+            </div>
           </div>
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-          <Card className="cinema-card">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <Card className="bg-card border-primary/20">
             <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-lg bg-primary/10">
-                  <FolderOpen className="h-4 w-4 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Assets</p>
-                  <p className="text-lg font-semibold">{mockAssets.length}</p>
-                </div>
+              <div className="flex items-center gap-2 mb-2">
+                <FileText className="h-4 w-4 text-blue-500" />
+                <span className="text-sm text-muted-foreground">Scripts</span>
               </div>
+              <p className="text-2xl font-bold text-blue-500">{assetsByType.script?.length || 0}</p>
             </CardContent>
           </Card>
 
-          {assetTypes.slice(1).map((type) => {
-            const count = mockAssets.filter((asset) => asset.type === type).length
-            const Icon = typeIcons[type as keyof typeof typeIcons]
-            return (
-              <Card key={type} className="cinema-card">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-muted/50">
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground capitalize">{type}s</p>
-                      <p className="text-lg font-semibold">{count}</p>
-                    </div>
-                  </div>
+          <Card className="bg-card border-primary/20">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <ImageIcon className="h-4 w-4 text-green-500" />
+                <span className="text-sm text-muted-foreground">Images</span>
+              </div>
+              <p className="text-2xl font-bold text-green-500">{assetsByType.image?.length || 0}</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card border-primary/20">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Play className="h-4 w-4 text-purple-500" />
+                <span className="text-sm text-muted-foreground">Videos</span>
+              </div>
+              <p className="text-2xl font-bold text-purple-500">{assetsByType.video?.length || 0}</p>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-card border-primary/20">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <MessageSquare className="h-4 w-4 text-orange-500" />
+                <span className="text-sm text-muted-foreground">Audio</span>
+              </div>
+              <p className="text-2xl font-bold text-orange-500">{assetsByType.audio?.length || 0}</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Main Content Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList className="bg-card border-primary/20">
+            <TabsTrigger
+              value="all"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+            >
+              All Assets ({filteredAssets.length})
+            </TabsTrigger>
+            <TabsTrigger value="scripts" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+              Scripts ({assetsByType.script.length})
+            </TabsTrigger>
+            <TabsTrigger value="images" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+              Images ({assetsByType.image.length})
+            </TabsTrigger>
+            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+              Videos ({assetsByType.video.length})
+            </TabsTrigger>
+            <TabsTrigger value="audio" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+              Audio ({assetsByType.audio.length})
+            </TabsTrigger>
+          </TabsList>
+
+          {/* All Assets Tab */}
+          <TabsContent value="all" className="space-y-6">
+            {loading ? (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+                  <p className="text-muted-foreground">Loading assets...</p>
                 </CardContent>
               </Card>
-            )
-          })}
-        </div>
-
-        {/* Search and Filter Bar */}
-        <div className="flex items-center gap-4 mb-6">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search assets..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-input border-border"
-            />
-          </div>
-
-          <Select value={selectedType} onValueChange={setSelectedType}>
-            <SelectTrigger className="w-40 bg-input border-border">
-              <SelectValue placeholder="Asset type" />
-            </SelectTrigger>
-            <SelectContent className="cinema-card border-border">
-              {assetTypes.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {type === "all" ? "All Types" : type.charAt(0).toUpperCase() + type.slice(1)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <Select value={selectedProject} onValueChange={setSelectedProject}>
-            <SelectTrigger className="w-48 bg-input border-border">
-              <SelectValue placeholder="Project" />
-            </SelectTrigger>
-            <SelectContent className="cinema-card border-border">
-              {projects.map((project) => (
-                <SelectItem key={project} value={project}>
-                  {project}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          <div className="flex items-center gap-1 border border-border rounded-lg p-1 bg-input">
-            <Button
-              variant={viewMode === "grid" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("grid")}
-              className={viewMode === "grid" ? "gradient-button text-white" : ""}
-            >
-              <Grid3X3 className="h-4 w-4" />
-            </Button>
-            <Button
-              variant={viewMode === "list" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setViewMode("list")}
-              className={viewMode === "list" ? "gradient-button text-white" : ""}
-            >
-              <List className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        {/* Assets Grid/List */}
-        {viewMode === "grid" ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {filteredAssets.map((asset) => {
-              const Icon = typeIcons[asset.type as keyof typeof typeIcons]
-              return (
-                <Card key={asset.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
-                  <CardHeader className="pb-3">
-                    <div className="aspect-square rounded-lg overflow-hidden mb-3 bg-muted relative">
-                      {asset.type === "image" ? (
-                        <img
-                          src={asset.url || "/placeholder.svg"}
-                          alt={asset.name}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Icon className="h-12 w-12 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="absolute top-2 right-2">
-                        <Badge className={`text-xs ${typeColors[asset.type as keyof typeof typeColors]}`}>
-                          {asset.type}
-                        </Badge>
-                      </div>
-                    </div>
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <CardTitle className="text-sm mb-1 group-hover:text-primary transition-colors line-clamp-1">
-                          {asset.name}
-                        </CardTitle>
-                        <p className="text-xs text-muted-foreground">{asset.size}</p>
-                      </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="hover:bg-muted">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="cinema-card border-border">
-                          <DropdownMenuItem onClick={() => handleViewDetails(asset)}>
-                            <Eye className="mr-2 h-4 w-4" />
-                            View Details
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDownload(asset)}>
-                            <Download className="mr-2 h-4 w-4" />
-                            Download
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Copy className="mr-2 h-4 w-4" />
-                            Duplicate
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Share className="mr-2 h-4 w-4" />
-                            Share
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Edit className="mr-2 h-4 w-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleDelete(asset.id)} className="text-destructive">
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Calendar className="h-3 w-3" />
-                        <span>{formatDate(asset.createdAt)}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Sparkles className="h-3 w-3" />
-                        <span>{asset.aiModel}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {asset.tags.slice(0, 2).map((tag) => (
-                          <Badge key={tag} variant="secondary" className="text-xs">
-                            {tag}
-                          </Badge>
-                        ))}
-                        {asset.tags.length > 2 && (
-                          <Badge variant="secondary" className="text-xs">
-                            +{asset.tags.length - 2}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {filteredAssets.map((asset) => {
-              const Icon = typeIcons[asset.type as keyof typeof typeIcons]
-              return (
-                <Card key={asset.id} className="cinema-card hover:neon-glow transition-all duration-300">
-                  <CardContent className="p-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                        {asset.type === "image" ? (
-                          <img
-                            src={asset.url || "/placeholder.svg"}
-                            alt={asset.name}
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                        ) : (
-                          <Icon className="h-6 w-6 text-muted-foreground" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <h3 className="font-medium truncate">{asset.name}</h3>
-                          <Badge className={`text-xs ${typeColors[asset.type as keyof typeof typeColors]}`}>
-                            {asset.type}
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground truncate mb-1">{asset.description}</p>
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                          <span>{asset.size}</span>
-                          <span>•</span>
-                          <span>{formatDate(asset.createdAt)}</span>
-                          <span>•</span>
-                          <span>{asset.project}</span>
-                          <span>•</span>
-                          <span>{asset.aiModel}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleViewDetails(asset)}
-                          className="hover:bg-primary/10 hover:text-primary"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDownload(asset)}
-                          className="hover:bg-secondary/10 hover:text-secondary"
-                        >
-                          <Download className="h-4 w-4" />
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="hover:bg-muted">
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent className="cinema-card border-border">
-                            <DropdownMenuItem>
-                              <Copy className="mr-2 h-4 w-4" />
-                              Duplicate
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Share className="mr-2 h-4 w-4" />
-                              Share
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Edit className="mr-2 h-4 w-4" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => handleDelete(asset.id)} className="text-destructive">
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        )}
-
-        {/* Empty State */}
-        {filteredAssets.length === 0 && (
-          <div className="text-center py-12">
-            <FolderOpen className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No assets found</h3>
-            <p className="text-muted-foreground mb-4">
-              {searchQuery || selectedType !== "all" || selectedProject !== "All Projects"
-                ? "Try adjusting your search or filter criteria"
-                : "Upload your first asset to get started"}
-            </p>
-            {!searchQuery && selectedType === "all" && selectedProject === "All Projects" && (
-              <Button onClick={() => setIsUploadOpen(true)} className="gradient-button text-white">
-                <Upload className="mr-2 h-5 w-5" />
-                Upload Assets
-              </Button>
+            ) : filteredAssets.length > 0 ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                {filteredAssets.map((asset) => (
+                  <AssetCard 
+                    key={asset.id} 
+                    asset={asset} 
+                    onView={handleViewAsset}
+                    onCopy={handleCopyScript}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">
+                    {searchTerm || contentTypeFilter !== "all" 
+                      ? "No assets match your current filters" 
+                      : "No assets found for this project"
+                    }
+                  </p>
+                  <Link href="/ai-studio">
+                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Generate Your First Asset
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
             )}
-          </div>
-        )}
+          </TabsContent>
+
+          {/* Individual Type Tabs */}
+          {['scripts', 'images', 'videos', 'audio'].map((type) => (
+            <TabsContent key={type} value={type} className="space-y-6">
+              {loading ? (
+                <Card className="bg-card border-primary/20">
+                  <CardContent className="p-8 text-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+                    <p className="text-muted-foreground">Loading {type}...</p>
+                  </CardContent>
+                </Card>
+              ) : (assetsByType[type.slice(0, -1) as keyof typeof assetsByType]?.length || 0) > 0 ? (
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                  {assetsByType[type.slice(0, -1) as keyof typeof assetsByType]?.map((asset) => (
+                    <AssetCard 
+                      key={asset.id} 
+                      asset={asset} 
+                      onView={handleViewAsset}
+                      onCopy={handleCopyScript}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <Card className="bg-card border-primary/20">
+                  <CardContent className="p-8 text-center">
+                    <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                    <p className="text-muted-foreground mb-4">No {type} found for this project</p>
+                    <Link href="/ai-studio">
+                      <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
+                        <Plus className="h-4 w-4 mr-2" />
+                        Generate {type.slice(0, -1)}
+                      </Button>
+                    </Link>
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+          ))}
+        </Tabs>
 
         {/* Asset Details Dialog */}
-        <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
-          <DialogContent className="cinema-card border-border max-w-2xl max-h-[80vh] overflow-y-auto">
+        <Dialog open={showAssetDetails} onOpenChange={setShowAssetDetails}>
+          <DialogContent className="bg-background border-primary/20 max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-primary">Asset Details</DialogTitle>
+            </DialogHeader>
             {selectedAsset && (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="text-foreground">{selectedAsset.name}</DialogTitle>
-                  <DialogDescription>Asset details and metadata</DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-6 py-4">
-                  {/* Preview */}
-                  <div className="aspect-video rounded-lg overflow-hidden bg-muted">
-                    {selectedAsset.type === "image" ? (
-                      <img
-                        src={selectedAsset.url || "/placeholder.svg"}
-                        alt={selectedAsset.name}
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        {React.createElement(typeIcons[selectedAsset.type as keyof typeof typeIcons], {
-                          className: "h-16 w-16 text-muted-foreground",
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Metadata */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <Label className="text-sm font-medium">Type</Label>
-                      <p className="text-sm text-muted-foreground capitalize">{selectedAsset.type}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Size</Label>
-                      <p className="text-sm text-muted-foreground">{selectedAsset.size}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Format</Label>
-                      <p className="text-sm text-muted-foreground">{selectedAsset.format}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Project</Label>
-                      <p className="text-sm text-muted-foreground">{selectedAsset.project}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">Created</Label>
-                      <p className="text-sm text-muted-foreground">{formatDate(selectedAsset.createdAt)}</p>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium">AI Model</Label>
-                      <p className="text-sm text-muted-foreground">{selectedAsset.aiModel}</p>
-                    </div>
-                  </div>
-
-                  {/* Description */}
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <Label className="text-sm font-medium">Description</Label>
-                    <p className="text-sm text-muted-foreground mt-1">{selectedAsset.description}</p>
+                    <span className="text-muted-foreground">Title:</span>
+                    <p className="text-foreground font-medium">{selectedAsset.title}</p>
                   </div>
-
-                  {/* AI Prompt */}
+                  <div>
+                    <span className="text-muted-foreground">Type:</span>
+                    <Badge className={`ml-2 ${getContentTypeColor(selectedAsset.content_type)}`}>
+                      {selectedAsset.content_type}
+                    </Badge>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Version:</span>
+                    <p className="text-foreground">v{selectedAsset.version}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Created:</span>
+                    <p className="text-foreground">{new Date(selectedAsset.created_at).toLocaleDateString()}</p>
+                  </div>
                   {selectedAsset.prompt && (
-                    <div>
-                      <Label className="text-sm font-medium">AI Prompt</Label>
-                      <p className="text-sm text-muted-foreground mt-1 p-3 bg-muted/50 rounded-lg">
-                        {selectedAsset.prompt}
-                      </p>
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Prompt:</span>
+                      <p className="text-foreground">{selectedAsset.prompt}</p>
                     </div>
                   )}
+                  {selectedAsset.model && (
+                    <div>
+                      <span className="text-muted-foreground">Model:</span>
+                      <p className="text-foreground">{selectedAsset.model}</p>
+                    </div>
+                  )}
+                </div>
 
-                  {/* Tags */}
+                {selectedAsset.content_type === 'script' && selectedAsset.content && (
                   <div>
-                    <Label className="text-sm font-medium">Tags</Label>
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {selectedAsset.tags.map((tag: string) => (
-                        <Badge key={tag} variant="secondary" className="text-xs">
-                          {tag}
-                        </Badge>
-                      ))}
+                    <span className="text-muted-foreground">Content:</span>
+                    <div className="bg-muted/20 rounded-lg p-4 mt-2 max-h-96 overflow-y-auto">
+                      <pre className="text-sm text-foreground font-mono whitespace-pre-wrap">
+                        {selectedAsset.content}
+                      </pre>
                     </div>
                   </div>
+                )}
 
-                  {/* Versions */}
+                {selectedAsset.content_type === 'image' && selectedAsset.content_url && (
                   <div>
-                    <Label className="text-sm font-medium">Versions</Label>
-                    <p className="text-sm text-muted-foreground">{selectedAsset.versions} versions available</p>
+                    <span className="text-muted-foreground">Image:</span>
+                    <div className="mt-2">
+                      <img 
+                        src={selectedAsset.content_url} 
+                        alt={selectedAsset.title}
+                        className="w-full max-h-96 object-contain rounded-lg"
+                      />
+                    </div>
                   </div>
+                )}
 
-                  <div className="flex gap-2 pt-4 border-t border-border">
-                    <Link href={`/timeline?movie=${mockMovies.find((m) => m.title === selectedAsset.project)?.id}`}>
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        <Play className="mr-2 h-4 w-4" />
-                        Open Timeline
-                      </Button>
-                    </Link>
-                    <Link href="/ai-studio">
-                      <Button variant="outline" size="sm" className="bg-transparent">
-                        <Sparkles className="mr-2 h-4 w-4" />
-                        Generate Similar
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsDetailsOpen(false)}>
+                <div className="flex gap-2 pt-4">
+                  {selectedAsset.content_type === 'script' && selectedAsset.content && (
+                    <Button
+                      variant="outline"
+                      onClick={() => handleCopyScript(selectedAsset.content!)}
+                      className="border-primary/30 text-primary bg-transparent"
+                    >
+                      <Copy className="h-4 w-4 mr-2" />
+                      Copy Script
+                    </Button>
+                  )}
+                  <Button variant="outline" onClick={() => setShowAssetDetails(false)}>
                     Close
                   </Button>
-                  <Button
-                    onClick={() => handleDownload(selectedAsset)}
-                    className="gradient-button text-white"
-                  >
-                    <Download className="mr-2 h-4 w-4" />
-                    Download
-                  </Button>
-                </DialogFooter>
-              </>
+                </div>
+              </div>
             )}
           </DialogContent>
         </Dialog>
-      </main>
+      </div>
     </div>
+  )
+}
+
+// Asset Card Component
+function AssetCard({ 
+  asset, 
+  onView, 
+  onCopy 
+}: { 
+  asset: Asset, 
+  onView: (asset: Asset) => void, 
+  onCopy: (content: string) => void 
+}) {
+  const getContentTypeIcon = (type: string) => {
+    switch (type) {
+      case 'script': return <FileText className="h-4 w-4" />
+      case 'image': return <ImageIcon className="h-4 w-4" />
+      case 'video': return <Play className="h-4 w-4" />
+      case 'audio': return <MessageSquare className="h-4 w-4" />
+      default: return <FileText className="h-4 w-4" />
+    }
+  }
+
+  const getContentTypeColor = (type: string) => {
+    switch (type) {
+      case 'script': return 'bg-blue-500/20 text-blue-500 border-blue-500/30'
+      case 'image': return 'bg-green-500/20 text-green-500 border-green-500/30'
+      case 'video': return 'bg-purple-500/20 text-purple-500 border-purple-500/30'
+      case 'audio': return 'bg-orange-500/20 text-orange-500 border-orange-500/30'
+      default: return 'bg-muted/20 text-muted-foreground border-muted/30'
+    }
+  }
+
+  return (
+    <Card className="bg-card border-primary/20 hover:border-primary/40 transition-colors">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <CardTitle className="text-primary text-lg line-clamp-2">{asset.title}</CardTitle>
+            <div className="flex items-center gap-2 mt-2">
+              <Badge variant="outline" className="text-xs">
+                v{asset.version}
+              </Badge>
+              {asset.is_latest_version && (
+                <Badge className="bg-green-500/20 text-green-500 border-green-500/30 text-xs">
+                  Latest
+                </Badge>
+              )}
+              <Badge className={`text-xs ${getContentTypeColor(asset.content_type)}`}>
+                {asset.content_type}
+              </Badge>
+            </div>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            {new Date(asset.created_at).toLocaleDateString()}
+          </div>
+        </div>
+      </CardHeader>
+      
+      <CardContent className="space-y-4">
+        {/* Content Preview */}
+        {asset.content_type === 'script' && asset.content && (
+          <div className="bg-muted/20 rounded-lg p-3 max-h-24 overflow-y-auto">
+            <p className="text-sm text-muted-foreground font-mono line-clamp-3">
+              {asset.content}
+            </p>
+          </div>
+        )}
+        
+        {asset.content_type === 'image' && asset.content_url && (
+          <div className="aspect-video bg-muted rounded-lg flex items-center justify-center overflow-hidden">
+            <img 
+              src={asset.content_url} 
+              alt={asset.title}
+              className="w-full h-full object-cover"
+            />
+          </div>
+        )}
+        
+        {/* Metadata */}
+        <div className="space-y-2 text-sm">
+          {asset.prompt && (
+            <div>
+              <span className="text-muted-foreground">Prompt:</span>
+              <p className="text-foreground line-clamp-2">{asset.prompt}</p>
+            </div>
+          )}
+          {asset.model && (
+            <div>
+              <span className="text-muted-foreground">Model:</span>
+              <span className="text-foreground ml-1">{asset.model}</span>
+            </div>
+          )}
+        </div>
+        
+        {/* Actions */}
+        <div className="flex gap-2">
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="border-primary/30 text-primary bg-transparent flex-1"
+            onClick={() => onView(asset)}
+          >
+            <Eye className="h-4 w-4 mr-2" />
+            View
+          </Button>
+          
+          {asset.content_type === 'script' && asset.content && (
+            <Button 
+              size="sm" 
+              variant="outline" 
+              className="border-blue-500/30 text-blue-500 bg-transparent"
+              onClick={() => onCopy(asset.content!)}
+            >
+              <Copy className="h-4 w-4 mr-2" />
+              Copy
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   )
 }

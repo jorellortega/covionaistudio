@@ -1,17 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { Film } from "lucide-react"
-
-// Mock movies data - in a real app this would come from a context or API
-const mockMovies = [
-  { id: 1, title: "Neon Dreams", status: "In Progress", scenes: 24 },
-  { id: 2, title: "The Last Symphony", status: "Pre-Production", scenes: 18 },
-  { id: 3, title: "Quantum Heist", status: "Post-Production", scenes: 32 },
-  { id: 4, title: "Digital Ghosts", status: "Completed", scenes: 28 },
-]
+import { Film, Plus, Loader2 } from "lucide-react"
+import { MovieService, Movie } from "@/lib/movie-service"
+import { useRouter } from "next/navigation"
 
 interface ProjectSelectorProps {
   selectedProject?: string
@@ -22,13 +16,47 @@ interface ProjectSelectorProps {
 
 export function ProjectSelector({ selectedProject, onProjectChange, showCreateNew = false, placeholder = "Select a movie project" }: ProjectSelectorProps) {
   const [selected, setSelected] = useState(selectedProject || "")
+  const [projects, setProjects] = useState<Movie[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const router = useRouter()
+
+  // Load real projects from database
+  useEffect(() => {
+    const loadProjects = async () => {
+      try {
+        setIsLoading(true)
+        const userProjects = await MovieService.getMovies()
+        setProjects(userProjects)
+      } catch (error) {
+        console.error('Error loading projects:', error)
+        setProjects([])
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    loadProjects()
+  }, [])
 
   const handleChange = (value: string) => {
+    if (value === "new") {
+      router.push("/dashboard") // Navigate to dashboard to create new project
+      return
+    }
     setSelected(value)
     onProjectChange?.(value)
   }
 
-  const selectedMovie = mockMovies.find((m) => m.id.toString() === selected)
+  const selectedMovie = projects.find((m) => m.id === selected)
+
+  if (isLoading) {
+    return (
+      <div className="w-full bg-input border-border rounded-md px-3 py-2 flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        <span className="text-muted-foreground">Loading projects...</span>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-2">
@@ -38,30 +66,39 @@ export function ProjectSelector({ selectedProject, onProjectChange, showCreateNe
             {selectedMovie && (
               <div className="flex items-center gap-2">
                 <Film className="h-4 w-4" />
-                <span>{selectedMovie.title}</span>
+                <span>{selectedMovie.name}</span>
                 <Badge variant="outline" className="text-xs">
-                  {selectedMovie.scenes} scenes
+                  {selectedMovie.status}
                 </Badge>
               </div>
             )}
           </SelectValue>
         </SelectTrigger>
         <SelectContent className="cinema-card border-border">
-          {mockMovies.map((movie) => (
-            <SelectItem key={movie.id} value={movie.id.toString()}>
-              <div className="flex items-center gap-2">
+          {projects.length === 0 ? (
+            <SelectItem value="no-projects" disabled>
+              <div className="flex items-center gap-2 text-muted-foreground">
                 <Film className="h-4 w-4" />
-                <span>{movie.title}</span>
-                <Badge variant="outline" className="text-xs ml-auto">
-                  {movie.scenes} scenes
-                </Badge>
+                <span>No projects found</span>
               </div>
             </SelectItem>
-          ))}
+          ) : (
+            projects.map((project) => (
+              <SelectItem key={project.id} value={project.id}>
+                <div className="flex items-center gap-2">
+                  <Film className="h-4 w-4" />
+                  <span>{project.name}</span>
+                  <Badge variant="outline" className="text-xs ml-auto">
+                    {project.status}
+                  </Badge>
+                </div>
+              </SelectItem>
+            ))
+          )}
           {showCreateNew && (
             <SelectItem value="new">
               <div className="flex items-center gap-2 text-blue-500">
-                <Film className="h-4 w-4" />
+                <Plus className="h-4 w-4" />
                 <span>Create New Project</span>
               </div>
             </SelectItem>

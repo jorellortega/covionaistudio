@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -31,60 +31,11 @@ import {
   Film,
   Sparkles,
   FolderOpen,
+  Loader2,
 } from "lucide-react"
 import Link from "next/link"
-
-// Mock data for movies
-const mockMovies = [
-  {
-    id: 1,
-    title: "Neon Dreams",
-    description: "A cyberpunk thriller set in 2087",
-    status: "Production",
-    scenes: 24,
-    duration: "120 min",
-    genre: "Sci-Fi",
-    createdAt: "2024-01-15",
-    updatedAt: "2024-01-20",
-    thumbnail: "/cyberpunk-movie-poster.png",
-  },
-  {
-    id: 2,
-    title: "The Last Symphony",
-    description: "A musical drama about a composer's final work",
-    status: "Pre-Production",
-    scenes: 18,
-    duration: "95 min",
-    genre: "Drama",
-    createdAt: "2024-01-10",
-    updatedAt: "2024-01-18",
-    thumbnail: "/classical-music-movie-poster.png",
-  },
-  {
-    id: 3,
-    title: "Quantum Heist",
-    description: "Time-traveling criminals attempt the ultimate robbery",
-    status: "Post-Production",
-    scenes: 32,
-    duration: "140 min",
-    genre: "Action",
-    createdAt: "2023-12-20",
-    updatedAt: "2024-01-19",
-    thumbnail: "/quantum-heist-movie-poster.png",
-  },
-  {
-    id: 4,
-    title: "Digital Ghosts",
-    description: "Horror in the age of artificial intelligence",
-    status: "Distribution",
-    scenes: 28,
-    duration: "110 min",
-    genre: "Horror",
-    createdAt: "2023-11-05",
-    updatedAt: "2024-01-12",
-    thumbnail: "/digital-horror-poster.png",
-  },
-]
+import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
+import { useToast } from "@/hooks/use-toast"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -94,29 +45,116 @@ const statusColors = {
 }
 
 export default function MoviesPage() {
+  const [movies, setMovies] = useState<Movie[]>([])
+  const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
-  const [newMovie, setNewMovie] = useState({
-    title: "",
+  const [isCreating, setIsCreating] = useState(false)
+  const [newMovie, setNewMovie] = useState<CreateMovieData>({
+    name: "",
     description: "",
     genre: "",
-    status: "Pre-Production",
+    project_type: "movie",
+    movie_status: "Pre-Production",
   })
+  const { toast } = useToast()
 
-  const filteredMovies = mockMovies.filter((movie) => {
+  useEffect(() => {
+    loadMovies()
+  }, [])
+
+  const loadMovies = async () => {
+    try {
+      setLoading(true)
+      const moviesData = await MovieService.getMovies()
+      setMovies(moviesData)
+    } catch (error) {
+      console.error('Error loading movies:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load movies. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredMovies = movies.filter((movie) => {
     const matchesSearch =
-      movie.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      movie.description.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesStatus = selectedStatus === "All" || movie.status === selectedStatus
+      movie.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (movie.description && movie.description.toLowerCase().includes(searchQuery.toLowerCase()))
+    const matchesStatus = selectedStatus === "All" || movie.movie_status === selectedStatus
     return matchesSearch && matchesStatus
   })
 
-  const handleCreateMovie = () => {
-    // In a real app, this would create the movie in the database
-    console.log("Creating movie:", newMovie)
-    setIsCreateDialogOpen(false)
-    setNewMovie({ title: "", description: "", genre: "", status: "Pre-Production" })
+  const handleCreateMovie = async () => {
+    if (!newMovie.name.trim()) {
+      toast({
+        title: "Error",
+        description: "Movie title is required.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsCreating(true)
+      const createdMovie = await MovieService.createMovie(newMovie)
+      setMovies([createdMovie, ...movies])
+      setIsCreateDialogOpen(false)
+      setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production" })
+      toast({
+        title: "Success",
+        description: "Movie created successfully!",
+      })
+    } catch (error) {
+      console.error('Error creating movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create movie. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  const handleDeleteMovie = async (movieId: string) => {
+    if (!confirm('Are you sure you want to delete this movie? This action cannot be undone.')) {
+      return
+    }
+
+    try {
+      await MovieService.deleteMovie(movieId)
+      setMovies(movies.filter(movie => movie.id !== movieId))
+      toast({
+        title: "Success",
+        description: "Movie deleted successfully!",
+      })
+    } catch (error) {
+      console.error('Error deleting movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to delete movie. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-7xl px-6 py-8">
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="ml-2 text-lg">Loading movies...</span>
+          </div>
+        </main>
+      </div>
+    )
   }
 
   return (
@@ -147,11 +185,11 @@ export default function MoviesPage() {
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label htmlFor="title">Project Title</Label>
+                  <Label htmlFor="name">Project Title</Label>
                   <Input
-                    id="title"
-                    value={newMovie.title}
-                    onChange={(e) => setNewMovie({ ...newMovie, title: e.target.value })}
+                    id="name"
+                    value={newMovie.name}
+                    onChange={(e) => setNewMovie({ ...newMovie, name: e.target.value })}
                     placeholder="Enter movie title..."
                     className="bg-input border-border"
                   />
@@ -167,8 +205,8 @@ export default function MoviesPage() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="status">Status</Label>
-                  <Select value={newMovie.status} onValueChange={(value) => setNewMovie({ ...newMovie, status: value })}>
+                  <Label htmlFor="movie_status">Status</Label>
+                  <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
                     <SelectTrigger className="bg-input border-border">
                       <SelectValue placeholder="Select status" />
                     </SelectTrigger>
@@ -195,9 +233,13 @@ export default function MoviesPage() {
                 <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={handleCreateMovie} className="gradient-button text-white">
-                  <Plus className="mr-2 h-5 w-5" />
-                  Create Movie
+                <Button onClick={handleCreateMovie} disabled={isCreating} className="gradient-button text-white">
+                  {isCreating ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="mr-2 h-5 w-5" />
+                  )}
+                  {isCreating ? 'Creating...' : 'Create Movie'}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -241,17 +283,17 @@ export default function MoviesPage() {
                 <div className="aspect-video rounded-lg overflow-hidden mb-3 bg-muted">
                   <img
                     src={movie.thumbnail || "/placeholder.svg"}
-                    alt={movie.title}
+                    alt={movie.name}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
                 </div>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <CardTitle className="text-lg mb-1 group-hover:text-primary transition-colors">
-                      {movie.title}
+                      {movie.name}
                     </CardTitle>
-                    <Badge className={`text-xs ${statusColors[movie.status as keyof typeof statusColors]}`}>
-                      {movie.status}
+                    <Badge className={`text-xs ${statusColors[movie.movie_status as keyof typeof statusColors]}`}>
+                      {movie.movie_status}
                     </Badge>
                   </div>
                   <DropdownMenu>
@@ -269,7 +311,10 @@ export default function MoviesPage() {
                         <Play className="mr-2 h-4 w-4" />
                         Preview
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="text-destructive">
+                      <DropdownMenuItem 
+                        className="text-destructive"
+                        onClick={() => handleDeleteMovie(movie.id)}
+                      >
                         <Trash2 className="mr-2 h-4 w-4" />
                         Delete
                       </DropdownMenuItem>
@@ -283,13 +328,17 @@ export default function MoviesPage() {
                 <div className="space-y-2 text-sm text-muted-foreground">
                   <div className="flex items-center gap-2">
                     <Film className="h-4 w-4" />
-                    <span>{movie.scenes} scenes</span>
-                    <span>•</span>
-                    <span>{movie.duration}</span>
+                    <span>{movie.scenes || 0} scenes</span>
+                    {movie.duration && (
+                      <>
+                        <span>•</span>
+                        <span>{movie.duration}</span>
+                      </>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <Calendar className="h-4 w-4" />
-                    <span>Created {new Date(movie.createdAt).toLocaleDateString()}</span>
+                    <span>Created {new Date(movie.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
 
@@ -314,7 +363,7 @@ export default function MoviesPage() {
                       AI Studio
                     </Button>
                   </Link>
-                  <Link href={`/assets?project=${movie.title}`}>
+                  <Link href={`/assets?project=${movie.name}`}>
                     <Button
                       variant="outline"
                       size="sm"

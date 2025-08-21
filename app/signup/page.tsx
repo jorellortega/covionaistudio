@@ -9,20 +9,75 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Film, ArrowLeft, Check } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { useAuth } from "@/lib/auth-context"
+import { useToast } from "@/hooks/use-toast"
 
 export default function SignupPage() {
-  const [showPassword, setShowPassword] = useState(false)
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [formData, setFormData] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    terms: false
+  })
   const [isLoading, setIsLoading] = useState(false)
+  const router = useRouter()
+  const { signup } = useAuth()
+  const { toast } = useToast()
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { id, value, type, checked } = e.target
+    setFormData(prev => ({
+      ...prev,
+      [id]: type === 'checkbox' ? checked : value
+    }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+
+
+    if (!formData.terms) {
+      toast({
+        title: "Error",
+        description: "Please accept the terms and conditions",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsLoading(true)
-    // TODO: Implement actual registration
-    setTimeout(() => {
+    
+    try {
+      const fullName = `${formData.firstName} ${formData.lastName}`.trim()
+      await signup(formData.email, formData.password, fullName)
+      toast({
+        title: "Success",
+        description: "Account created successfully! Welcome to Cinema Studio.",
+      })
+      router.push("/dashboard")
+    } catch (error: any) {
+      console.error('Signup error:', error)
+      
+      // Handle specific error cases
+      if (error.message?.includes('email confirmation')) {
+        toast({
+          title: "Account Created",
+          description: "Account created! Please check your email to confirm your account.",
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Error",
+          description: error.message || "Failed to create account. Please try again.",
+          variant: "destructive",
+        })
+      }
+    } finally {
       setIsLoading(false)
-      window.location.href = "/dashboard"
-    }, 2000)
+    }
   }
 
   return (
@@ -55,77 +110,90 @@ export default function SignupPage() {
             <CardDescription>Fill in your details to get started</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="firstName">First Name</Label>
+                  <Input
+                    id="firstName"
+                    placeholder="John"
+                    value={formData.firstName}
+                    onChange={handleInputChange}
+                    required
+                    className="bg-background/50 border-border/50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="lastName">Last Name</Label>
+                  <Input
+                    id="lastName"
+                    placeholder="Doe"
+                    value={formData.lastName}
+                    onChange={handleInputChange}
+                    required
+                    className="bg-background/50 border-border/50"
+                  />
+                </div>
+              </div>
               <div className="space-y-2">
-                <Label htmlFor="firstName">First Name</Label>
+                <Label htmlFor="email">Email</Label>
                 <Input
-                  id="firstName"
-                  placeholder="John"
+                  id="email"
+                  type="email"
+                  placeholder="john@example.com"
+                  value={formData.email}
+                  onChange={handleInputChange}
+                  required
                   className="bg-background/50 border-border/50"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="lastName">Last Name</Label>
+                <Label htmlFor="password">Password</Label>
                 <Input
-                  id="lastName"
-                  placeholder="Doe"
+                  id="password"
+                  type="password"
+                  placeholder="Create a strong password (minimum 6 characters)"
+                  value={formData.password}
+                  onChange={handleInputChange}
+                  required
+                  minLength={6}
                   className="bg-background/50 border-border/50"
                 />
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="john@example.com"
-                className="bg-background/50 border-border/50"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Create a strong password"
-                className="bg-background/50 border-border/50"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type="password"
-                placeholder="Confirm your password"
-                className="bg-background/50 border-border/50"
-              />
-            </div>
-            <div className="flex items-start space-x-2">
-              <input
-                id="terms"
-                type="checkbox"
-                className="mt-1 rounded border-border/50 bg-background/50"
-              />
-              <Label htmlFor="terms" className="text-sm text-muted-foreground">
-                I agree to the{" "}
-                <Link href="/terms" className="text-blue-500 hover:text-blue-400">
-                  Terms of Service
-                </Link>{" "}
-                and{" "}
-                <Link href="/privacy" className="text-blue-500 hover:text-blue-400">
-                  Privacy Policy
+              <div className="flex items-start space-x-2">
+                <input
+                  id="terms"
+                  type="checkbox"
+                  checked={formData.terms}
+                  onChange={handleInputChange}
+                  className="mt-1 rounded border-border/50 bg-background/50"
+                  required
+                />
+                <Label htmlFor="terms" className="text-sm text-muted-foreground">
+                  I agree to the{" "}
+                  <Link href="/terms" className="text-blue-500 hover:text-blue-400">
+                    Terms of Service
+                  </Link>{" "}
+                  and{" "}
+                  <Link href="/privacy" className="text-blue-500 hover:text-blue-400">
+                    Privacy Policy
+                  </Link>
+                </Label>
+              </div>
+              <Button 
+                type="submit" 
+                className="w-full gradient-button neon-glow text-white"
+                disabled={isLoading}
+              >
+                {isLoading ? "Creating Account..." : "Create Account"}
+              </Button>
+              <div className="text-center text-sm">
+                Already have an account?{" "}
+                <Link href="/login" className="text-blue-500 hover:text-blue-400 font-medium">
+                  Sign in
                 </Link>
-              </Label>
-            </div>
-            <Button className="w-full gradient-button neon-glow text-white">
-              Create Account
-            </Button>
-            <div className="text-center text-sm">
-              Already have an account?{" "}
-              <Link href="/login" className="text-blue-500 hover:text-blue-400 font-medium">
-                Sign in
-              </Link>
-            </div>
+              </div>
+            </form>
           </CardContent>
         </Card>
 
