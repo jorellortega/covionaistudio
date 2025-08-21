@@ -109,7 +109,7 @@ export default function SettingsPage() {
               <Label htmlFor="created">Member Since</Label>
               <Input 
                 id="created" 
-                value={user.createdAt.toLocaleDateString()} 
+                value={user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'} 
                 disabled 
               />
             </div>
