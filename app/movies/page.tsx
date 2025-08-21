@@ -36,7 +36,7 @@ import {
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
 import { useToast } from "@/hooks/use-toast"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",

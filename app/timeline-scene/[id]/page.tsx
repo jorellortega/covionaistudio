@@ -46,7 +46,7 @@ import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 

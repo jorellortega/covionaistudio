@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Film, ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import { useToast } from "@/hooks/use-toast"
 
 export default function LoginPage() {

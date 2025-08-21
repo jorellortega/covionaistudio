@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Progress } from "@/components/ui/progress"
 import { Label } from "@/components/ui/label"
 import { ProjectSelector } from "@/components/project-selector"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import { OpenAIService } from "@/lib/openai-service"
 import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
@@ -121,11 +121,24 @@ export default function AIStudioPage() {
   const [scriptPrompt, setScriptPrompt] = useState("")
   const [imagePrompt, setImagePrompt] = useState("")
   const [videoPrompt, setVideoPrompt] = useState("")
+  const [audioPrompt, setAudioPrompt] = useState("")
   const [selectedModel, setSelectedModel] = useState("")
   const [selectedStyle, setSelectedStyle] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState("")
   const [selectedProject, setSelectedProject] = useState("")
   const [selectedScene, setSelectedScene] = useState("none")
+  const [selectedDuration, setSelectedDuration] = useState("10s")
+  const [selectedVideoStyle, setSelectedVideoStyle] = useState("cinematic")
+  const [selectedCameraMovement, setSelectedCameraMovement] = useState("static")
+  const [selectedLighting, setSelectedLighting] = useState("natural")
+  const [selectedResolution, setSelectedResolution] = useState("1024x576")
+  const [selectedAudioType, setSelectedAudioType] = useState("music")
+  const [selectedAudioDuration, setSelectedAudioDuration] = useState("30s")
+  const [selectedVoice, setSelectedVoice] = useState("21m00Tcm4TlvDq8ikWAM")
+  const [cloningVoiceName, setCloningVoiceName] = useState("")
+  const [cloningVoiceDescription, setCloningVoiceDescription] = useState("")
+  const [cloningVoiceFiles, setCloningVoiceFiles] = useState<File[]>([])
+  const [customVoices, setCustomVoices] = useState<any[]>([])
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [saveModalData, setSaveModalData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
@@ -155,6 +168,18 @@ export default function AIStudioPage() {
     setSelectedModel("")
     setSelectedStyle("")
     setSelectedTemplate("")
+    setSelectedDuration("10s")
+    setSelectedVideoStyle("cinematic")
+    setSelectedCameraMovement("static")
+    setSelectedLighting("natural")
+    setSelectedResolution("1024x576")
+    setSelectedAudioType("music")
+    setSelectedAudioDuration("30s")
+    setSelectedVoice("21m00Tcm4TlvDq8ikWAM")
+    setCloningVoiceName("")
+    setCloningVoiceDescription("")
+    setCloningVoiceFiles([])
+    setCustomVoices([])
   }, [activeTab])
 
   // Load real data from database
@@ -289,8 +314,39 @@ export default function AIStudioPage() {
   }, [toast])
 
   const handleGenerate = async (type: string) => {
-    if (!user?.openaiApiKey) {
+    // Check if we have the required API key for the selected model
+    if (!user) {
+      alert("Please log in to use AI features")
+      return
+    }
+    
+    if (type === "script" && selectedModel === "ChatGPT" && !user.openaiApiKey) {
       alert("Please set up your OpenAI API key first")
+      return
+    }
+    
+    if (type === "image" && selectedModel === "DALL-E 3" && !user.openaiApiKey) {
+      alert("Please set up your OpenAI API key first")
+      return
+    }
+    
+    if (type === "video" && selectedModel === "Runway ML" && !user.runwayApiKey) {
+      alert("Please set up your Runway ML API key first")
+      return
+    }
+    
+    if (type === "video" && selectedModel === "Kling" && !user.klingApiKey) {
+      alert("Please set up your Kling API key first")
+      return
+    }
+    
+    if (type === "audio" && selectedModel === "ElevenLabs" && !user.elevenlabsApiKey) {
+      alert("Please set up your ElevenLabs API key first")
+      return
+    }
+    
+    if (type === "audio" && selectedModel === "Suno AI" && !user.sunoApiKey) {
+      alert("Please set up your Suno AI API key first")
       return
     }
 
@@ -308,7 +364,7 @@ export default function AIStudioPage() {
         
         // First validate the API key
         console.log('Validating API key...')
-        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey)
+        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey!)
         console.log('API key validation result:', isValid)
         
         if (!isValid) {
@@ -317,11 +373,11 @@ export default function AIStudioPage() {
           return
         }
         
-        const response = await OpenAIService.generateScript({
-          prompt: scriptPrompt,
-          template: selectedTemplate || "Write a creative script based on:",
-          apiKey: user.openaiApiKey,
-        })
+                  const response = await OpenAIService.generateScript({
+            prompt: scriptPrompt,
+            template: selectedTemplate || "Write a creative script based on:",
+            apiKey: user.openaiApiKey!,
+          })
 
         if (response.success) {
           // Create new generated content
@@ -352,7 +408,7 @@ export default function AIStudioPage() {
         
         // First validate the API key
         console.log('Validating API key for image generation...')
-        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey)
+        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey!)
         console.log('API key validation result:', isValid)
         
         if (!isValid) {
@@ -364,7 +420,7 @@ export default function AIStudioPage() {
         const response = await OpenAIService.generateImage({
           prompt: imagePrompt,
           style: selectedStyle || "Cinematic",
-          apiKey: user.openaiApiKey,
+          apiKey: user.openaiApiKey!,
         })
 
         if (response.success) {
@@ -386,12 +442,306 @@ export default function AIStudioPage() {
         } else {
           alert(`Error generating image: ${response.error}`)
         }
-      } else {
-        // For other models, show a message that they're not implemented yet
-        alert(`${selectedModel} is not yet implemented. Please use ChatGPT for scripts or DALL-E 3 for images.`)
-        setIsGenerating(false)
-        return
-      }
+              } else if (type === "video" && selectedModel === "Runway ML") {
+          console.log('Attempting to generate video with Runway ML:', {
+            prompt: videoPrompt,
+            duration: "10s", // Default duration
+            apiKeyLength: user.runwayApiKey?.length || 0,
+            apiKeyPrefix: user.runwayApiKey?.substring(0, 7) || 'None'
+          })
+          
+          // Import the RunwayML service
+          const { RunwayMLService } = await import('@/lib/ai-services')
+          
+          // First validate the API key
+          console.log('Validating Runway ML API key...')
+          const isValid = await RunwayMLService.validateApiKey(user.runwayApiKey!)
+          console.log('Runway ML API key validation result:', isValid)
+          
+          if (!isValid) {
+            toast({
+              title: "Invalid API Key",
+              description: "Your Runway ML API key appears to be invalid. Please check your setup.",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
+          
+          // Build enhanced prompt with all the selected options
+          let enhancedPrompt = videoPrompt
+          if (selectedVideoStyle !== "cinematic") {
+            enhancedPrompt += `, ${selectedVideoStyle} style`
+          }
+          if (selectedCameraMovement !== "static") {
+            enhancedPrompt += `, camera ${selectedCameraMovement}`
+          }
+          if (selectedLighting !== "natural") {
+            enhancedPrompt += `, ${selectedLighting} lighting`
+          }
+          
+          console.log('Enhanced prompt for Runway ML:', enhancedPrompt)
+          
+          const response = await RunwayMLService.generateVideo({
+            prompt: enhancedPrompt,
+            duration: selectedDuration,
+            model: selectedModel,
+            apiKey: user.runwayApiKey!,
+            resolution: selectedResolution,
+          })
+
+          if (response.success) {
+            // Create new generated content
+            const newContent: GeneratedContent = {
+              id: Date.now().toString(),
+              title: `Generated Video - ${new Date().toLocaleDateString()}`,
+              prompt: videoPrompt,
+              type: 'video',
+              model: selectedModel,
+              created_at: new Date().toISOString(),
+              project_id: selectedProject,
+              scene_id: selectedScene !== "none" ? selectedScene : undefined,
+              duration: "10s",
+              url: response.data?.url || response.data?.output?.url,
+            }
+            
+            setGeneratedContent(prev => [newContent, ...prev])
+            setVideoPrompt("") // Clear the prompt after successful generation
+            
+            // Show success toast
+            toast({
+              title: "Video Generated!",
+              description: "Your video has been created successfully.",
+              variant: "default",
+            })
+          } else {
+            console.error('Runway ML video generation failed:', response.error)
+            toast({
+              title: "Video Generation Failed",
+              description: `Error: ${response.error}. Please check your Runway ML API key and try again.`,
+              variant: "destructive",
+            })
+          }
+        } else if (type === "video" && selectedModel === "Kling") {
+          console.log('Attempting to generate video with Kling:', {
+            prompt: videoPrompt,
+            duration: "10s", // Default duration
+            apiKeyLength: user.klingApiKey?.length || 0,
+            apiKeyPrefix: user.klingApiKey?.substring(0, 7) || 'None'
+          })
+          
+          // Import the Kling service
+          const { KlingService } = await import('@/lib/ai-services')
+          
+          const response = await KlingService.generateVideo({
+            prompt: videoPrompt,
+            duration: "10s",
+            model: selectedModel,
+            apiKey: user.klingApiKey!,
+          })
+
+          if (response.success) {
+            // Create new generated content
+            const newContent: GeneratedContent = {
+              id: Date.now().toString(),
+              title: `Generated Video - ${new Date().toLocaleDateString()}`,
+              prompt: videoPrompt,
+              type: 'video',
+              model: selectedModel,
+              created_at: new Date().toISOString(),
+              project_id: selectedProject,
+              scene_id: selectedScene !== "none" ? selectedScene : undefined,
+              duration: "10s",
+              url: response.data?.url || response.data?.output?.url,
+            }
+            
+            setGeneratedContent(prev => [newContent, ...prev])
+            setVideoPrompt("") // Clear the prompt after successful generation
+          } else {
+            alert(`Error generating video: ${response.error}`)
+          }
+        } else if (type === "audio" && selectedModel === "ElevenLabs") {
+          console.log('Attempting to generate audio with ElevenLabs:', {
+            prompt: audioPrompt,
+            type: selectedAudioType,
+            duration: selectedAudioDuration,
+            voice: selectedVoice,
+            apiKeyLength: user.elevenlabsApiKey?.length || 0,
+            apiKeyPrefix: user.elevenlabsApiKey?.substring(0, 7) || 'None'
+          })
+          
+          // Import the ElevenLabs service
+          const { ElevenLabsService } = await import('@/lib/ai-services')
+          
+          // First validate the API key
+          console.log('Validating ElevenLabs API key...')
+          const isValid = await ElevenLabsService.validateApiKey(user.elevenlabsApiKey!)
+          console.log('ElevenLabs API key validation result:', isValid)
+          
+          if (!isValid) {
+            toast({
+              title: "Invalid API Key",
+              description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
+          
+          // Build enhanced prompt based on audio type
+          let enhancedPrompt = audioPrompt
+          if (selectedAudioType === "music") {
+            enhancedPrompt = `Background music: ${audioPrompt}`
+          } else if (selectedAudioType === "sfx") {
+            enhancedPrompt = `Sound effect: ${audioPrompt}`
+          } else if (selectedAudioType === "ambient") {
+            enhancedPrompt = `Ambient sound: ${audioPrompt}`
+          } else if (selectedAudioType === "dialogue") {
+            enhancedPrompt = audioPrompt // Keep original for voice generation
+          } else if (selectedAudioType === "score") {
+            enhancedPrompt = `Film score: ${audioPrompt}`
+          }
+          
+          console.log('Enhanced prompt for ElevenLabs:', enhancedPrompt)
+          
+          const response = await ElevenLabsService.generateAudio({
+            prompt: enhancedPrompt,
+            type: selectedAudioType,
+            model: selectedModel,
+            apiKey: user.elevenlabsApiKey!,
+            voiceId: selectedVoice,
+          })
+
+          if (response.success) {
+            // Create new generated content
+            const newContent: GeneratedContent = {
+              id: Date.now().toString(),
+              title: `Generated Audio - ${selectedAudioType} - ${new Date().toLocaleDateString()}`,
+              prompt: audioPrompt,
+              type: 'audio',
+              model: selectedModel,
+              created_at: new Date().toISOString(),
+              project_id: selectedProject,
+              scene_id: selectedScene !== "none" ? selectedScene : undefined,
+              duration: selectedAudioDuration,
+              url: response.data?.audio_url || response.data?.url,
+            }
+            
+            setGeneratedContent(prev => [newContent, ...prev])
+            setAudioPrompt("") // Clear the prompt after successful generation
+            
+            // Show success toast
+            toast({
+              title: "Audio Generated!",
+              description: `Your ${selectedAudioType} has been created successfully.`,
+              variant: "default",
+            })
+            
+            // Auto-play the generated audio for immediate feedback
+            if (response.data?.audio_url) {
+              const audio = new Audio(response.data.audio_url)
+              audio.play().catch(e => console.log('Auto-play prevented:', e))
+            }
+          } else {
+            console.error('ElevenLabs audio generation failed:', response.error)
+            toast({
+              title: "Audio Generation Failed",
+              description: `Error: ${response.error}. Please check your ElevenLabs API key and try again.`,
+              variant: "destructive",
+            })
+          }
+        } else if (type === "audio" && selectedModel === "Suno AI") {
+          console.log('Attempting to generate audio with Suno AI:', {
+            prompt: audioPrompt,
+            type: selectedAudioType,
+            duration: selectedAudioDuration,
+            apiKeyLength: user.sunoApiKey?.length || 0,
+            apiKeyPrefix: user.sunoApiKey?.substring(0, 7) || 'None'
+          })
+          
+          // Import the Suno AI service
+          const { SunoAIService } = await import('@/lib/ai-services')
+          
+          // First validate the API key
+          console.log('Validating Suno AI API key...')
+          const isValid = await SunoAIService.validateApiKey(user.sunoApiKey!)
+          console.log('Suno AI API key validation result:', isValid)
+          
+          if (!isValid) {
+            toast({
+              title: "Invalid API Key",
+              description: "Your Suno AI API key appears to be invalid. Please check your setup.",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
+          
+          // Build enhanced prompt based on audio type
+          let enhancedPrompt = audioPrompt
+          if (selectedAudioType === "music") {
+            enhancedPrompt = `Music: ${audioPrompt}`
+          } else if (selectedAudioType === "sfx") {
+            enhancedPrompt = `Sound effect: ${audioPrompt}`
+          } else if (selectedAudioType === "ambient") {
+            enhancedPrompt = `Ambient: ${audioPrompt}`
+          } else if (selectedAudioType === "score") {
+            enhancedPrompt = `Film score: ${audioPrompt}`
+          }
+          
+          console.log('Enhanced prompt for Suno AI:', enhancedPrompt)
+          
+          const response = await SunoAIService.generateAudio({
+            prompt: enhancedPrompt,
+            type: selectedAudioType,
+            model: selectedModel,
+            apiKey: user.sunoApiKey!,
+          })
+
+          if (response.success) {
+            // Create new generated content
+            const newContent: GeneratedContent = {
+              id: Date.now().toString(),
+              title: `Generated Audio - ${selectedAudioType} - ${new Date().toLocaleDateString()}`,
+              prompt: audioPrompt,
+              type: 'audio',
+              model: selectedModel,
+              created_at: new Date().toISOString(),
+              project_id: selectedProject,
+              scene_id: selectedScene !== "none" ? selectedScene : undefined,
+              duration: selectedAudioDuration,
+              url: response.data?.audio_url || response.data?.url,
+            }
+            
+            setGeneratedContent(prev => [newContent, ...prev])
+            setAudioPrompt("") // Clear the prompt after successful generation
+            
+            // Show success toast
+            toast({
+              title: "Audio Generated!",
+              description: `Your ${selectedAudioType} has been created successfully.`,
+              variant: "default",
+            })
+            
+            // Auto-play the generated audio for immediate feedback
+            if (response.data?.audio_url) {
+              const audio = new Audio(response.data.audio_url)
+              audio.play().catch(e => console.log('Auto-play prevented:', e))
+            }
+          } else {
+            console.error('Suno AI audio generation failed:', response.error)
+            toast({
+              title: "Audio Generation Failed",
+              description: `Error: ${response.error}. Please check your Suno AI API key and try again.`,
+              variant: "destructive",
+            })
+          }
+        } else {
+          // For other models, show a message that they're not implemented yet
+          alert(`${selectedModel} is not yet implemented. Please use ChatGPT for scripts, DALL-E 3 for images, or Runway ML/Kling for videos.`)
+          setIsGenerating(false)
+          return
+        }
 
       setGenerationProgress(100)
     } catch (error) {
@@ -510,85 +860,209 @@ export default function AIStudioPage() {
     }
   }
 
+  const handleVoicePreview = async (voiceId: string) => {
+    if (!user?.elevenlabsApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { ElevenLabsService } = await import('@/lib/ai-services')
+      const response = await ElevenLabsService.getVoicePreview(user.elevenlabsApiKey, voiceId)
+      
+      if (response.success && response.data?.audioUrl) {
+        // Create and play the audio preview
+        const audio = new Audio(response.data.audioUrl)
+        audio.play()
+        
+        toast({
+          title: "Voice Preview",
+          description: "Playing voice preview...",
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Preview Failed",
+          description: response.error || "Could not generate voice preview",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Voice preview error:', error)
+      toast({
+        title: "Preview Error",
+        description: "Failed to generate voice preview",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleCloneVoice = async () => {
+    if (!user?.elevenlabsApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!cloningVoiceName || cloningVoiceFiles.length === 0) {
+      toast({
+        title: "Missing Information",
+        description: "Please provide a voice name and upload audio files.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGenerating(true)
+      const { ElevenLabsService } = await import('@/lib/ai-services')
+      
+      const response = await ElevenLabsService.cloneVoice(
+        user.elevenlabsApiKey,
+        cloningVoiceName,
+        cloningVoiceDescription,
+        cloningVoiceFiles
+      )
+
+      if (response.success) {
+        toast({
+          title: "Voice Cloned!",
+          description: `"${cloningVoiceName}" has been created successfully.`,
+          variant: "default",
+        })
+        
+        // Clear the form
+        setCloningVoiceName("")
+        setCloningVoiceDescription("")
+        setCloningVoiceFiles([])
+        
+        // Optionally refresh available voices
+        // You could implement a function to fetch and update the voice list
+      } else {
+        toast({
+          title: "Cloning Failed",
+          description: response.error || "Failed to clone voice",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Voice cloning error:', error)
+      toast({
+        title: "Cloning Error",
+        description: "Failed to clone voice",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
+  const handleRefreshCustomVoices = async () => {
+    if (!user?.elevenlabsApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { ElevenLabsService } = await import('@/lib/ai-services')
+      const response = await ElevenLabsService.getAvailableVoices(user.elevenlabsApiKey)
+      
+      if (response.success && response.data?.voices) {
+        // Filter to show only custom voices (not the default ones)
+        const customVoicesList = response.data.voices.filter((voice: any) => 
+          voice.category === 'cloned' || voice.category === 'generated'
+        )
+        setCustomVoices(customVoicesList)
+        
+        toast({
+          title: "Voices Refreshed",
+          description: `Found ${customVoicesList.length} custom voices.`,
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Refresh Failed",
+          description: response.error || "Could not fetch custom voices",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Refresh custom voices error:', error)
+      toast({
+        title: "Refresh Error",
+        description: "Failed to refresh custom voices",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleDeleteCustomVoice = async (voiceId: string) => {
+    if (!user?.elevenlabsApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!confirm("Are you sure you want to delete this voice? This action cannot be undone.")) {
+      return
+    }
+
+    try {
+      const { ElevenLabsService } = await import('@/lib/ai-services')
+      const response = await ElevenLabsService.deleteVoice(user.elevenlabsApiKey, voiceId)
+      
+      if (response.success) {
+        // Remove the voice from the local state
+        setCustomVoices(prev => prev.filter(voice => voice.voice_id !== voiceId))
+        
+        toast({
+          title: "Voice Deleted",
+          description: "Custom voice has been removed successfully.",
+          variant: "default",
+        })
+      } else {
+        toast({
+          title: "Deletion Failed",
+          description: response.error || "Failed to delete voice",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Delete custom voice error:', error)
+      toast({
+        title: "Deletion Error",
+        description: "Failed to delete custom voice",
+        variant: "destructive",
+      })
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
 
       <main className="container mx-auto max-w-7xl px-6 py-8">
         {/* Page Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              AI Studio
-            </h1>
-            <p className="text-muted-foreground">Generate scripts, images, and videos with advanced AI models</p>
-            {user?.openaiApiKey ? (
-              <div className="flex items-center gap-2 mt-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-green-500">OpenAI API Key Configured</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 mt-2">
-                <AlertCircle className="h-4 w-4 text-orange-500" />
-                <span className="text-sm text-orange-500">OpenAI API Key Not Configured</span>
-                <Link href="/setup-ai">
-                  <Button size="sm" variant="outline" className="ml-2">
-                    Configure Now
-                  </Button>
-                </Link>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
-              <History className="mr-2 h-4 w-4" />
-              History
-            </Button>
-            <Link href="/setup-ai">
-              <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
-                <Settings className="mr-2 h-4 w-4" />
-                AI Setup
-              </Button>
-            </Link>
-          </div>
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2">AI Studio</h1>
+          <p className="text-muted-foreground">Generate scripts, images, and videos with AI</p>
         </div>
 
-        {/* Continuing Script Banner */}
-        {continuingScript && (
-          <div className="bg-gradient-to-r from-blue-500/10 to-green-500/10 p-6 rounded-lg border-2 border-blue-500/20 mb-8">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <h3 className="text-xl font-bold text-blue-600 mb-3 flex items-center gap-2">
-                  <Bot className="h-5 w-5" />
-                  Continuing Script Generation
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Script:</span>
-                    <p className="font-semibold text-blue-600">{continuingScript.title}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Version:</span>
-                    <p className="font-semibold text-blue-600">{continuingScript.version_name}</p>
-                  </div>
-                  <div className="md:col-span-2">
-                    <span className="text-muted-foreground">Original Prompt:</span>
-                    <p className="font-medium text-blue-600 italic">"{continuingScript.prompt}"</p>
-                  </div>
-                </div>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setContinuingScript(null)}
-                className="border-blue-500/30 text-blue-600 hover:bg-blue-500/10"
-              >
-                Clear
-              </Button>
-            </div>
-          </div>
-        )}
+
 
         <div className="mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
@@ -650,10 +1124,7 @@ export default function AIStudioPage() {
               {/* Generation Panel */}
               <Card className="cinema-card">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wand2 className="h-5 w-5 text-primary" />
-                    Script Generator
-                  </CardTitle>
+                  <CardTitle>Script Generator</CardTitle>
                   <CardDescription>Generate dialogue, scenes, and story elements</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -680,22 +1151,7 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {/* Show current script content if continuing */}
-                  {continuingScript && (
-                    <div className="p-4 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                      <h4 className="font-medium text-sm mb-2 text-blue-600 flex items-center gap-2">
-                        <FileText className="h-4 w-4" />
-                        Current Script Content:
-                      </h4>
-                      <div className="max-h-32 overflow-y-auto bg-background p-3 rounded border text-xs font-mono text-muted-foreground">
-                        {continuingScript.content.substring(0, 300)}
-                        {continuingScript.content.length > 300 && '...'}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-2">
-                        You can modify the prompt below to continue or edit this script
-                      </p>
-                    </div>
-                  )}
+
 
                   <div className="grid gap-2">
                     <Label>Template</Label>
@@ -720,13 +1176,52 @@ export default function AIStudioPage() {
                         <SelectValue placeholder="Select AI model" />
                       </SelectTrigger>
                       <SelectContent className="cinema-card border-border">
-                        {aiModels.script.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
+                        {aiModels.script.map((model) => {
+                          let isReady = false
+                          let statusText = ""
+                          
+                          if (model === "ChatGPT") {
+                            isReady = !!user?.openaiApiKey
+                            statusText = isReady ? "Ready" : "OpenAI API Key Required"
+                          } else if (model === "Claude") {
+                            isReady = !!user?.anthropicApiKey
+                            statusText = isReady ? "Ready" : "Anthropic API Key Required"
+                          } else {
+                            isReady = false
+                            statusText = "Coming Soon"
+                          }
+                          
+                          return (
+                            <SelectItem key={model} value={model} disabled={!isReady}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{model}</span>
+                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                  {statusText}
+                                </Badge>
+                              </div>
+                            </SelectItem>
+                          )
+                        })}
                       </SelectContent>
                     </Select>
+                    
+                    {selectedModel === "ChatGPT" && !user?.openaiApiKey && (
+                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <p className="text-sm text-orange-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                        </p>
+                      </div>
+                    )}
+                    
+                    {selectedModel === "Claude" && !user?.anthropicApiKey && (
+                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <p className="text-sm text-orange-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          Anthropic API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid gap-2">
@@ -751,7 +1246,14 @@ export default function AIStudioPage() {
 
                   <Button
                     onClick={() => handleGenerate("script")}
-                    disabled={isGenerating || !scriptPrompt || !selectedProject}
+                    disabled={
+                      isGenerating || 
+                      !scriptPrompt || 
+                      !selectedProject || 
+                      !selectedModel ||
+                      (selectedModel === "ChatGPT" && !user?.openaiApiKey) ||
+                      (selectedModel === "Claude" && !user?.anthropicApiKey)
+                    }
                     className="w-full gradient-button text-white"
                   >
                     {isGenerating ? (
@@ -762,13 +1264,7 @@ export default function AIStudioPage() {
                     Generate Script
                   </Button>
                   
-                  {/* Debug info */}
-                  <div className="text-xs text-muted-foreground mt-2">
-                    Selected model: {selectedModel || "None"} | 
-                    Template: {selectedTemplate || "None"} | 
-                    Project: {selectedProject || "None"} | 
-                    Can generate: {!isGenerating && scriptPrompt && selectedProject && selectedModel ? "Yes" : "No"}
-                  </div>
+
                 </CardContent>
               </Card>
 
@@ -866,10 +1362,7 @@ export default function AIStudioPage() {
               {/* Generation Panel */}
               <Card className="cinema-card">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wand2 className="h-5 w-5 text-secondary" />
-                    Image Generator
-                  </CardTitle>
+                  <CardTitle>Image Generator</CardTitle>
                   <CardDescription>Create concept art, storyboards, and visual assets</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -896,13 +1389,43 @@ export default function AIStudioPage() {
                         <SelectValue placeholder="Select AI model" />
                       </SelectTrigger>
                       <SelectContent className="cinema-card border-border">
-                        {aiModels.image.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
+                        {aiModels.image.map((model) => {
+                          let isReady = false
+                          let statusText = ""
+                          
+                          if (model === "DALL-E 3") {
+                            isReady = !!user?.openaiApiKey
+                            statusText = isReady ? "Ready" : "OpenAI API Key Required"
+                          } else if (model === "OpenArt") {
+                            isReady = !!user?.openartApiKey
+                            statusText = isReady ? "Ready" : "API Key Required"
+                          } else {
+                            isReady = false
+                            statusText = "Coming Soon"
+                          }
+                          
+                          return (
+                            <SelectItem key={model} value={model} disabled={!isReady}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{model}</span>
+                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                  {statusText}
+                                </Badge>
+                              </div>
+                            </SelectItem>
+                          )
+                        })}
                       </SelectContent>
                     </Select>
+                    
+                    {selectedModel === "DALL-E 3" && !user?.openaiApiKey && (
+                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <p className="text-sm text-orange-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid gap-2">
@@ -927,7 +1450,13 @@ export default function AIStudioPage() {
 
                   <Button
                     onClick={() => handleGenerate("image")}
-                    disabled={isGenerating || !imagePrompt || !selectedModel}
+                    disabled={
+                      isGenerating || 
+                      !imagePrompt || 
+                      !selectedModel ||
+                      (selectedModel === "DALL-E 3" && !user?.openaiApiKey) ||
+                      (selectedModel === "OpenArt" && !user?.openartApiKey)
+                    }
                     className="w-full gradient-button text-white"
                   >
                     {isGenerating ? (
@@ -938,12 +1467,7 @@ export default function AIStudioPage() {
                     Generate Image
                   </Button>
                   
-                  {/* Debug info */}
-                  <div className="text-xs text-muted-foreground mt-2">
-                    Selected model: {selectedModel || "None"} | 
-                    Prompt length: {imagePrompt.length} | 
-                    Can generate: {!isGenerating && imagePrompt && selectedModel ? "Yes" : "No"}
-                  </div>
+
                 </CardContent>
               </Card>
 
@@ -1027,16 +1551,13 @@ export default function AIStudioPage() {
               {/* Generation Panel */}
               <Card className="cinema-card">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wand2 className="h-5 w-5 text-chart-3" />
-                    Video Generator
-                  </CardTitle>
+                  <CardTitle>Video Generator</CardTitle>
                   <CardDescription>Create previsualization and video clips</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid gap-2">
                     <Label>Duration</Label>
-                    <Select>
+                    <Select value={selectedDuration} onValueChange={setSelectedDuration}>
                       <SelectTrigger className="bg-input border-border">
                         <SelectValue placeholder="Select duration" />
                       </SelectTrigger>
@@ -1049,6 +1570,89 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
+                  {selectedModel === "Runway ML" && (
+                    <>
+                      <div className="grid gap-2">
+                        <Label>Video Style</Label>
+                        <Select value={selectedVideoStyle} onValueChange={setSelectedVideoStyle}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Choose video style" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            <SelectItem value="cinematic">Cinematic</SelectItem>
+                            <SelectItem value="realistic">Realistic</SelectItem>
+                            <SelectItem value="artistic">Artistic</SelectItem>
+                            <SelectItem value="documentary">Documentary</SelectItem>
+                            <SelectItem value="fantasy">Fantasy</SelectItem>
+                            <SelectItem value="sci-fi">Sci-Fi</SelectItem>
+                            <SelectItem value="vintage">Vintage</SelectItem>
+                            <SelectItem value="modern">Modern</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Camera Movement</Label>
+                        <Select value={selectedCameraMovement} onValueChange={setSelectedCameraMovement}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Select camera movement" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            <SelectItem value="static">Static</SelectItem>
+                            <SelectItem value="pan-left">Pan Left</SelectItem>
+                            <SelectItem value="pan-right">Pan Right</SelectItem>
+                            <SelectItem value="pan-up">Pan Up</SelectItem>
+                            <SelectItem value="pan-down">Pan Down</SelectItem>
+                            <SelectItem value="zoom-in">Zoom In</SelectItem>
+                            <SelectItem value="zoom-out">Zoom Out</SelectItem>
+                            <SelectItem value="dolly-in">Dolly In</SelectItem>
+                            <SelectItem value="dolly-out">Dolly Out</SelectItem>
+                            <SelectItem value="tilt-up">Tilt Up</SelectItem>
+                            <SelectItem value="tilt-down">Tilt Down</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Lighting</Label>
+                        <Select value={selectedLighting} onValueChange={setSelectedLighting}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Choose lighting" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            <SelectItem value="natural">Natural</SelectItem>
+                            <SelectItem value="dramatic">Dramatic</SelectItem>
+                            <SelectItem value="soft">Soft</SelectItem>
+                            <SelectItem value="harsh">Harsh</SelectItem>
+                            <SelectItem value="warm">Warm</SelectItem>
+                            <SelectItem value="cool">Cool</SelectItem>
+                            <SelectItem value="golden-hour">Golden Hour</SelectItem>
+                            <SelectItem value="blue-hour">Blue Hour</SelectItem>
+                            <SelectItem value="studio">Studio</SelectItem>
+                            <SelectItem value="low-key">Low Key</SelectItem>
+                            <SelectItem value="high-key">High Key</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="grid gap-2">
+                        <Label>Resolution</Label>
+                        <Select value={selectedResolution} onValueChange={setSelectedResolution}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Select resolution" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            <SelectItem value="1024x576">16:9 (1024x576)</SelectItem>
+                            <SelectItem value="1024x1024">1:1 (1024x1024)</SelectItem>
+                            <SelectItem value="1024x768">4:3 (1024x768)</SelectItem>
+                            <SelectItem value="1280x720">HD (1280x720)</SelectItem>
+                            <SelectItem value="1920x1080">Full HD (1920x1080)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </>
+                  )}
+
                   <div className="grid gap-2">
                     <Label>AI Model</Label>
                     <Select value={selectedModel} onValueChange={setSelectedModel}>
@@ -1056,13 +1660,55 @@ export default function AIStudioPage() {
                         <SelectValue placeholder="Select AI model" />
                       </SelectTrigger>
                       <SelectContent className="cinema-card border-border">
-                        {aiModels.video.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
+                        {aiModels.video.map((model) => {
+                          let isReady = false
+                          let statusText = ""
+                          
+                          if (model === "Runway ML") {
+                            isReady = !!user?.runwayApiKey
+                            statusText = isReady ? "Ready" : "API Key Required"
+                          } else if (model === "Kling") {
+                            isReady = !!user?.klingApiKey
+                            statusText = isReady ? "Ready" : "API Key Required"
+                          } else {
+                            isReady = true
+                            statusText = "Coming Soon"
+                          }
+                          
+                          return (
+                            <SelectItem key={model} value={model} disabled={!isReady}>
+                              <div className="flex items-center justify-between w-full">
+                                <span>{model}</span>
+                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                  {statusText}
+                                </Badge>
+                              </div>
+                            </SelectItem>
+                          )
+                        })}
                       </SelectContent>
                     </Select>
+                    
+                    {selectedModel === "Runway ML" && !user?.runwayApiKey && (
+                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <p className="text-sm text-orange-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          Runway ML API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                        </p>
+                        <p className="text-xs text-orange-500 mt-1">
+                          Get your API key from <a href="https://runwayml.com/api" target="_blank" rel="noopener noreferrer" className="underline">Runway ML's API page</a>
+                        </p>
+                      </div>
+                    )}
+                    
+                    {selectedModel === "Kling" && !user?.klingApiKey && (
+                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                        <p className="text-sm text-orange-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          Kling API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid gap-2">
@@ -1087,7 +1733,13 @@ export default function AIStudioPage() {
 
                   <Button
                     onClick={() => handleGenerate("video")}
-                    disabled={isGenerating || !videoPrompt}
+                    disabled={
+                      isGenerating || 
+                      !videoPrompt || 
+                      !selectedModel ||
+                      (selectedModel === "Runway ML" && !user?.runwayApiKey) ||
+                      (selectedModel === "Kling" && !user?.klingApiKey)
+                    }
                     className="w-full gradient-button text-white"
                   >
                     {isGenerating ? (
@@ -1097,6 +1749,8 @@ export default function AIStudioPage() {
                     )}
                     Generate Video
                   </Button>
+                  
+
                 </CardContent>
               </Card>
 
@@ -1191,16 +1845,13 @@ export default function AIStudioPage() {
               {/* Generation Panel */}
               <Card className="cinema-card">
                 <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wand2 className="h-5 w-5 text-cyan-500" />
-                    Audio Generator
-                  </CardTitle>
+                  <CardTitle>Audio Generator</CardTitle>
                   <CardDescription>Create music, sound effects, and audio tracks</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid gap-2">
                     <Label>Audio Type</Label>
-                    <Select>
+                    <Select value={selectedAudioType} onValueChange={setSelectedAudioType}>
                       <SelectTrigger className="bg-input border-border">
                         <SelectValue placeholder="Choose audio type" />
                       </SelectTrigger>
@@ -1210,6 +1861,9 @@ export default function AIStudioPage() {
                         <SelectItem value="ambient">Ambient Sounds</SelectItem>
                         <SelectItem value="dialogue">Voice Generation</SelectItem>
                         <SelectItem value="score">Film Score</SelectItem>
+                        <SelectItem value="foley">Foley Sounds</SelectItem>
+                        <SelectItem value="atmosphere">Atmospheric Audio</SelectItem>
+                        <SelectItem value="transition">Audio Transitions</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1230,9 +1884,27 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
+                  {selectedModel === "ElevenLabs" && !user?.elevenlabsApiKey && (
+                    <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                      <p className="text-sm text-orange-600">
+                        <AlertCircle className="h-4 w-4 inline mr-2" />
+                        ElevenLabs API key required. <Link href="/setup-ai" className="underline">Configure now</Link> or <Link href="https://elevenlabs.io/" target="_blank" className="underline">get your API key</Link>
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedModel === "Suno AI" && !user?.sunoApiKey && (
+                    <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                      <p className="text-sm text-orange-600">
+                        <AlertCircle className="h-4 w-4 inline mr-2" />
+                        Suno AI API key required. <Link href="/setup-ai" className="underline">Configure now</Link> or <Link href="https://suno.ai/" target="_blank" className="underline">get your API key</Link>
+                      </p>
+                    </div>
+                  )}
+
                   <div className="grid gap-2">
                     <Label>Duration</Label>
-                    <Select>
+                    <Select value={selectedAudioDuration} onValueChange={setSelectedAudioDuration}>
                       <SelectTrigger className="bg-input border-border">
                         <SelectValue placeholder="Select duration" />
                       </SelectTrigger>
@@ -1246,9 +1918,140 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
+                  {selectedModel === "ElevenLabs" && (
+                    <div className="grid gap-2">
+                      <Label>Voice</Label>
+                      <Select value={selectedVoice} onValueChange={setSelectedVoice}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select voice" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="21m00Tcm4TlvDq8ikWAM">Rachel (Female, Warm)</SelectItem>
+                          <SelectItem value="AZnzlk1XvdvUeBnXmlld">Domi (Female, Strong)</SelectItem>
+                          <SelectItem value="EXAVITQu4vr4xnSDxMaL">Bella (Female, Soft)</SelectItem>
+                          <SelectItem value="VR6AewLTigWG4xSOukaG">Arnold (Male, Deep)</SelectItem>
+                          <SelectItem value="pNInz6obpgDQGcFmaJgB">Adam (Male, Clear)</SelectItem>
+                          <SelectItem value="yoZ06aMxZJJ28mfd3POQ">Josh (Male, Casual)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Voice Preview Button */}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleVoicePreview(selectedVoice)}
+                        className="text-xs"
+                        disabled={!user?.elevenlabsApiKey}
+                      >
+                        <Play className="mr-1 h-3 w-3" />
+                        Preview Voice
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Voice Cloning Section */}
+                  {selectedModel === "ElevenLabs" && (
+                    <div className="border border-border rounded-lg p-4 bg-muted/30">
+                      <Label className="text-sm font-medium mb-2 block">Voice Cloning</Label>
+                      <p className="text-xs text-muted-foreground mb-3">
+                        Create a custom voice by uploading audio samples (5-10 seconds each, clear speech)
+                      </p>
+                      
+                      <div className="space-y-3">
+                        <Input
+                          placeholder="Voice name (e.g., 'My Character')"
+                          value={cloningVoiceName}
+                          onChange={(e) => setCloningVoiceName(e.target.value)}
+                          className="text-xs"
+                        />
+                        <Input
+                          placeholder="Voice description (e.g., 'Young female protagonist')"
+                          value={cloningVoiceDescription}
+                          onChange={(e) => setCloningVoiceDescription(e.target.value)}
+                          className="text-xs"
+                        />
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="file"
+                            accept="audio/*"
+                            multiple
+                            onChange={(e) => setCloningVoiceFiles(Array.from(e.target.files || []))}
+                            className="text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={handleCloneVoice}
+                            disabled={!cloningVoiceName || cloningVoiceFiles.length === 0 || !user?.elevenlabsApiKey}
+                            className="text-xs"
+                          >
+                            <Bot className="mr-1 h-3 w-3" />
+                            Clone Voice
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Custom Voices Management */}
+                  {selectedModel === "ElevenLabs" && (
+                    <div className="border border-border rounded-lg p-4 bg-muted/30">
+                      <div className="flex items-center justify-between mb-3">
+                        <Label className="text-sm font-medium">Your Custom Voices</Label>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleRefreshCustomVoices}
+                          className="text-xs"
+                          disabled={!user?.elevenlabsApiKey}
+                        >
+                          <RefreshCw className="mr-1 h-3 w-3" />
+                          Refresh
+                        </Button>
+                      </div>
+                      
+                      {customVoices.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          No custom voices yet. Create one above!
+                        </p>
+                      ) : (
+                        <div className="space-y-2 max-h-32 overflow-y-auto">
+                          {customVoices.map((voice) => (
+                            <div key={voice.voice_id} className="flex items-center justify-between p-2 bg-background/50 rounded border">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium truncate">{voice.name}</p>
+                                <p className="text-xs text-muted-foreground truncate">{voice.description}</p>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleVoicePreview(voice.voice_id)}
+                                  className="text-xs h-6 px-2"
+                                >
+                                  <Play className="h-3 w-3" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleDeleteCustomVoice(voice.voice_id)}
+                                  className="text-xs h-6 px-2 text-red-500 hover:text-red-600"
+                                >
+                                  <AlertCircle className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
                     <Textarea
+                      value={audioPrompt}
+                      onChange={(e) => setAudioPrompt(e.target.value)}
                       placeholder="Describe the audio you want to generate..."
                       className="bg-input border-border min-h-32"
                     />
@@ -1266,7 +2069,14 @@ export default function AIStudioPage() {
 
                   <Button
                     onClick={() => handleGenerate("audio")}
-                    disabled={isGenerating}
+                    disabled={
+                      isGenerating || 
+                      !audioPrompt || 
+                      !selectedProject || 
+                      !selectedModel ||
+                      (selectedModel === "ElevenLabs" && !user?.elevenlabsApiKey) ||
+                      (selectedModel === "Suno AI" && !user?.sunoApiKey)
+                    }
                     className="w-full gradient-button text-white"
                   >
                     {isGenerating ? (
@@ -1312,11 +2122,36 @@ export default function AIStudioPage() {
                             </Badge>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Button size="sm" variant="outline" className="text-xs bg-transparent">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="text-xs bg-transparent"
+                              onClick={() => {
+                                if (audio.url) {
+                                  const audioElement = new Audio(audio.url)
+                                  audioElement.play().catch(e => console.log('Play failed:', e))
+                                }
+                              }}
+                            >
                               <Play className="mr-1 h-3 w-3" />
                               Play
                             </Button>
-                            <Button size="sm" variant="outline" className="text-xs bg-transparent">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="text-xs bg-transparent"
+                              onClick={() => {
+                                if (audio.url) {
+                                  // Create a download link for the audio
+                                  const link = document.createElement('a')
+                                  link.href = audio.url
+                                  link.download = `${audio.title || 'generated-audio'}.mp3`
+                                  document.body.appendChild(link)
+                                  link.click()
+                                  document.body.removeChild(link)
+                                }
+                              }}
+                            >
                               <Download className="mr-1 h-3 w-3" />
                               Download
                             </Button>
@@ -1349,135 +2184,19 @@ export default function AIStudioPage() {
 
         {/* Save Confirmation Modal */}
         <Dialog open={showSaveModal} onOpenChange={setShowSaveModal}>
-          <DialogContent className="cinema-card border-primary/20 max-w-md">
+          <DialogContent>
             <DialogHeader>
-              <div className="flex items-center gap-3 mb-2">
-                <div className="p-2 bg-primary/20 rounded-full">
-                  <CheckCircle className="h-5 w-5 text-primary" />
-                </div>
-                <DialogTitle className="text-lg">Save to Asset Library</DialogTitle>
-              </div>
-              <DialogDescription className="text-muted-foreground">
-                This content will be saved to your asset library and linked to your project.
+              <DialogTitle>Save to Library</DialogTitle>
+              <DialogDescription>
+                Save this content to your asset library.
               </DialogDescription>
             </DialogHeader>
-
-            {saveModalData && (
-              <div className="space-y-4 py-4">
-                {/* Content Preview */}
-                <div className="p-4 bg-muted/50 rounded-lg border border-border">
-                  <div className="flex items-center gap-2 mb-2">
-                    {saveModalData.type === "script" && <FileText className="h-4 w-4 text-primary" />}
-                    {saveModalData.type === "image" && <ImageIcon className="h-4 w-4 text-secondary" />}
-                    {saveModalData.type === "video" && <Video className="h-4 w-4 text-chart-3" />}
-                    {saveModalData.type === "audio" && <Sparkles className="h-4 w-4 text-cyan-500" />}
-                    <span className="font-medium text-sm">{saveModalData.item.title}</span>
-                  </div>
-
-                  {saveModalData.type === "script" && (
-                    <p className="text-xs text-muted-foreground line-clamp-2">{saveModalData.item.content}</p>
-                  )}
-
-                  {saveModalData.type === "image" && (
-                    <p className="text-xs text-muted-foreground line-clamp-2">{saveModalData.item.prompt}</p>
-                  )}
-
-                  {saveModalData.type === "video" && (
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        {saveModalData.item.duration}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">{saveModalData.item.prompt}</span>
-                    </div>
-                  )}
-
-                  {saveModalData.type === "audio" && (
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs">
-                        {saveModalData.item.duration || "2:30"}
-                      </Badge>
-                      <span className="text-xs text-muted-foreground">{saveModalData.item.prompt || "AI-generated audio track"}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Version Label Input */}
-                <div className="space-y-2">
-                  <Label htmlFor="versionLabel" className="text-sm font-medium">
-                    Version Label (Optional)
-                  </Label>
-                  <Input
-                    id="versionLabel"
-                    value={saveModalData.versionLabel || ''}
-                    onChange={(e) => setSaveModalData((prev: any) => ({
-                      ...prev,
-                      versionLabel: e.target.value
-                    }))}
-                    placeholder="e.g., 'First Draft', 'Final Version', 'Director Notes'"
-                    className="text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Add a custom label to identify this version (e.g., "Rough Draft", "Final", "Director's Cut")
-                  </p>
-                </div>
-
-                {/* Project & Scene Info */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Project:</span>
-                    <span className="font-medium text-primary">{saveModalData.projectName}</span>
-                  </div>
-
-                  {saveModalData.sceneName && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Scene:</span>
-                      <span className="font-medium text-secondary">{saveModalData.sceneName}</span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Type:</span>
-                    <Badge variant="outline" className="text-xs capitalize">
-                      {saveModalData.type}
-                    </Badge>
-                  </div>
-                </div>
-
-                {/* Success Message */}
-                <div className="p-3 bg-primary/10 rounded-lg border border-primary/20">
-                  <p className="text-sm text-primary">
-                    ✓ This content will be available in your Asset Library and can be accessed from the timeline.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <DialogFooter className="gap-2">
-              <Button
-                variant="outline"
-                onClick={() => setShowSaveModal(false)}
-                className="bg-transparent border-border"
-              >
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowSaveModal(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleConfirmSave} disabled={loading} className="gradient-button text-white">
-                {loading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="mr-2 h-4 w-4" />
-                )}
-                {loading ? "Saving..." : "Save to Project"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  handleConfirmSave()
-                  // Navigate to assets page (you could use router.push('/assets') here)
-                }}
-                className="bg-transparent border-border"
-              >
-                <ExternalLink className="mr-2 h-4 w-4" />
-                View in Library
+              <Button onClick={handleConfirmSave} disabled={loading}>
+                {loading ? "Saving..." : "Save"}
               </Button>
             </DialogFooter>
           </DialogContent>

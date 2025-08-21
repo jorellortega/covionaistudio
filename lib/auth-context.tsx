@@ -292,7 +292,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw error
       }
 
-      const updatedUser = { ...user, openai_api_key: apiKey }
+      const updatedUser = { ...user, openaiApiKey: apiKey }
       setUser(updatedUser)
     } catch (error) {
       console.error('Error updating API key:', error)
@@ -304,8 +304,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return
     
     try {
+      // Map service names to database column names
+      const serviceMapping: { [key: string]: string } = {
+        'anthropic': 'anthropic_api_key',
+        'openart': 'openart_api_key',
+        'kling': 'kling_api_key',
+        'runway': 'runway_api_key',
+        'elevenlabs': 'elevenlabs_api_key',
+        'suno': 'suno_api_key'
+      }
+      
+      // Map service names to user object property names
+      const propertyMapping: { [key: string]: string } = {
+        'anthropic': 'anthropicApiKey',
+        'openart': 'openartApiKey',
+        'kling': 'klingApiKey',
+        'runway': 'runwayApiKey',
+        'elevenlabs': 'elevenlabsApiKey',
+        'suno': 'sunoApiKey'
+      }
+      
+      const dbColumn = serviceMapping[service]
+      const userProperty = propertyMapping[service]
+      
+      if (!dbColumn || !userProperty) {
+        throw new Error(`Unsupported service: ${service}`)
+      }
+      
       const updateData: any = {}
-      updateData[`${service}_api_key`] = apiKey
+      updateData[dbColumn] = apiKey
 
       const { error } = await supabase
         .from('users')
@@ -316,7 +343,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw error
       }
 
-      const updatedUser = { ...user, [`${service}ApiKey`]: apiKey }
+      const updatedUser = { ...user, [userProperty]: apiKey }
       setUser(updatedUser)
     } catch (error) {
       console.error('Error updating service API key:', error)

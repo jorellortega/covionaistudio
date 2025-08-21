@@ -35,11 +35,13 @@ import {
   FolderOpen,
   Loader2,
   ImageIcon,
+  RefreshCw,
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
 import { useToast } from "@/hooks/use-toast"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
+import { analyzeImageUrl, getFallbackImageUrl } from "@/lib/image-utils"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -569,6 +571,65 @@ export default function TimelinePage() {
       })
     } finally {
       setIsUploadingImage(false)
+    }
+  }
+
+  const handleRefreshExpiredImage = async (scene: SceneWithMetadata) => {
+    if (!scene.metadata.thumbnail || !movieId) return
+    
+    const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+    if (!urlInfo.needsRefresh) {
+      toast({
+        title: "Image is Current",
+        description: "This image doesn't need refreshing.",
+      })
+      return
+    }
+    
+    try {
+      // Download and store the expired image locally
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: scene.metadata.thumbnail,
+          sceneId: scene.id,
+          movieId: movieId,
+          fileName: `refreshed_${scene.name.replace(/[^a-zA-Z0-9]/g, '_')}.png`
+        })
+      })
+      
+      if (!response.ok) {
+        throw new Error('Failed to refresh image')
+      }
+      
+      const result = await response.json()
+      
+      if (result.success) {
+        // Update the scene with the new local URL
+        await TimelineService.updateScene(scene.id, {
+          metadata: { 
+            ...scene.metadata, 
+            thumbnail: result.localUrl 
+          }
+        })
+        
+        toast({
+          title: "Image Refreshed",
+          description: "Expired image has been downloaded and stored locally.",
+        })
+        
+        await refreshScenes()
+      } else {
+        throw new Error(result.error || 'Failed to refresh image')
+      }
+    } catch (error) {
+      console.error("Failed to refresh expired image:", error)
+      toast({
+        title: "Refresh Failed",
+        description: "Failed to refresh expired image. Please try again.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -1487,41 +1548,75 @@ export default function TimelinePage() {
 
                               {/* Mobile Thumbnail */}
                               <div className="w-full h-32 md:w-40 md:h-64 relative bg-muted/20 border-t md:border-l md:border-t-0 border-border/30 flex-shrink-0 overflow-hidden">
-                                <img
-                                  src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=288&width=192&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name} - ${scene.description}`}
-                                  alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
-                                  className="w-full h-full object-cover md:object-contain md:rounded-r-lg"
-                                  onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                                  onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                                />
-                                {/* Scene number overlay */}
-                                <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                                  {scene.metadata.sceneNumber || index + 1}
-                                </div>
-                                
-                                {/* Debug: Show thumbnail URL if exists */}
-                                {scene.metadata.thumbnail && (
-                                  <div className="absolute bottom-2 right-2 bg-green-600/90 text-white text-xs px-2 py-1 rounded max-w-32 truncate">
-                                    ✓ Has Image
-                                  </div>
-                                )}
-                                
-                                {/* Upload Image Button */}
-                                <div className="absolute bottom-2 left-2">
-                                  <Button
-                                    size="sm"
-                                    variant="secondary"
-                                    onClick={(e) => {
-                                      e.preventDefault()
-                                      e.stopPropagation()
-                                      handleUploadImage(scene)
-                                    }}
-                                    className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
-                                  >
-                                    <ImageIcon className="h-3 w-3 mr-1" />
-                                    UPLOAD
-                                  </Button>
-                                </div>
+                                {(() => {
+                                  const urlInfo = scene.metadata.thumbnail ? analyzeImageUrl(scene.metadata.thumbnail) : null
+                                  const imageSrc = scene.metadata.thumbnail && !urlInfo?.needsRefresh 
+                                    ? scene.metadata.thumbnail 
+                                    : getFallbackImageUrl(scene.name, scene.metadata.sceneNumber || (index + 1).toString())
+                                  
+                                  return (
+                                    <>
+                                      <img
+                                        src={imageSrc}
+                                        alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
+                                        className="w-full h-full object-cover md:object-contain md:rounded-r-lg"
+                                        onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                        onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                      />
+                                      
+                                      {/* Scene number overlay */}
+                                      <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                        {scene.metadata.sceneNumber || index + 1}
+                                      </div>
+                                      
+                                      {/* Image status indicator */}
+                                      {scene.metadata.thumbnail && (
+                                        <div className={`absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate ${
+                                          urlInfo?.needsRefresh 
+                                            ? 'bg-orange-600/90' 
+                                            : 'bg-green-600/90'
+                                        }`}>
+                                          {urlInfo?.needsRefresh ? '⚠️ Expired' : '✓ Has Image'}
+                                        </div>
+                                      )}
+                                      
+                                      {/* Action buttons */}
+                                      <div className="absolute bottom-2 left-2 flex gap-1">
+                                        {/* Refresh button for expired images */}
+                                        {urlInfo?.needsRefresh && (
+                                          <Button
+                                            size="sm"
+                                            variant="secondary"
+                                            onClick={(e) => {
+                                              e.preventDefault()
+                                              e.stopPropagation()
+                                              handleRefreshExpiredImage(scene)
+                                            }}
+                                            className="h-auto px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                            title="Refresh expired image"
+                                          >
+                                            <RefreshCw className="h-3 w-3" />
+                                          </Button>
+                                        )}
+                                        
+                                        {/* Upload Image Button */}
+                                        <Button
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            handleUploadImage(scene)
+                                          }}
+                                          className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                        >
+                                          <ImageIcon className="h-3 w-3 mr-1" />
+                                          UPLOAD
+                                        </Button>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
                               </div>
                             </div>
                           </CardHeader>
@@ -1674,41 +1769,75 @@ export default function TimelinePage() {
                                   </div>
 
                                   <div className="w-40 h-64 relative bg-muted/20 border-l border-border/30 flex-shrink-0 overflow-hidden">
-                                    <img
-                                      src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=288&width=192&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name} - ${scene.description}`}
-                                      alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
-                                      className="w-full h-full object-contain rounded-r-lg"
-                                      onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                                      onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                                    />
-                                    {/* Scene number overlay */}
-                                    <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                                      {scene.metadata.sceneNumber || index + 1}
-                                    </div>
-                                    
-                                    {/* Debug: Show thumbnail URL if exists */}
-                                    {scene.metadata.thumbnail && (
-                                      <div className="absolute bottom-2 right-2 bg-green-600/90 text-white text-xs px-2 py-1 rounded max-w-32 truncate">
-                                        ✓ Has Image
-                                      </div>
-                                    )}
-                                    
-                                    {/* Upload Image Button */}
-                                    <div className="absolute bottom-2 left-2">
-                                      <Button
-                                        size="sm"
-                                        variant="secondary"
-                                        onClick={(e) => {
-                                          e.preventDefault()
-                                          e.stopPropagation()
-                                          handleUploadImage(scene)
-                                        }}
-                                        className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
-                                      >
-                                        <ImageIcon className="h-3 w-3 mr-1" />
-                                        UPLOAD
-                                      </Button>
-                                    </div>
+                                    {(() => {
+                                      const urlInfo = scene.metadata.thumbnail ? analyzeImageUrl(scene.metadata.thumbnail) : null
+                                      const imageSrc = scene.metadata.thumbnail && !urlInfo?.needsRefresh 
+                                        ? scene.metadata.thumbnail 
+                                        : getFallbackImageUrl(scene.name, scene.metadata.sceneNumber || (index + 1).toString())
+                                      
+                                      return (
+                                        <>
+                                          <img
+                                            src={imageSrc}
+                                            alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
+                                            className="w-full h-full object-contain rounded-r-lg"
+                                            onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                            onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                          />
+                                          
+                                          {/* Scene number overlay */}
+                                          <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                            {scene.metadata.sceneNumber || index + 1}
+                                          </div>
+                                          
+                                          {/* Image status indicator */}
+                                          {scene.metadata.thumbnail && (
+                                            <div className={`absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate ${
+                                              urlInfo?.needsRefresh 
+                                                ? 'bg-orange-600/90' 
+                                                : 'bg-green-600/90'
+                                            }`}>
+                                              {urlInfo?.needsRefresh ? '⚠️ Expired' : '✓ Has Image'}
+                                            </div>
+                                          )}
+                                          
+                                          {/* Action buttons */}
+                                          <div className="absolute bottom-2 left-2 flex gap-1">
+                                            {/* Refresh button for expired images */}
+                                            {urlInfo?.needsRefresh && (
+                                              <Button
+                                                size="sm"
+                                                variant="secondary"
+                                                onClick={(e) => {
+                                                  e.preventDefault()
+                                                  e.stopPropagation()
+                                                  handleRefreshExpiredImage(scene)
+                                                }}
+                                                className="h-auto px-2 py-2 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                                title="Refresh expired image"
+                                              >
+                                                <RefreshCw className="h-3 w-3" />
+                                              </Button>
+                                            )}
+                                            
+                                            {/* Upload Image Button */}
+                                            <Button
+                                              size="sm"
+                                              variant="secondary"
+                                              onClick={(e) => {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                                handleUploadImage(scene)
+                                              }}
+                                              className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                            >
+                                              <ImageIcon className="h-3 w-3 mr-1" />
+                                              UPLOAD
+                                            </Button>
+                                          </div>
+                                        </>
+                                      )
+                                    })()}
                                   </div>
                                 </div>
                               </CardHeader>
@@ -1776,22 +1905,46 @@ export default function TimelinePage() {
                           {/* Scene Thumbnail with Upload */}
                           <div className="mt-4 flex items-center gap-4">
                             <div className="relative w-24 h-16 bg-muted/20 rounded border border-border/30 overflow-hidden">
-                              <img
-                                src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=96&width=96&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name}`}
-                                alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
-                                className="w-full h-full object-cover"
-                                onLoad={() => console.log('Video view thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                                onError={() => console.log('Video view thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
-                              />
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => handleUploadImage(scene)}
-                                className="absolute inset-0 h-full w-full bg-blue-600/80 hover:bg-blue-700/90 text-white flex items-center justify-center text-xs font-medium"
-                              >
-                                <ImageIcon className="h-3 w-3 mr-1" />
-                                UPLOAD
-                              </Button>
+                              {(() => {
+                                const urlInfo = scene.metadata.thumbnail ? analyzeImageUrl(scene.metadata.thumbnail) : null
+                                const imageSrc = scene.metadata.thumbnail && !urlInfo?.needsRefresh 
+                                  ? scene.metadata.thumbnail 
+                                  : getFallbackImageUrl(scene.name, scene.metadata.sceneNumber || (index + 1).toString())
+                                
+                                return (
+                                  <>
+                                    <img
+                                      src={imageSrc}
+                                      alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
+                                      className="w-full h-full object-cover"
+                                      onLoad={() => console.log('Video view thumbnail loaded:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                      onError={() => console.log('Video view thumbnail failed to load:', scene.name, 'URL:', imageSrc, 'Full metadata:', scene.metadata)}
+                                    />
+                                    
+                                    {/* Image status indicator */}
+                                    {scene.metadata.thumbnail && (
+                                      <div className={`absolute top-1 right-1 text-white text-xs px-1 py-0.5 rounded text-[10px] ${
+                                        urlInfo?.needsRefresh 
+                                          ? 'bg-orange-600/90' 
+                                          : 'bg-green-600/90'
+                                      }`}>
+                                        {urlInfo?.needsRefresh ? '⚠️' : '✓'}
+                                      </div>
+                                    )}
+                                    
+                                    {/* Upload Button */}
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() => handleUploadImage(scene)}
+                                      className="absolute inset-0 h-full w-full bg-blue-600/80 hover:bg-blue-700/90 text-white flex items-center justify-center text-xs font-medium"
+                                    >
+                                      <ImageIcon className="h-3 w-3 mr-1" />
+                                      UPLOAD
+                                    </Button>
+                                  </>
+                                )
+                              })()}
                             </div>
                             <div className="flex items-center gap-2">
                               <Button size="sm" variant="outline" onClick={() => handleGenerateWithAI(scene.id)}>

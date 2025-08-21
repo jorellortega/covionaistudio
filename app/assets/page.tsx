@@ -29,7 +29,7 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import Link from "next/link"
 
 export default function AssetsPage() {

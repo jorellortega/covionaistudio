@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
 import { Navigation } from "@/components/navigation"
 import { ThemeToggle } from "@/components/theme-provider"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import { LogOut, User, Settings } from "lucide-react"
 import {
   DropdownMenu,

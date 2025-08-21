@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon } from "lucide-react"
 import Link from "next/link"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TreatmentsService } from "@/lib/treatments-service"
 import { ProjectsService, DashboardProject } from "@/lib/projects-service"

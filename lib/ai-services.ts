@@ -24,6 +24,7 @@ interface GenerateVideoRequest {
   duration: string
   model: string
   apiKey: string
+  resolution?: string
 }
 
 interface GenerateAudioRequest {
@@ -31,6 +32,7 @@ interface GenerateAudioRequest {
   type: string
   model: string
   apiKey: string
+  voiceId?: string
 }
 
 // OpenAI Service (ChatGPT, DALL-E)
@@ -227,6 +229,19 @@ export class KlingService {
 export class RunwayMLService {
   static async generateVideo(request: GenerateVideoRequest): Promise<AIResponse> {
     try {
+      // Runway ML uses a different API structure
+      // Parse resolution if provided
+      let width = 1024
+      let height = 576
+      
+      if (request.resolution) {
+        const [w, h] = request.resolution.split('x').map(Number)
+        if (w && h) {
+          width = w
+          height = h
+        }
+      }
+      
       const response = await fetch('https://api.runwayml.com/v1/inference', {
         method: 'POST',
         headers: {
@@ -237,26 +252,36 @@ export class RunwayMLService {
           model: "gen-2",
           input: {
             prompt: request.prompt,
-            duration: request.duration,
+            duration: parseInt(request.duration.replace('s', '')),
+            width: width,
+            height: height,
           },
         }),
       })
 
-      if (!response.ok) throw new Error(`Runway ML API error: ${response.status}`)
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('Runway ML API error:', response.status, errorText)
+        throw new Error(`Runway ML API error: ${response.status} - ${errorText}`)
+      }
+      
       const result = await response.json()
       return { success: true, data: result }
     } catch (error) {
+      console.error('Runway ML generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }
 
   static async validateApiKey(apiKey: string): Promise<boolean> {
     try {
-      const response = await fetch('https://api.runwayml.com/v1/user', {
+      // Test the API key by making a simple request
+      const response = await fetch('https://api.runwayml.com/v1/models', {
         headers: { 'Authorization': `Bearer ${apiKey}` },
       })
       return response.ok
-    } catch {
+    } catch (error) {
+      console.error('Runway ML API key validation error:', error)
       return false
     }
   }
@@ -266,7 +291,10 @@ export class RunwayMLService {
 export class ElevenLabsService {
   static async generateAudio(request: GenerateAudioRequest): Promise<AIResponse> {
     try {
-      const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM', {
+      // Use the voice from the request or default to Rachel
+      const voiceId = request.voiceId || "21m00Tcm4TlvDq8ikWAM"
+      
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -278,14 +306,32 @@ export class ElevenLabsService {
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.5,
+            style: 0.0,
+            use_speaker_boost: true,
           },
         }),
       })
 
-      if (!response.ok) throw new Error(`ElevenLabs API error: ${response.status}`)
-      const result = await response.json()
-      return { success: true, data: result }
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('ElevenLabs API error:', response.status, errorText)
+        throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`)
+      }
+      
+      // ElevenLabs returns audio data, not JSON
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      
+      return { 
+        success: true, 
+        data: { 
+          audio_url: audioUrl, 
+          audio_blob: audioBlob,
+          message: "Audio generated successfully"
+        } 
+      }
     } catch (error) {
+      console.error('ElevenLabs generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }
@@ -298,6 +344,117 @@ export class ElevenLabsService {
       return response.ok
     } catch {
       return false
+    }
+  }
+
+  static async getAvailableVoices(apiKey: string): Promise<AIResponse> {
+    try {
+      const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+        headers: { 'xi-api-key': apiKey },
+      })
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('ElevenLabs voices API error:', response.status, errorText)
+        throw new Error(`ElevenLabs voices API error: ${response.status} - ${errorText}`)
+      }
+      
+      const result = await response.json()
+      return { success: true, data: result }
+    } catch (error) {
+      console.error('ElevenLabs voices error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
+  static async cloneVoice(apiKey: string, name: string, description: string, files: File[]): Promise<AIResponse> {
+    try {
+      const formData = new FormData()
+      formData.append('name', name)
+      formData.append('description', description)
+      
+      files.forEach((file, index) => {
+        formData.append('files', file)
+      })
+
+      const response = await fetch('https://api.elevenlabs.io/v1/voices/add', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('ElevenLabs voice cloning error:', response.status, errorText)
+        throw new Error(`ElevenLabs voice cloning error: ${response.status} - ${errorText}`)
+      }
+
+      const result = await response.json()
+      return { success: true, data: result }
+    } catch (error) {
+      console.error('ElevenLabs voice cloning error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
+  static async getVoicePreview(apiKey: string, voiceId: string, text: string = "Hello, this is a preview of my voice."): Promise<AIResponse> {
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: "eleven_monolingual_v1",
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5,
+            style: 0.0,
+            use_speaker_boost: true,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('ElevenLabs voice preview error:', response.status, errorText)
+        throw new Error(`ElevenLabs voice preview error: ${response.status} - ${errorText}`)
+      }
+
+      // Return the audio blob for preview
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      
+      return { success: true, data: { audioUrl, audioBlob } }
+    } catch (error) {
+      console.error('ElevenLabs voice preview error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
+  static async deleteVoice(apiKey: string, voiceId: string): Promise<AIResponse> {
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+        method: 'DELETE',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('ElevenLabs voice deletion error:', response.status, errorText)
+        throw new Error(`ElevenLabs voice deletion error: ${response.status} - ${errorText}`)
+      }
+
+      return { success: true, data: { message: 'Voice deleted successfully' } }
+    } catch (error) {
+      console.error('ElevenLabs voice deletion error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }
 }

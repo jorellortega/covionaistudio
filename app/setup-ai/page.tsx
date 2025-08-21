@@ -11,11 +11,17 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CheckCircle, AlertCircle, Key, Eye, EyeOff, Bot, Sparkles, ImageIcon, FileText, Video, Music } from "lucide-react"
 import { OpenAIService } from "@/lib/openai-service"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 import Link from "next/link"
 
 export default function SetupAIPage() {
-  const { user, updateApiKey } = useAuth()
+  const auth = useAuth()
+  const { user, updateApiKey, updateServiceApiKey } = auth
+  
+  // Debug: Log what's available in the auth object
+  console.log('Auth object:', auth)
+  console.log('updateServiceApiKey function:', updateServiceApiKey)
+  
   const [apiKey, setApiKey] = useState(user?.openaiApiKey || "")
   const [showKey, setShowKey] = useState(false)
   const [isValidating, setIsValidating] = useState(false)

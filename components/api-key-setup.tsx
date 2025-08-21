@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CheckCircle, AlertCircle, Key, Eye, EyeOff } from "lucide-react"
 import { OpenAIService } from "@/lib/openai-service"
-import { useAuth } from "@/lib/auth-context"
+import { useAuth } from "@/lib/auth-context-fixed"
 
 export function ApiKeySetup() {
   const { user, updateApiKey } = useAuth()
