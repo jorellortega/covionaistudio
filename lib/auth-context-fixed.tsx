@@ -16,7 +16,6 @@ interface User {
   runwayApiKey?: string
   elevenlabsApiKey?: string
   sunoApiKey?: string
-  leonardoApiKey?: string
   created_at: string
 }
 
@@ -85,7 +84,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           runwayApiKey: data.runway_api_key,
           elevenlabsApiKey: data.elevenlabs_api_key,
           sunoApiKey: data.suno_api_key,
-          leonardoApiKey: data.leonardo_api_key,
           created_at: data.created_at,
         }
         return userData
@@ -209,12 +207,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [handleSessionChange])
 
-
-
   const signIn = async (email: string, password: string): Promise<{ error: any }> => {
     try {
       console.log('Attempting to sign in with email:', email)
       setIsLoading(true)
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -226,6 +223,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       
       console.log('Sign in successful, user:', data.user?.id)
+      
+      // The session change will be handled by the auth state listener
       return { error: null }
     } catch (error) {
       console.error('Sign in exception:', error)
@@ -292,7 +291,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw error
       }
 
-      const updatedUser = { ...user, openai_api_key: apiKey }
+      const updatedUser = { ...user, openaiApiKey: apiKey }
       setUser(updatedUser)
     } catch (error) {
       console.error('Error updating API key:', error)
@@ -316,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw error
       }
 
-      const updatedUser = { ...user, [`${service}ApiKey`]: apiKey }
+      const updatedUser = { ...user, [``${service}ApiKey``]: apiKey }
       setUser(updatedUser)
     } catch (error) {
       console.error('Error updating service API key:', error)

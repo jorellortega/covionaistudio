@@ -36,6 +36,7 @@ import {
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
 import { useToast } from "@/hooks/use-toast"
+import { useAuth } from "@/lib/auth-context"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -50,7 +51,10 @@ export default function MoviesPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [editingMovie, setEditingMovie] = useState<Movie | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const [isUpdating, setIsUpdating] = useState(false)
   const [newMovie, setNewMovie] = useState<CreateMovieData>({
     name: "",
     description: "",
@@ -58,7 +62,15 @@ export default function MoviesPage() {
     project_type: "movie",
     movie_status: "Pre-Production",
   })
+  
+  // AI cover generation state
+  const [aiPrompt, setAiPrompt] = useState("")
+  const [selectedAIService, setSelectedAIService] = useState("dalle")
+  const [isGeneratingCover, setIsGeneratingCover] = useState(false)
+  const [generatedCoverUrl, setGeneratedCoverUrl] = useState("")
+  
   const { toast } = useToast()
+  const { user } = useAuth()
 
   useEffect(() => {
     loadMovies()
@@ -104,7 +116,7 @@ export default function MoviesPage() {
       const createdMovie = await MovieService.createMovie(newMovie)
       setMovies([createdMovie, ...movies])
       setIsCreateDialogOpen(false)
-      setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production" })
+      resetMovieForm()
       toast({
         title: "Success",
         description: "Movie created successfully!",
@@ -118,6 +130,224 @@ export default function MoviesPage() {
       })
     } finally {
       setIsCreating(false)
+    }
+  }
+
+  const resetMovieForm = () => {
+    setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production" })
+    setAiPrompt("")
+    setSelectedAIService("dalle")
+    setGeneratedCoverUrl("")
+  }
+
+  const handleEditMovie = (movie: Movie) => {
+    setEditingMovie(movie)
+    setNewMovie({
+      name: movie.name,
+      description: movie.description || "",
+      genre: movie.genre || "",
+      project_type: "movie",
+      movie_status: movie.movie_status,
+      thumbnail: movie.thumbnail || ""
+    })
+    setGeneratedCoverUrl(movie.thumbnail || "")
+    setIsEditDialogOpen(true)
+  }
+
+  const handleUpdateMovie = async () => {
+    if (!editingMovie || !newMovie.name.trim()) {
+      toast({
+        title: "Error",
+        description: "Movie title is required.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsUpdating(true)
+      const updatedMovie = await MovieService.updateMovie(editingMovie.id, newMovie)
+      
+      setMovies(prev => prev.map(movie => 
+        movie.id === editingMovie.id ? updatedMovie : movie
+      ))
+      
+      setIsEditDialogOpen(false)
+      setEditingMovie(null)
+      resetMovieForm()
+      
+      toast({
+        title: "Success",
+        description: "Movie updated successfully!",
+      })
+    } catch (error) {
+      console.error('Error updating movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update movie. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsUpdating(false)
+    }
+  }
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const result = e.target?.result as string
+        setGeneratedCoverUrl(result)
+        setNewMovie(prev => ({ ...prev, thumbnail: result }))
+        toast({
+          title: "Cover Uploaded",
+          description: "Cover image uploaded successfully"
+        })
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const generateAICover = async () => {
+    if (!aiPrompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a prompt for cover generation",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to use AI services",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // Check if user has the required API key for the selected service
+    if (selectedAIService === "dalle" && !user.openaiApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenAI API key in settings to use DALL-E",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (selectedAIService === "openart" && !user.openartApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenArt API key in settings to use OpenArt",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setIsGeneratingCover(true)
+    try {
+      let imageUrl = ""
+      
+      // Use the selected AI service for cover generation
+      switch (selectedAIService) {
+        case "dalle":
+          if (!user.openaiApiKey) {
+            throw new Error("OpenAI API key not configured")
+          }
+          const dalleResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              service: 'dalle',
+              apiKey: user.openaiApiKey
+            })
+          })
+          if (!dalleResponse.ok) {
+            const errorData = await dalleResponse.json().catch(() => ({}))
+            throw new Error(`DALL-E API failed: ${dalleResponse.status} - ${errorData.error || 'Unknown error'}`)
+          }
+          const dalleData = await dalleResponse.json()
+          imageUrl = dalleData.imageUrl
+          break
+          
+        case "openart":
+          if (!user.openartApiKey) {
+            throw new Error("OpenArt API key not configured")
+          }
+          const openartResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              service: 'openart',
+              apiKey: user.openartApiKey
+            })
+          })
+          if (!openartResponse.ok) {
+            const errorData = await openartResponse.json().catch(() => ({}))
+            throw new Error(`OpenArt API failed: ${openartResponse.status} - ${errorData.error || 'Unknown error'}`)
+          }
+          const openartData = await openartResponse.json()
+          imageUrl = openartData.imageUrl
+          break
+          
+        case "leonardo":
+          if (!user.openaiApiKey) {
+            throw new Error("Leonardo AI requires API key")
+          }
+          const leonardoResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              service: 'leonardo',
+              apiKey: user.openaiApiKey
+            })
+          })
+          if (!leonardoResponse.ok) throw new Error('Leonardo AI API request failed')
+          const leonardoData = await leonardoResponse.json()
+          imageUrl = leonardoData.imageUrl
+          break
+          
+        default:
+          // Fallback to DALL-E
+          if (!user.openaiApiKey) {
+            throw new Error("OpenAI API key not configured")
+          }
+          const fallbackResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              service: 'dalle',
+              apiKey: user.openaiApiKey
+            })
+          })
+          if (!fallbackResponse.ok) throw new Error('DALL-E API request failed')
+          const fallbackData = await fallbackResponse.json()
+          imageUrl = fallbackData.imageUrl
+      }
+      
+      setGeneratedCoverUrl(imageUrl)
+      setNewMovie(prev => ({ ...prev, thumbnail: imageUrl }))
+      
+      toast({
+        title: "AI Cover Generated",
+        description: `Cover generated successfully using ${selectedAIService.toUpperCase()}`
+      })
+    } catch (error) {
+      console.error("Error generating AI cover:", error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate AI cover",
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingCover(false)
     }
   }
 
@@ -178,12 +408,12 @@ export default function MoviesPage() {
                 Create New Movie
               </Button>
             </DialogTrigger>
-            <DialogContent className="cinema-card border-border">
-              <DialogHeader>
+            <DialogContent className="cinema-card border-border max-h-[90vh] flex flex-col">
+              <DialogHeader className="flex-shrink-0">
                 <DialogTitle className="text-foreground">Create New Movie Project</DialogTitle>
                 <DialogDescription>Start a new film project with AI-powered production tools.</DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
                 <div className="grid gap-2">
                   <Label htmlFor="name">Project Title</Label>
                   <Input
@@ -228,9 +458,91 @@ export default function MoviesPage() {
                     className="bg-input border-border"
                   />
                 </div>
+
+                {/* AI Cover Generation Section */}
+                <div className="border rounded-lg p-3 bg-muted/50">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="h-5 w-5 text-purple-500" />
+                    <h3 className="font-semibold">Movie Cover</h3>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    {/* AI Service Selection */}
+                    <div>
+                      <Label htmlFor="ai-service">AI Service</Label>
+                      <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                          <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                          <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    {/* AI Prompt */}
+                    <div>
+                      <Label htmlFor="ai-prompt">AI Prompt</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="ai-prompt"
+                          value={aiPrompt}
+                          onChange={(e) => setAiPrompt(e.target.value)}
+                          placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                          className="flex-1 bg-input border-border"
+                        />
+                        <Button
+                          onClick={generateAICover}
+                          disabled={isGeneratingCover || !aiPrompt.trim()}
+                          variant="outline"
+                          size="sm"
+                          className="border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10"
+                        >
+                          {isGeneratingCover ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-4 w-4 mr-2" />
+                          )}
+                          {isGeneratingCover ? "Generating..." : "Generate Cover"}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Manual Upload */}
+                    <div>
+                      <Label htmlFor="cover-upload">Or Upload Manually</Label>
+                      <Input
+                        id="cover-upload"
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                        className="bg-input border-border"
+                      />
+                    </div>
+
+                    {/* Cover Preview */}
+                    {(generatedCoverUrl || newMovie.thumbnail) && (
+                      <div>
+                        <Label>Cover Preview</Label>
+                        <div className="mt-2">
+                          <img
+                            src={generatedCoverUrl || newMovie.thumbnail}
+                            alt="Movie cover preview"
+                            className="w-full max-w-md h-auto rounded-lg border border-border"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
+              <DialogFooter className="flex-shrink-0 bg-background border-t pt-4">
+                <Button variant="outline" onClick={() => {
+                  setIsCreateDialogOpen(false)
+                  resetMovieForm()
+                }}>
                   Cancel
                 </Button>
                 <Button onClick={handleCreateMovie} disabled={isCreating} className="gradient-button text-white">
@@ -245,6 +557,158 @@ export default function MoviesPage() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {/* Edit Movie Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] flex flex-col">
+            <DialogHeader className="flex-shrink-0">
+              <DialogTitle className="text-foreground">Edit Movie Project</DialogTitle>
+              <DialogDescription>Update your movie project details and cover.</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-name">Project Title</Label>
+                <Input
+                  id="edit-name"
+                  value={newMovie.name}
+                  onChange={(e) => setNewMovie({ ...newMovie, name: e.target.value })}
+                  placeholder="Enter movie title..."
+                  className="bg-input border-border"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-genre">Genre</Label>
+                <Input
+                  id="edit-genre"
+                  value={newMovie.genre}
+                  onChange={(e) => setNewMovie({ ...newMovie, genre: e.target.value })}
+                  placeholder="e.g., Sci-Fi, Drama, Action..."
+                  className="bg-input border-border"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-movie_status">Status</Label>
+                <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
+                  <SelectTrigger className="bg-input border-border">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent className="cinema-card border-border">
+                    <SelectItem value="Pre-Production">Pre-Production</SelectItem>
+                    <SelectItem value="Production">Production</SelectItem>
+                    <SelectItem value="Post-Production">Post-Production</SelectItem>
+                    <SelectItem value="Distribution">Distribution</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-description">Description</Label>
+                <Textarea
+                  id="edit-description"
+                  value={newMovie.description}
+                  onChange={(e) => setNewMovie({ ...newMovie, description: e.target.value })}
+                  placeholder="Brief description of your movie..."
+                  className="bg-input border-border"
+                />
+              </div>
+
+              {/* AI Cover Generation Section for Edit */}
+              <div className="border rounded-lg p-3 bg-muted/50">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="h-5 w-5 text-purple-500" />
+                  <h3 className="font-semibold">Movie Cover</h3>
+                </div>
+                
+                <div className="space-y-3">
+                  {/* AI Service Selection */}
+                  <div>
+                    <Label htmlFor="edit-ai-service">AI Service</Label>
+                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                      <SelectTrigger className="bg-input border-border">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="cinema-card border-border">
+                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  {/* AI Prompt */}
+                  <div>
+                    <Label htmlFor="edit-ai-prompt">AI Prompt</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="edit-ai-prompt"
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                        className="flex-1 bg-input border-border"
+                      />
+                      <Button
+                        onClick={generateAICover}
+                        disabled={isGeneratingCover || !aiPrompt.trim()}
+                        variant="outline"
+                        size="sm"
+                        className="border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10"
+                      >
+                        {isGeneratingCover ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-2" />
+                        )}
+                        {isGeneratingCover ? "Generating..." : "Generate Cover"}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Manual Upload */}
+                  <div>
+                    <Label htmlFor="edit-cover-upload">Or Upload Manually</Label>
+                    <Input
+                      id="edit-cover-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="bg-input border-border"
+                    />
+                  </div>
+
+                  {/* Cover Preview */}
+                  {(generatedCoverUrl || newMovie.thumbnail) && (
+                    <div>
+                      <Label>Cover Preview</Label>
+                      <div className="mt-2">
+                        <img
+                          src={generatedCoverUrl || newMovie.thumbnail}
+                          alt="Movie cover preview"
+                          className="w-full max-w-md h-auto rounded-lg border border-border"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="flex-shrink-0 bg-background border-t pt-4">
+              <Button variant="outline" onClick={() => {
+                setIsEditDialogOpen(false)
+                setEditingMovie(null)
+                resetMovieForm()
+              }}>
+                Cancel
+              </Button>
+              <Button onClick={handleUpdateMovie} disabled={isUpdating} className="gradient-button text-white">
+                {isUpdating ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Edit className="mr-2 h-4 w-4" />
+                )}
+                {isUpdating ? 'Updating...' : 'Update Movie'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Search and Filter Bar */}
         <div className="flex items-center gap-4 mb-8">
@@ -303,7 +767,7 @@ export default function MoviesPage() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent className="cinema-card border-border">
-                      <DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => handleEditMovie(movie)}>
                         <Edit className="mr-2 h-4 w-4" />
                         Edit
                       </DropdownMenuItem>

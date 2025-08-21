@@ -3,13 +3,15 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Film, Sparkles, TimerIcon as Timeline, FolderOpen, Bot, Video, Settings } from "lucide-react"
+import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon } from "lucide-react"
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: Film },
   { name: "Movies", href: "/movies", icon: Film },
+  { name: "Treatments", href: "/treatments", icon: FileText },
+  { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
   { name: "Videos", href: "/videos", icon: Video },
-  { name: "Timeline", href: "/timeline", icon: Timeline },
+
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
   { name: "AI Setup", href: "/setup-ai", icon: Settings },

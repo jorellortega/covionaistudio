@@ -1,15 +1,59 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth-context"
 import { Skeleton } from "@/components/ui/skeleton"
+import { TreatmentsService } from "@/lib/treatments-service"
+import { ProjectsService, DashboardProject } from "@/lib/projects-service"
+import { StoryboardsService } from "@/lib/storyboards-service"
 
 export default function DashboardPage() {
   const { user, isLoading } = useAuth()
+  const [treatmentsCount, setTreatmentsCount] = useState(0)
+  const [recentProjects, setRecentProjects] = useState<DashboardProject[]>([])
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true)
+  const [totalProjects, setTotalProjects] = useState(0)
+  const [totalScenes, setTotalScenes] = useState(0)
+  const [storyboardsCount, setStoryboardsCount] = useState(0)
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        // Fetch treatments count
+        const treatments = await TreatmentsService.getTreatments()
+        setTreatmentsCount(treatments.length)
+
+        // Fetch recent projects
+        const projects = await ProjectsService.getRecentProjects()
+        setRecentProjects(projects)
+        
+        // Fetch total counts
+        const allProjects = await ProjectsService.getProjects()
+        setTotalProjects(allProjects.length)
+        
+        // Calculate total scenes from all projects
+        const totalScenesCount = allProjects.reduce((sum, project) => sum + (project.scenes || 0), 0)
+        setTotalScenes(totalScenesCount)
+        
+        // Fetch storyboards count
+        const storyboards = await StoryboardsService.getStoryboardsCount()
+        setStoryboardsCount(storyboards)
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error)
+      } finally {
+        setIsLoadingProjects(false)
+      }
+    }
+
+    if (user) {
+      fetchData()
+    }
+  }, [user])
 
   if (isLoading) {
     return (
@@ -55,7 +99,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
           <Link href="/movies">
             <CardHeader className="pb-4">
@@ -69,6 +113,42 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-500">3</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-500 transition-colors" />
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
+          <Link href="/treatments">
+            <CardHeader className="pb-4">
+              <div className="p-3 rounded-lg bg-purple-500/10 w-fit group-hover:bg-purple-500/20 transition-colors">
+                <FileText className="h-6 w-6 text-purple-500" />
+              </div>
+              <CardTitle className="text-lg group-hover:text-purple-500 transition-colors">Treatments</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CardDescription className="mb-4">Manage story concepts</CardDescription>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-purple-500">{treatmentsCount}</span>
+                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-purple-500 transition-colors" />
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
+          <Link href="/storyboards">
+            <CardHeader className="pb-4">
+              <div className="p-3 rounded-lg bg-green-500/10 w-fit group-hover:bg-green-500/20 transition-colors">
+                <ImageIcon className="h-6 w-6 text-green-500" />
+              </div>
+              <CardTitle className="text-lg group-hover:text-green-500 transition-colors">Storyboards</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CardDescription className="mb-4">Visual scene planning</CardDescription>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-green-500">{storyboardsCount}</span>
+                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-green-500 transition-colors" />
               </div>
             </CardContent>
           </Link>
@@ -122,70 +202,91 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[
-            {
-              title: "Quantum Heist",
-              status: "In Progress",
-              progress: 75,
-              team: 4,
-              lastUpdated: "2 hours ago",
-            },
-            {
-              title: "Digital Horror",
-              status: "Planning",
-              progress: 25,
-              team: 2,
-              lastUpdated: "1 day ago",
-            },
-            {
-              title: "Classical Music",
-              status: "Completed",
-              progress: 100,
-              team: 6,
-              lastUpdated: "1 week ago",
-            },
-          ].map((project, index) => (
-            <Card key={index} className="cinema-card hover:neon-glow transition-all duration-300">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{project.title}</CardTitle>
-                  <Badge
-                    variant="secondary"
-                    className={
-                      project.status === "Completed"
-                        ? "bg-green-500/20 text-green-500 border-green-500/30"
-                        : project.status === "In Progress"
-                        ? "bg-blue-500/20 text-blue-500 border-blue-500/30"
-                        : "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
-                    }
-                  >
-                    {project.status}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span>Progress</span>
-                    <span className="text-blue-500">{project.progress}%</span>
+          {isLoadingProjects ? (
+            // Loading skeletons
+            Array.from({ length: 3 }).map((_, index) => (
+              <Card key={index} className="cinema-card">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <Skeleton className="h-6 w-32" />
+                    <Skeleton className="h-6 w-20" />
                   </div>
-                  <div className="w-full bg-muted rounded-full h-2">
-                    <div
-                      className="bg-gradient-to-r from-blue-500 to-cyan-400 h-2 rounded-full transition-all duration-300"
-                      style={{ width: `${project.progress}%` }}
-                    ></div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span>Progress</span>
+                      <Skeleton className="h-4 w-12" />
+                    </div>
+                    <Skeleton className="w-full h-2 rounded-full" />
                   </div>
-                </div>
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Users className="h-4 w-4" />
-                    <span>{project.team} members</span>
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Users className="h-4 w-4" />
+                      <Skeleton className="h-4 w-16" />
+                    </div>
+                    <Skeleton className="h-4 w-20" />
                   </div>
-                  <span>{project.lastUpdated}</span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            ))
+          ) : recentProjects.length > 0 ? (
+                        recentProjects.map((project) => (
+              <Card key={project.id} className="cinema-card hover:neon-glow transition-all duration-300">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-lg">{project.title}</CardTitle>
+                    <Badge
+                      variant="secondary"
+                      className={
+                        project.status === "Completed" || project.status === "Distribution"
+                          ? "bg-green-500/20 text-green-500 border-green-500/30"
+                          : project.status === "In Progress" || project.status === "Production" || project.status === "Post-Production"
+                          ? "bg-blue-500/20 text-blue-500 border-blue-500/30"
+                          : "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
+                      }
+                    >
+                      {project.status}
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span>Progress</span>
+                      <span className="text-blue-500">{project.progress}%</span>
+                    </div>
+                    <div className="w-full bg-muted rounded-full h-2">
+                      <div
+                        className="bg-gradient-to-r from-blue-500 to-cyan-400 h-2 rounded-full transition-all duration-300"
+                        style={{ width: `${project.progress}%` }}
+                      ></div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Users className="h-4 w-4" />
+                      <span>{project.team} members</span>
+                    </div>
+                    <span>{project.lastUpdated}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            ))
+          ) : (
+            // Empty state
+            <div className="col-span-full text-center py-12">
+              <div className="text-muted-foreground mb-4">
+                <Film className="h-12 w-12 mx-auto mb-4" />
+                <h3 className="text-lg font-medium mb-2">No projects yet</h3>
+                <p className="text-sm">Get started by creating your first project</p>
+              </div>
+              <Button className="gradient-button neon-glow text-white">
+                <Plus className="mr-2 h-4 w-4" />
+                Create Project
+              </Button>
+            </div>
+          )}}
         </div>
       </div>
 
@@ -199,7 +300,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Total Projects</p>
-                <p className="text-2xl font-bold text-blue-500">12</p>
+                <p className="text-2xl font-bold text-blue-500">{totalProjects}</p>
               </div>
             </div>
           </CardContent>
@@ -213,7 +314,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Scenes Created</p>
-                <p className="text-2xl font-bold text-cyan-500">48</p>
+                <p className="text-2xl font-bold text-cyan-500">{totalScenes}</p>
               </div>
             </div>
           </CardContent>

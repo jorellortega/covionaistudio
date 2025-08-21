@@ -39,6 +39,7 @@ import {
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
 import { useToast } from "@/hooks/use-toast"
+import { useAuth } from "@/lib/auth-context"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -83,7 +84,15 @@ export default function TimelinePage() {
   const [uploadingSceneId, setUploadingSceneId] = useState<string | null>(null)
   const [isImageUploadOpen, setIsImageUploadOpen] = useState(false)
   const [selectedSceneForUpload, setSelectedSceneForUpload] = useState<SceneWithMetadata | null>(null)
+  
+  // AI Image Generation states
+  const [aiPrompt, setAiPrompt] = useState("")
+  const [selectedAIService, setSelectedAIService] = useState("dalle")
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const [generatedImageUrl, setGeneratedImageUrl] = useState("")
+  
   const { toast } = useToast()
+  const { user } = useAuth()
 
   useEffect(() => {
     if (movieId) {
@@ -162,7 +171,17 @@ export default function TimelinePage() {
   }
 
   const handleAddScene = async () => {
+    console.log('handleAddScene called')
+    console.log('movieId:', movieId)
+    console.log('newScene.title:', newScene.title)
+    console.log('currentTimeline:', currentTimeline)
+    
     if (!movieId || !newScene.title.trim() || !currentTimeline) {
+      console.log('Validation failed:')
+      console.log('- movieId exists:', !!movieId)
+      console.log('- title exists:', !!newScene.title.trim())
+      console.log('- timeline exists:', !!currentTimeline)
+      
       toast({
         title: "Error",
         description: "Scene title is required and timeline must be available.",
@@ -207,10 +226,12 @@ export default function TimelinePage() {
           mood: newScene.mood,
           notes: newScene.notes,
           status: newScene.status,
+          thumbnail: generatedImageUrl || undefined,
         }
       }
 
       console.log('Creating scene with data:', sceneData)
+      console.log('Generated image URL to save:', generatedImageUrl)
       const createdScene = await TimelineService.createScene(sceneData)
       console.log('Scene created:', createdScene)
       
@@ -220,10 +241,13 @@ export default function TimelinePage() {
         metadata: sceneData.metadata
       }
       console.log('Adding scene to list:', newSceneWithMetadata)
+      console.log('Scene metadata includes thumbnail:', newSceneWithMetadata.metadata.thumbnail)
+      console.log('Full scene object:', newSceneWithMetadata)
+      console.log('Scene metadata object:', newSceneWithMetadata.metadata)
       setScenes([...scenes, newSceneWithMetadata])
 
-      // Refresh scenes from the database to ensure consistency
-      await refreshScenes()
+      // Don't refresh scenes immediately - keep the local state with thumbnail
+      // await refreshScenes()
 
       setIsAddSceneOpen(false)
       setNewScene({
@@ -238,6 +262,11 @@ export default function TimelinePage() {
         notes: "",
         status: "Planning",
       })
+      
+      // Reset AI image generation states
+      setAiPrompt("")
+      setSelectedAIService("dalle")
+      setGeneratedImageUrl("")
 
       toast({
         title: "Success",
@@ -289,6 +318,10 @@ export default function TimelinePage() {
   const handleUpdateScene = async () => {
     if (!editingScene) return
 
+    console.log('handleUpdateScene called')
+    console.log('editingScene:', editingScene)
+    console.log('generatedImageUrl:', generatedImageUrl)
+
     try {
       setIsCreating(true)
       
@@ -311,6 +344,7 @@ export default function TimelinePage() {
           mood: newScene.mood,
           notes: newScene.notes,
           status: newScene.status,
+          thumbnail: generatedImageUrl || editingScene.metadata?.thumbnail,
         }
       }
 
@@ -327,6 +361,7 @@ export default function TimelinePage() {
       await refreshScenes()
 
       setEditingScene(null)
+      setIsAddSceneOpen(false)
       setNewScene({
         sceneNumber: "",
         title: "",
@@ -339,6 +374,11 @@ export default function TimelinePage() {
         notes: "",
         status: "Planning",
       })
+      
+      // Reset AI image generation states
+      setAiPrompt("")
+      setSelectedAIService("dalle")
+      setGeneratedImageUrl("")
 
       toast({
         title: "Success",
@@ -402,6 +442,22 @@ export default function TimelinePage() {
 
   const handleUploadImage = (scene: SceneWithMetadata) => {
     setSelectedSceneForUpload(scene)
+    // For existing scenes, reset the form
+    resetImageForm()
+    setIsImageUploadOpen(true)
+  }
+
+  const handleOpenThumbnailDialog = () => {
+    // For new scene creation, don't reset the form
+    // This preserves any generated image
+    setSelectedSceneForUpload(null)
+    setIsImageUploadOpen(true)
+  }
+
+  const handleOpenThumbnailForNewScene = () => {
+    // For new scene creation, don't reset the form
+    // This preserves any generated image
+    setSelectedSceneForUpload(null)
     setIsImageUploadOpen(true)
   }
 
@@ -464,10 +520,248 @@ export default function TimelinePage() {
     }
   }
 
+  const handleImageUploadForNewScene = async (file: File) => {
+    if (!movieId) return
+    
+    setIsUploadingImage(true)
+    
+    try {
+      // Upload file to Supabase storage
+      const { supabase } = await import('@/lib/supabase')
+      
+      // Create a temporary file path for new scenes
+      const filePath = `${movieId}/temp/${Date.now()}_${file.name}`
+      
+      console.log('Uploading to temp path:', filePath)
+      
+      const { data, error } = await supabase.storage
+        .from('cinema_files')
+        .upload(filePath, file)
+      
+      if (error) {
+        throw new Error(`Upload failed: ${error.message}`)
+      }
+      
+      // Get the public URL for the uploaded file
+      const { data: { publicUrl } } = supabase.storage
+        .from('cinema_files')
+        .getPublicUrl(filePath)
+      
+      console.log('File uploaded successfully for new scene, public URL:', publicUrl)
+      
+      // Set the generated image URL for the new scene
+      setGeneratedImageUrl(publicUrl)
+      
+      toast({
+        title: "Image Ready",
+        description: "Image is ready! Go back to the main dialog and click 'Add Scene' to create your scene.",
+      })
+      
+      // Close the thumbnail dialog
+      setIsImageUploadOpen(false)
+      
+    } catch (error) {
+      console.error("Failed to upload image for new scene:", error)
+      toast({
+        title: "Upload Failed",
+        description: `Failed to upload image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsUploadingImage(false)
+    }
+  }
+
   const formatDuration = (seconds: number): string => {
     const minutes = Math.floor(seconds / 60)
     const remainingSeconds = seconds % 60
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
+  }
+
+  const generateAIImage = async () => {
+    if (!aiPrompt.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter a prompt to generate an image.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Check if user is loaded
+    if (!user) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating images.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Debug: Log user object and API keys
+    console.log('User object:', user)
+    console.log('Selected AI service:', selectedAIService)
+    console.log('OpenAI API key exists:', !!user?.openaiApiKey)
+    console.log('OpenArt API key exists:', !!user?.openartApiKey)
+    console.log('Leonardo API key exists:', !!user?.leonardoApiKey)
+
+    // Check if user has the required API key
+    if (selectedAIService === "dalle" && !user?.openaiApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenAI API key in settings to use DALL-E.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (selectedAIService === "openart" && !user?.openartApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your OpenArt API key in settings to use OpenArt.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (selectedAIService === "leonardo" && !user?.leonardoApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your Leonardo AI API key in settings to use Leonardo AI.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingImage(true)
+
+      // Get the appropriate API key based on selected service
+      let apiKey = ''
+      switch (selectedAIService) {
+        case 'dalle':
+          apiKey = user?.openaiApiKey || ''
+          break
+        case 'openart':
+          apiKey = user?.openartApiKey || ''
+          break
+        case 'leonardo':
+          apiKey = user?.leonardoApiKey || ''
+          break
+        default:
+          throw new Error('Unsupported AI service')
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          service: selectedAIService,
+          apiKey: apiKey,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+      console.log('AI image generated:', result)
+
+      if (result.success && result.imageUrl) {
+        setGeneratedImageUrl(result.imageUrl)
+        toast({
+          title: "Image Generated",
+          description: "AI has generated your scene image!",
+        })
+      } else {
+        throw new Error('No image URL received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI image:', error)
+      toast({
+        title: "Generation Failed",
+        description: `Failed to generate image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingImage(false)
+    }
+  }
+
+  const saveGeneratedImage = async () => {
+    if (!generatedImageUrl) return
+
+    try {
+      setIsUploadingImage(true)
+
+      if (selectedSceneForUpload) {
+        // Updating existing scene
+        setUploadingSceneId(selectedSceneForUpload.id)
+
+        // Update the scene metadata with the generated image URL
+        await TimelineService.updateScene(selectedSceneForUpload.id, {
+          metadata: { 
+            ...selectedSceneForUpload.metadata, 
+            thumbnail: generatedImageUrl 
+          }
+        })
+
+        // Update the local state
+        setScenes(prevScenes => 
+          prevScenes.map(scene => 
+            scene.id === selectedSceneForUpload.id 
+              ? { ...scene, metadata: { ...scene.metadata, thumbnail: generatedImageUrl } }
+              : scene
+          )
+        )
+
+        toast({
+          title: "Image Saved",
+          description: "Generated image has been saved to the scene!",
+        })
+
+        // Reset AI states
+        setGeneratedImageUrl("")
+        setAiPrompt("")
+        setIsImageUploadOpen(false)
+      } else {
+        // Creating new scene - just close the dialog and keep the image ready
+        toast({
+          title: "Image Ready",
+          description: "Image is ready! Go back to the main dialog and click 'Add Scene' to create your scene.",
+        })
+
+        // Close the thumbnail dialog
+        setIsImageUploadOpen(false)
+        
+        // Keep the generated image URL for the main dialog
+        // Don't reset it so it can be used when creating the scene
+      }
+    } catch (error) {
+      console.error('Failed to save generated image:', error)
+      toast({
+        title: "Save Failed",
+        description: `Failed to save image: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsUploadingImage(false)
+      if (selectedSceneForUpload) {
+        setUploadingSceneId(null)
+      }
+    }
+  }
+
+  const resetImageForm = () => {
+    setAiPrompt("")
+    setSelectedAIService("dalle")
+    setGeneratedImageUrl("")
+    setSelectedSceneForUpload(null)
   }
 
   const totalDuration = scenes.reduce((total, scene) => total + scene.duration_seconds, 0)
@@ -478,11 +772,12 @@ export default function TimelinePage() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
+  // Render loading state
   if (loading) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <main className="container mx-auto px-6 py-8">
+        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <span className="ml-2 text-lg">Loading timeline...</span>
@@ -492,11 +787,12 @@ export default function TimelinePage() {
     )
   }
 
+  // Render no movie selected state
   if (!movieId) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <main className="container mx-auto px-6 py-8">
+        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
           <div className="text-center py-12">
             <Play className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No movie selected</h3>
@@ -513,11 +809,12 @@ export default function TimelinePage() {
     )
   }
 
+  // Render movie not found state
   if (!movie) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <main className="container mx-auto px-6 py-8">
+        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
           <div className="text-center py-12">
             <Play className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">Movie not found</h3>
@@ -538,9 +835,9 @@ export default function TimelinePage() {
     <div className="min-h-screen bg-background">
       <Header />
 
-      <main className="container mx-auto px-6 py-8">
+      <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
         {/* Page Header */}
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-8">
           <div className="flex items-center gap-4">
             <Link href="/movies">
               <Button variant="ghost" size="icon" className="hover:bg-muted">
@@ -548,14 +845,14 @@ export default function TimelinePage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+              <h1 className="text-2xl lg:text-3xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
                 {movie.name} - Timeline
               </h1>
               <p className="text-muted-foreground">Organize and manage your film scenes</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 lg:gap-4">
             <Link href={`/ai-studio?project=${movieId}`}>
               <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
                 <Sparkles className="mr-2 h-4 w-4" />
@@ -687,40 +984,40 @@ export default function TimelinePage() {
         </div>
 
         {/* Movie Info & Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-8">
           <Card className="cinema-card">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Current Movie</CardTitle>
+            <CardHeader className="pb-2 lg:pb-3">
+              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Current Movie</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-lg font-semibold text-blue-500">{movie.name}</p>
+            <CardContent className="pt-0">
+              <p className="text-sm lg:text-lg font-semibold text-blue-500 truncate">{movie.name}</p>
             </CardContent>
           </Card>
 
           <Card className="cinema-card">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Scenes</CardTitle>
+            <CardHeader className="pb-2 lg:pb-3">
+              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Total Scenes</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold">{scenes.length}</p>
+            <CardContent className="pt-0">
+              <p className="text-xl lg:text-2xl font-bold">{scenes.length}</p>
             </CardContent>
           </Card>
 
           <Card className="cinema-card">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Duration</CardTitle>
+            <CardHeader className="pb-2 lg:pb-3">
+              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Total Duration</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold">{formatTotalDuration(totalDuration)}</p>
+            <CardContent className="pt-0">
+              <p className="text-xl lg:text-2xl font-bold">{formatTotalDuration(totalDuration)}</p>
             </CardContent>
           </Card>
 
           <Card className="cinema-card">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Completion</CardTitle>
+            <CardHeader className="pb-2 lg:pb-3">
+              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Completion</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-2xl font-bold text-green-400">
+            <CardContent className="pt-0">
+              <p className="text-xl lg:text-2xl font-bold text-green-400">
                 {scenes.length > 0 
                   ? Math.round((scenes.filter((s) => s.metadata.status === "Completed").length / scenes.length) * 100)
                   : 0}%
@@ -760,7 +1057,7 @@ export default function TimelinePage() {
                 Add Scene
               </Button>
             </DialogTrigger>
-            <DialogContent className="cinema-card border-border max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] flex flex-col">
               <DialogHeader>
                 <DialogTitle className="text-foreground">
                   {editingScene ? `Edit Scene: ${editingScene.name}` : "Add New Scene"}
@@ -777,7 +1074,7 @@ export default function TimelinePage() {
                 </div>
               )}
 
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
                     <Label htmlFor="sceneNumber">Scene Number</Label>
@@ -906,19 +1203,126 @@ export default function TimelinePage() {
                     className="bg-input border-border"
                   />
                 </div>
+
+                {/* AI Image Generation Section */}
+                <div className="border rounded-lg p-4 bg-muted/50">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Sparkles className="h-5 w-5 text-purple-500" />
+                    <h3 className="font-semibold">AI Scene Image Generation</h3>
+                  </div>
+                  
+                  {!user ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mr-2" />
+                      <span className="text-muted-foreground">Loading user profile...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* AI Service Selection */}
+                      <div>
+                        <Label htmlFor="ai-service">AI Service</Label>
+                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                            <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                            <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      {/* AI Prompt */}
+                      <div>
+                        <Label htmlFor="ai-prompt">AI Prompt</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="ai-prompt"
+                            value={aiPrompt}
+                            onChange={(e) => setAiPrompt(e.target.value)}
+                            placeholder="Describe your scene (e.g., 'Sci-fi spaceship interior with neon lights')"
+                            className="flex-1 bg-input border-border"
+                          />
+                          <Button
+                            onClick={generateAIImage}
+                            disabled={isGeneratingImage || !aiPrompt.trim()}
+                            variant="outline"
+                            size="sm"
+                            className="border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10"
+                          >
+                            {isGeneratingImage ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4 mr-2" />
+                            )}
+                            Generate
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {/* Generated Image Preview */}
+                      {generatedImageUrl && (
+                        <div className="space-y-3">
+                          <Label>Generated Scene Image</Label>
+                          <div className="relative">
+                            <img
+                              src={generatedImageUrl}
+                              alt="AI generated scene image"
+                              className="w-full h-48 object-cover rounded-lg border border-border"
+                            />
+                            <div className="absolute top-2 right-2">
+                              <Badge variant="secondary" className="bg-green-600/90 text-white">
+                                Generated ✓
+                              </Badge>
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            This image will be automatically saved when you create the scene.
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              onClick={handleOpenThumbnailForNewScene}
+                              variant="outline"
+                              size="sm"
+                              className="border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10"
+                            >
+                              <ImageIcon className="h-4 w-4 mr-2" />
+                              Advanced Image Options
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-              <DialogFooter>
+              <DialogFooter className="flex-shrink-0 bg-background border-t pt-4">
                 <Button
                   variant="outline"
                   onClick={() => {
                     setIsAddSceneOpen(false)
                     setEditingScene(null)
+                    // Reset AI image generation states
+                    setAiPrompt("")
+                    setSelectedAIService("dalle")
+                    setGeneratedImageUrl("")
                   }}
                 >
                   Cancel
                 </Button>
                 <Button
-                  onClick={editingScene ? handleUpdateScene : handleAddScene}
+                  onClick={() => {
+                    console.log('Add/Update Scene button clicked')
+                    console.log('editingScene:', editingScene)
+                    console.log('newScene:', newScene)
+                    console.log('generatedImageUrl:', generatedImageUrl)
+                    if (editingScene) {
+                      handleUpdateScene()
+                    } else {
+                      handleAddScene()
+                    }
+                  }}
                   disabled={isCreating}
                   className="gradient-button text-white"
                 >
@@ -932,36 +1336,41 @@ export default function TimelinePage() {
           </Dialog>
         </div>
 
+        {/* Debug Info */}
+        <div className="mb-4 p-4 bg-blue-500/10 rounded-lg border border-blue-500/20">
+          <h3 className="text-sm font-semibold text-blue-600 mb-2">Debug: Current Scenes</h3>
+          <div className="text-xs text-blue-600 space-y-1">
+            {scenes.map((scene, index) => (
+              <div key={scene.id}>
+                Scene {index + 1}: {scene.name} - Thumbnail: {scene.metadata.thumbnail ? '✓' : '✗'} 
+                {scene.metadata.thumbnail && ` (${scene.metadata.thumbnail.substring(0, 50)}...)`}
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* Timeline */}
         <Tabs value={viewMode} className="w-full">
           <TabsContent value="cinema" className="mt-0">
-            <div className="relative mt-8">
-              <div className="relative w-full mx-auto">
-                <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 bg-cyan-500/30"></div>
-
-                <div className="space-y-2">
-                  {scenes.map((scene, index) => (
-                <div key={scene.id} className="relative">
-                  <div className="absolute left-1/2 -translate-x-1/2 top-4 h-4 w-4 rounded-full bg-cyan-500 glow z-10 flex items-center justify-center">
-                    <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
-                  </div>
-
-                  <div
-                    className={`absolute left-1/2 top-6 h-0.5 w-1/2 bg-cyan-500/30 ${
-                      index % 2 === 0 ? "-translate-x-full" : ""
-                    }`}
-                  />
-
-                  <div className={`relative w-full flex ${index % 2 === 0 ? "justify-start" : "justify-end"}`}>
-                    <div className={`${index % 2 === 0 ? "mr-8" : "ml-8"} w-[calc(40%-3rem)]`}>
-                      <Link href={`/timeline-scene/${scene.id}`}>
-                        <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer overflow-hidden">
-                          <CardHeader className="p-0">
-                            <div className="flex h-full min-h-[256px]">
-                              {/* Content Section - Left Side */}
-                              <div className="flex-1 p-6 min-w-0">
-                                <div className="flex items-center gap-3 mb-2">
-                                  <CardTitle className="text-lg">{scene.name}</CardTitle>
+            {/* Mobile Layout - Stacked Cards */}
+            <div className="block md:hidden mt-8">
+              <div className="space-y-4">
+                {scenes.map((scene, index) => (
+                  <div key={scene.id} className="relative">
+                    <Link href={`/timeline-scene/${scene.id}`}>
+                      <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer overflow-hidden">
+                        <CardHeader className="p-0">
+                          <div className="flex flex-col md:flex-row h-full min-h-[200px] md:min-h-[256px]">
+                            {/* Content Section */}
+                            <div className="flex-1 p-4 md:p-6 min-w-0">
+                              <div className="flex items-center gap-2 md:gap-3 mb-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-6 w-6 rounded-full bg-cyan-500 glow flex items-center justify-center flex-shrink-0">
+                                    <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
+                                  </div>
+                                  <CardTitle className="text-base md:text-lg">{scene.name}</CardTitle>
+                                </div>
+                                <div className="flex flex-wrap gap-1 ml-auto">
                                   <Badge
                                     className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
                                   >
@@ -976,43 +1385,44 @@ export default function TimelinePage() {
                                     </Badge>
                                   )}
                                 </div>
-                                <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
+                              </div>
+                              <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
 
-                                <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                                  <div className="flex items-center gap-1 text-muted-foreground">
-                                    <MapPin className="h-3 w-3" />
-                                    <span>{scene.metadata.location || "No location"}</span>
-                                  </div>
-                                  <div className="flex items-center gap-1 text-muted-foreground">
-                                    <Clock className="h-3 w-3" />
-                                    <span>{formatDuration(scene.duration_seconds)}</span>
-                                  </div>
-                                  <div className="flex items-center gap-1 text-muted-foreground">
-                                    <Camera className="h-3 w-3" />
-                                    <span>{scene.metadata.shotType || "No shot type"}</span>
-                                  </div>
-                                  <div className="flex items-center gap-1 text-muted-foreground">
-                                    <Users className="h-3 w-3" />
-                                    <span>{(scene.metadata.characters || []).length} chars</span>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mb-3">
+                                <div className="flex items-center gap-1 text-muted-foreground">
+                                  <MapPin className="h-3 w-3" />
+                                  <span className="truncate">{scene.metadata.location || "No location"}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-muted-foreground">
+                                  <Clock className="h-3 w-3" />
+                                  <span>{formatDuration(scene.duration_seconds)}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-muted-foreground">
+                                  <Camera className="h-3 w-3" />
+                                  <span className="truncate">{scene.metadata.shotType || "No shot type"}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-muted-foreground">
+                                  <Users className="h-3 w-3" />
+                                  <span>{(scene.metadata.characters || []).length} chars</span>
+                                </div>
+                              </div>
+
+                              {(scene.metadata.characters || []).length > 0 && (
+                                <div className="mb-2">
+                                  <div className="flex flex-wrap gap-1">
+                                    {scene.metadata.characters!.slice(0, 3).map((character: string, i: number) => (
+                                      <Badge key={i} variant="secondary" className="text-xs">
+                                        {character}
+                                      </Badge>
+                                    ))}
+                                    {scene.metadata.characters!.length > 3 && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        +{scene.metadata.characters!.length - 3}
+                                      </Badge>
+                                    )}
                                   </div>
                                 </div>
-
-                                {(scene.metadata.characters || []).length > 0 && (
-                                  <div className="mb-2">
-                                    <div className="flex flex-wrap gap-1">
-                                      {scene.metadata.characters!.slice(0, 3).map((character: string, i: number) => (
-                                        <Badge key={i} variant="secondary" className="text-xs">
-                                          {character}
-                                        </Badge>
-                                      ))}
-                                      {scene.metadata.characters!.length > 3 && (
-                                        <Badge variant="secondary" className="text-xs">
-                                          +{scene.metadata.characters!.length - 3}
-                                        </Badge>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
+                              )}
 
                                 {scene.metadata.notes && (
                                   <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
@@ -1075,16 +1485,26 @@ export default function TimelinePage() {
                                 </div>
                               </div>
 
-                              <div className="w-40 h-64 relative bg-muted/20 border-l border-border/30 flex-shrink-0 overflow-hidden">
+                              {/* Mobile Thumbnail */}
+                              <div className="w-full h-32 md:w-40 md:h-64 relative bg-muted/20 border-t md:border-l md:border-t-0 border-border/30 flex-shrink-0 overflow-hidden">
                                 <img
                                   src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=288&width=192&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name} - ${scene.description}`}
                                   alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
-                                  className="w-full h-full object-contain rounded-r-lg"
+                                  className="w-full h-full object-cover md:object-contain md:rounded-r-lg"
+                                  onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
+                                  onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
                                 />
                                 {/* Scene number overlay */}
                                 <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
                                   {scene.metadata.sceneNumber || index + 1}
                                 </div>
+                                
+                                {/* Debug: Show thumbnail URL if exists */}
+                                {scene.metadata.thumbnail && (
+                                  <div className="absolute bottom-2 right-2 bg-green-600/90 text-white text-xs px-2 py-1 rounded max-w-32 truncate">
+                                    ✓ Has Image
+                                  </div>
+                                )}
                                 
                                 {/* Upload Image Button */}
                                 <div className="absolute bottom-2 left-2">
@@ -1108,8 +1528,195 @@ export default function TimelinePage() {
                         </Card>
                       </Link>
                     </div>
-                  </div>
+                  ))}
                 </div>
+              </div>
+
+            {/* Desktop Layout - Timeline */}
+            <div className="hidden md:block mt-8">
+              <div className="relative w-full mx-auto">
+                <div className="absolute left-1/2 -translate-x-1/2 top-0 bottom-0 w-0.5 bg-cyan-500/30"></div>
+
+                <div className="space-y-2">
+                  {scenes.map((scene, index) => (
+                    <div key={scene.id} className="relative">
+                      <div className="absolute left-1/2 -translate-x-1/2 top-4 h-4 w-4 rounded-full bg-cyan-500 glow z-10 flex items-center justify-center">
+                        <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
+                      </div>
+
+                      <div
+                        className={`absolute left-1/2 top-6 h-0.5 w-1/2 bg-cyan-500/30 ${
+                          index % 2 === 0 ? "-translate-x-full" : ""
+                        }`}
+                      />
+
+                      <div className={`relative w-full flex ${index % 2 === 0 ? "justify-start" : "justify-end"}`}>
+                        <div className={`${index % 2 === 0 ? "mr-8" : "ml-8"} w-[calc(40%-3rem)]`}>
+                          <Link href={`/timeline-scene/${scene.id}`}>
+                            <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer overflow-hidden">
+                              <CardHeader className="p-0">
+                                <div className="flex h-full min-h-[256px]">
+                                  {/* Content Section - Left Side */}
+                                  <div className="flex-1 p-6 min-w-0">
+                                    <div className="flex items-center gap-3 mb-2">
+                                      <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                      <Badge
+                                        className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
+                                      >
+                                        {scene.metadata.status || "Planning"}
+                                      </Badge>
+                                      {scene.metadata.mood && (
+                                        <Badge
+                                          variant="outline"
+                                          className={`text-xs ${moodColors[scene.metadata.mood as keyof typeof moodColors]}`}
+                                        >
+                                          {scene.metadata.mood}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
+
+                                    <div className="grid grid-cols-2 gap-2 text-xs mb-3">
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <MapPin className="h-3 w-3" />
+                                        <span>{scene.metadata.location || "No location"}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <Clock className="h-3 w-3" />
+                                        <span>{formatDuration(scene.duration_seconds)}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <Camera className="h-3 w-3" />
+                                        <span>{scene.metadata.shotType || "No shot type"}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1 text-muted-foreground">
+                                        <Users className="h-3 w-3" />
+                                        <span>{(scene.metadata.characters || []).length} chars</span>
+                                      </div>
+                                    </div>
+
+                                    {(scene.metadata.characters || []).length > 0 && (
+                                      <div className="mb-2">
+                                        <div className="flex flex-wrap gap-1">
+                                          {scene.metadata.characters!.slice(0, 3).map((character: string, i: number) => (
+                                            <Badge key={i} variant="secondary" className="text-xs">
+                                              {character}
+                                            </Badge>
+                                          ))}
+                                          {scene.metadata.characters!.length > 3 && (
+                                            <Badge variant="secondary" className="text-xs">
+                                              +{scene.metadata.characters!.length - 3}
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {scene.metadata.notes && (
+                                      <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
+                                        <p className="text-muted-foreground">Notes: {scene.metadata.notes}</p>
+                                      </div>
+                                    )}
+
+                                    <div className="flex items-center gap-1 pt-2 border-t border-border/50">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          handleGenerateWithAI(scene.id)
+                                        }}
+                                        className="text-xs h-6 px-2 bg-transparent hover:bg-blue-500/10 hover:text-blue-500"
+                                      >
+                                        <Sparkles className="mr-1 h-2 w-2" />
+                                        AI
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          handleViewAssets(scene.id)
+                                        }}
+                                        className="text-xs h-6 px-2 bg-transparent hover:bg-cyan-500/10 hover:text-blue-500"
+                                      >
+                                        <FolderOpen className="mr-1 h-2 w-2" />
+                                        Assets
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          console.log('Edit button clicked for scene:', scene)
+                                          handleEditScene(scene)
+                                        }}
+                                        className="h-6 w-6 hover:bg-blue-500/10 hover:text-blue-500 ml-auto"
+                                      >
+                                        <Edit className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          handleDeleteScene(scene.id)
+                                        }}
+                                        className="h-6 w-6 hover:bg-destructive/10 hover:text-destructive"
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  <div className="w-40 h-64 relative bg-muted/20 border-l border-border/30 flex-shrink-0 overflow-hidden">
+                                    <img
+                                      src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=288&width=192&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name} - ${scene.description}`}
+                                      alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
+                                      className="w-full h-full object-contain rounded-r-lg"
+                                      onLoad={() => console.log('Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
+                                      onError={() => console.log('Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
+                                    />
+                                    {/* Scene number overlay */}
+                                    <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                      {scene.metadata.sceneNumber || index + 1}
+                                    </div>
+                                    
+                                    {/* Debug: Show thumbnail URL if exists */}
+                                    {scene.metadata.thumbnail && (
+                                      <div className="absolute bottom-2 right-2 bg-green-600/90 text-white text-xs px-2 py-1 rounded max-w-32 truncate">
+                                        ✓ Has Image
+                                      </div>
+                                    )}
+                                    
+                                    {/* Upload Image Button */}
+                                    <div className="absolute bottom-2 left-2">
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          handleUploadImage(scene)
+                                        }}
+                                        className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                      >
+                                        <ImageIcon className="h-3 w-3 mr-1" />
+                                        UPLOAD
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </CardHeader>
+                            </Card>
+                          </Link>
+                        </div>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -1173,6 +1780,8 @@ export default function TimelinePage() {
                                 src={scene.metadata.thumbnail || `/abstract-geometric-scene.png?key=jchhr&height=96&width=96&query=Scene ${scene.metadata.sceneNumber || index + 1}: ${scene.name}`}
                                 alt={`Scene ${scene.metadata.sceneNumber || index + 1} thumbnail`}
                                 className="w-full h-full object-cover"
+                                onLoad={() => console.log('Video view thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
+                                onError={() => console.log('Video view thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail, 'Full metadata:', scene.metadata)}
                               />
                               <Button
                                 size="sm"
@@ -1227,57 +1836,168 @@ export default function TimelinePage() {
         )}
 
         {/* Image Upload Dialog */}
-        <Dialog open={isImageUploadOpen} onOpenChange={setIsImageUploadOpen}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Upload Scene Thumbnail</DialogTitle>
+        <Dialog open={isImageUploadOpen} onOpenChange={(open) => {
+          setIsImageUploadOpen(open)
+          if (!open) {
+            // Only reset if we're not keeping an image for new scene creation
+            if (!generatedImageUrl || selectedSceneForUpload) {
+              resetImageForm()
+            }
+          }
+        }}>
+          <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] flex flex-col">
+            <DialogHeader className="flex-shrink-0">
+              <DialogTitle className="text-foreground">Scene Thumbnail</DialogTitle>
               <DialogDescription>
-                Upload an image to replace the placeholder for "{selectedSceneForUpload?.name}"
+                {selectedSceneForUpload 
+                  ? `Upload an image or generate one with AI for "${selectedSceneForUpload.name}"`
+                  : "Upload an image or generate one with AI for your new scene"
+                }
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4">
-              <div className="flex items-center justify-center w-full">
-                <label
-                  htmlFor="image-upload"
-                  className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-border rounded-lg cursor-pointer bg-muted/20 hover:bg-muted/40 transition-colors"
-                >
-                  <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                    <ImageIcon className="w-8 h-8 mb-4 text-muted-foreground" />
-                    <p className="mb-2 text-sm text-muted-foreground">
-                      <span className="font-semibold">Click to upload</span> or drag and drop
-                    </p>
-                    <p className="text-xs text-muted-foreground">PNG, JPG, GIF up to 10MB</p>
-                  </div>
-                  <input
-                    id="image-upload"
-                    type="file"
-                    className="hidden"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) {
-                        handleImageUpload(file)
-                      }
-                    }}
-                    disabled={isUploadingImage}
-                  />
-                </label>
-              </div>
-              
-              {isUploadingImage && (
-                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Uploading image...
+            
+            <div className="space-y-6 py-4 overflow-y-auto flex-1 min-h-0">
+              {/* AI Image Generation Section */}
+              <div className="border rounded-lg p-4 bg-muted/50">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="h-5 w-5 text-purple-500" />
+                  <h3 className="font-semibold">AI Image Generation</h3>
                 </div>
-              )}
+                
+                <div className="space-y-4">
+                  {/* AI Service Selection */}
+                  <div>
+                    <Label htmlFor="ai-service">AI Service</Label>
+                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                      <SelectTrigger className="bg-input border-border">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="cinema-card border-border">
+                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  {/* AI Prompt */}
+                  <div>
+                    <Label htmlFor="ai-prompt">AI Prompt</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="ai-prompt"
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder="Describe your scene (e.g., 'Sci-fi spaceship interior with neon lights')"
+                        className="flex-1 bg-input border-border"
+                      />
+                      <Button
+                        onClick={generateAIImage}
+                        disabled={isGeneratingImage || !aiPrompt.trim()}
+                        variant="outline"
+                        size="sm"
+                        className="border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10"
+                      >
+                        {isGeneratingImage ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-2" />
+                        )}
+                        Generate
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Generated Image Preview */}
+                  {generatedImageUrl && (
+                    <div className="space-y-3">
+                      <Label>Generated Image</Label>
+                      <div className="relative">
+                        <img
+                          src={generatedImageUrl}
+                          alt="AI generated scene image"
+                          className="w-full h-48 object-cover rounded-lg border border-border"
+                        />
+                        <Button
+                          onClick={saveGeneratedImage}
+                          disabled={isUploadingImage}
+                          className="absolute bottom-2 right-2 bg-green-600 hover:bg-green-700 text-white"
+                          size="sm"
+                        >
+                          {isUploadingImage ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          ) : (
+                            <Save className="h-4 w-4 mr-2" />
+                          )}
+                          Save to Scene
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Manual Upload Section */}
+              <div className="border rounded-lg p-4 bg-muted/50">
+                <div className="flex items-center gap-2 mb-4">
+                  <ImageIcon className="h-5 w-5 text-blue-500" />
+                  <h3 className="font-semibold">Manual Upload</h3>
+                </div>
+                
+                <div className="flex items-center justify-center w-full">
+                  <label
+                    htmlFor="image-upload"
+                    className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-border rounded-lg cursor-pointer bg-muted/20 hover:bg-muted/40 transition-colors"
+                  >
+                    <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                      <ImageIcon className="w-8 h-8 mb-4 text-muted-foreground" />
+                      <p className="mb-2 text-sm text-muted-foreground">
+                        <span className="font-semibold">Click to upload</span> or drag and drop
+                      </p>
+                      <p className="text-xs text-muted-foreground">PNG, JPG, GIF up to 10MB</p>
+                    </div>
+                    <input
+                      id="image-upload"
+                      type="file"
+                      className="hidden"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) {
+                          if (selectedSceneForUpload) {
+                            handleImageUpload(file)
+                          } else {
+                            handleImageUploadForNewScene(file)
+                          }
+                        }
+                      }}
+                      disabled={isUploadingImage}
+                    />
+                  </label>
+                </div>
+                
+                {isUploadingImage && (
+                  <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Uploading image...
+                  </div>
+                )}
+              </div>
             </div>
-            <DialogFooter>
+            
+            <DialogFooter className="flex-shrink-0 bg-background border-t pt-4">
               <Button
                 variant="outline"
-                onClick={() => setIsImageUploadOpen(false)}
+                onClick={() => {
+                  setIsImageUploadOpen(false)
+                  // Only reset if we're not keeping an image for new scene creation
+                  if (!generatedImageUrl || selectedSceneForUpload) {
+                    resetImageForm()
+                  }
+                }}
                 disabled={isUploadingImage}
               >
-                Cancel
+                Close
               </Button>
             </DialogFooter>
           </DialogContent>

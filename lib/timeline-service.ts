@@ -17,6 +17,7 @@ export type SceneWithMetadata = Scene & {
     mood?: string
     notes?: string
     status?: string
+    thumbnail?: string
   }
   notes?: Array<{
     id: string
@@ -162,7 +163,8 @@ export class TimelineService {
       shotType: metadata.shotType || '',
       mood: metadata.mood || '',
       notes: metadata.notes || '',
-      status: metadata.status || 'Planning'
+      status: metadata.status || 'Planning',
+      thumbnail: metadata.thumbnail || undefined
     }
   }
 
