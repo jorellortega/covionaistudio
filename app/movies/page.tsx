@@ -32,11 +32,14 @@ import {
   Sparkles,
   FolderOpen,
   Loader2,
+  Download,
+  CheckCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context-fixed"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -69,12 +72,69 @@ export default function MoviesPage() {
   const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const [generatedCoverUrl, setGeneratedCoverUrl] = useState("")
   
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
   const { toast } = useToast()
   const { user } = useAuth()
 
   useEffect(() => {
     loadMovies()
   }, [])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images tab if available
+        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked) {
+          console.log('Setting locked model for images:', imagesSetting.locked_model)
+          setSelectedAIService(imagesSetting.locked_model)
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [user])
+
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
+  }
+
+  // Debug info for locked models - HIDDEN
+  // Uncomment to see locked model details during development
+  /*
+  useEffect(() => {
+    if (aiSettingsLoaded) {
+      console.log('Movies Page - AI Settings:', aiSettings)
+      console.log('Movies Page - Images Tab Locked:', isImagesTabLocked())
+      console.log('Movies Page - Locked Model:', getImagesTabLockedModel())
+    }
+  }, [aiSettingsLoaded, aiSettings])
+  */
 
   const loadMovies = async () => {
     try {
@@ -209,12 +269,147 @@ export default function MoviesPage() {
     }
   }
 
+  // Upload generated image to Supabase storage
+  const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Uploading generated movie cover to Supabase storage...')
+      
+      // Use our API route to download and upload (bypasses CORS)
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      console.log('Image upload API response:', result)
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Movie cover uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error uploading movie cover to Supabase:', error)
+      throw error
+    }
+  }
+
+  // Download movie cover image
+  const downloadMovieCover = async (movie: Movie) => {
+    if (!movie.thumbnail) {
+      toast({
+        title: "No Cover Image",
+        description: "This movie doesn't have a cover image to download.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Create a temporary link element to trigger download
+      const link = document.createElement('a')
+      link.href = movie.thumbnail
+      link.download = `${movie.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_cover.png`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast({
+        title: "🎬 Download Started!",
+        description: `Cover for "${movie.name}" is downloading...`,
+      })
+    } catch (error) {
+      console.error('Error downloading movie cover:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download the cover image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Download generated cover image
+  const downloadGeneratedCover = () => {
+    if (!generatedCoverUrl) {
+      toast({
+        title: "No Generated Cover",
+        description: "Generate a cover first before downloading.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const link = document.createElement('a')
+      link.href = generatedCoverUrl
+      link.download = `generated_movie_cover_${Date.now()}.png`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast({
+        title: "🎨 Download Started!",
+        description: "Generated cover image is downloading...",
+      })
+    } catch (error) {
+      console.error('Error downloading generated cover:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download the generated cover. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const generateAICover = async () => {
     if (!aiPrompt.trim()) {
       toast({
-        title: "Error",
-        description: "Please enter a prompt for cover generation",
+        title: "Missing Prompt",
+        description: "Please enter a description for your movie cover.",
         variant: "destructive"
+      })
+      return
+    }
+
+    // Sanitize the prompt to avoid content filter issues
+    const sanitizedPrompt = aiPrompt
+      .replace(/godzilla/gi, 'giant monster')
+      .replace(/violence|blood|gore/gi, 'action')
+      .trim()
+
+    // Check prompt length for DALL-E 3 (1000 character limit)
+    const fullPrompt = `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+    if (fullPrompt.length > 1000) {
+      toast({
+        title: "Prompt Too Long",
+        description: "Please keep your description shorter. DALL-E 3 has a 1000 character limit.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // Use locked model if available, otherwise use selected service
+    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
       })
       return
     }
@@ -228,8 +423,8 @@ export default function MoviesPage() {
       return
     }
 
-    // Check if user has the required API key for the selected service
-    if (selectedAIService === "dalle" && !user.openaiApiKey) {
+    // Check if user has the required API key for the service to use
+    if (serviceToUse === "dalle" && !user.openaiApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenAI API key in settings to use DALL-E",
@@ -238,7 +433,7 @@ export default function MoviesPage() {
       return
     }
 
-    if (selectedAIService === "openart" && !user.openartApiKey) {
+    if (serviceToUse === "openart" && !user.openartApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenArt API key in settings to use OpenArt",
@@ -251,23 +446,34 @@ export default function MoviesPage() {
     try {
       let imageUrl = ""
       
-      // Use the selected AI service for cover generation
-      switch (selectedAIService) {
+      console.log(`Generating movie cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      
+      // Use the service to use for cover generation
+      switch (serviceToUse) {
         case "dalle":
           if (!user.openaiApiKey) {
             throw new Error("OpenAI API key not configured")
           }
+          
+          // Validate API key format
+          if (!user.openaiApiKey.startsWith('sk-')) {
+            throw new Error("Invalid OpenAI API key format")
+          }
+          
+          console.log('Making DALL-E request with prompt:', `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`)
+          
           const dalleResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              prompt: `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`,
               service: 'dalle',
               apiKey: user.openaiApiKey
             })
           })
           if (!dalleResponse.ok) {
             const errorData = await dalleResponse.json().catch(() => ({}))
+            console.error('DALL-E API error details:', errorData)
             throw new Error(`DALL-E API failed: ${dalleResponse.status} - ${errorData.error || 'Unknown error'}`)
           }
           const dalleData = await dalleResponse.json()
@@ -289,6 +495,7 @@ export default function MoviesPage() {
           })
           if (!openartResponse.ok) {
             const errorData = await openartResponse.json().catch(() => ({}))
+            console.error('OpenArt API error details:', errorData)
             throw new Error(`OpenArt API failed: ${openartResponse.status} - ${errorData.error || 'Unknown error'}`)
           }
           const openartData = await openartResponse.json()
@@ -335,10 +542,29 @@ export default function MoviesPage() {
       setGeneratedCoverUrl(imageUrl)
       setNewMovie(prev => ({ ...prev, thumbnail: imageUrl }))
       
-      toast({
-        title: "AI Cover Generated",
-        description: `Cover generated successfully using ${selectedAIService.toUpperCase()}`
-      })
+      // Upload the generated image to Supabase storage
+      try {
+        console.log('Uploading generated movie cover to Supabase...')
+        const fileName = `movie-cover-${Date.now()}`
+        const supabaseUrl = await uploadGeneratedImageToStorage(imageUrl, fileName)
+        
+        // Update with the Supabase URL instead of the temporary AI service URL
+        setGeneratedCoverUrl(supabaseUrl)
+        setNewMovie(prev => ({ ...prev, thumbnail: supabaseUrl }))
+        
+        toast({
+          title: "AI Cover Generated & Uploaded",
+          description: `Cover generated and uploaded to storage using ${serviceToUse.toUpperCase()}`,
+        })
+      } catch (uploadError) {
+        console.error('Failed to upload movie cover to Supabase:', uploadError)
+        toast({
+          title: "Cover Generated (Upload Failed)",
+          description: "Cover generated but failed to upload to storage. Using temporary URL.",
+          variant: "destructive",
+        })
+        // Keep the temporary URL if upload fails
+      }
     } catch (error) {
       console.error("Error generating AI cover:", error)
       toast({
@@ -467,7 +693,8 @@ export default function MoviesPage() {
                   </div>
                   
                   <div className="space-y-3">
-                    {/* AI Service Selection */}
+                                      {/* AI Service Selection - Only show if not locked */}
+                  {!isImagesTabLocked() && (
                     <div>
                       <Label htmlFor="ai-service">AI Service</Label>
                       <Select value={selectedAIService} onValueChange={setSelectedAIService}>
@@ -481,6 +708,20 @@ export default function MoviesPage() {
                         </SelectContent>
                       </Select>
                     </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {isImagesTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                        <Link href="/settings-ai" className="ml-auto text-xs underline hover:text-green-500">
+                          Change Settings
+                        </Link>
+                      </p>
+                    </div>
+                  )}
                     
                     {/* AI Prompt */}
                     <div>
@@ -507,6 +748,19 @@ export default function MoviesPage() {
                           )}
                           {isGeneratingCover ? "Generating..." : "Generate Cover"}
                         </Button>
+                        
+                        {/* Download Generated Cover Button */}
+                        {generatedCoverUrl && (
+                          <Button
+                            onClick={downloadGeneratedCover}
+                            variant="outline"
+                            size="sm"
+                            className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                          >
+                            <Download className="h-4 w-4 mr-2" />
+                            Download Cover
+                          </Button>
+                        )}
                       </div>
                     </div>
 
@@ -532,6 +786,17 @@ export default function MoviesPage() {
                             alt="Movie cover preview"
                             className="w-full max-w-md h-auto rounded-lg border border-border"
                           />
+                          <div className="mt-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={downloadGeneratedCover}
+                              className="w-full"
+                            >
+                              <Download className="mr-2 h-3 w-3" />
+                              Download Cover
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -619,20 +884,35 @@ export default function MoviesPage() {
                 </div>
                 
                 <div className="space-y-3">
-                  {/* AI Service Selection */}
-                  <div>
-                    <Label htmlFor="edit-ai-service">AI Service</Label>
-                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* AI Service Selection - Only show if not locked */}
+                  {!isImagesTabLocked() && (
+                    <div>
+                      <Label htmlFor="edit-ai-service">AI Service</Label>
+                      <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                          <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                          <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {isImagesTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                        <Link href="/settings-ai" className="ml-auto text-xs underline hover:text-green-500">
+                          Change Settings
+                        </Link>
+                      </p>
+                    </div>
+                  )}
                   
                   {/* AI Prompt */}
                   <div>
@@ -659,6 +939,19 @@ export default function MoviesPage() {
                         )}
                         {isGeneratingCover ? "Generating..." : "Generate Cover"}
                       </Button>
+                      
+                      {/* Download Generated Cover Button */}
+                      {generatedCoverUrl && (
+                        <Button
+                          onClick={downloadGeneratedCover}
+                          variant="outline"
+                          size="sm"
+                          className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Download Cover
+                        </Button>
+                      )}
                     </div>
                   </div>
 
@@ -684,6 +977,17 @@ export default function MoviesPage() {
                           alt="Movie cover preview"
                           className="w-full max-w-md h-auto rounded-lg border border-border"
                         />
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={downloadGeneratedCover}
+                            className="w-full"
+                          >
+                            <Download className="mr-2 h-3 w-3" />
+                            Download Cover
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -740,17 +1044,19 @@ export default function MoviesPage() {
         </div>
 
         {/* Movies Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
           {filteredMovies.map((movie) => (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
-              <CardHeader className="pb-3">
-                <div className="aspect-video rounded-lg overflow-hidden mb-3 bg-muted">
-                  <img
-                    src={movie.thumbnail || "/placeholder.svg"}
-                    alt={movie.name}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                </div>
+              <CardHeader className="pb-2">
+                <Link href={`/timeline?movie=${movie.id}`} className="block">
+                  <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                    <img
+                      src={movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                      alt={movie.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  </div>
+                </Link>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <CardTitle className="text-lg mb-1 group-hover:text-primary transition-colors">
@@ -776,6 +1082,13 @@ export default function MoviesPage() {
                         Preview
                       </DropdownMenuItem>
                       <DropdownMenuItem 
+                        onClick={() => downloadMovieCover(movie)}
+                        disabled={!movie.thumbnail}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Download Cover
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
                         className="text-destructive"
                         onClick={() => handleDeleteMovie(movie.id)}
                       >
@@ -787,11 +1100,11 @@ export default function MoviesPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <CardDescription className="mb-4 line-clamp-2">{movie.description}</CardDescription>
+                <CardDescription className="mb-2 line-clamp-2 text-sm">{movie.description}</CardDescription>
 
-                <div className="space-y-2 text-sm text-muted-foreground">
+                <div className="space-y-1 text-xs text-muted-foreground">
                   <div className="flex items-center gap-2">
-                    <Film className="h-4 w-4" />
+                    <Film className="h-3 w-3" />
                     <span>{movie.scenes || 0} scenes</span>
                     {movie.duration && (
                       <>
@@ -801,19 +1114,19 @@ export default function MoviesPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Calendar className="h-4 w-4" />
+                    <Calendar className="h-3 w-3" />
                     <span>Created {new Date(movie.created_at).toLocaleDateString()}</span>
                   </div>
                 </div>
 
-                <div className="flex gap-2 mt-4">
-                  <Link href={`/timeline?movie=${movie.id}`} className="flex-1">
+                <div className="flex flex-col gap-1 mt-2">
+                  <Link href={`/timeline?movie=${movie.id}`}>
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10 bg-transparent"
+                      className="w-full border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10 bg-transparent text-xs h-6"
                     >
-                      <Play className="mr-2 h-3 w-3" />
+                      <Play className="mr-1 h-2.5 w-2.5" />
                       Timeline
                     </Button>
                   </Link>
@@ -821,9 +1134,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-cyan-500/20 hover:border-cyan-500 hover:bg-cyan-500/10 bg-transparent"
+                      className="w-full border-cyan-500/20 hover:border-cyan-500 hover:bg-cyan-500/10 bg-transparent text-xs h-6"
                     >
-                      <Sparkles className="mr-2 h-3 w-3" />
+                      <Sparkles className="mr-1 h-2.5 w-2.5" />
                       AI Studio
                     </Button>
                   </Link>
@@ -831,9 +1144,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-cyan-600/20 hover:border-cyan-600 hover:bg-cyan-600/10 bg-transparent"
+                      className="w-full border-cyan-600/20 hover:border-cyan-500 hover:bg-cyan-600/10 bg-transparent text-xs h-6"
                     >
-                      <FolderOpen className="mr-2 h-3 w-3" />
+                      <FolderOpen className="mr-1 h-2.5 w-2.5" />
                       Assets
                     </Button>
                   </Link>

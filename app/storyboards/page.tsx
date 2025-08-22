@@ -12,14 +12,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
+import Link from "next/link"
 
 
 
 export default function StoryboardsPage() {
-  const { user, isLoading } = useAuth()
+  const { user } = useAuth()
   const { toast } = useToast()
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [isLoadingStoryboards, setIsLoadingStoryboards] = useState(true)
@@ -52,11 +54,39 @@ export default function StoryboardsPage() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [selectedAIService, setSelectedAIService] = useState("dalle")
+  
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
 
   useEffect(() => {
     if (user) {
       fetchStoryboards()
     }
+  }, [user])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images tab if available
+        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked) {
+          console.log('Setting locked model for images:', imagesSetting.locked_model)
+          setSelectedAIService(imagesSetting.locked_model)
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
   }, [user])
 
   const fetchStoryboards = async () => {
@@ -78,16 +108,39 @@ export default function StoryboardsPage() {
   const handleCreateStoryboard = async () => {
     if (!formData.title || !formData.description) {
       toast({
-        title: "Validation Error",
-        description: "Title and description are required",
+        title: "Missing Fields",
+        description: "Please fill in all required fields.",
         variant: "destructive"
       })
       return
     }
 
-    setIsCreating(true)
     try {
-      const newStoryboard = await StoryboardsService.createStoryboard(formData)
+      setIsCreating(true)
+
+      // If there's a generated image, upload it to Supabase storage first
+      let finalImageUrl = formData.image_url
+      if (formData.image_url && formData.image_url.includes('oaidalleapiprodscus.blob.core.windows.net')) {
+        try {
+          console.log('Uploading generated image to Supabase storage...')
+          const fileName = `storyboard-${Date.now()}`
+          finalImageUrl = await uploadGeneratedImageToStorage(formData.image_url, fileName)
+          console.log('Image uploaded to Supabase, new URL:', finalImageUrl)
+        } catch (uploadError) {
+          console.error('Failed to upload image to Supabase:', uploadError)
+          toast({
+            title: "Image Upload Warning",
+            description: "Failed to upload image to storage, but saving with original URL.",
+            variant: "destructive",
+          })
+          // Continue with original URL if upload fails
+        }
+      }
+
+      const newStoryboard = await StoryboardsService.createStoryboard({
+        ...formData,
+        image_url: finalImageUrl
+      })
       setStoryboards(prev => [newStoryboard, ...prev])
       setShowCreateForm(false)
       resetForm()
@@ -129,16 +182,39 @@ export default function StoryboardsPage() {
   const handleUpdateStoryboard = async () => {
     if (!editingStoryboard || !formData.title || !formData.description) {
       toast({
-        title: "Validation Error",
-        description: "Title and description are required",
+        title: "Missing Fields",
+        description: "Please fill in all required fields.",
         variant: "destructive"
       })
       return
     }
 
-    setIsUpdating(true)
     try {
-      const updatedStoryboard = await StoryboardsService.updateStoryboard(editingStoryboard.id, formData)
+      setIsUpdating(true)
+
+      // If there's a generated image, upload it to Supabase storage first
+      let finalImageUrl = formData.image_url
+      if (formData.image_url && formData.image_url.includes('oaidalleapiprodscus.blob.core.windows.net')) {
+        try {
+          console.log('Uploading generated image to Supabase storage...')
+          const fileName = `storyboard-${Date.now()}`
+          finalImageUrl = await uploadGeneratedImageToStorage(formData.image_url, fileName)
+          console.log('Image uploaded to Supabase, new URL:', finalImageUrl)
+        } catch (uploadError) {
+          console.error('Failed to upload image to Supabase:', uploadError)
+          toast({
+            title: "Image Upload Warning",
+            description: "Failed to upload image to storage, but saving with original URL.",
+            variant: "destructive",
+          })
+          // Continue with original URL if upload fails
+        }
+      }
+
+      const updatedStoryboard = await StoryboardsService.updateStoryboard(editingStoryboard.id, {
+        ...formData,
+        image_url: finalImageUrl
+      })
       
       setStoryboards(prev => prev.map(sb => 
         sb.id === editingStoryboard.id ? updatedStoryboard : sb
@@ -202,6 +278,23 @@ export default function StoryboardsPage() {
     setEditingStoryboard(null)
   }
 
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
+  }
+
   // AI Integration Functions
   const generateAIText = async (field: keyof CreateStoryboardData) => {
     if (!aiPrompt.trim()) {
@@ -222,12 +315,26 @@ export default function StoryboardsPage() {
       return
     }
 
+    // Use locked model if available, otherwise use selected service
+    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsGeneratingText(true)
     try {
       let generatedText = ""
       
-      // Use the selected AI service
-      switch (selectedAIService) {
+      console.log(`Generating storyboard text using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      
+      // Use the service to use
+      switch (serviceToUse) {
         case "dalle":
           if (!user.openaiApiKey) {
             throw new Error("OpenAI API key not configured")
@@ -309,6 +416,45 @@ export default function StoryboardsPage() {
     }
   }
 
+  // Upload generated image to Supabase storage
+  const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Uploading generated image to Supabase storage...')
+      
+      // Use our API route to download and upload (bypasses CORS)
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      console.log('Image upload API response:', result)
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Image uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error uploading image to Supabase:', error)
+      throw error
+    }
+  }
+
   const generateAIImage = async () => {
     if (!aiPrompt.trim()) {
       toast({
@@ -328,12 +474,26 @@ export default function StoryboardsPage() {
       return
     }
 
+    // Use locked model if available, otherwise use selected service
+    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setIsGeneratingImage(true)
     try {
       let imageUrl = ""
       
-      // Use the selected AI service for image generation
-      switch (selectedAIService) {
+      console.log(`Generating storyboard image using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      
+      // Use the service to use for image generation
+      switch (serviceToUse) {
         case "dalle":
           if (!user.openaiApiKey) {
             throw new Error("OpenAI API key not configured")
@@ -481,7 +641,7 @@ export default function StoryboardsPage() {
     return matchesSearch && matchesFilter
   })
 
-  if (isLoading || isLoadingStoryboards) {
+  if (isLoadingStoryboards) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
@@ -656,21 +816,34 @@ export default function StoryboardsPage() {
                 </div>
                 
                 <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="ai-service">AI Service</Label>
-                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                        <SelectItem value="stable-diffusion">Stable Diffusion</SelectItem>
-                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                        <SelectItem value="runway">Runway ML</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* AI Service Selection - Only show if not locked */}
+                  {!isImagesTabLocked() && (
+                    <div>
+                      <Label htmlFor="ai-service">AI Service</Label>
+                      <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                          <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                          <SelectItem value="stable-diffusion">Stable Diffusion</SelectItem>
+                          <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                          <SelectItem value="runway">Runway ML</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {isImagesTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
                   
                   <div>
                     <Label htmlFor="ai-prompt">AI Prompt</Label>
@@ -892,21 +1065,34 @@ export default function StoryboardsPage() {
                 </div>
                 
                 <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="edit-ai-service">AI Service</Label>
-                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                        <SelectItem value="stable-diffusion">Stable Diffusion</SelectItem>
-                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                        <SelectItem value="runway">Runway ML</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* AI Service Selection - Only show if not locked */}
+                  {!isImagesTabLocked() && (
+                    <div>
+                      <Label htmlFor="edit-ai-service">AI Service</Label>
+                      <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                          <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                          <SelectItem value="stable-diffusion">Stable Diffusion</SelectItem>
+                          <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                          <SelectItem value="runway">Runway ML</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {isImagesTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
                   
                   <div>
                     <Label htmlFor="edit-ai-prompt">AI Prompt</Label>
@@ -1098,7 +1284,7 @@ export default function StoryboardsPage() {
           ))}
         </div>
 
-        {filteredStoryboards.length === 0 && !isLoading && (
+        {filteredStoryboards.length === 0 && !isLoadingStoryboards && (
           <div className="text-center py-12">
             <div className="text-muted-foreground mb-4">
               <FileText className="h-12 w-12 mx-auto mb-4" />

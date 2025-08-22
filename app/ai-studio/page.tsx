@@ -16,6 +16,7 @@ import { OpenAIService } from "@/lib/openai-service"
 import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
 import { AssetService } from "@/lib/asset-service"
+import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
 import Link from "next/link"
 import {
   Dialog,
@@ -34,7 +35,6 @@ import {
   Download,
   Save,
   RefreshCw,
-  Settings,
   History,
   Copy,
   Play,
@@ -163,9 +163,82 @@ export default function AIStudioPage() {
   console.log("AI Studio - User:", user)
   console.log("AI Studio - OpenAI API Key:", user?.openaiApiKey ? "Available" : "Not available")
 
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked models for each tab
+        settings.forEach(setting => {
+          if (setting.is_locked) {
+            switch (setting.tab_type) {
+              case 'scripts':
+                setSelectedModel(setting.locked_model)
+                break
+              case 'images':
+                setSelectedModel(setting.locked_model)
+                break
+              case 'videos':
+                setSelectedModel(setting.locked_model)
+                break
+              case 'audio':
+                setSelectedModel(setting.locked_model)
+                break
+            }
+          }
+        })
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [user])
+
+  // Auto-select locked models when AI settings change
+  useEffect(() => {
+    if (aiSettings.length > 0 && activeTab) {
+      const currentSetting = aiSettings.find(setting => setting.tab_type === activeTab)
+      if (currentSetting?.is_locked) {
+        console.log(`Setting locked model for ${activeTab}:`, currentSetting.locked_model)
+        setSelectedModel(currentSetting.locked_model)
+      }
+    }
+  }, [aiSettings, activeTab])
+
+  // Get current tab's AI setting
+  const getCurrentTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === activeTab)
+  }
+
+  // Check if current tab has a locked model
+  const isCurrentTabLocked = () => {
+    const setting = getCurrentTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for current tab
+  const getCurrentTabLockedModel = () => {
+    const setting = getCurrentTabSetting()
+    return setting?.locked_model || ""
+  }
+
   // Reset model selection when switching tabs
   useEffect(() => {
-    setSelectedModel("")
+    // Don't reset selectedModel if the current tab has a locked model
+    if (!isCurrentTabLocked()) {
+      setSelectedModel("")
+    }
+    
     setSelectedStyle("")
     setSelectedTemplate("")
     setSelectedDuration("10s")
@@ -752,6 +825,17 @@ export default function AIStudioPage() {
   }
 
   const handleSaveToLibrary = (item: any, type: string) => {
+    // Check if a project is selected
+    if (!selectedProject) {
+      toast({
+        title: "Project Required",
+        description: "Please select a project above before saving to the library. Generated content must be associated with a project.",
+        variant: "destructive",
+        duration: 5000, // Show for 5 seconds
+      })
+      return
+    }
+
     const assetData = {
       ...item,
       project: selectedProject,
@@ -771,11 +855,175 @@ export default function AIStudioPage() {
     setShowSaveModal(true)
   }
 
+  // Download image function
+  const handleDownloadImage = async (imageUrl: string, fileName: string) => {
+    try {
+      console.log('Downloading image via API...')
+      
+      // Check if it's already a Supabase URL
+      if (imageUrl.includes('supabase.co')) {
+        // Direct download from Supabase (no CORS issues)
+        const response = await fetch(imageUrl)
+        if (!response.ok) {
+          throw new Error(`Failed to download image: ${response.status}`)
+        }
+        
+        const imageBlob = await response.blob()
+        console.log('Image downloaded from Supabase, size:', imageBlob.size)
+        
+        // Create download link
+        const url = window.URL.createObjectURL(imageBlob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${fileName}.png`
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+        
+        toast({
+          title: "Download Started",
+          description: "Image download has begun.",
+          variant: "default",
+        })
+      } else {
+        // For OpenAI URLs, use our API to download and then download from Supabase
+        toast({
+          title: "Processing Image",
+          description: "Downloading and uploading image to storage first...",
+          variant: "default",
+        })
+        
+        // Use our API route to download and upload
+        const response = await fetch('/api/ai/download-and-store-image', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            imageUrl: imageUrl,
+            fileName: fileName,
+            userId: user!.id
+          })
+        })
+        
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(`API error: ${errorData.error || response.statusText}`)
+        }
+        
+        const result = await response.json()
+        if (result.success && result.supabaseUrl) {
+          // Now download from the new Supabase URL
+          const downloadResponse = await fetch(result.supabaseUrl)
+          if (!downloadResponse.ok) {
+            throw new Error(`Failed to download from Supabase: ${downloadResponse.status}`)
+          }
+          
+          const imageBlob = await downloadResponse.blob()
+          const url = window.URL.createObjectURL(imageBlob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `${fileName}.png`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          window.URL.revokeObjectURL(url)
+          
+          toast({
+            title: "Download Started",
+            description: "Image uploaded to storage and download begun.",
+            variant: "default",
+          })
+        } else {
+          throw new Error('Failed to get Supabase URL from API')
+        }
+      }
+      
+    } catch (error) {
+      console.error('Download error:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Download and upload image to Supabase storage
+  const downloadAndUploadImage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Processing image for Supabase storage via API...')
+      
+      // Use our API route to download and upload (bypasses CORS)
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      console.log('API response:', result)
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Image uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error downloading/uploading image via API:', error)
+      throw error
+    }
+  }
+
   const handleConfirmSave = async () => {
     if (!saveModalData || !user) return
     
+    // Validate project selection
+    if (!selectedProject) {
+      toast({
+        title: "Project Required",
+        description: "Please select a project before saving to the library.",
+        variant: "destructive",
+      })
+      return
+    }
+    
     try {
       setLoading(true)
+      
+      let finalContentUrl = saveModalData.item.url
+      
+      // For images, download and upload to Supabase storage
+      if (saveModalData.type === 'image' && saveModalData.item.url) {
+        try {
+          console.log('Processing image for Supabase storage...')
+          const fileName = saveModalData.item.title || 'generated-image'
+          finalContentUrl = await downloadAndUploadImage(saveModalData.item.url, fileName)
+          console.log('Image uploaded to Supabase, new URL:', finalContentUrl)
+        } catch (error) {
+          console.error('Failed to upload image to Supabase:', error)
+          toast({
+            title: "Image Upload Failed",
+            description: "Failed to upload image to storage, but saving to database with original URL.",
+            variant: "destructive",
+          })
+          // Continue with original URL if upload fails
+        }
+      }
       
       // Save the asset to the database
       const assetData = {
@@ -784,7 +1032,7 @@ export default function AIStudioPage() {
         title: saveModalData.item.title,
         content_type: saveModalData.type as 'script' | 'image' | 'video' | 'audio',
         content: saveModalData.item.content,
-        content_url: saveModalData.item.url,
+        content_url: finalContentUrl, // Use the new Supabase URL if available
         prompt: saveModalData.item.prompt,
         model: saveModalData.item.model,
         version_name: saveModalData.versionLabel || undefined, // Pass version name
@@ -804,6 +1052,7 @@ export default function AIStudioPage() {
       console.log('Content type being sent:', assetData.content_type)
       console.log('Project ID being sent:', assetData.project_id)
       console.log('Scene ID being sent:', assetData.scene_id)
+      console.log('Final content URL:', assetData.content_url)
       
       const savedAsset = await AssetService.createAsset(assetData)
       console.log('Asset saved successfully:', savedAsset)
@@ -1058,8 +1307,12 @@ export default function AIStudioPage() {
       <main className="container mx-auto max-w-7xl px-6 py-8">
         {/* Page Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">AI Studio</h1>
-          <p className="text-muted-foreground">Generate scripts, images, and videos with AI</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">AI Studio</h1>
+              <p className="text-muted-foreground">Generate scripts, images, and videos with AI</p>
+            </div>
+          </div>
         </div>
 
 
@@ -1075,6 +1328,11 @@ export default function AIStudioPage() {
               }}
               showCreateNew={true}
             />
+            {!selectedProject && (
+              <p className="text-xs text-orange-600 mt-1">
+                ⚠️ Select a project to save generated content to your library
+              </p>
+            )}
           </div>
 
           {selectedProject && (
@@ -1169,60 +1427,73 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
-                  <div className="grid gap-2">
-                    <Label>AI Model</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Select AI model" />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        {aiModels.script.map((model) => {
-                          let isReady = false
-                          let statusText = ""
-                          
-                          if (model === "ChatGPT") {
-                            isReady = !!user?.openaiApiKey
-                            statusText = isReady ? "Ready" : "OpenAI API Key Required"
-                          } else if (model === "Claude") {
-                            isReady = !!user?.anthropicApiKey
-                            statusText = isReady ? "Ready" : "Anthropic API Key Required"
-                          } else {
-                            isReady = false
-                            statusText = "Coming Soon"
-                          }
-                          
-                          return (
-                            <SelectItem key={model} value={model} disabled={!isReady}>
-                              <div className="flex items-center justify-between w-full">
-                                <span>{model}</span>
-                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
-                                  {statusText}
-                                </Badge>
-                              </div>
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
-                    
-                    {selectedModel === "ChatGPT" && !user?.openaiApiKey && (
-                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
-                        <p className="text-sm text-orange-600">
-                          <AlertCircle className="h-4 w-4 inline mr-2" />
-                          OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
-                        </p>
-                      </div>
-                    )}
-                    
-                    {selectedModel === "Claude" && !user?.anthropicApiKey && (
-                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
-                        <p className="text-sm text-orange-600">
-                          <AlertCircle className="h-4 w-4 inline mr-2" />
-                          Anthropic API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  {/* AI Model Selection - Only show if not locked */}
+                  {!isCurrentTabLocked() && (
+                    <div className="grid gap-2">
+                      <Label>AI Model</Label>
+                      <Select value={selectedModel} onValueChange={setSelectedModel}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select AI model" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {aiModels.script.map((model) => {
+                            let isReady = false
+                            let statusText = ""
+                            
+                            if (model === "ChatGPT") {
+                              isReady = !!user?.openaiApiKey
+                              statusText = isReady ? "Ready" : "OpenAI API Key Required"
+                            } else if (model === "Claude") {
+                              isReady = !!user?.anthropicApiKey
+                              statusText = isReady ? "Ready" : "Anthropic API Key Required"
+                            } else {
+                              isReady = false
+                              statusText = "Coming Soon"
+                            }
+                            
+                            return (
+                              <SelectItem key={model} value={model} disabled={!isReady}>
+                                <div className="flex items-center justify-between w-full">
+                                  <span>{model}</span>
+                                  <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                    {statusText}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
+                        </SelectContent>
+                      </Select>
+                      
+                      {selectedModel === "ChatGPT" && !user?.openaiApiKey && (
+                        <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                          <p className="text-sm text-orange-600">
+                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                            OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                          </p>
+                        </div>
+                      )}
+                      
+                      {selectedModel === "Claude" && !user?.anthropicApiKey && (
+                        <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                          <p className="text-sm text-orange-600">
+                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                            Anthropic API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Show locked model info if tab is locked */}
+                  {isCurrentTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
@@ -1273,6 +1544,16 @@ export default function AIStudioPage() {
                 <CardHeader>
                   <CardTitle>Generated Scripts</CardTitle>
                   <CardDescription>Your recent script generations</CardDescription>
+                  {selectedProject && (
+                    <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mt-2">
+                      ✅ Will save to project: <strong>{movies.find((m) => m.id.toString() === selectedProject)?.name}</strong>
+                    </div>
+                  )}
+                  {!selectedProject && (
+                    <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mt-2">
+                      ⚠️ Select a project above to save scripts to your library
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent>
                   {isLoadingData ? (
@@ -1382,51 +1663,64 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
-                  <div className="grid gap-2">
-                    <Label>AI Model</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Select AI model" />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        {aiModels.image.map((model) => {
-                          let isReady = false
-                          let statusText = ""
-                          
-                          if (model === "DALL-E 3") {
-                            isReady = !!user?.openaiApiKey
-                            statusText = isReady ? "Ready" : "OpenAI API Key Required"
-                          } else if (model === "OpenArt") {
-                            isReady = !!user?.openartApiKey
-                            statusText = isReady ? "Ready" : "API Key Required"
-                          } else {
-                            isReady = false
-                            statusText = "Coming Soon"
-                          }
-                          
-                          return (
-                            <SelectItem key={model} value={model} disabled={!isReady}>
-                              <div className="flex items-center justify-between w-full">
-                                <span>{model}</span>
-                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
-                                  {statusText}
-                                </Badge>
-                              </div>
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
-                    
-                    {selectedModel === "DALL-E 3" && !user?.openaiApiKey && (
-                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
-                        <p className="text-sm text-orange-600">
-                          <AlertCircle className="h-4 w-4 inline mr-2" />
-                          OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  {/* AI Model Selection - Only show if not locked */}
+                  {!isCurrentTabLocked() && (
+                    <div className="grid gap-2">
+                      <Label>AI Model</Label>
+                      <Select value={selectedModel} onValueChange={setSelectedModel}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select AI model" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {aiModels.image.map((model) => {
+                            let isReady = false
+                            let statusText = ""
+                            
+                            if (model === "DALL-E 3") {
+                              isReady = !!user?.openaiApiKey
+                              statusText = isReady ? "Ready" : "OpenAI API Key Required"
+                            } else if (model === "OpenArt") {
+                              isReady = !!user?.openartApiKey
+                              statusText = isReady ? "Ready" : "API Key Required"
+                            } else {
+                              isReady = false
+                              statusText = "Coming Soon"
+                            }
+                            
+                            return (
+                              <SelectItem key={model} value={model} disabled={!isReady}>
+                                <div className="flex items-center justify-between w-full">
+                                  <span>{model}</span>
+                                  <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                    {statusText}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
+                        </SelectContent>
+                      </Select>
+                      
+                      {selectedModel === "DALL-E 3" && !user?.openaiApiKey && (
+                        <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                          <p className="text-sm text-orange-600">
+                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                            OpenAI API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Show locked model info if tab is locked */}
+                  {isCurrentTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
@@ -1467,6 +1761,14 @@ export default function AIStudioPage() {
                     Generate Image
                   </Button>
                   
+                  {/* Debug info for locked models - HIDDEN */}
+                  {/* {isCurrentTabLocked() && (
+                    <div className="text-xs text-muted-foreground p-2 bg-muted/50 rounded border">
+                      <div>Locked Model: {getCurrentTabLockedModel()}</div>
+                      <div>Selected Model: {selectedModel || 'None'}</div>
+                      <div>Is Locked: {isCurrentTabLocked().toString()}</div>
+                    </div>
+                  )} */}
 
                 </CardContent>
               </Card>
@@ -1476,6 +1778,16 @@ export default function AIStudioPage() {
                 <CardHeader>
                   <CardTitle>Generated Images</CardTitle>
                   <CardDescription>Your recent image generations</CardDescription>
+                  {selectedProject && (
+                    <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mt-2">
+                      ✅ Will save to project: <strong>{movies.find((m) => m.id.toString() === selectedProject)?.name}</strong>
+                    </div>
+                  )}
+                  {!selectedProject && (
+                    <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mt-2">
+                      ⚠️ Select a project above to save images to your library
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-4">
@@ -1493,6 +1805,23 @@ export default function AIStudioPage() {
                           </div>
                           <h4 className="text-sm font-medium mb-1">{image.title}</h4>
                           <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{image.prompt}</p>
+                          
+                          {/* Storage Status Indicator */}
+                          <div className="mb-2">
+                            {image.url && image.url.includes('supabase.co') ? (
+                              <Badge variant="default" className="text-xs bg-green-500/20 text-green-600 border-green-500/30">
+                                ✅ Stored in Supabase
+                              </Badge>
+                            ) : image.url && image.url.includes('oaidalleapiprodscus.blob.core.windows.net') ? (
+                              <Badge variant="secondary" className="text-xs bg-orange-500/20 text-orange-600 border-orange-500/30">
+                                ⚠️ OpenAI URL (Save to upload to Supabase)
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs">
+                                ❓ No URL
+                              </Badge>
+                            )}
+                          </div>
 
                           {selectedProject && scenes.length > 0 && (
                             <div className="mb-2">
@@ -1515,7 +1844,12 @@ export default function AIStudioPage() {
                           )}
 
                           <div className="flex items-center gap-1">
-                            <Button size="sm" variant="outline" className="text-xs flex-1 bg-transparent">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="text-xs flex-1 bg-transparent"
+                              onClick={() => handleDownloadImage(image.url || '', image.title || 'generated-image')}
+                            >
                               <Download className="mr-1 h-3 w-3" />
                               Download
                             </Button>
@@ -1653,63 +1987,76 @@ export default function AIStudioPage() {
                     </>
                   )}
 
-                  <div className="grid gap-2">
-                    <Label>AI Model</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Select AI model" />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        {aiModels.video.map((model) => {
-                          let isReady = false
-                          let statusText = ""
-                          
-                          if (model === "Runway ML") {
-                            isReady = !!user?.runwayApiKey
-                            statusText = isReady ? "Ready" : "API Key Required"
-                          } else if (model === "Kling") {
-                            isReady = !!user?.klingApiKey
-                            statusText = isReady ? "Ready" : "API Key Required"
-                          } else {
-                            isReady = true
-                            statusText = "Coming Soon"
-                          }
-                          
-                          return (
-                            <SelectItem key={model} value={model} disabled={!isReady}>
-                              <div className="flex items-center justify-between w-full">
-                                <span>{model}</span>
-                                <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
-                                  {statusText}
-                                </Badge>
-                              </div>
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
-                    
-                    {selectedModel === "Runway ML" && !user?.runwayApiKey && (
-                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
-                        <p className="text-sm text-orange-600">
-                          <AlertCircle className="h-4 w-4 inline mr-2" />
-                          Runway ML API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
-                        </p>
-                        <p className="text-xs text-orange-500 mt-1">
-                          Get your API key from <a href="https://runwayml.com/api" target="_blank" rel="noopener noreferrer" className="underline">Runway ML's API page</a>
-                        </p>
-                      </div>
-                    )}
-                    
-                    {selectedModel === "Kling" && !user?.klingApiKey && (
-                      <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
-                        <p className="text-sm text-orange-600">
-                          <AlertCircle className="h-4 w-4 inline mr-2" />
-                          Kling API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  {/* AI Model Selection - Only show if not locked */}
+                  {!isCurrentTabLocked() && (
+                    <div className="grid gap-2">
+                      <Label>AI Model</Label>
+                      <Select value={selectedModel} onValueChange={setSelectedModel}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select AI model" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {aiModels.video.map((model) => {
+                            let isReady = false
+                            let statusText = ""
+                            
+                            if (model === "Runway ML") {
+                              isReady = !!user?.runwayApiKey
+                              statusText = isReady ? "Ready" : "API Key Required"
+                            } else if (model === "Kling") {
+                              isReady = !!user?.klingApiKey
+                              statusText = isReady ? "Ready" : "API Key Required"
+                            } else {
+                              isReady = true
+                              statusText = "Coming Soon"
+                            }
+                            
+                            return (
+                              <SelectItem key={model} value={model} disabled={!isReady}>
+                                <div className="flex items-center justify-between w-full">
+                                  <span>{model}</span>
+                                  <Badge variant={isReady ? "default" : "secondary"} className="text-xs ml-2">
+                                    {statusText}
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
+                        </SelectContent>
+                      </Select>
+                      
+                      {selectedModel === "Runway ML" && !user?.runwayApiKey && (
+                        <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                          <p className="text-sm text-orange-600">
+                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                            Runway ML API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                          </p>
+                          <p className="text-xs text-orange-500 mt-1">
+                            Get your API key from <a href="https://runwayml.com/api" target="_blank" rel="noopener noreferrer" className="underline">Runway ML's API page</a>
+                          </p>
+                        </div>
+                      )}
+                      
+                      {selectedModel === "Kling" && !user?.klingApiKey && (
+                        <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
+                          <p className="text-sm text-orange-600">
+                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                            Kling API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Show locked model info if tab is locked */}
+                  {isCurrentTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
@@ -1759,6 +2106,16 @@ export default function AIStudioPage() {
                 <CardHeader>
                   <CardTitle>Generated Videos</CardTitle>
                   <CardDescription>Your recent video generations</CardDescription>
+                  {selectedProject && (
+                    <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mt-2">
+                      ✅ Will save to project: <strong>{movies.find((m) => m.id.toString() === selectedProject)?.name}</strong>
+                    </div>
+                  )}
+                  {!selectedProject && (
+                    <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mt-2">
+                      ⚠️ Select a project above to save videos to your library
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
@@ -1868,21 +2225,34 @@ export default function AIStudioPage() {
                     </Select>
                   </div>
 
-                  <div className="grid gap-2">
-                    <Label>AI Model</Label>
-                    <Select value={selectedModel} onValueChange={setSelectedModel}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Select AI model" />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        {aiModels.audio.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* AI Model Selection - Only show if not locked */}
+                  {!isCurrentTabLocked() && (
+                    <div className="grid gap-2">
+                      <Label>AI Model</Label>
+                      <Select value={selectedModel} onValueChange={setSelectedModel}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select AI model" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {aiModels.audio.map((model) => (
+                            <SelectItem key={model} value={model}>
+                              {model}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if tab is locked */}
+                  {isCurrentTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
 
                   {selectedModel === "ElevenLabs" && !user?.elevenlabsApiKey && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
@@ -2094,6 +2464,16 @@ export default function AIStudioPage() {
                 <CardHeader>
                   <CardTitle>Generated Audio</CardTitle>
                   <CardDescription>Your recent audio generations</CardDescription>
+                  {selectedProject && (
+                    <div className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2 mt-2">
+                      ✅ Will save to project: <strong>{movies.find((m) => m.id.toString() === selectedProject)?.name}</strong>
+                    </div>
+                  )}
+                  {!selectedProject && (
+                    <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mt-2">
+                      ⚠️ Select a project above to save audio to your library
+                    </div>
+                  )}
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">

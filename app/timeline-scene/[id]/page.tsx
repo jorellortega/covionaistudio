@@ -63,7 +63,7 @@ function ScenePageClient({ id }: { id: string }) {
   const router = useRouter()
 
   // State variables
-  const [activeTab, setActiveTab] = useState("overview")
+  const [activeTab, setActiveTab] = useState("scripts")
   const [newNote, setNewNote] = useState("")
   const [newNoteType, setNewNoteType] = useState("General")
   const [isEditing, setIsEditing] = useState(false)
@@ -81,6 +81,18 @@ function ScenePageClient({ id }: { id: string }) {
     version_name: '',
     content: ''
   })
+  
+  // Speech synthesis state
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [speakingAssetId, setSpeakingAssetId] = useState<string | null>(null)
+  const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
+  const [speechSettings, setSpeechSettings] = useState({
+    rate: 0.9,
+    pitch: 1.0,
+    volume: 1.0,
+    voice: ''
+  })
+  const [showSpeechSettings, setShowSpeechSettings] = useState(false)
 
   // Effect to fetch scene data
   useEffect(() => {
@@ -105,6 +117,15 @@ function ScenePageClient({ id }: { id: string }) {
 
     fetchSceneData()
   }, [id, user?.id, toast])
+
+  // Cleanup speech synthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+    }
+  }, [])
 
   // Effect to fetch assets
   useEffect(() => {
@@ -234,6 +255,90 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }
 
+  // Speech synthesis functions
+  const speakScript = (script: Asset) => {
+    if (!script.content) {
+      toast({
+        title: "No Content",
+        description: "This script has no content to read.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Stop any currently speaking
+    if (isSpeaking) {
+      window.speechSynthesis.cancel()
+      setIsSpeaking(false)
+      setSpeakingAssetId(null)
+      return
+    }
+
+    const utterance = new SpeechSynthesisUtterance(script.content)
+    utterance.rate = speechSettings.rate
+    utterance.pitch = speechSettings.pitch
+    utterance.volume = speechSettings.volume
+
+    // Get available voices and set the selected one or a good default
+    const voices = window.speechSynthesis.getVoices()
+    let selectedVoice = null
+    
+    if (speechSettings.voice) {
+      selectedVoice = voices.find(voice => voice.name === speechSettings.voice)
+    }
+    
+    if (!selectedVoice) {
+      selectedVoice = voices.find(voice => 
+        voice.lang.includes('en') && voice.name.includes('Alex')
+      ) || voices.find(voice => voice.lang.includes('en')) || voices[0]
+    }
+    
+    if (selectedVoice) {
+      utterance.voice = selectedVoice
+    }
+
+    utterance.onstart = () => {
+      setIsSpeaking(true)
+      setSpeakingAssetId(script.id)
+    }
+
+    utterance.onend = () => {
+      setIsSpeaking(false)
+      setSpeakingAssetId(null)
+    }
+
+    utterance.onerror = (event) => {
+      console.error('Speech synthesis error:', event)
+      setIsSpeaking(false)
+      setSpeakingAssetId(null)
+      toast({
+        title: "Speech Error",
+        description: "Failed to read the script aloud.",
+        variant: "destructive",
+      })
+    }
+
+    window.speechSynthesis.speak(utterance)
+  }
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel()
+    setIsSpeaking(false)
+    setSpeakingAssetId(null)
+  }
+
+  // Version selection functions
+  const selectVersion = (assetId: string, version: Asset) => {
+    setSelectedVersions(prev => ({
+      ...prev,
+      [assetId]: version
+    }))
+  }
+
+  const getSelectedVersion = (assetId: string) => {
+    return selectedVersions[assetId] || null
+  }
+
   const handleAddNote = async () => {
     if (!newNote.trim()) return
 
@@ -360,6 +465,19 @@ function ScenePageClient({ id }: { id: string }) {
             </div>
           </div>
           <div className="flex gap-3">
+            {/* Global Speech Control */}
+            {isSpeaking && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={stopSpeaking}
+                className="border-red-500/30 text-red-400 hover:bg-red-500/10 bg-transparent"
+              >
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Stop All Speech
+              </Button>
+            )}
+            
             <Button
               variant="outline"
               size="sm"
@@ -572,134 +690,422 @@ function ScenePageClient({ id }: { id: string }) {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="bg-card border-primary/20">
             <TabsTrigger
-              value="overview"
+              value="scripts"
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
-              Overview
+              Scripts ({assets.filter(a => a.content_type === 'script').length})
             </TabsTrigger>
-            <TabsTrigger value="media" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
-              Media
+            <TabsTrigger 
+              value="images" 
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+            >
+              Images ({assets.filter(a => a.content_type === 'image').length})
             </TabsTrigger>
-            <TabsTrigger value="notes" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
-              Notes
+            <TabsTrigger 
+              value="video" 
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+            >
+              Video ({assets.filter(a => a.content_type === 'video').length})
             </TabsTrigger>
             <TabsTrigger
-              value="versions"
+              value="audio"
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
-              Versions
+              Audio ({assets.filter(a => a.content_type === 'audio').length})
             </TabsTrigger>
           </TabsList>
 
-          {/* Overview Tab */}
-          <TabsContent value="overview" className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <Card className="bg-card border-primary/20">
+          {/* Scripts Tab */}
+          <TabsContent value="scripts" className="space-y-6">
+            {/* Debug Info for Scripts */}
+            {process.env.NODE_ENV === 'development' && (
+              <Card className="bg-card border-blue-500/20 mb-4">
                 <CardHeader>
-                  <CardTitle className="text-primary">Scene Details</CardTitle>
+                  <CardTitle className="text-blue-500">Scripts Debug Info</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div>
-                    <Label className="text-muted-foreground">Title</Label>
-                    <p className="text-foreground font-medium">{scene.name}</p>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Description</Label>
-                    <p className="text-foreground">{scene.description}</p>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Scene Type</Label>
-                    <p className="text-foreground">{scene.scene_type}</p>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Start Time</Label>
-                    <p className="text-foreground font-mono">{scene.start_time_seconds}s</p>
+                <CardContent>
+                  <div className="space-y-2 text-sm">
+                    <div><strong>Total Assets:</strong> {assets.length}</div>
+                    <div><strong>Script Assets:</strong> {assets.filter(a => a.content_type === 'script').length}</div>
+                    <div><strong>Script Assets Details:</strong></div>
+                    {assets.filter(a => a.content_type === 'script').map((script, index) => (
+                      <div key={script.id} className="ml-4 text-xs">
+                        {index + 1}. ID: {script.id} | Title: {script.title} | Version: {script.version} | Parent: {script.parent_asset_id || 'None'}
+                      </div>
+                    ))}
                   </div>
                 </CardContent>
               </Card>
-
-              <Card className="bg-card border-primary/20">
-                <CardHeader>
-                  <CardTitle className="text-primary">Quick Stats</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Scripts:</span>
-                    <span className="text-foreground font-medium">
-                      {assets.filter(a => a.content_type === 'script').length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <ImageIcon className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Images:</span>
-                    <span className="text-foreground font-medium">
-                      {assets.filter(a => a.content_type === 'image').length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Play className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Videos:</span>
-                    <span className="text-foreground font-medium">
-                      {assets.filter(a => a.content_type === 'video').length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Audio:</span>
-                    <span className="text-foreground font-medium">
-                      {assets.filter(a => a.content_type === 'audio').length}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Duration:</span>
-                    <span className="text-foreground font-medium">{scene.duration_seconds}s</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 text-primary" />
-                    <span className="text-muted-foreground">Timeline:</span>
-                    <span className="text-foreground font-medium">{scene.timeline_id}</span>
-                  </div>
-                </CardContent>
-              </Card>
+            )}
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-semibold text-primary">Scene Scripts</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Read scripts aloud with speech synthesis • Toggle between versions • Generate new content
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  onClick={() => setShowSpeechSettings(true)}
+                >
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Speech Settings
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                  onClick={() => {
+                    // Show speech settings info
+                    toast({
+                      title: "Speech Synthesis Active",
+                      description: "Click 'Read Aloud' on any script to hear it. Use the global 'Stop All Speech' button to stop.",
+                    })
+                  }}
+                >
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Speech Help
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
+                  onClick={() => router.push('/ai-studio')}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Generate Script
+                </Button>
+              </div>
             </div>
+
+            {assets.filter(a => a.content_type === 'script').length > 0 ? (
+              <div className="space-y-4">
+                            {(() => {
+              // Group scripts by parent to show version history
+              const scriptAssets = assets.filter(a => a.content_type === 'script')
+              console.log('Script assets found:', scriptAssets)
+              
+              // FORCE VERSION TABS TO SHOW - TEST
+              if (scriptAssets.length > 0) {
+                return (
+                  <div className="space-y-4">
+                                         {/* FORCED VERSION TABS - TEST */}
+                     <div className="border-b border-green-400/30 mb-4">
+                       <div className="flex space-x-1">
+                         {scriptAssets.map((script) => (
+                           <button
+                             key={script.id}
+                             onClick={() => {
+                               console.log('Clicking version:', script.version, 'ID:', script.id)
+                               selectVersion(script.id, script)
+                               // Force re-render
+                               setAssets([...assets])
+                             }}
+                             className={`px-4 py-2 text-sm font-medium transition-all duration-200 border-b-2 ${
+                               (selectedVersions[script.id] || scriptAssets[0]).id === script.id
+                                 ? 'text-green-400 border-green-400 bg-green-500/10'
+                                 : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
+                             }`}
+                           >
+                             {script.version_name || `Version ${script.version}`}
+                             {script.is_latest_version && (
+                               <span className="ml-1 text-xs text-green-300">★</span>
+                             )}
+                           </button>
+                         ))}
+                       </div>
+                     </div>
+                    
+                                         {/* Original content */}
+                     <Card className="bg-card border-primary/20">
+                       <CardHeader>
+                         <div className="flex items-start justify-between">
+                           <div className="flex-1">
+                             <div className="flex items-center gap-3 mb-2">
+                               <h4 className="text-xl font-bold text-primary">{(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).title}</h4>
+                               <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
+                                 {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).version_name || `v${(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).version}`}
+                               </Badge>
+                               {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).is_latest_version && (
+                                 <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
+                                   LATEST
+                                 </Badge>
+                               )}
+                             </div>
+                             <p className="text-sm text-muted-foreground mb-3">
+                               Generated with {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).model} • {new Date((selectedVersions[scriptAssets[0].id] || scriptAssets[0]).created_at).toLocaleDateString()}
+                             </p>
+                           </div>
+                           <div className="flex gap-2">
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                               onClick={() => speakScript(selectedVersions[scriptAssets[0].id] || scriptAssets[0])}
+                             >
+                               <MessageSquare className="h-4 w-4 mr-2" />
+                               Read Aloud
+                             </Button>
+                           </div>
+                         </div>
+                       </CardHeader>
+                       <CardContent>
+                         <div className="bg-muted/20 p-4 rounded-lg border border-border">
+                           <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
+                             {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).content || 'No content available'}
+                           </pre>
+                         </div>
+                       </CardContent>
+                     </Card>
+                  </div>
+                )
+              }
+              
+              const groupedScripts = scriptAssets.reduce((acc, script) => {
+                const parentId = script.parent_asset_id || script.id
+                if (!acc[parentId]) {
+                  acc[parentId] = []
+                }
+                acc[parentId].push(script)
+                return acc
+              }, {} as Record<string, typeof scriptAssets>)
+              
+              console.log('Grouped scripts:', groupedScripts)
+
+              return Object.entries(groupedScripts).map(([parentId, versions]) => {
+                    // Sort versions by version number
+                    const sortedVersions = versions.sort((a, b) => a.version - b.version)
+                    const latestVersion = sortedVersions[sortedVersions.length - 1]
+                    const selectedVersion = getSelectedVersion(parentId) || latestVersion
+                    
+                    return (
+                      <Card key={parentId} className="bg-card border-primary/20">
+                        <CardHeader>
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-3 mb-2">
+                                <h4 className="text-xl font-bold text-primary">{selectedVersion.title}</h4>
+                                <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
+                                  {selectedVersion.version_name || `v${selectedVersion.version}`}
+                                </Badge>
+                                {selectedVersion.is_latest_version && (
+                                  <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
+                                    LATEST
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground mb-3">
+                                Generated with {selectedVersion.model} • {new Date(selectedVersion.created_at).toLocaleDateString()}
+                              </p>
+                              
+                               {/* Version Tabs */}
+                               <div className="mb-4">
+                                 <div className="flex space-x-1 border-b border-green-400/30">
+                                   {sortedVersions.map((version) => (
+                                     <button
+                                       key={version.id}
+                                       onClick={() => selectVersion(parentId, version)}
+                                       className={`px-4 py-2 text-sm font-medium transition-all duration-200 border-b-2 ${
+                                         selectedVersion.id === version.id
+                                           ? 'text-green-400 border-green-400 bg-green-500/10'
+                                           : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
+                                       }`}
+                                     >
+                                       {version.version_name || `Version ${version.version}`}
+                                       {version.is_latest_version && (
+                                         <span className="ml-1 text-xs text-green-300">★</span>
+                                       )}
+                                     </button>
+                                   ))}
+                                 </div>
+                               </div>
+                            </div>
+                            <div className="flex gap-2">
+                              {/* Speech Synthesis Button */}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className={`${
+                                  speakingAssetId === selectedVersion.id 
+                                    ? 'border-red-500/30 text-red-400 hover:bg-red-500/10' 
+                                    : 'border-purple-500/30 text-purple-400 hover:bg-purple-500/10'
+                                }`}
+                                onClick={() => speakScript(selectedVersion)}
+                              >
+                                {speakingAssetId === selectedVersion.id ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Stop Reading
+                                  </>
+                                ) : (
+                                  <>
+                                    <MessageSquare className="h-4 w-4 mr-2" />
+                                    Read Aloud
+                                  </>
+                                )}
+                              </Button>
+                              
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                onClick={() => {
+                                  // Navigate to AI Studio with script data
+                                  const scriptData = {
+                                    title: selectedVersion.title,
+                                    content: selectedVersion.content,
+                                    prompt: selectedVersion.prompt,
+                                    model: selectedVersion.model,
+                                    version_name: selectedVersion.version_name,
+                                    version: selectedVersion.version,
+                                    asset_id: selectedVersion.id,
+                                    project_id: selectedVersion.project_id,
+                                    scene_id: selectedVersion.scene_id,
+                                    content_type: selectedVersion.content_type,
+                                    generation_settings: selectedVersion.generation_settings,
+                                    metadata: selectedVersion.metadata
+                                  }
+                                  
+                                  // Store in sessionStorage for AI Studio to pick up
+                                  sessionStorage.setItem('continueScriptData', JSON.stringify(scriptData))
+                                  
+                                  // Navigate to AI Studio
+                                  router.push('/ai-studio')
+                                  
+                                  toast({
+                                    title: "Script Loaded in AI Studio",
+                                    description: "Your script is ready for editing and continuation.",
+                                  })
+                                }}
+                              >
+                                <Bot className="h-4 w-4 mr-2" />
+                                Continue in AI Studio
+                              </Button>
+                              
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                                onClick={() => {
+                                  // Open version editing modal
+                                  setEditingVersion(selectedVersion)
+                                  setVersionEditForm({
+                                    title: selectedVersion.title,
+                                    version_name: selectedVersion.version_name || `Version ${selectedVersion.version}`,
+                                    content: selectedVersion.content || ''
+                                  })
+                                  setShowVersionEdit(true)
+                                }}
+                              >
+                                <Edit className="h-4 w-4 mr-2" />
+                                Edit
+                              </Button>
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="bg-muted/20 p-4 rounded-lg border border-border">
+                            <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
+                              {selectedVersion.content || 'No content available'}
+                            </pre>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })
+                })()}
+              </div>
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">No scripts generated for this scene yet</p>
+                  <Button
+                    onClick={() => router.push('/ai-studio')}
+                    className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
+                  >
+                    <Bot className="h-4 w-4 mr-2" />
+                    Generate Your First Script
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
           </TabsContent>
 
-          {/* Media Tab */}
-          <TabsContent value="media" className="space-y-6">
+          {/* Images Tab */}
+          <TabsContent value="images" className="space-y-6">
             <div className="flex justify-between items-center">
-              <h3 className="text-xl font-semibold text-primary">Scene Media</h3>
+              <h3 className="text-xl font-semibold text-primary">Scene Images</h3>
               <Button
                 size="sm"
-                className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90"
-                onClick={startAddMedia}
+                className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90"
+                onClick={() => router.push('/ai-studio')}
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Add Media
+                Generate Image
               </Button>
             </div>
 
-            {scene.media && scene.media.length > 0 ? (
+            {assets.filter(a => a.content_type === 'image').length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {scene.media.map((media) => (
-                  <Card key={media.id} className="bg-card border-primary/20">
+                {assets.filter(a => a.content_type === 'image').map((image) => (
+                  <Card key={image.id} className="bg-card border-primary/20">
                     <CardContent className="p-4">
-                      <div className="aspect-video bg-muted rounded-lg mb-3 flex items-center justify-center">
-                        <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                      <div className="aspect-video bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
+                        {image.content_url ? (
+                          <img 
+                            src={image.content_url} 
+                            alt={image.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                        )}
                       </div>
-                      <h4 className="font-medium text-foreground mb-1">{media.name}</h4>
-                      <p className="text-sm text-muted-foreground mb-2">{media.size}</p>
+                      <h4 className="font-medium text-foreground mb-1">{image.title}</h4>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Generated with {image.model} • {new Date(image.created_at).toLocaleDateString()}
+                      </p>
                       <div className="flex gap-2">
-                        <Button size="sm" variant="outline" className="border-primary/30 text-primary bg-transparent">
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          onClick={() => window.open(image.content_url, '_blank')}
+                        >
                           View
                         </Button>
                         <Button
                           size="sm"
                           variant="outline"
-                          className="border-destructive/30 text-destructive bg-transparent"
+                          className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                          onClick={() => {
+                            // Navigate to AI Studio to generate variations
+                            const imageData = {
+                              title: image.title,
+                              prompt: image.prompt,
+                              model: image.model,
+                              asset_id: image.id,
+                              project_id: image.project_id,
+                              scene_id: image.scene_id,
+                              content_type: image.content_type,
+                              generation_settings: image.generation_settings,
+                              metadata: image.metadata
+                            }
+                            
+                            sessionStorage.setItem('continueImageData', JSON.stringify(imageData))
+                            router.push('/ai-studio')
+                            
+                            toast({
+                              title: "Image Loaded in AI Studio",
+                              description: "Ready to generate variations or new images.",
+                            })
+                          }}
                         >
-                          Delete
+                          <Bot className="h-4 w-4 mr-2" />
+                          Generate Variation
                         </Button>
                       </div>
                     </CardContent>
@@ -710,72 +1116,190 @@ function ScenePageClient({ id }: { id: string }) {
               <Card className="bg-card border-primary/20">
                 <CardContent className="p-8 text-center">
                   <ImageIcon className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground">No media files added to this scene yet</p>
+                  <p className="text-muted-foreground mb-4">No images generated for this scene yet</p>
+                  <Button
+                    onClick={() => router.push('/ai-studio')}
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90"
+                  >
+                    <Bot className="h-4 w-4 mr-2" />
+                    Generate Your First Image
+                  </Button>
                 </CardContent>
               </Card>
             )}
           </TabsContent>
 
-          {/* Notes Tab */}
-          <TabsContent value="notes" className="space-y-6">
-            <Card className="bg-card border-primary/20">
-              <CardContent className="p-4">
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-muted-foreground">Note Type</Label>
-                    <Select value={newNoteType} onValueChange={setNewNoteType}>
-                      <SelectTrigger className="bg-card border-primary/30">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-card border-primary/30">
-                        <SelectItem value="General">General</SelectItem>
-                        <SelectItem value="Director">Director</SelectItem>
-                        <SelectItem value="Script">Script</SelectItem>
-                        <SelectItem value="Technical">Technical</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label className="text-muted-foreground">Note Content</Label>
-                    <Textarea
-                      value={newNote}
-                      onChange={(e) => setNewNote(e.target.value)}
-                      placeholder="Add your note here..."
-                      className="bg-card border-primary/30 text-foreground"
-                      rows={3}
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={handleAddNote}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90"
-                    >
-                      <Save className="h-4 w-4 mr-2" />
-                      Save Note
-                    </Button>
-                    <Button variant="outline" onClick={() => setNewNote("")} className="border-muted/30">
-                      Clear
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+          {/* Video Tab */}
+          <TabsContent value="video" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-semibold text-primary">Scene Videos</h3>
+              <Button
+                size="sm"
+                className="bg-gradient-to-r from-red-500 to-orange-500 hover:opacity-90"
+                onClick={() => router.push('/ai-studio')}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Generate Video
+              </Button>
+            </div>
 
-            {scene.notes && scene.notes.length > 0 ? (
-              <div className="space-y-4">
-                {scene.notes.map((note) => (
-                  <Card key={note.id} className="bg-card border-primary/20">
+            {assets.filter(a => a.content_type === 'video').length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {assets.filter(a => a.content_type === 'video').map((video) => (
+                  <Card key={video.id} className="bg-card border-primary/20">
                     <CardContent className="p-4">
-                      <div className="flex justify-between items-start mb-2">
-                        <Badge className="bg-primary/20 text-primary border-primary/30">{note.type}</Badge>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10">
-                          <Trash2 className="h-4 w-4" />
+                      <div className="aspect-video bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
+                        {video.content_url ? (
+                          <video 
+                            src={video.content_url} 
+                            className="w-full h-full object-cover"
+                            controls
+                            preload="metadata"
+                          />
+                        ) : (
+                          <Play className="h-8 w-8 text-muted-foreground" />
+                        )}
+                      </div>
+                      <h4 className="font-medium text-foreground mb-1">{video.title}</h4>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Generated with {video.model} • {new Date(video.created_at).toLocaleDateString()}
+                      </p>
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          onClick={() => window.open(video.content_url, '_blank')}
+                        >
+                          View
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                          onClick={() => {
+                            // Navigate to AI Studio to generate variations
+                            const videoData = {
+                              title: video.title,
+                              prompt: video.prompt,
+                              model: video.model,
+                              asset_id: video.id,
+                              project_id: video.project_id,
+                              scene_id: video.scene_id,
+                              content_type: video.content_type,
+                              generation_settings: video.generation_settings,
+                              metadata: video.metadata
+                            }
+                            
+                            sessionStorage.setItem('continueVideoData', JSON.stringify(videoData))
+                            router.push('/ai-studio')
+                            
+                            toast({
+                              title: "Video Loaded in AI Studio",
+                              description: "Ready to generate variations or new videos.",
+                            })
+                          }}
+                        >
+                          <Bot className="h-4 w-4 mr-2" />
+                          Generate Variation
                         </Button>
                       </div>
-                      <p className="text-foreground mb-2">{note.content}</p>
-                      <p className="text-sm text-muted-foreground">
-                        By {note.author} • {new Date(note.created_at).toLocaleDateString()}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <Play className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">No videos generated for this scene yet</p>
+                  <Button
+                    onClick={() => router.push('/ai-studio')}
+                    className="bg-gradient-to-r from-red-500 to-orange-500 hover:opacity-90"
+                  >
+                    <Bot className="h-4 w-4 mr-2" />
+                    Generate Your First Video
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* Audio Tab */}
+          <TabsContent value="audio" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-semibold text-primary">Scene Audio</h3>
+              <Button
+                size="sm"
+                className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:opacity-90"
+                onClick={() => router.push('/ai-studio')}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Generate Audio
+              </Button>
+            </div>
+
+            {assets.filter(a => a.content_type === 'audio').length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {assets.filter(a => a.content_type === 'audio').map((audio) => (
+                  <Card key={audio.id} className="bg-card border-primary/20">
+                    <CardContent className="p-4">
+                      <div className="aspect-video bg-muted rounded-lg mb-3 flex items-center justify-center overflow-hidden">
+                        {audio.content_url ? (
+                          <audio 
+                            src={audio.content_url} 
+                            className="w-full"
+                            controls
+                            preload="metadata"
+                          />
+                        ) : (
+                          <MessageSquare className="h-8 w-8 text-muted-foreground" />
+                        )}
+                      </div>
+                      <h4 className="font-medium text-foreground mb-1">{audio.title}</h4>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        Generated with {audio.model} • {new Date(audio.created_at).toLocaleDateString()}
                       </p>
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          onClick={() => window.open(audio.content_url, '_blank')}
+                        >
+                          View
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                          onClick={() => {
+                            // Navigate to AI Studio to generate variations
+                            const audioData = {
+                              title: audio.title,
+                              prompt: audio.prompt,
+                              model: audio.model,
+                              asset_id: audio.id,
+                              project_id: audio.project_id,
+                              scene_id: audio.scene_id,
+                              content_type: audio.content_type,
+                              generation_settings: audio.generation_settings,
+                              metadata: audio.metadata
+                            }
+                            
+                            sessionStorage.setItem('continueAudioData', JSON.stringify(audioData))
+                            router.push('/ai-studio')
+                            
+                            toast({
+                              title: "Audio Loaded in AI Studio",
+                              description: "Ready to generate variations or new audio.",
+                            })
+                          }}
+                        >
+                          <Bot className="h-4 w-4 mr-2" />
+                          Generate Variation
+                        </Button>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}
@@ -784,7 +1308,14 @@ function ScenePageClient({ id }: { id: string }) {
               <Card className="bg-card border-primary/20">
                 <CardContent className="p-8 text-center">
                   <MessageSquare className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground">No notes added to this scene yet</p>
+                  <p className="text-muted-foreground mb-4">No audio generated for this scene yet</p>
+                  <Button
+                    onClick={() => router.push('/ai-studio')}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:opacity-90"
+                  >
+                    <Bot className="h-4 w-4 mr-2" />
+                    Generate Your First Audio
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -1444,6 +1975,131 @@ function ScenePageClient({ id }: { id: string }) {
                 </div>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Speech Settings Dialog */}
+        <Dialog open={showSpeechSettings} onOpenChange={setShowSpeechSettings}>
+          <DialogContent className="bg-background border-primary/20 max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-primary">Speech Synthesis Settings</DialogTitle>
+              <DialogDescription>
+                Customize how your scripts are read aloud
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4 py-4">
+              {/* Speech Rate */}
+              <div>
+                <Label htmlFor="speech-rate" className="text-foreground">Speech Rate</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-muted-foreground">Slow</span>
+                  <input
+                    id="speech-rate"
+                    type="range"
+                    min="0.5"
+                    max="2.0"
+                    step="0.1"
+                    value={speechSettings.rate}
+                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
+                    className="flex-1"
+                  />
+                  <span className="text-xs text-muted-foreground">Fast</span>
+                  <span className="text-xs font-mono text-primary w-8 text-center">
+                    {speechSettings.rate.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Speech Pitch */}
+              <div>
+                <Label htmlFor="speech-pitch" className="text-foreground">Speech Pitch</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-muted-foreground">Low</span>
+                  <input
+                    id="speech-pitch"
+                    type="range"
+                    min="0.5"
+                    max="2.0"
+                    step="0.1"
+                    value={speechSettings.pitch}
+                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, pitch: parseFloat(e.target.value) }))}
+                    className="flex-1"
+                  />
+                  <span className="text-xs text-muted-foreground">High</span>
+                  <span className="text-xs font-mono text-primary w-8 text-center">
+                    {speechSettings.pitch.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Speech Volume */}
+              <div>
+                <Label htmlFor="speech-volume" className="text-foreground">Speech Volume</Label>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs text-muted-foreground">Quiet</span>
+                  <input
+                    id="speech-volume"
+                    type="range"
+                    min="0.0"
+                    max="1.0"
+                    step="0.1"
+                    value={speechSettings.volume}
+                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))}
+                    className="flex-1"
+                  />
+                  <span className="text-xs text-muted-foreground">Loud</span>
+                  <span className="text-xs font-mono text-primary w-8 text-center">
+                    {speechSettings.volume.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Voice Selection */}
+              <div>
+                <Label htmlFor="speech-voice" className="text-foreground">Voice</Label>
+                <Select 
+                  value={speechSettings.voice} 
+                  onValueChange={(voice) => setSpeechSettings(prev => ({ ...prev, voice }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const voices = window.speechSynthesis.getVoices()
+                      return voices.map((voice) => (
+                        <SelectItem key={voice.name} value={voice.name}>
+                          {voice.name} ({voice.lang})
+                        </SelectItem>
+                      ))
+                    })()}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => setShowSpeechSettings(false)}
+                className="border-primary/30"
+              >
+                Close
+              </Button>
+              <Button
+                onClick={() => {
+                  setShowSpeechSettings(false)
+                  toast({
+                    title: "Settings Saved",
+                    description: "Your speech synthesis settings have been updated.",
+                  })
+                }}
+                className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90"
+              >
+                Save Settings
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>

@@ -11,10 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2 } from 'lucide-react'
+import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2, CheckCircle } from 'lucide-react'
 import { TreatmentsService, Treatment, CreateTreatmentData } from '@/lib/treatments-service'
 import Header from '@/components/header'
 import Link from 'next/link'
+import { AISettingsService, type AISetting } from '@/lib/ai-settings-service'
 
 export default function TreatmentsPage() {
   const { user } = useAuth()
@@ -46,11 +47,39 @@ export default function TreatmentsPage() {
   const [selectedAIService, setSelectedAIService] = useState('dalle')
   const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const [generatedCoverUrl, setGeneratedCoverUrl] = useState('')
+  
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
 
   // Load treatments on component mount
   useEffect(() => {
     loadTreatments()
   }, [])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images tab if available
+        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked) {
+          console.log('Setting locked model for images:', imagesSetting.locked_model)
+          setSelectedAIService(imagesSetting.locked_model)
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [user])
 
   const loadTreatments = async () => {
     try {
@@ -69,7 +98,46 @@ export default function TreatmentsPage() {
     }
   }
 
-  const generateAICover = async () => {
+  // Upload generated image to Supabase storage
+  const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Uploading generated image to Supabase storage...')
+      
+      // Use our API route to download and upload (bypasses CORS)
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      console.log('Image upload API response:', result)
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Image uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error uploading image to Supabase:', error)
+      throw error
+    }
+  }
+
+  const generateAICoverImage = async () => {
     if (!aiPrompt.trim()) {
       toast({
         title: "Missing Information",
@@ -89,9 +157,21 @@ export default function TreatmentsPage() {
       return
     }
 
-    // Check if user has the required API key
+    // Use locked model if available, otherwise use selected service
+    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Check if user has the required API key for the service to use
     let apiKey = ''
-    switch (selectedAIService) {
+    switch (serviceToUse) {
       case 'dalle':
         if (!user.openaiApiKey) {
           toast({
@@ -132,6 +212,8 @@ export default function TreatmentsPage() {
     try {
       setIsGeneratingCover(true)
 
+      console.log(`Generating treatment cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: {
@@ -139,7 +221,7 @@ export default function TreatmentsPage() {
         },
         body: JSON.stringify({
           prompt: aiPrompt,
-          service: selectedAIService,
+          service: serviceToUse,
           apiKey: apiKey,
         }),
       })
@@ -203,6 +285,23 @@ export default function TreatmentsPage() {
     setGeneratedCoverUrl('')
   }
 
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
+  }
+
   const handleEditTreatment = (treatment: Treatment) => {
     setEditingTreatment(treatment)
     setNewTreatment({
@@ -219,15 +318,41 @@ export default function TreatmentsPage() {
   }
 
   const handleUpdateTreatment = async () => {
-    if (!editingTreatment) return
-    
-    setIsUpdating(true)
-    
+    if (!editingTreatment || !newTreatment.title || !newTreatment.genre || !newTreatment.synopsis) {
+      toast({
+        title: "Missing Fields",
+        description: "Please fill in all required fields.",
+        variant: "destructive"
+      })
+      return
+    }
+
     try {
+      setIsUpdating(true)
+
+      // If there's a generated cover image, upload it to Supabase storage first
+      let finalCoverUrl = newTreatment.cover_image_url
+      if (newTreatment.cover_image_url && newTreatment.cover_image_url.includes('oaidalleapiprodscus.blob.core.windows.net')) {
+        try {
+          console.log('Uploading generated cover image to Supabase storage...')
+          const fileName = `treatment-cover-${Date.now()}`
+          finalCoverUrl = await uploadGeneratedImageToStorage(newTreatment.cover_image_url, fileName)
+          console.log('Cover image uploaded to Supabase, new URL:', finalCoverUrl)
+        } catch (uploadError) {
+          console.error('Failed to upload cover image to Supabase:', uploadError)
+          toast({
+            title: "Image Upload Warning",
+            description: "Failed to upload cover image to storage, but saving with original URL.",
+            variant: "destructive",
+          })
+          // Continue with original URL if upload fails
+        }
+      }
+
       const treatmentData: CreateTreatmentData = {
         title: newTreatment.title,
         genre: newTreatment.genre,
-        cover_image_url: newTreatment.cover_image_url || undefined,
+        cover_image_url: finalCoverUrl,
         synopsis: newTreatment.synopsis,
         target_audience: newTreatment.target_audience || undefined,
         estimated_budget: newTreatment.estimated_budget || undefined,
@@ -300,13 +425,42 @@ export default function TreatmentsPage() {
 
   const handleCreateTreatment = async (e: React.FormEvent) => {
     e.preventDefault()
-    setIsLoading(true)
     
+    if (!newTreatment.title || !newTreatment.genre || !newTreatment.synopsis) {
+      toast({
+        title: "Missing Fields",
+        description: "Please fill in all required fields.",
+        variant: "destructive"
+      })
+      return
+    }
+
     try {
+      setIsLoading(true)
+
+      // If there's a generated cover image, upload it to Supabase storage first
+      let finalCoverUrl = newTreatment.cover_image_url
+      if (newTreatment.cover_image_url && newTreatment.cover_image_url.includes('oaidalleapiprodscus.blob.core.windows.net')) {
+        try {
+          console.log('Uploading generated cover image to Supabase storage...')
+          const fileName = `treatment-cover-${Date.now()}`
+          finalCoverUrl = await uploadGeneratedImageToStorage(newTreatment.cover_image_url, fileName)
+          console.log('Cover image uploaded to Supabase, new URL:', finalCoverUrl)
+        } catch (uploadError) {
+          console.error('Failed to upload cover image to Supabase:', uploadError)
+          toast({
+            title: "Image Upload Warning",
+            description: "Failed to upload cover image to storage, but saving with original URL.",
+            variant: "destructive",
+          })
+          // Continue with original URL if upload fails
+        }
+      }
+
       const treatmentData: CreateTreatmentData = {
         title: newTreatment.title,
         genre: newTreatment.genre,
-        cover_image_url: newTreatment.cover_image_url || undefined,
+        cover_image_url: finalCoverUrl,
         synopsis: newTreatment.synopsis,
         target_audience: newTreatment.target_audience || undefined,
         estimated_budget: newTreatment.estimated_budget || undefined,
@@ -445,20 +599,32 @@ export default function TreatmentsPage() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {/* AI Service Selection */}
-                      <div>
-                        <Label htmlFor="ai-service">AI Service</Label>
-                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                          <SelectTrigger className="bg-input border-border">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="cinema-card border-border">
-                            <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                            <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                            <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      {/* AI Service Selection - Only show if not locked */}
+                      {!isImagesTabLocked() && (
+                        <div>
+                          <Label htmlFor="ai-service">AI Service</Label>
+                          <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                              <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                              <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Show locked model info if images tab is locked */}
+                      {isImagesTabLocked() && (
+                        <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                          <p className="text-sm text-green-600 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4" />
+                            AI Online
+                          </p>
+                        </div>
+                      )}
                       
                       {/* AI Prompt */}
                       <div>
@@ -472,7 +638,7 @@ export default function TreatmentsPage() {
                             className="flex-1 bg-input border-border"
                           />
                           <Button
-                            onClick={generateAICover}
+                            onClick={generateAICoverImage}
                             disabled={isGeneratingCover || !aiPrompt.trim()}
                             variant="outline"
                             size="sm"
@@ -576,8 +742,8 @@ export default function TreatmentsPage() {
                   <Label htmlFor="targetAudience">Target Audience</Label>
                   <Input
                     id="targetAudience"
-                    value={newTreatment.targetAudience}
-                    onChange={(e) => setNewTreatment(prev => ({ ...prev, targetAudience: e.target.value }))}
+                    value={newTreatment.target_audience}
+                    onChange={(e) => setNewTreatment(prev => ({ ...prev, target_audience: e.target.value }))}
                     placeholder="e.g., 18-35, Action fans"
                   />
                 </div>
@@ -585,8 +751,8 @@ export default function TreatmentsPage() {
                   <Label htmlFor="estimatedBudget">Estimated Budget</Label>
                   <Input
                     id="estimatedBudget"
-                    value={newTreatment.estimatedBudget}
-                    onChange={(e) => setNewTreatment(prev => ({ ...prev, estimatedBudget: e.target.value }))}
+                    value={newTreatment.estimated_budget}
+                    onChange={(e) => setNewTreatment(prev => ({ ...prev, estimated_budget: e.target.value }))}
                     placeholder="e.g., $10M"
                   />
                 </div>
@@ -594,8 +760,8 @@ export default function TreatmentsPage() {
                   <Label htmlFor="estimatedDuration">Estimated Duration</Label>
                   <Input
                     id="estimatedDuration"
-                    value={newTreatment.estimatedDuration}
-                    onChange={(e) => setNewTreatment(prev => ({ ...prev, estimatedDuration: e.target.value }))}
+                    value={newTreatment.estimated_duration}
+                    onChange={(e) => setNewTreatment(prev => ({ ...prev, estimated_duration: e.target.value }))}
                     placeholder="e.g., 120 min"
                   />
                 </div>
@@ -674,20 +840,32 @@ export default function TreatmentsPage() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {/* AI Service Selection */}
-                      <div>
-                        <Label htmlFor="edit-ai-service">AI Service</Label>
-                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                          <SelectTrigger className="bg-input border-border">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="cinema-card border-border">
-                            <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                            <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                            <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      {/* AI Service Selection - Only show if not locked */}
+                      {!isImagesTabLocked() && (
+                        <div>
+                          <Label htmlFor="edit-ai-service">AI Service</Label>
+                          <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                              <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                              <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Show locked model info if images tab is locked */}
+                      {isImagesTabLocked() && (
+                        <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                          <p className="text-sm text-green-600 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4" />
+                            AI Online
+                          </p>
+                        </div>
+                      )}
                       
                       {/* AI Prompt */}
                       <div>
@@ -701,7 +879,7 @@ export default function TreatmentsPage() {
                             className="flex-1 bg-input border-border"
                           />
                           <Button
-                            onClick={generateAICover}
+                            onClick={generateAICoverImage}
                             disabled={isGeneratingCover || !aiPrompt.trim()}
                             variant="outline"
                             size="sm"

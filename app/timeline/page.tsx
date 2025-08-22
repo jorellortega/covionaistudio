@@ -36,12 +36,14 @@ import {
   Loader2,
   ImageIcon,
   RefreshCw,
+  CheckCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { analyzeImageUrl, getFallbackImageUrl } from "@/lib/image-utils"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -93,6 +95,10 @@ export default function TimelinePage() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [generatedImageUrl, setGeneratedImageUrl] = useState("")
   
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
   const { toast } = useToast()
   const { user } = useAuth()
 
@@ -103,6 +109,30 @@ export default function TimelinePage() {
       setLoading(false)
     }
   }, [movieId])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images tab if available
+        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked) {
+          console.log('Setting locked model for images:', imagesSetting.locked_model)
+          setSelectedAIService(imagesSetting.locked_model)
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [user])
 
   const loadMovieAndScenes = async () => {
     if (!movieId) return
@@ -639,6 +669,45 @@ export default function TimelinePage() {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
   }
 
+  // Upload generated image to Supabase storage
+  const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Uploading generated image to Supabase storage...')
+      
+      // Use our API route to download and upload (bypasses CORS)
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      console.log('Image upload API response:', result)
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Image uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error uploading image to Supabase:', error)
+      throw error
+    }
+  }
+
   const generateAIImage = async () => {
     if (!aiPrompt.trim()) {
       toast({
@@ -659,15 +728,27 @@ export default function TimelinePage() {
       return
     }
 
+    // Use locked model if available, otherwise use selected service
+    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
     // Debug: Log user object and API keys
     console.log('User object:', user)
-    console.log('Selected AI service:', selectedAIService)
+    console.log('Service to use:', serviceToUse, isImagesTabLocked() ? '(locked model)' : '(user selected)')
     console.log('OpenAI API key exists:', !!user?.openaiApiKey)
     console.log('OpenArt API key exists:', !!user?.openartApiKey)
     console.log('Leonardo API key exists:', !!user?.leonardoApiKey)
 
-    // Check if user has the required API key
-    if (selectedAIService === "dalle" && !user?.openaiApiKey) {
+    // Check if user has the required API key for the service to use
+    if (serviceToUse === "dalle" && !user?.openaiApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenAI API key in settings to use DALL-E.",
@@ -676,7 +757,7 @@ export default function TimelinePage() {
       return
     }
 
-    if (selectedAIService === "openart" && !user?.openartApiKey) {
+    if (serviceToUse === "openart" && !user?.openartApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenArt API key in settings to use OpenArt.",
@@ -685,7 +766,7 @@ export default function TimelinePage() {
       return
     }
 
-    if (selectedAIService === "leonardo" && !user?.leonardoApiKey) {
+    if (serviceToUse === "leonardo" && !user?.leonardoApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your Leonardo AI API key in settings to use Leonardo AI.",
@@ -697,9 +778,11 @@ export default function TimelinePage() {
     try {
       setIsGeneratingImage(true)
 
-      // Get the appropriate API key based on selected service
+      console.log(`Generating scene image using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+
+      // Get the appropriate API key based on service to use
       let apiKey = ''
-      switch (selectedAIService) {
+      switch (serviceToUse) {
         case 'dalle':
           apiKey = user?.openaiApiKey || ''
           break
@@ -720,7 +803,7 @@ export default function TimelinePage() {
         },
         body: JSON.stringify({
           prompt: aiPrompt,
-          service: selectedAIService,
+          service: serviceToUse,
           apiKey: apiKey,
         }),
       })
@@ -760,15 +843,32 @@ export default function TimelinePage() {
     try {
       setIsUploadingImage(true)
 
+      // First, upload the generated image to Supabase storage
+      let finalImageUrl = generatedImageUrl
+      try {
+        console.log('Uploading generated image to Supabase storage...')
+        const fileName = `scene-image-${Date.now()}`
+        finalImageUrl = await uploadGeneratedImageToStorage(generatedImageUrl, fileName)
+        console.log('Image uploaded to Supabase, new URL:', finalImageUrl)
+      } catch (uploadError) {
+        console.error('Failed to upload image to Supabase:', uploadError)
+        toast({
+          title: "Image Upload Warning",
+          description: "Failed to upload image to storage, but saving with original URL.",
+          variant: "destructive",
+        })
+        // Continue with original URL if upload fails
+      }
+
       if (selectedSceneForUpload) {
         // Updating existing scene
         setUploadingSceneId(selectedSceneForUpload.id)
 
-        // Update the scene metadata with the generated image URL
+        // Update the scene metadata with the new Supabase URL
         await TimelineService.updateScene(selectedSceneForUpload.id, {
           metadata: { 
             ...selectedSceneForUpload.metadata, 
-            thumbnail: generatedImageUrl 
+            thumbnail: finalImageUrl 
           }
         })
 
@@ -776,7 +876,7 @@ export default function TimelinePage() {
         setScenes(prevScenes => 
           prevScenes.map(scene => 
             scene.id === selectedSceneForUpload.id 
-              ? { ...scene, metadata: { ...scene.metadata, thumbnail: generatedImageUrl } }
+              ? { ...scene, metadata: { ...scene.metadata, thumbnail: finalImageUrl } }
               : scene
           )
         )
@@ -812,10 +912,24 @@ export default function TimelinePage() {
       })
     } finally {
       setIsUploadingImage(false)
-      if (selectedSceneForUpload) {
-        setUploadingSceneId(null)
-      }
     }
+  }
+
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
   }
 
   const resetImageForm = () => {
@@ -1279,20 +1393,32 @@ export default function TimelinePage() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {/* AI Service Selection */}
-                      <div>
-                        <Label htmlFor="ai-service">AI Service</Label>
-                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                          <SelectTrigger className="bg-input border-border">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="cinema-card border-border">
-                            <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                            <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                            <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      {/* AI Service Selection - Only show if not locked */}
+                      {!isImagesTabLocked() && (
+                        <div>
+                          <Label htmlFor="ai-service">AI Service</Label>
+                          <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                              <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                              <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Show locked model info if images tab is locked */}
+                      {isImagesTabLocked() && (
+                        <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                          <p className="text-sm text-green-600 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4" />
+                            AI Online
+                          </p>
+                        </div>
+                      )}
                       
                       {/* AI Prompt */}
                       <div>
@@ -2018,20 +2144,32 @@ export default function TimelinePage() {
                 </div>
                 
                 <div className="space-y-4">
-                  {/* AI Service Selection */}
-                  <div>
-                    <Label htmlFor="ai-service">AI Service</Label>
-                    <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
-                        <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
-                        <SelectItem value="leonardo">Leonardo AI</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* AI Service Selection - Only show if not locked */}
+                  {!isImagesTabLocked() && (
+                    <div>
+                      <Label htmlFor="ai-service">AI Service</Label>
+                      <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="dalle">DALL-E 3 (OpenAI)</SelectItem>
+                          <SelectItem value="openart">OpenArt (SDXL)</SelectItem>
+                          <SelectItem value="leonardo">Leonardo AI</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {isImagesTabLocked() && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                    </div>
+                  )}
                   
                   {/* AI Prompt */}
                   <div>

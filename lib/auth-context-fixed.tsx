@@ -36,10 +36,23 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+// Timeout for operations (30 seconds)
+const OPERATION_TIMEOUT = 30000
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isInitialized, setIsInitialized] = useState(false)
+
+  // Helper function to add timeout to async operations
+  const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Operation timed out')), timeoutMs)
+      )
+    ])
+  }
 
   // Memoized function to fetch user profile
   const fetchUserProfile = useCallback(async (userId: string): Promise<User | null> => {
@@ -103,7 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Creating profile for user:', userId)
       
       // Get user info from auth
-      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const { data: { user: authUser } } = await withTimeout(
+        supabase.auth.getUser(),
+        OPERATION_TIMEOUT
+      )
       if (!authUser) return null
       
       const { error } = await supabase
@@ -171,7 +187,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const initializeAuth = async () => {
       try {
         // Get initial session
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session } } = await withTimeout(
+          supabase.auth.getSession(),
+          OPERATION_TIMEOUT
+        )
         
         if (mounted) {
           await handleSessionChange(session)
@@ -194,6 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         if (mounted) {
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            setIsLoading(true) // Set loading while fetching profile
             await handleSessionChange(session)
           } else if (event === 'SIGNED_OUT') {
             setUser(null)
@@ -212,15 +232,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string): Promise<{ error: any }> => {
     try {
       console.log('Attempting to sign in with email:', email)
-      setIsLoading(true)
       
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      })
+      const { data, error } = await withTimeout(
+        supabase.auth.signInWithPassword({
+          email,
+          password,
+        }),
+        OPERATION_TIMEOUT
+      )
       
       if (error) {
         console.error('Sign in error:', error)
+        
+        // Handle specific error cases
+        if (error.message?.includes('Invalid login credentials')) {
+          return { error: { message: 'Invalid email or password. Please check your credentials and try again.' } }
+        } else if (error.message?.includes('Email not confirmed')) {
+          return { error: { message: 'Please check your email and confirm your account before signing in.' } }
+        } else if (error.message?.includes('Too many requests')) {
+          return { error: { message: 'Too many sign-in attempts. Please wait a moment and try again.' } }
+        } else if (error.message?.includes('Network')) {
+          return { error: { message: 'Network error. Please check your connection and try again.' } }
+        }
+        
         return { error }
       }
       
@@ -230,44 +264,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return { error: null }
     } catch (error) {
       console.error('Sign in exception:', error)
-      return { error }
-    } finally {
-      setIsLoading(false)
+      
+      // Handle timeout and other exceptions
+      if (error instanceof Error && error.message.includes('timed out')) {
+        return { error: { message: 'Sign-in is taking too long. Please check your connection and try again.' } }
+      }
+      
+      return { error: { message: 'An unexpected error occurred. Please try again.' } }
     }
   }
 
   const signup = async (email: string, password: string, name: string): Promise<{ error: any }> => {
     try {
-      setIsLoading(true)
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            name,
+      const { error } = await withTimeout(
+        supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              name,
+            },
           },
-        },
-      })
+        }),
+        OPERATION_TIMEOUT
+      )
       if (error) {
         return { error }
       }
       return { error: null }
     } catch (error) {
       return { error }
-    } finally {
-      setIsLoading(false)
     }
   }
 
   const logout = async () => {
     try {
-      setIsLoading(true)
-      await supabase.auth.signOut()
+      await withTimeout(supabase.auth.signOut(), OPERATION_TIMEOUT)
       setUser(null)
     } catch (error) {
       console.error('Error signing out:', error)
-    } finally {
-      setIsLoading(false)
     }
   }
 

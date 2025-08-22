@@ -1,47 +1,123 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Film, ArrowLeft } from "lucide-react"
+import { Film, ArrowLeft, AlertCircle, Bug } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { useToast } from "@/hooks/use-toast"
+import { AuthDebug } from "@/components/auth-debug"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [timeoutId, setTimeoutId] = useState<NodeJS.Timeout | null>(null)
+  const [showDebug, setShowDebug] = useState(false)
   const router = useRouter()
-  const { signIn } = useAuth()
+  const { signIn, user, loading: authLoading } = useAuth()
   const { toast } = useToast()
+
+  // Clear any existing timeout when component unmounts
+  useEffect(() => {
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+    }
+  }, [timeoutId])
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (user && !authLoading) {
+      router.push("/dashboard")
+    }
+  }, [user, authLoading, router])
+
+  // Set a timeout for the sign-in operation
+  const startTimeout = () => {
+    const id = setTimeout(() => {
+      setIsLoading(false)
+      setError("Sign-in is taking longer than expected. Please try again.")
+      toast({
+        title: "Timeout",
+        description: "Sign-in is taking longer than expected. Please try again.",
+        variant: "destructive",
+      })
+    }, 30000) // 30 second timeout
+    setTimeoutId(id)
+  }
+
+  const clearLocalTimeout = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      setTimeoutId(null)
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    setError(null)
     setIsLoading(true)
+    startTimeout()
     
     try {
-      const { error } = await signIn(email, password)
-      if (error) {
-        throw error
+      const { error: signInError } = await signIn(email, password)
+      
+      if (signInError) {
+        throw signInError
       }
+      
+      // Clear timeout since sign-in was successful
+      clearLocalTimeout()
+      
       toast({
         title: "Success",
         description: "Welcome back! You've been successfully signed in.",
       })
-      router.push("/dashboard")
+      
+      // Small delay to ensure auth state is updated
+      setTimeout(() => {
+        router.push("/dashboard")
+      }, 500)
+      
     } catch (error: any) {
+      clearLocalTimeout()
+      setIsLoading(false)
+      
+      const errorMessage = error.message || "Failed to sign in. Please check your credentials."
+      setError(errorMessage)
+      
       toast({
         title: "Error",
-        description: error.message || "Failed to sign in. Please check your credentials.",
+        description: errorMessage,
         variant: "destructive",
       })
-    } finally {
-      setIsLoading(false)
     }
+  }
+
+  const handleRetry = () => {
+    setError(null)
+    setIsLoading(false)
+  }
+
+  // Show debug component if in debug mode
+  if (showDebug) {
+    return (
+      <div className="min-h-screen bg-background p-4">
+        <div className="mb-4">
+          <Button onClick={() => setShowDebug(false)} variant="outline">
+            ← Back to Login
+          </Button>
+        </div>
+        <AuthDebug />
+      </div>
+    )
   }
 
   return (
@@ -74,6 +150,13 @@ export default function LoginPage() {
             <CardDescription>Enter your credentials to access your account</CardDescription>
           </CardHeader>
           <CardContent>
+            {error && (
+              <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-md flex items-center gap-2 text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                <span className="text-sm">{error}</span>
+              </div>
+            )}
+            
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
@@ -84,6 +167,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  disabled={isLoading}
                   className="bg-background/50 border-border/50"
                 />
               </div>
@@ -96,6 +180,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
+                  disabled={isLoading}
                   className="bg-background/50 border-border/50"
                 />
               </div>
@@ -104,13 +189,34 @@ export default function LoginPage() {
                   Forgot password?
                 </Link>
               </div>
-              <Button 
-                type="submit" 
-                className="w-full gradient-button neon-glow text-white"
-                disabled={isLoading}
-              >
-                {isLoading ? "Signing in..." : "Sign In"}
-              </Button>
+              
+              {error ? (
+                <div className="space-y-2">
+                  <Button 
+                    type="button" 
+                    onClick={handleRetry}
+                    className="w-full gradient-button neon-glow text-white"
+                  >
+                    Try Again
+                  </Button>
+                  <Button 
+                    type="submit" 
+                    className="w-full bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? "Signing in..." : "Sign In"}
+                  </Button>
+                </div>
+              ) : (
+                <Button 
+                  type="submit" 
+                  className="w-full gradient-button neon-glow text-white"
+                  disabled={isLoading}
+                >
+                  {isLoading ? "Signing in..." : "Sign In"}
+                </Button>
+              )}
+              
               <div className="text-center text-sm">
                 Don't have an account?{" "}
                 <Link href="/signup" className="text-blue-500 hover:text-blue-400 font-medium">
@@ -120,6 +226,19 @@ export default function LoginPage() {
             </form>
           </CardContent>
         </Card>
+
+        {/* Debug Button */}
+        <div className="mt-4 text-center">
+          <Button
+            onClick={() => setShowDebug(true)}
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <Bug className="h-4 w-4 mr-2" />
+            Debug Auth Issues
+          </Button>
+        </div>
 
         {/* Additional Info */}
         <div className="mt-8 text-center text-sm text-muted-foreground">

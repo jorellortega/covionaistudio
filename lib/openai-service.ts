@@ -38,11 +38,17 @@ export class OpenAIService {
         // Try to get the error details from the response
         let errorDetails = ''
         try {
-          const errorResponse = await response.text()
-          errorDetails = errorResponse
-          console.log('OpenAI error response body:', errorResponse)
+          const errorResponse = await response.json()
+          errorDetails = JSON.stringify(errorResponse)
+          console.log('OpenAI error response details:', errorResponse)
         } catch (e) {
-          errorDetails = 'Could not read error response'
+          try {
+            const errorText = await response.text()
+            errorDetails = errorText
+            console.log('OpenAI error response text:', errorText)
+          } catch (e2) {
+            errorDetails = 'Could not read error response'
+          }
         }
         
         throw new Error(`OpenAI API error: ${response.status} - ${errorDetails}`)
@@ -92,7 +98,7 @@ export class OpenAIService {
     const data = {
       prompt: enhancedPrompt,
       n: 1,
-      size: "1024x1024",
+      size: "1024x1792", // Portrait size for movie posters
       model: "dall-e-3",
     }
 

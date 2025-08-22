@@ -150,6 +150,8 @@
     background: linear-gradient(135deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 1) 100%);
   }
 
+
+
   /* Added glow effect for timeline nodes */
   .glow {
     box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);

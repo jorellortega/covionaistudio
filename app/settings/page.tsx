@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { LogOut, User, Key, Save } from 'lucide-react'
+import { LogOut, User, Key, Save, Settings } from 'lucide-react'
+import Link from 'next/link'
 
 export default function SettingsPage() {
   const { user, logout, updateServiceApiKey } = useAuth()
@@ -268,6 +269,33 @@ export default function SettingsPage() {
                   </Button>
                 </div>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* AI Settings Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Key className="h-5 w-5" />
+              AI Model Preferences
+            </CardTitle>
+            <CardDescription>
+              Configure which AI models to use for different generation tasks
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Set your preferred AI models for scripts, images, videos, and audio generation. 
+                You can lock specific models to hide the selection interface in AI Studio.
+              </p>
+              <Button asChild className="w-full sm:w-auto">
+                <Link href="/settings-ai" className="flex items-center gap-2">
+                  <Settings className="h-4 w-4" />
+                  Configure AI Settings
+                </Link>
+              </Button>
             </div>
           </CardContent>
         </Card>

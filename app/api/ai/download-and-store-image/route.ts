@@ -1,53 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@supabase/supabase-js'
+
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 export async function POST(request: NextRequest) {
   try {
-    const { imageUrl, sceneId, movieId, fileName } = await request.json()
+    const { imageUrl, fileName, userId } = await request.json()
     
-    if (!imageUrl || !sceneId || !movieId) {
+    if (!imageUrl || !fileName || !userId) {
       return NextResponse.json(
-        { error: 'Missing required fields: imageUrl, sceneId, movieId' },
+        { error: 'Missing required fields: imageUrl, fileName, userId' },
         { status: 400 }
       )
     }
 
-    console.log('Downloading and storing image:', { imageUrl, sceneId, movieId, fileName })
+    console.log('Downloading image from:', imageUrl)
+    console.log('File name:', fileName)
+    console.log('User ID:', userId)
 
-    // Download the image from the external URL
-    const imageResponse = await fetch(imageUrl)
-    if (!imageResponse.ok) {
-      throw new Error(`Failed to download image: ${imageResponse.status}`)
+    // Download the image from OpenAI (server-side, no CORS issues)
+    const response = await fetch(imageUrl)
+    if (!response.ok) {
+      throw new Error(`Failed to download image: ${response.status}`)
     }
 
-    const imageBlob = await imageResponse.blob()
-    const imageBuffer = await imageBlob.arrayBuffer()
+    const imageBuffer = await response.arrayBuffer()
+    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    
+    console.log('Image downloaded, size:', imageBlob.size)
 
-    // Generate a safe filename
-    const safeFileName = fileName || `ai_generated_${Date.now()}.png`
-    const filePath = `${movieId}/${sceneId}/${Date.now()}_${safeFileName}`
-
-    console.log('Uploading to Supabase storage:', filePath)
+    // Create a unique filename
+    const timestamp = Date.now()
+    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
+    const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
 
     // Upload to Supabase storage
+    const filePath = `${userId}/images/${uniqueFileName}`
+    console.log('Uploading to Supabase path:', filePath)
+
     const { data, error } = await supabase.storage
       .from('cinema_files')
-      .upload(filePath, imageBuffer, {
-        contentType: imageBlob.type || 'image/png',
+      .upload(filePath, imageBlob, {
+        contentType: 'image/png',
         cacheControl: '3600',
-        upsert: false,
-        metadata: {
-          originalName: safeFileName,
-          source: 'ai_generated',
-          sceneId,
-          movieId,
-          originalUrl: imageUrl
-        }
+        upsert: false
       })
 
     if (error) {
-      console.error('Storage upload error:', error)
-      throw new Error(`Failed to upload to storage: ${error.message}`)
+      console.error('Supabase upload error:', error)
+      throw new Error(`Failed to upload to Supabase: ${error.message}`)
     }
 
     // Get the public URL
@@ -55,21 +60,18 @@ export async function POST(request: NextRequest) {
       .from('cinema_files')
       .getPublicUrl(filePath)
 
-    console.log('Image stored successfully:', urlData.publicUrl)
+    console.log('Image uploaded successfully to Supabase:', urlData.publicUrl)
 
-    return NextResponse.json({ 
-      success: true, 
-      localUrl: urlData.publicUrl,
-      filePath
+    return NextResponse.json({
+      success: true,
+      supabaseUrl: urlData.publicUrl,
+      filePath: filePath
     })
 
   } catch (error) {
-    console.error('Error downloading and storing image:', error)
+    console.error('Error in download-and-store-image API:', error)
     return NextResponse.json(
-      { 
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-        success: false
-      },
+      { error: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     )
   }
