@@ -73,6 +73,8 @@ export type Database = {
           duration?: string
           thumbnail?: string
           movie_status?: string
+          writer?: string
+          cowriters?: string[]
           created_at: string
           updated_at: string
         }
@@ -88,6 +90,8 @@ export type Database = {
           duration?: string
           thumbnail?: string
           movie_status?: string
+          writer?: string
+          cowriters?: string[]
           created_at?: string
           updated_at?: string
         }
@@ -103,6 +107,8 @@ export type Database = {
           duration?: string
           thumbnail?: string
           movie_status?: string
+          writer?: string
+          cowriters?: string[]
           created_at?: string
           updated_at?: string
         }

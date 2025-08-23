@@ -3,8 +3,8 @@ import { Database } from './supabase'
 
 export type Movie = Database['public']['Tables']['projects']['Row'] & {
   project_type: 'movie'
-  writer?: string
-  cowriters?: string[]
+  writer?: string | null
+  cowriters?: string[] | null
 }
 
 export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Insert'], 'id' | 'user_id' | 'created_at' | 'updated_at'> & {
@@ -15,18 +15,39 @@ export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Ins
 
 export class MovieService {
   static async getMovies(): Promise<Movie[]> {
-    const { data, error } = await supabase
-      .from('projects')
-      .select('*')
-      .eq('project_type', 'movie')
-      .order('created_at', { ascending: false })
+    console.log('🎬 MovieService.getMovies() - Starting...')
+    
+    try {
+      console.log('🎬 MovieService.getMovies() - Making Supabase query...')
+      
+      // Make the Supabase query directly without race condition
+      const { data, error } = await supabase
+        .from('projects')
+        .select('*')
+        .eq('project_type', 'movie')
+        .order('created_at', { ascending: false })
+      
+      console.log('🎬 MovieService.getMovies() - Query completed, data:', data?.length || 0, 'rows')
+      
+      if (error) {
+        console.error('🎬 MovieService.getMovies() - Supabase error:', error)
+        throw error
+      }
 
-    if (error) {
-      console.error('Error fetching movies:', error)
+      // Transform the data to ensure writer and cowriters fields exist
+      const movies = (data || []).map(movie => ({
+        ...movie,
+        writer: movie.writer || null,
+        cowriters: movie.cowriters || []
+      })) as Movie[]
+
+      console.log('🎬 MovieService.getMovies() - Successfully processed', movies.length, 'movies')
+      return movies
+      
+    } catch (error) {
+      console.error('🎬 MovieService.getMovies() - Error in getMovies:', error)
       throw error
     }
-
-    return data as Movie[]
   }
 
   static async createMovie(movieData: CreateMovieData): Promise<Movie> {

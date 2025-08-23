@@ -68,14 +68,10 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Debug logging for authentication state
   useEffect(() => {
-    console.log('🎬 TIMELINE-SCENE - Auth State Change:', {
-      userId: user?.id,
-      userEmail: user?.email,
-      authLoading,
-      sceneId: id,
-      timestamp: new Date().toISOString()
-    })
-  }, [user, authLoading, id])
+    if (user?.id) {
+      console.log('🎬 TIMELINE-SCENE - User authenticated:', user.name)
+    }
+  }, [user])
 
   // State variables
   const [activeTab, setActiveTab] = useState("scripts")
@@ -98,22 +94,44 @@ function ScenePageClient({ id }: { id: string }) {
   })
   const [projectId, setProjectId] = useState<string>("")
   
+  // Enhanced text editing states
+  const [inlineEditing, setInlineEditing] = useState<{
+    assetId: string;
+    field: 'title' | 'content' | 'version_name';
+    value: string;
+  } | null>(null)
+  const [autoSaveTimer, setAutoSaveTimer] = useState<NodeJS.Timeout | null>(null)
+  const [savingStatus, setSavingStatus] = useState<{
+    assetId: string;
+    status: 'idle' | 'saving' | 'saved' | 'error';
+    message?: string;
+  } | null>(null)
+
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
+
+  // Helper function to get timeline navigation URL
+  const getTimelineUrl = () => {
+    if (projectId) {
+      return `/timeline?project=${projectId}`
+    }
+    // Fallback: try to get project ID from scene data
+    if (scene?.timeline_id) {
+      // We'll use the timeline ID as a fallback
+      return `/timeline?timeline=${scene.timeline_id}`
+    }
+    return "/timeline"
+  }
 
   // Effect to fetch scene data
   useEffect(() => {
     let mounted = true
     
     const fetchSceneData = async () => {
-      console.log('🎬 TIMELINE-SCENE - Starting scene data fetch:', { 
-        sceneId: id, 
-        userId: user?.id, 
-        timestamp: new Date().toISOString() 
-      })
+      console.log('🎬 TIMELINE-SCENE - Starting scene data fetch for scene:', id)
       
       if (!id || !user?.id) {
-        console.log('🎬 TIMELINE-SCENE - Missing required data for fetch:', { hasId: !!id, hasUserId: !!user?.id })
+        console.log('🎬 TIMELINE-SCENE - Missing required data for fetch')
         return
       }
 
@@ -125,93 +143,31 @@ function ScenePageClient({ id }: { id: string }) {
       }
       
       try {
-        console.log('🎬 TIMELINE-SCENE - Setting loading state to true')
         setLoading(true)
         
-        console.log('🎬 TIMELINE-SCENE - Calling TimelineService.getSceneById...')
-        const startTime = Date.now()
-        
-        // First check if scene exists in database
-        console.log('🎬 TIMELINE-SCENE - Checking if scene exists in database...')
-        const { data: sceneCheck, error: sceneCheckError } = await supabase
-          .from('scenes')
-          .select('id, name, user_id, project_id')
-          .eq('id', id)
-          .single()
-        
-        if (sceneCheckError) {
-          console.error('🎬 TIMELINE-SCENE - Scene check error:', sceneCheckError)
-          if (sceneCheckError.code === 'PGRST116') {
-            console.error('🎬 TIMELINE-SCENE - Scene not found in database')
-            setLoading(false)
-            return
-          }
-        } else {
-          console.log('🎬 TIMELINE-SCENE - Scene found in database:', sceneCheck)
-          
-          // Check if user has access to this scene
-          if (sceneCheck.user_id !== user.id) {
-            console.error('🎬 TIMELINE-SCENE - User does not have access to this scene')
-            setLoading(false)
-            return
-          }
-          
-          // Check what other scenes exist for this user
-          const { data: userScenes, error: userScenesError } = await supabase
-            .from('scenes')
-            .select('id, name, project_id')
-            .eq('user_id', user.id)
-          
-          if (userScenesError) {
-            console.error('🎬 TIMELINE-SCENE - Error fetching user scenes:', userScenesError)
-          } else {
-            console.log('🎬 TIMELINE-SCENE - All user scenes:', userScenes)
-          }
-        }
-        
+        // Fetch scene data directly
         const scene = await TimelineService.getSceneById(id)
-        const fetchTime = Date.now() - startTime
-        console.log('🎬 TIMELINE-SCENE - Scene fetched successfully:', { 
-          sceneId: scene?.id, 
-          sceneName: scene?.name, 
-          fetchTimeMs: fetchTime,
-          sceneData: scene,
-          sceneType: typeof scene,
-          isNull: scene === null,
-          isUndefined: scene === undefined
-        })
         
         if (scene && mounted) {
-          console.log('🎬 TIMELINE-SCENE - Scene is valid, setting state')
+          console.log('🎬 TIMELINE-SCENE - Scene fetched successfully:', scene.name)
           setScene(scene)
           
           // Get project ID through timeline
           try {
-            console.log('🎬 TIMELINE-SCENE - Fetching timeline for project ID...')
-            const timelineStartTime = Date.now()
             const { data: timeline, error } = await supabase
               .from('timelines')
               .select('project_id')
               .eq('id', scene.timeline_id)
               .single()
             
-            const timelineFetchTime = Date.now() - timelineStartTime
-            console.log('🎬 TIMELINE-SCENE - Timeline fetch result:', { 
-              timeline, 
-              error, 
-              fetchTimeMs: timelineFetchTime 
-            })
-            
             if (timeline && !error && mounted) {
-              console.log('🎬 TIMELINE-SCENE - Setting project ID:', timeline.project_id)
               setProjectId(timeline.project_id)
             }
           } catch (timelineError) {
             console.error('🎬 TIMELINE-SCENE - Error fetching timeline:', timelineError)
           }
         } else if (mounted) {
-          console.error('🎬 TIMELINE-SCENE - Scene is null/undefined, this will cause infinite loading')
-          // Set loading to false to prevent infinite loading
+          console.error('🎬 TIMELINE-SCENE - Scene not found')
           setLoading(false)
         }
       } catch (error) {
@@ -225,198 +181,83 @@ function ScenePageClient({ id }: { id: string }) {
         }
       } finally {
         if (mounted) {
-          console.log('🎬 TIMELINE-SCENE - Setting loading state to false')
           setLoading(false)
         }
       }
     }
 
-    // Safety timeout to prevent infinite loading
-    const safetyTimeout = setTimeout(() => {
-      if (mounted && loading) {
-        console.warn('🎬 TIMELINE-SCENE - Safety timeout triggered, forcing loading to false')
-        setLoading(false)
-      }
-    }, 10000) // 10 second timeout
-
     fetchSceneData()
 
     return () => {
       mounted = false
-      clearTimeout(safetyTimeout)
     }
-  }, [id, user?.id]) // Removed toast dependency to prevent infinite loops
+  }, [id, user?.id])
+
+  // Cleanup function for inline editing
+  useEffect(() => {
+    return () => {
+      // Clear any pending timers
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer)
+      }
+      // Clear editing states
+      setInlineEditing(null)
+      setSavingStatus(null)
+    }
+  }, [autoSaveTimer])
 
   // Effect to fetch assets
   useEffect(() => {
     let mounted = true
     
     const fetchAssets = async () => {
-      console.log('🎬 TIMELINE-SCENE - Starting assets fetch:', { 
-        sceneId: id, 
-        userId: user?.id, 
-        timestamp: new Date().toISOString() 
-      })
+      console.log('🎬 TIMELINE-SCENE - Starting assets fetch for scene:', id)
       
       if (!id || !user?.id) {
-        console.log('🎬 TIMELINE-SCENE - Missing required data for assets fetch:', { hasId: !!id, hasUserId: !!user?.id })
+        console.log('🎬 TIMELINE-SCENE - Missing required data for assets fetch')
         return
       }
       
       try {
-        console.log('🎬 TIMELINE-SCENE - Setting assets loading state to true')
         setAssetsLoading(true)
         
-        console.log('🎬 TIMELINE-SCENE - Fetching assets for scene:', id)
-        console.log('🎬 TIMELINE-SCENE - Current user:', user.id)
-        
-        // First, let's check the database schema and see what assets exist
-        console.log('🎬 TIMELINE-SCENE - Checking database schema and assets...')
-        const schemaStartTime = Date.now()
-        
-        // Check if assets table has any data at all
-        const { data: allAssetsGlobal, error: allAssetsGlobalError } = await supabase
-          .from('assets')
-          .select('*')
-        
-        const schemaCheckTime = Date.now() - schemaStartTime
-        if (allAssetsGlobalError) {
-          console.error('🎬 TIMELINE-SCENE - Assets table error:', allAssetsGlobalError)
-        } else {
-          console.log('🎬 TIMELINE-SCENE - Assets table check completed:', { 
-            totalAssets: allAssetsGlobal?.length || 0,
-            sampleAsset: allAssetsGlobal?.[0], 
-            availableColumns: allAssetsGlobal?.[0] ? Object.keys(allAssetsGlobal?.[0]) : 'No data',
-            checkTimeMs: schemaCheckTime,
-            sceneIds: allAssetsGlobal?.map(a => a.scene_id).filter(Boolean),
-            userIds: allAssetsGlobal?.map(a => a.user_id).filter(Boolean)
-          })
-        }
-        
-        // First, let's check if there are any assets at all for this user
-        console.log('🎬 TIMELINE-SCENE - Fetching all assets for user...')
-        const allAssetsStartTime = Date.now()
-        const { data: allUserAssets, error: allUserAssetsError } = await supabase
-          .from('assets')
-          .select('*')
-          .eq('user_id', user.id)
-        
-        const allAssetsTime = Date.now() - allAssetsStartTime
-        if (allUserAssetsError) {
-          console.error('🎬 TIMELINE-SCENE - Error fetching all assets:', allUserAssetsError)
-        } else {
-          console.log('🎬 TIMELINE-SCENE - All assets for user fetched:', { 
-            count: allUserAssets?.length, 
-            fetchTimeMs: allAssetsTime 
-          })
-          allUserAssets?.forEach((asset, index) => {
-            console.log(`🎬 TIMELINE-SCENE - Asset ${index + 1}:`, {
-              id: asset.id,
-              title: asset.title,
-              content_type: asset.content_type,
-              project_id: asset.project_id,
-              scene_id: asset.scene_id,
-              user_id: asset.user_id,
-              version_name: asset.version_name, // Check if this column exists
-              version: asset.version
-            })
-          })
-        }
-        
-        // Now fetch assets for this specific scene
-        console.log('🎬 TIMELINE-SCENE - Fetching assets for specific scene...')
-        const sceneAssetsStartTime = Date.now()
-        const fetchedAssets = await AssetService.getAssetsForScene(id)
-        const sceneAssetsTime = Date.now() - sceneAssetsStartTime
-        console.log('🎬 TIMELINE-SCENE - Scene assets fetched:', { 
-          count: fetchedAssets.length, 
-          fetchTimeMs: sceneAssetsTime 
-        })
-        
-        // Also check manually for assets linked to this scene
-        console.log('🎬 TIMELINE-SCENE - Manual scene assets fetch...')
-        const manualStartTime = Date.now()
-        
-        // Try different query approaches to debug the issue
-        console.log('🎬 TIMELINE-SCENE - Trying different query approaches...')
-        
-        // Approach 1: Just by scene_id
-        const { data: sceneAssetsOnly, error: sceneAssetsOnlyError } = await supabase
+        // Single, efficient query for scene assets
+        const { data: sceneAssets, error } = await supabase
           .from('assets')
           .select('*')
           .eq('scene_id', id)
-        
-        console.log('🎬 TIMELINE-SCENE - Assets by scene_id only:', { 
-          count: sceneAssetsOnly?.length, 
-          error: sceneAssetsOnlyError,
-          sceneId: id
-        })
-        
-        // Approach 2: By user_id and scene_id
-        const { data: manualSceneAssets, error: manualError } = await supabase
-          .from('assets')
-          .select('*')
           .eq('user_id', user.id)
-          .eq('scene_id', id)
         
-        const manualTime = Date.now() - manualStartTime
-        if (manualError) {
-          console.error('🎬 TIMELINE-SCENE - Manual scene assets fetch error:', manualError)
+        if (error) {
+          console.error('🎬 TIMELINE-SCENE - Error fetching scene assets:', error)
+          if (mounted) {
+            setAssets([])
+          }
         } else {
-          console.log('🎬 TIMELINE-SCENE - Manual scene assets fetch completed:', { 
-            count: manualSceneAssets?.length, 
-            fetchTimeMs: manualTime 
-          })
+          console.log('🎬 TIMELINE-SCENE - Scene assets fetched successfully:', sceneAssets?.length || 0)
+          if (mounted) {
+            setAssets(sceneAssets || [])
+          }
         }
         
-        // Approach 3: Check if there are any assets with null scene_id
-        const { data: nullSceneAssets, error: nullSceneError } = await supabase
-          .from('assets')
-          .select('*')
-          .eq('user_id', user.id)
-          .is('scene_id', null)
-        
-        console.log('🎬 TIMELINE-SCENE - Assets with null scene_id:', { 
-          count: nullSceneAssets?.length, 
-          error: nullSceneError 
-        })
-        
-        if (mounted) {
-          console.log('🎬 TIMELINE-SCENE - Setting assets state...')
-          setAssets(fetchedAssets)
-        }
       } catch (error) {
         console.error('🎬 TIMELINE-SCENE - Error fetching assets:', error)
         if (mounted) {
-          toast({
-            title: "Error fetching assets",
-            description: "Failed to load scene assets.",
-            variant: "destructive",
-          })
+          setAssets([])
         }
       } finally {
         if (mounted) {
-          console.log('🎬 TIMELINE-SCENE - Setting assets loading state to false')
           setAssetsLoading(false)
         }
       }
     }
 
-    // Safety timeout to prevent infinite loading
-    const safetyTimeout = setTimeout(() => {
-      if (mounted && assetsLoading) {
-        console.warn('🎬 TIMELINE-SCENE - Assets safety timeout triggered, forcing loading to false')
-        setAssetsLoading(false)
-      }
-    }, 10000) // 10 second timeout
-
     fetchAssets()
 
     return () => {
       mounted = false
-      clearTimeout(safetyTimeout)
     }
-  }, [id, user?.id]) // Removed toast dependency to prevent infinite loops
+  }, [id, user?.id])
 
   // Effect to set initial active script
   useEffect(() => {
@@ -430,23 +271,21 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Function to refresh assets
   const refreshAssets = async () => {
-    if (!id) return
-    
     try {
       setAssetsLoading(true)
-      const fetchedAssets = await AssetService.getAssetsForScene(id)
-      setAssets(fetchedAssets)
-      toast({
-        title: "Assets Refreshed",
-        description: "Scene assets have been updated.",
-      })
+      const { data: sceneAssets, error } = await supabase
+        .from('assets')
+        .select('*')
+        .eq('scene_id', id)
+        .eq('user_id', user?.id)
+      
+      if (error) {
+        console.error('🎬 TIMELINE-SCENE - Error refreshing assets:', error)
+      } else {
+        setAssets(sceneAssets || [])
+      }
     } catch (error) {
       console.error('🎬 TIMELINE-SCENE - Error refreshing assets:', error)
-      toast({
-        title: "Error refreshing assets",
-        description: "Failed to refresh scene assets.",
-        variant: "destructive",
-      })
     } finally {
       setAssetsLoading(false)
     }
@@ -581,46 +420,74 @@ function ScenePageClient({ id }: { id: string }) {
     })
   }
 
-  if (loading) {
-    console.log('🎬 TIMELINE-SCENE - Showing loading state:', { loading, hasScene: !!scene, userId: user?.id, sceneId: id })
+  // Simple loading state
+  if (loading || authLoading) {
     return (
-      <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
-          <p className="text-muted-foreground mb-2">Loading scene data...</p>
-          <div className="text-xs text-muted-foreground space-y-1">
-            <p>Debug Info:</p>
-            <p>• Loading: {loading.toString()}</p>
-            <p>• Has Scene: {!!scene ? 'Yes' : 'No'}</p>
-            <p>• User ID: {user?.id || 'None'}</p>
-            <p>• Scene ID: {id}</p>
-            <p>• Auth Loading: {authLoading.toString()}</p>
-            <p>• Assets Loading: {assetsLoading.toString()}</p>
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto max-w-7xl px-6 py-8">
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="text-lg">Loading scene...</span>
+            <div className="text-sm text-muted-foreground text-center">
+              <p>Loading scene data and assets...</p>
+            </div>
+            <Button 
+              onClick={() => {
+                console.log('🎬 TIMELINE-SCENE - Manual retry clicked')
+                window.location.reload()
+              }}
+              variant="outline"
+              className="mt-4"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Retry Loading
+            </Button>
           </div>
         </div>
       </div>
     )
   }
 
+  // Error state if scene not found
   if (!scene) {
-    console.log('🎬 TIMELINE-SCENE - Scene not found, showing error state')
     return (
-      <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-destructive mb-4">
-            <h1 className="text-2xl font-bold mb-2">Scene Not Found</h1>
-            <p className="text-muted-foreground">The scene you're looking for doesn't exist or you don't have access to it.</p>
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto max-w-7xl px-6 py-8">
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <div className="text-center">
+              <h1 className="text-2xl font-bold mb-4">Scene Not Found</h1>
+              <p className="text-muted-foreground mb-6">
+                The scene you're looking for doesn't exist or you don't have access to it.
+              </p>
+              <div className="space-x-4">
+                <Button asChild>
+                  <Link href={getTimelineUrl()}>
+                    Back to Timeline
+                  </Link>
+                </Button>
+                <Button variant="outline" asChild>
+                  <Link href="/dashboard">Dashboard</Link>
+                </Button>
+              </div>
+            </div>
           </div>
-          <div className="text-xs text-muted-foreground space-y-1 mb-4">
-            <p>Debug Info:</p>
-            <p>• Scene ID: {id}</p>
-            <p>• User ID: {user?.id || 'None'}</p>
-            <p>• Loading: {loading.toString()}</p>
-            <p>• Auth Loading: {authLoading.toString()}</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Assets loading indicator
+  if (assetsLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="container mx-auto max-w-7xl px-6 py-8">
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <span className="text-lg">Loading scene assets...</span>
+            <div className="text-sm text-muted-foreground text-center">
+              <p>Loading scene content and media...</p>
+            </div>
           </div>
-          <Button asChild>
-            <Link href="/timeline">Back to Timeline</Link>
-          </Button>
         </div>
       </div>
     )
@@ -634,13 +501,156 @@ function ScenePageClient({ id }: { id: string }) {
     audio: assets.filter(a => a.content_type === 'audio'),
   };
 
+  // Enhanced inline text editing functions
+  const startInlineEditing = (assetId: string, field: 'title' | 'content' | 'version_name', currentValue: string) => {
+    setInlineEditing({
+      assetId,
+      field,
+      value: currentValue
+    })
+  }
+
+  const cancelInlineEditing = () => {
+    setInlineEditing(null)
+    setSavingStatus(null)
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer)
+      setAutoSaveTimer(null)
+    }
+  }
+
+  const handleInlineEditChange = (value: string) => {
+    if (!inlineEditing) return
+    
+    setInlineEditing(prev => prev ? { ...prev, value } : null)
+    
+    // Clear existing timer
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer)
+    }
+    
+    // Set new auto-save timer (2 seconds delay)
+    const timer = setTimeout(() => {
+      saveInlineEdit()
+    }, 2000)
+    
+    setAutoSaveTimer(timer)
+  }
+
+  // Helper function to generate shorter, cleaner names
+  const generateCleanName = (originalName: string, type: 'title' | 'version_name') => {
+    if (type === 'title') {
+      // For titles, remove "Extracted from" and file extensions, keep meaningful parts
+      return originalName
+        .replace(/^Extracted from /i, '')
+        .replace(/\.(docx|doc|txt|pdf)$/i, '')
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    } else {
+      // For version names, create shorter, descriptive names
+      if (originalName.includes('v3')) return 'Version 3'
+      if (originalName.includes('v2')) return 'Version 2'
+      if (originalName.includes('v1')) return 'Version 1'
+      if (originalName.includes('Final')) return 'Final Version'
+      if (originalName.includes('Draft')) return 'Draft'
+      if (originalName.includes('Scene_1')) return 'Scene 1'
+      if (originalName.includes('Scene_2')) return 'Scene 2'
+      return 'New Version'
+    }
+  }
+
+  const saveInlineEdit = async () => {
+    if (!inlineEditing) return
+    
+    const { assetId, field, value } = inlineEditing
+    const asset = assets.find(a => a.id === assetId)
+    
+    if (!asset) return
+    
+    try {
+      setSavingStatus({ assetId, status: 'saving' })
+      
+      // Create a new version with the edited content
+      const newAssetData = {
+        project_id: asset.project_id,
+        scene_id: asset.scene_id,
+        title: field === 'title' ? value : asset.title,
+        content_type: asset.content_type,
+        content: field === 'content' ? value : asset.content,
+        content_url: asset.content_url,
+        prompt: asset.prompt,
+        model: asset.model,
+        version_name: field === 'version_name' ? value : `${asset.version_name || `Version ${asset.version}`} (Edited)`,
+        generation_settings: asset.generation_settings,
+        metadata: {
+          ...asset.metadata,
+          edited_from_version: asset.version,
+          edited_at: new Date().toISOString(),
+          edited_field: field,
+          original_value: field === 'title' ? asset.title : 
+                         field === 'version_name' ? asset.version_name : 
+                         asset.content
+        }
+      }
+      
+      // Save as new version
+      await AssetService.createAsset(newAssetData)
+      
+      // Refresh assets
+      refreshAssets()
+      
+      // Show success status
+      setSavingStatus({ assetId, status: 'saved', message: 'Changes saved!' })
+      
+      // Clear inline editing
+      setInlineEditing(null)
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer)
+        setAutoSaveTimer(null)
+      }
+      
+      // Clear success status after 3 seconds
+      setTimeout(() => {
+        setSavingStatus(null)
+      }, 3000)
+      
+      toast({
+        title: "Changes Saved!",
+        description: `New version created with your edits.`,
+      })
+      
+    } catch (error) {
+      console.error('🎬 TIMELINE-SCENE - Error saving inline edit:', error)
+      setSavingStatus({ 
+        assetId, 
+        status: 'error', 
+        message: 'Failed to save changes' 
+      })
+      
+      toast({
+        title: "Save Failed",
+        description: "Failed to save your changes. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const saveInlineEditImmediately = () => {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer)
+      setAutoSaveTimer(null)
+    }
+    saveInlineEdit()
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground p-6">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <Link href="/timeline">
+            <Link href={getTimelineUrl()}>
               <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Timeline
@@ -653,50 +663,65 @@ function ScenePageClient({ id }: { id: string }) {
               <p className="text-muted-foreground mt-1">{scene.description}</p>
             </div>
           </div>
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setActiveTab("import")}
-              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
-            >
-              <Upload className="h-4 w-4 mr-2" />
-              Import Files
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={startEditing}
-              className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
-            >
-              <Edit3 className="h-4 w-4 mr-2" />
-              Edit Scene
-            </Button>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent className="bg-background border-destructive/20">
-                <AlertDialogHeader>
-                  <AlertDialogTitle className="text-destructive">Delete Scene</AlertDialogTitle>
-                  <AlertDialogDescription className="text-muted-foreground">
-                    This action cannot be undone. This will permanently delete the scene and all associated media.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
-                  <AlertDialogAction className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+          
+          {/* Breadcrumb Navigation */}
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Link href="/dashboard" className="hover:text-primary transition-colors">
+              Dashboard
+            </Link>
+            <span>/</span>
+            <Link href={getTimelineUrl()} className="hover:text-primary transition-colors">
+              Timeline
+            </Link>
+            <span>/</span>
+            <span className="text-primary font-medium">Scene: {scene.name}</span>
           </div>
+        </div>
+        
+        {/* Action Buttons */}
+        <div className="flex justify-end gap-3 mb-6">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setActiveTab("import")}
+            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+          >
+            <Upload className="h-4 w-4 mr-2" />
+            Import Files
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={startEditing}
+            className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
+          >
+            <Edit3 className="h-4 w-4 mr-2" />
+            Edit Scene
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent className="bg-background border-destructive/20">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="text-destructive">Delete Scene</AlertDialogTitle>
+                <AlertDialogDescription className="text-muted-foreground">
+                  This action cannot be undone. This will permanently delete the scene and all associated media.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                <AlertDialogAction className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         {/* Debug Info Panel */}
@@ -928,28 +953,90 @@ function ScenePageClient({ id }: { id: string }) {
                      <div className="border-b border-green-400/30 mb-4">
                        <div className="flex space-x-1">
                          {scriptAssets.map((script) => (
-                           <button
-                             key={script.id}
-                             onClick={() => {
-                               console.log('🎬 TIMELINE-SCENE - Clicking version:', script.version, 'ID:', script.id)
-                               setActiveScriptId(script.id)
-                             }}
-                             className={`px-4 py-2 text-sm font-medium transition-all duration-200 border-b-2 ${
-                               activeScriptId === script.id
-                                 ? 'text-green-400 border-green-400 bg-green-500/10'
-                                 : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
-                             }`}
-                           >
-                             {script.version_name || `Version ${script.version}`}
-                             {script.is_latest_version && (
-                               <span className="ml-1 text-xs text-green-300">★</span>
+                           <div key={script.id} className="relative group">
+                             {inlineEditing?.assetId === script.id && inlineEditing.field === 'version_name' ? (
+                               <div className="flex items-center gap-1">
+                                 <Input
+                                   value={inlineEditing.value}
+                                   onChange={(e) => handleInlineEditChange(e.target.value)}
+                                   className="px-3 py-2 text-sm font-medium bg-background border-green-400/30 focus:border-green-400 min-w-[120px]"
+                                   autoFocus
+                                 />
+                                 <div className="flex gap-1">
+                                   <Button
+                                     size="sm"
+                                     variant="outline"
+                                     onClick={saveInlineEditImmediately}
+                                     className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                   >
+                                     <Save className="h-3 w-3" />
+                                   </Button>
+                                   <Button
+                                     size="sm"
+                                     variant="outline"
+                                     onClick={cancelInlineEditing}
+                                     className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                   >
+                                     ×
+                                   </Button>
+                                 </div>
+                               </div>
+                             ) : (
+                               <div
+                                 onClick={() => {
+                                   console.log('🎬 TIMELINE-SCENE - Clicking version:', script.version, 'ID:', script.id)
+                                   setActiveScriptId(script.id)
+                                 }}
+                                 className={`px-4 py-2 text-sm font-medium transition-all duration-200 border-b-2 cursor-pointer ${
+                                   activeScriptId === script.id
+                                     ? 'text-green-400 border-green-400 bg-green-500/10'
+                                     : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
+                                 }`}
+                               >
+                                 <div className="flex items-center gap-2">
+                                   <span>{script.version_name || `Version ${script.version}`}</span>
+                                   {script.is_latest_version && (
+                                     <span className="text-xs text-green-300">★</span>
+                                   )}
+                                   <Button
+                                     size="sm"
+                                     variant="ghost"
+                                     onClick={(e) => {
+                                       e.stopPropagation()
+                                       startInlineEditing(script.id, 'version_name', script.version_name || `Version ${script.version}`)
+                                     }}
+                                     className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity p-0 hover:bg-green-500/20"
+                                   >
+                                     <Edit className="h-3 w-3" />
+                                   </Button>
+                                 </div>
+                               </div>
                              )}
-                           </button>
+                           </div>
+                         ))}
+                       </div>
+                       
+                       {/* Quick Rename Suggestions */}
+                       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                         <span>💡 Quick rename suggestions:</span>
+                         {scriptAssets.map((script) => (
+                           <Button
+                             key={script.id}
+                             size="sm"
+                             variant="ghost"
+                             onClick={() => {
+                               const cleanName = generateCleanName(script.version_name || `Version ${script.version}`, 'version_name')
+                               startInlineEditing(script.id, 'version_name', cleanName)
+                             }}
+                             className="h-6 px-2 text-xs hover:bg-green-500/10 hover:text-green-400"
+                           >
+                             {generateCleanName(script.version_name || `Version ${script.version}`, 'version_name')}
+                           </Button>
                          ))}
                        </div>
                      </div>
-                    
-                                         {/* Original content */}
+                     
+                     {/* Script Content Display */}
                      <Card className="bg-card border-primary/20">
                        <CardHeader>
                          <div className="flex items-start justify-between">
@@ -957,7 +1044,59 @@ function ScenePageClient({ id }: { id: string }) {
                              <div className="flex items-center gap-3 mb-2">
                                <h4 className="text-xl font-bold text-primary">{(() => {
                                  const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                                 return activeScript.title
+                                 
+                                 // Check if this title is being edited inline
+                                 if (inlineEditing?.assetId === activeScript.id && inlineEditing.field === 'title') {
+                                   return (
+                                     <div className="flex items-center gap-2">
+                                       <Input
+                                         value={inlineEditing.value}
+                                         onChange={(e) => handleInlineEditChange(e.target.value)}
+                                         className="text-xl font-bold text-primary bg-background border-primary/30 focus:border-primary"
+                                         autoFocus
+                                       />
+                                       <div className="flex gap-1">
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={saveInlineEditImmediately}
+                                           className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                         >
+                                           <Save className="h-3 w-3" />
+                                         </Button>
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={cancelInlineEditing}
+                                           className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                         >
+                                           ×
+                                         </Button>
+                                       </div>
+                                       {savingStatus?.assetId === activeScript.id && (
+                                         <span className="text-xs text-muted-foreground">
+                                           {savingStatus.status === 'saving' && 'Saving...'}
+                                           {savingStatus.status === 'saved' && '✓ Saved!'}
+                                           {savingStatus.status === 'error' && '✗ Error'}
+                                         </span>
+                                       )}
+                                     </div>
+                                   )
+                                 }
+                                 
+                                 return (
+                                   <div className="flex items-center gap-2 group">
+                                     <span>{activeScript.title}</span>
+                                     <Button
+                                       size="sm"
+                                       variant="ghost"
+                                       onClick={() => startInlineEditing(activeScript.id, 'title', activeScript.title)}
+                                       className="h-6 px-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                     >
+                                       <Edit className="h-3 w-3" />
+                                     </Button>
+                                   </div>
+                                 )
                                })()}</h4>
                                <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
                                  {(() => {
@@ -1001,17 +1140,110 @@ function ScenePageClient({ id }: { id: string }) {
                                <Volume2 className="h-4 w-4 mr-2" />
                                Listen to Script
                              </Button>
+                             
+                             {/* Quick Edit Button */}
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                               onClick={() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 startInlineEditing(activeScript.id, 'content', activeScript.content || '')
+                               }}
+                               disabled={inlineEditing !== null}
+                             >
+                               <Edit className="h-4 w-4 mr-2" />
+                               Quick Edit
+                             </Button>
                            </div>
                          </div>
                        </CardHeader>
                        <CardContent>
                          <div className="bg-muted/20 p-4 rounded-lg border border-border mb-4">
-                           <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
-                             {(() => {
-                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                               return activeScript.content || 'No content available'
-                             })()}
-                           </pre>
+                           {(() => {
+                             const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                             
+                             // Check if this content is being edited inline
+                             if (inlineEditing?.assetId === activeScript.id && inlineEditing.field === 'content') {
+                               return (
+                                 <div className="space-y-3">
+                                   <div className="flex items-center justify-between">
+                                     <Label className="text-sm font-medium text-muted-foreground">
+                                       Editing Script Content
+                                     </Label>
+                                     <div className="flex gap-2">
+                                       <Button
+                                         size="sm"
+                                         variant="outline"
+                                         onClick={saveInlineEditImmediately}
+                                         className="h-8 px-3 text-sm border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                       >
+                                         <Save className="h-4 w-4 mr-1" />
+                                         Save
+                                       </Button>
+                                       <Button
+                                         size="sm"
+                                         variant="outline"
+                                         onClick={cancelInlineEditing}
+                                         className="h-8 px-3 text-sm border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                       >
+                                         Cancel
+                                       </Button>
+                                     </div>
+                                   </div>
+                                   <Textarea
+                                     value={inlineEditing.value}
+                                     onChange={(e) => handleInlineEditChange(e.target.value)}
+                                     placeholder="Edit your script content here..."
+                                     className="w-full h-96 p-4 border border-primary/30 focus:border-primary bg-background text-foreground resize-none font-mono text-sm leading-relaxed"
+                                     autoFocus
+                                   />
+                                   {savingStatus?.assetId === activeScript.id && (
+                                     <div className="flex items-center gap-2 text-sm">
+                                       <span className={`${
+                                         savingStatus.status === 'saving' ? 'text-blue-400' :
+                                         savingStatus.status === 'saved' ? 'text-green-400' :
+                                         'text-red-400'
+                                       }`}>
+                                         {savingStatus.status === 'saving' && '⏳ Saving...'}
+                                         {savingStatus.status === 'saved' && '✓ Saved successfully!'}
+                                         {savingStatus.status === 'error' && '✗ Failed to save'}
+                                       </span>
+                                       {savingStatus.message && (
+                                         <span className="text-muted-foreground">- {savingStatus.message}</span>
+                                       )}
+                                     </div>
+                                   )}
+                                   <div className="text-xs text-muted-foreground">
+                                     💡 Auto-save in 2 seconds • Press Save to save immediately
+                                   </div>
+                                   {autoSaveTimer && (
+                                     <div className="flex items-center gap-2 text-xs text-blue-400">
+                                       <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                                       <span>Auto-save pending...</span>
+                                     </div>
+                                   )}
+                                 </div>
+                               )
+                             }
+                             
+                             return (
+                               <div className="group relative">
+                                 <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
+                                   {activeScript.content || 'No content available'}
+                                 </pre>
+                                 <Button
+                                   size="sm"
+                                   variant="ghost"
+                                   onClick={() => startInlineEditing(activeScript.id, 'content', activeScript.content || '')}
+                                   className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                 >
+                                   <Edit className="h-4 w-4 mr-1" />
+                                   Edit
+                                 </Button>
+                               </div>
+                             )
+                           })()}
                          </div>
                          
                          {/* Text to Speech Component */}
@@ -1173,9 +1405,88 @@ function ScenePageClient({ id }: { id: string }) {
                         </CardHeader>
                         <CardContent>
                           <div className="bg-muted/20 p-4 rounded-lg border border-border mb-4">
-                            <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
-                              {selectedVersion.content || 'No content available'}
-                            </pre>
+                            {(() => {
+                              // Check if this content is being edited inline
+                              if (inlineEditing?.assetId === selectedVersion.id && inlineEditing.field === 'content') {
+                                return (
+                                  <div className="space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <Label className="text-sm font-medium text-muted-foreground">
+                                        Editing Script Content
+                                      </Label>
+                                      <div className="flex gap-2">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={saveInlineEditImmediately}
+                                          className="h-8 px-3 text-sm border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                        >
+                                          <Save className="h-4 w-4 mr-1" />
+                                          Save
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={cancelInlineEditing}
+                                          className="h-8 px-3 text-sm border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                        >
+                                          Cancel
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <Textarea
+                                      value={inlineEditing.value}
+                                      onChange={(e) => handleInlineEditChange(e.target.value)}
+                                      placeholder="Edit your script content here..."
+                                      className="w-full h-96 p-4 border border-primary/30 focus:border-primary bg-background text-foreground resize-none font-mono text-sm leading-relaxed"
+                                      autoFocus
+                                    />
+                                    {savingStatus?.assetId === selectedVersion.id && (
+                                      <div className="flex items-center gap-2 text-sm">
+                                        <span className={`${
+                                          savingStatus.status === 'saving' ? 'text-blue-400' :
+                                          savingStatus.status === 'saved' ? 'text-green-400' :
+                                          'text-red-400'
+                                        }`}>
+                                          {savingStatus.status === 'saving' && '⏳ Saving...'}
+                                          {savingStatus.status === 'saved' && '✓ Saved successfully!'}
+                                          {savingStatus.status === 'error' && '✗ Failed to save'}
+                                        </span>
+                                        {savingStatus.message && (
+                                          <span className="text-muted-foreground">- {savingStatus.message}</span>
+                                        )}
+                                      </div>
+                                    )}
+                                    <div className="text-xs text-muted-foreground">
+                                      💡 Auto-save in 2 seconds • Press Save to save immediately
+                                    </div>
+                                    {autoSaveTimer && (
+                                      <div className="flex items-center gap-2 text-xs text-blue-400">
+                                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
+                                        <span>Auto-save pending...</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              }
+                              
+                              return (
+                                <div className="group relative">
+                                  <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
+                                    {selectedVersion.content || 'No content available'}
+                                  </pre>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => startInlineEditing(selectedVersion.id, 'content', selectedVersion.content || '')}
+                                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                  >
+                                    <Edit className="h-4 w-4 mr-1" />
+                                    Edit
+                                  </Button>
+                                </div>
+                              )
+                            })()}
                           </div>
                           
                           {/* Text to Speech Component */}

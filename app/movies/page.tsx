@@ -41,6 +41,7 @@ import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-serv
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
+import { supabase } from "@/lib/supabase"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -85,8 +86,36 @@ export default function MoviesPage() {
   const { toast } = useToast()
   const { user } = useAuth()
 
+  console.log('🎬 Movies Page - Render - User state:', user ? `Logged in as ${user.name}` : 'No user')
+  console.log('🎬 Movies Page - Render - Loading state:', loading)
+  console.log('🎬 Movies Page - Render - Movies count:', movies.length)
+
   useEffect(() => {
+    console.log('🎬 Movies Page - useEffect triggered - Starting loadMovies...')
+    
+    // Test Supabase connection first
+    const testConnection = async () => {
+      try {
+        console.log('🎬 Movies Page - Testing Supabase connection...')
+        const { data, error } = await supabase.from('projects').select('count').limit(1)
+        if (error) {
+          console.error('🎬 Movies Page - Supabase connection test failed:', error)
+        } else {
+          console.log('🎬 Movies Page - Supabase connection test successful')
+        }
+      } catch (err) {
+        console.error('🎬 Movies Page - Supabase connection test exception:', err)
+      }
+    }
+    
+    testConnection()
+    
+    console.log('🎬 Movies Page - Calling loadMovies()...')
     loadMovies()
+
+    return () => {
+      console.log('🎬 Movies Page - useEffect cleanup')
+    }
   }, [])
 
   // Load AI settings
@@ -158,19 +187,51 @@ export default function MoviesPage() {
   */
 
   const loadMovies = async () => {
+    console.log('🎬 Movies Page - loadMovies() - Starting...')
+    
     try {
+      console.log('🎬 Movies Page - Setting loading to true...')
       setLoading(true)
+      
+      console.log('🎬 Movies Page - Calling MovieService.getMovies()...')
+      const startTime = Date.now()
+      
       const moviesData = await MovieService.getMovies()
+      
+      const endTime = Date.now()
+      console.log(`🎬 Movies Page - MovieService.getMovies() completed in ${endTime - startTime}ms`)
+      console.log('🎬 Movies Page - Received movies data:', moviesData.length, 'movies')
+      
       setMovies(moviesData)
+      console.log('🎬 Movies Page - Movies state updated successfully')
+      
+      // Show success message
+      if (moviesData.length > 0) {
+        toast({
+          title: "Movies Loaded Successfully",
+          description: `Found ${moviesData.length} movie project(s)`,
+        })
+      }
+      
     } catch (error) {
-      console.error('Error loading movies:', error)
+      console.error('🎬 Movies Page - Error loading movies:', error)
+      
+      // Show user-friendly error message
+      const errorMessage = error instanceof Error ? error.message : 'Failed to load movies'
+      
       toast({
-        title: "Error",
-        description: "Failed to load movies. Please try again.",
+        title: "Error Loading Movies",
+        description: `Unable to load movies: ${errorMessage}. Please try refreshing the page.`,
         variant: "destructive",
       })
+      
+      // Set empty array to prevent infinite loading
+      setMovies([])
+      console.log('🎬 Movies Page - Set empty movies array due to error')
     } finally {
+      console.log('🎬 Movies Page - Setting loading to false...')
       setLoading(false)
+      console.log('🎬 Movies Page - loadMovies() completed')
     }
   }
 
@@ -624,14 +685,37 @@ export default function MoviesPage() {
     }
   }
 
-  if (loading) {
+  // If there's an error but we have some movies, show them anyway
+  const shouldShowContent = !loading || movies.length > 0
+
+  if (loading && movies.length === 0) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto max-w-7xl px-6 py-8">
-          <div className="flex items-center justify-center py-12">
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <span className="ml-2 text-lg">Loading movies...</span>
+            <span className="text-lg">Loading movies...</span>
+            <div className="text-sm text-muted-foreground text-center">
+              <p>Loading your movie projects...</p>
+            </div>
+            <div className="mt-4 p-3 bg-muted rounded-lg text-xs">
+              <p><strong>Debug Info:</strong></p>
+              <p>User: {user ? user.name : 'Not authenticated'}</p>
+              <p>Loading State: {loading ? 'True' : 'False'}</p>
+              <p>Movies Count: {movies.length}</p>
+            </div>
+            <Button 
+              onClick={() => {
+                console.log('🎬 Movies Page - Manual retry clicked')
+                loadMovies()
+              }}
+              variant="outline"
+              className="mt-4"
+            >
+              <Loader2 className="h-4 w-4 mr-2" />
+              Retry Loading
+            </Button>
           </div>
         </main>
       </div>
