@@ -34,6 +34,7 @@ import {
   Loader2,
   Download,
   CheckCircle,
+  User,
 } from "lucide-react"
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
@@ -64,6 +65,8 @@ export default function MoviesPage() {
     genre: "",
     project_type: "movie",
     movie_status: "Pre-Production",
+    writer: "",
+    cowriters: [],
   })
   
   // AI cover generation state
@@ -75,6 +78,9 @@ export default function MoviesPage() {
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Co-writers input state
+  const [cowriterInput, setCowriterInput] = useState("")
   
   const { toast } = useToast()
   const { user } = useAuth()
@@ -90,11 +96,26 @@ export default function MoviesPage() {
       
       try {
         const settings = await AISettingsService.getUserSettings(user.id)
-        setAiSettings(settings)
+        
+        // Ensure default settings exist for all tabs
+        const defaultSettings = await Promise.all([
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+        ])
+        
+        // Merge existing settings with default ones, preferring existing
+        const mergedSettings = defaultSettings.map(defaultSetting => {
+          const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+          return existingSetting || defaultSetting
+        })
+        
+        setAiSettings(mergedSettings)
         setAiSettingsLoaded(true)
         
         // Auto-select locked model for images tab if available
-        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        const imagesSetting = mergedSettings.find(setting => setting.tab_type === 'images')
         if (imagesSetting?.is_locked) {
           console.log('Setting locked model for images:', imagesSetting.locked_model)
           setSelectedAIService(imagesSetting.locked_model)
@@ -194,10 +215,11 @@ export default function MoviesPage() {
   }
 
   const resetMovieForm = () => {
-    setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production" })
+    setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production", writer: "", cowriters: [] })
     setAiPrompt("")
     setSelectedAIService("dalle")
     setGeneratedCoverUrl("")
+    setCowriterInput("")
   }
 
   const handleEditMovie = (movie: Movie) => {
@@ -208,7 +230,9 @@ export default function MoviesPage() {
       genre: movie.genre || "",
       project_type: "movie",
       movie_status: movie.movie_status,
-      thumbnail: movie.thumbnail || ""
+      thumbnail: movie.thumbnail || "",
+      writer: movie.writer || "",
+      cowriters: movie.cowriters || []
     })
     setGeneratedCoverUrl(movie.thumbnail || "")
     setIsEditDialogOpen(true)
@@ -403,7 +427,8 @@ export default function MoviesPage() {
     }
 
     // Use locked model if available, otherwise use selected service
-    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    const lockedModel = getImagesTabLockedModel()
+    const serviceToUse = (isImagesTabLocked() && lockedModel) ? lockedModel : selectedAIService
     
     if (!serviceToUse) {
       toast({
@@ -661,6 +686,76 @@ export default function MoviesPage() {
                   />
                 </div>
                 <div className="grid gap-2">
+                  <Label htmlFor="writer">Writer</Label>
+                  <Input
+                    id="writer"
+                    value={newMovie.writer || ""}
+                    onChange={(e) => setNewMovie({ ...newMovie, writer: e.target.value })}
+                    placeholder="e.g., John Smith"
+                    className="bg-input border-border"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="cowriters">Co-writers</Label>
+                  <div className="space-y-2">
+                    {/* Tags Display */}
+                    {newMovie.cowriters && newMovie.cowriters.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {newMovie.cowriters.map((name, index) => (
+                          <div key={index} className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded-md text-sm">
+                            <span>{name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updatedCowriters = newMovie.cowriters?.filter((_, i) => i !== index) || []
+                                setNewMovie({ ...newMovie, cowriters: updatedCowriters })
+                              }}
+                              className="text-blue-300 hover:text-blue-100 ml-1"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* Input and Add Button */}
+                    <div className="flex gap-2">
+                      <Input
+                        id="cowriters"
+                        value={cowriterInput}
+                        onChange={(e) => setCowriterInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && cowriterInput.trim()) {
+                            e.preventDefault()
+                            const newCowriters = [...(newMovie.cowriters || []), cowriterInput.trim()]
+                            setNewMovie({ ...newMovie, cowriters: newCowriters })
+                            setCowriterInput("")
+                          }
+                        }}
+                        placeholder="Type name and press Enter"
+                        className="flex-1 bg-input border-border"
+                      />
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          if (cowriterInput.trim()) {
+                            const newCowriters = [...(newMovie.cowriters || []), cowriterInput.trim()]
+                            setNewMovie({ ...newMovie, cowriters: newCowriters })
+                            setCowriterInput("")
+                          }
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="px-3"
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Type a name and press Enter, or click the + button to add co-writers.</p>
+                </div>
+                <div className="grid gap-2">
                   <Label htmlFor="movie_status">Status</Label>
                   <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
                     <SelectTrigger className="bg-input border-border">
@@ -726,14 +821,14 @@ export default function MoviesPage() {
                     {/* AI Prompt */}
                     <div>
                       <Label htmlFor="ai-prompt">AI Prompt</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          id="ai-prompt"
-                          value={aiPrompt}
-                          onChange={(e) => setAiPrompt(e.target.value)}
-                          placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
-                          className="flex-1 bg-input border-border"
-                        />
+                      <Textarea
+                        id="ai-prompt"
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                        className="bg-input border-border min-h-[80px]"
+                      />
+                      <div className="flex gap-2 mt-2">
                         <Button
                           onClick={generateAICover}
                           disabled={isGeneratingCover || !aiPrompt.trim()}
@@ -852,6 +947,76 @@ export default function MoviesPage() {
                 />
               </div>
               <div className="grid gap-2">
+                <Label htmlFor="edit-writer">Writer</Label>
+                <Input
+                  id="edit-writer"
+                  value={newMovie.writer || ""}
+                  onChange={(e) => setNewMovie({ ...newMovie, writer: e.target.value })}
+                  placeholder="e.g., John Smith"
+                  className="bg-input border-border"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-cowriters">Co-writers</Label>
+                <div className="space-y-2">
+                  {/* Tags Display */}
+                  {newMovie.cowriters && newMovie.cowriters.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {newMovie.cowriters.map((name, index) => (
+                        <div key={index} className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded-md text-sm">
+                          <span>{name}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updatedCowriters = newMovie.cowriters?.filter((_, i) => i !== index) || []
+                              setNewMovie({ ...newMovie, cowriters: updatedCowriters })
+                            }}
+                            className="text-blue-300 hover:text-blue-100 ml-1"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  
+                  {/* Input and Add Button */}
+                  <div className="flex gap-2">
+                    <Input
+                      id="edit-cowriters"
+                      value={cowriterInput}
+                      onChange={(e) => setCowriterInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && cowriterInput.trim()) {
+                          e.preventDefault()
+                          const newCowriters = [...(newMovie.cowriters || []), cowriterInput.trim()]
+                          setNewMovie({ ...newMovie, cowriters: newCowriters })
+                          setCowriterInput("")
+                        }
+                      }}
+                      placeholder="Type name and press Enter"
+                      className="flex-1 bg-input border-border"
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        if (cowriterInput.trim()) {
+                          const newCowriters = [...(newMovie.cowriters || []), cowriterInput.trim()]
+                          setNewMovie({ ...newMovie, cowriters: newCowriters })
+                          setCowriterInput("")
+                        }
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className="px-3"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">Type a name and press Enter, or click the + button to add co-writers.</p>
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="edit-movie_status">Status</Label>
                 <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
                   <SelectTrigger className="bg-input border-border">
@@ -917,14 +1082,14 @@ export default function MoviesPage() {
                   {/* AI Prompt */}
                   <div>
                     <Label htmlFor="edit-ai-prompt">AI Prompt</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="edit-ai-prompt"
-                        value={aiPrompt}
-                        onChange={(e) => setAiPrompt(e.target.value)}
-                        placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
-                        className="flex-1 bg-input border-border"
-                      />
+                    <Textarea
+                      id="edit-ai-prompt"
+                      value={aiPrompt}
+                      onChange={(e) => setAiPrompt(e.target.value)}
+                      placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                      className="bg-input border-border min-h-[80px]"
+                    />
+                    <div className="flex gap-2 mt-2">
                       <Button
                         onClick={generateAICover}
                         disabled={isGeneratingCover || !aiPrompt.trim()}
@@ -1113,6 +1278,18 @@ export default function MoviesPage() {
                       </>
                     )}
                   </div>
+                  {movie.writer && (
+                    <div className="flex items-center gap-2">
+                      <User className="h-3 w-3" />
+                      <span>Writer: {movie.writer}</span>
+                    </div>
+                  )}
+                  {movie.cowriters && movie.cowriters.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <User className="h-3 w-3" />
+                      <span>Co-writers: {movie.cowriters.join(", ")}</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <Calendar className="h-3 w-3" />
                     <span>Created {new Date(movie.created_at).toLocaleDateString()}</span>
@@ -1140,7 +1317,7 @@ export default function MoviesPage() {
                       AI Studio
                     </Button>
                   </Link>
-                  <Link href={`/assets?project=${movie.name}`}>
+                  <Link href={`/assets?project=${movie.id}`}>
                     <Button
                       variant="outline"
                       size="sm"

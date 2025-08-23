@@ -43,6 +43,7 @@ import {
   AlertCircle,
   Loader2,
   Bot,
+  Settings,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
@@ -174,11 +175,26 @@ export default function AIStudioPage() {
       
       try {
         const settings = await AISettingsService.getUserSettings(user.id)
-        setAiSettings(settings)
+        
+        // Ensure default settings exist for all tabs
+        const defaultSettings = await Promise.all([
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+        ])
+        
+        // Merge existing settings with default ones, preferring existing
+        const mergedSettings = defaultSettings.map(defaultSetting => {
+          const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+          return existingSetting || defaultSetting
+        })
+        
+        setAiSettings(mergedSettings)
         setAiSettingsLoaded(true)
         
         // Auto-select locked models for each tab
-        settings.forEach(setting => {
+        mergedSettings.forEach(setting => {
           if (setting.is_locked) {
             switch (setting.tab_type) {
               case 'scripts':
@@ -1311,6 +1327,16 @@ export default function AIStudioPage() {
             <div>
               <h1 className="text-3xl font-bold mb-2">AI Studio</h1>
               <p className="text-muted-foreground">Generate scripts, images, and videos with AI</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => window.open('/settings-ai', '_blank')}
+                className="flex items-center gap-2"
+              >
+                <Settings className="h-4 w-4" />
+                AI Settings
+              </Button>
             </div>
           </div>
         </div>

@@ -37,6 +37,40 @@ export class AISettingsService {
     }
   }
 
+  // Check and repair AI settings table state
+  static async checkAndRepairTable(userId: string): Promise<boolean> {
+    try {
+      console.log('Checking AI settings table state for user:', userId)
+      
+      // First, try to get settings normally
+      const settings = await this.getUserSettings(userId)
+      
+      // If we have settings for all tabs, we're good
+      if (settings.length >= 4) {
+        console.log('AI settings table is healthy, all tabs have settings')
+        return true
+      }
+      
+      // If we're missing settings, create them
+      console.log('Missing AI settings, creating defaults for missing tabs')
+      const requiredTabs: ('scripts' | 'images' | 'videos' | 'audio')[] = ['scripts', 'images', 'videos', 'audio']
+      
+      for (const tabType of requiredTabs) {
+        const existingSetting = settings.find(s => s.tab_type === tabType)
+        if (!existingSetting) {
+          console.log(`Creating missing setting for ${tabType} tab`)
+          await this.getOrCreateDefaultTabSetting(userId, tabType)
+        }
+      }
+      
+      console.log('AI settings table repair completed')
+      return true
+    } catch (error) {
+      console.error('Failed to check and repair AI settings table:', error)
+      return false
+    }
+  }
+
   // Get all AI settings for a user
   static async getUserSettings(userId: string): Promise<AISetting[]> {
     try {
@@ -55,6 +89,25 @@ export class AISettingsService {
         if (error.code === '42P01') { // undefined_table
           console.error('ai_settings table does not exist. Please run the migration script.')
           return []
+        }
+        
+        // If it's a 406 error, the table might be in a bad state, try to recreate
+        if (error.code === '406') {
+          console.error('AI settings table returned 406 error, attempting to recreate default settings')
+          try {
+            // Try to create default settings for all tabs
+            const defaultSettings = await Promise.all([
+              this.getOrCreateDefaultTabSetting(userId, 'scripts'),
+              this.getOrCreateDefaultTabSetting(userId, 'images'),
+              this.getOrCreateDefaultTabSetting(userId, 'videos'),
+              this.getOrCreateDefaultTabSetting(userId, 'audio')
+            ])
+            console.log('Successfully created default AI settings after 406 error')
+            return defaultSettings
+          } catch (recreateError) {
+            console.error('Failed to recreate default settings after 406 error:', recreateError)
+            return []
+          }
         }
         
         throw error
@@ -91,6 +144,46 @@ export class AISettingsService {
     } catch (error) {
       console.error('Error in getTabSetting:', error)
       throw error
+    }
+  }
+
+  // Get or create default AI setting for a tab
+  static async getOrCreateDefaultTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<AISetting> {
+    try {
+      // Try to get existing setting
+      const existingSetting = await this.getTabSetting(userId, tabType)
+      if (existingSetting) {
+        return existingSetting
+      }
+
+      // Create default setting if none exists
+      const defaultSetting: AISettingUpdate = {
+        tab_type: tabType,
+        locked_model: this.getDefaultModelForTab(tabType),
+        is_locked: false
+      }
+
+      const newSetting = await this.upsertTabSetting(userId, defaultSetting)
+      return newSetting
+    } catch (error) {
+      console.error('Error in getOrCreateDefaultTabSetting:', error)
+      throw error
+    }
+  }
+
+  // Get default model for a tab type
+  private static getDefaultModelForTab(tabType: 'scripts' | 'images' | 'videos' | 'audio'): string {
+    switch (tabType) {
+      case 'scripts':
+        return 'ChatGPT'
+      case 'images':
+        return 'dalle'
+      case 'videos':
+        return 'Runway ML'
+      case 'audio':
+        return 'ElevenLabs'
+      default:
+        return 'ChatGPT'
     }
   }
 

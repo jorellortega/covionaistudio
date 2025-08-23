@@ -140,11 +140,50 @@ export class TimelineService {
 
       console.log('Scenes fetched successfully:', data.length, 'scenes')
       
+      // Fetch associated assets for all scenes to get latest image URLs
+      const sceneIds = data.map(scene => scene.id)
+      let assets: any[] = []
+      
+      if (sceneIds.length > 0) {
+        try {
+          const { data: assetsData, error: assetsError } = await supabase
+            .from('assets')
+            .select('scene_id, content_url, content_type, title, created_at')
+            .in('scene_id', sceneIds)
+            .eq('content_type', 'image')
+            .order('created_at', { ascending: false }) // Get most recent images first
+          
+          if (assetsError) {
+            console.warn('Error fetching assets for scenes:', assetsError)
+          } else {
+            assets = assetsData || []
+            console.log('Fetched assets for scenes:', assets.length, 'assets')
+          }
+        } catch (assetsError) {
+          console.warn('Failed to fetch assets for scenes:', assetsError)
+        }
+      }
+      
       // Parse metadata for each scene and ensure it's properly typed
-      return data.map(scene => ({
-        ...scene,
-        metadata: this.parseSceneMetadata(scene.metadata)
-      }))
+      return data.map(scene => {
+        // Find the most recent image asset for this scene
+        const sceneAssets = assets.filter(asset => asset.scene_id === scene.id)
+        const latestImageAsset = sceneAssets[0] // Already ordered by created_at desc
+        
+        // Parse existing metadata
+        const parsedMetadata = this.parseSceneMetadata(scene.metadata)
+        
+        // Update thumbnail URL if we have a more recent asset
+        if (latestImageAsset?.content_url) {
+          parsedMetadata.thumbnail = latestImageAsset.content_url
+          console.log(`Updated scene "${scene.name}" thumbnail from asset:`, latestImageAsset.content_url)
+        }
+        
+        return {
+          ...scene,
+          metadata: parsedMetadata
+        }
+      })
     } catch (error) {
       console.error('Error in getScenesForTimeline:', error)
       throw error
@@ -216,6 +255,43 @@ export class TimelineService {
 
     if (error) {
       console.error('Error deleting scene:', error)
+      throw error
+    }
+  }
+
+  static async refreshSceneThumbnail(sceneId: string): Promise<string | null> {
+    try {
+      const user = await this.ensureAuthenticated()
+      console.log('Refreshing thumbnail for scene:', sceneId, 'user:', user.id)
+      
+      // Get the most recent image asset for this scene
+      const { data: assets, error } = await supabase
+        .from('assets')
+        .select('content_url, created_at')
+        .eq('scene_id', sceneId)
+        .eq('content_type', 'image')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          console.log('No image assets found for scene:', sceneId)
+          return null
+        }
+        console.error('Error fetching scene assets:', error)
+        throw error
+      }
+
+      if (assets?.content_url) {
+        console.log('Found latest image asset for scene:', sceneId, 'URL:', assets.content_url)
+        return assets.content_url
+      }
+
+      return null
+    } catch (error) {
+      console.error('Error refreshing scene thumbnail:', error)
       throw error
     }
   }

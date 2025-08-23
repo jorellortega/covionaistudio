@@ -30,17 +30,18 @@ import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { useAuth } from "@/lib/auth-context-fixed"
+import TextToSpeech from "@/components/text-to-speech"
 import Link from "next/link"
 
 export default function AssetsPage() {
   const searchParams = useSearchParams()
-  const projectName = searchParams.get('project')
+  const projectId = searchParams.get('project')
   const searchQuery = searchParams.get('search') || ''
 
-  return <AssetsPageClient projectName={projectName} searchQuery={searchQuery} />
+  return <AssetsPageClient projectId={projectId} searchQuery={searchQuery} />
 }
 
-function AssetsPageClient({ projectName, searchQuery }: { projectName: string | null, searchQuery: string }) {
+function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null, searchQuery: string }) {
   const { toast } = useToast()
   const { user } = useAuth()
 
@@ -63,8 +64,8 @@ function AssetsPageClient({ projectName, searchQuery }: { projectName: string | 
         setProjects(fetchedProjects)
         
         // Set selected project based on URL param
-        if (projectName) {
-          const project = fetchedProjects.find(p => p.name === projectName)
+        if (projectId) {
+          const project = fetchedProjects.find(p => p.id === projectId)
           if (project) {
             setSelectedProject(project.id)
           }
@@ -82,7 +83,7 @@ function AssetsPageClient({ projectName, searchQuery }: { projectName: string | 
     }
 
     fetchProjects()
-  }, [projectName, toast])
+  }, [projectId, toast])
 
   // Effect to fetch assets when project changes
   useEffect(() => {
@@ -279,26 +280,7 @@ function AssetsPageClient({ projectName, searchQuery }: { projectName: string | 
           </div>
         </div>
 
-        {/* Debug Info - Development Only */}
-        {process.env.NODE_ENV === 'development' && (
-          <Card className="bg-card border-blue-500/20 mb-6">
-            <CardHeader>
-              <CardTitle className="text-blue-500">Debug Info (Development Only)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2 text-sm">
-                <div><strong>Current Search Term:</strong> "{searchTerm}"</div>
-                <div><strong>Search Term Length:</strong> {searchTerm.length}</div>
-                <div><strong>Is UUID:</strong> {/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchTerm) ? 'Yes' : 'No'}</div>
-                <div><strong>Total Assets:</strong> {assets.length}</div>
-                <div><strong>Filtered Assets:</strong> {filteredAssets.length}</div>
-                <div><strong>Selected Project:</strong> {selectedProject}</div>
-                <div><strong>URL Project Param:</strong> {projectName}</div>
-                <div><strong>URL Search Param:</strong> {searchQuery}</div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+
 
         {/* Filters and Search */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -547,12 +529,25 @@ function AssetsPageClient({ projectName, searchQuery }: { projectName: string | 
                 </div>
 
                 {selectedAsset.content_type === 'script' && selectedAsset.content && (
-                  <div>
-                    <span className="text-muted-foreground">Content:</span>
-                    <div className="bg-muted/20 rounded-lg p-4 mt-2 max-h-96 overflow-y-auto">
-                      <pre className="text-sm text-foreground font-mono whitespace-pre-wrap">
-                        {selectedAsset.content}
-                      </pre>
+                  <div className="space-y-4">
+                    <div>
+                      <span className="text-muted-foreground">Content:</span>
+                      <div className="bg-muted/20 rounded-lg p-4 mt-2 max-h-96 overflow-y-auto">
+                        <pre className="text-sm text-foreground font-mono whitespace-pre-wrap">
+                          {selectedAsset.content}
+                        </pre>
+                      </div>
+                    </div>
+                    
+                    {/* Text to Speech Component */}
+                    <div data-tts-asset={selectedAsset.id}>
+                      <TextToSpeech 
+                        text={selectedAsset.content}
+                        title={selectedAsset.title}
+                        projectId={selectedAsset.project_id}
+                        sceneId={selectedAsset.scene_id}
+                        className="mt-4"
+                      />
                     </div>
                   </div>
                 )}
@@ -653,10 +648,29 @@ function AssetCard({
       <CardContent className="space-y-4">
         {/* Content Preview */}
         {asset.content_type === 'script' && asset.content && (
-          <div className="bg-muted/20 rounded-lg p-3 max-h-24 overflow-y-auto">
-            <p className="text-sm text-muted-foreground font-mono line-clamp-3">
-              {asset.content}
-            </p>
+          <div className="space-y-3">
+            <div className="bg-muted/20 rounded-lg p-3 max-h-24 overflow-y-auto">
+              <p className="text-sm text-muted-foreground font-mono line-clamp-3">
+                {asset.content}
+              </p>
+            </div>
+            
+            {/* Text to Speech Component */}
+            <div data-tts-asset={asset.id}>
+              <TextToSpeech 
+                text={asset.content}
+                title={asset.title}
+                projectId={asset.project_id}
+                sceneId={asset.scene_id}
+                className="mt-2"
+              />
+              {/* Debug info for TTS */}
+              {process.env.NODE_ENV === 'development' && (
+                <div className="text-xs text-muted-foreground mt-1">
+                  Debug: projectId={asset.project_id}, sceneId={asset.scene_id}
+                </div>
+              )}
+            </div>
           </div>
         )}
         
@@ -699,15 +713,33 @@ function AssetCard({
           </Button>
           
           {asset.content_type === 'script' && asset.content && (
-            <Button 
-              size="sm" 
-              variant="outline" 
-              className="border-blue-500/30 text-blue-500 bg-transparent"
-              onClick={() => onCopy(asset.content!)}
-            >
-              <Copy className="h-4 w-4 mr-2" />
-              Copy
-            </Button>
+            <>
+              <Button 
+                size="sm" 
+                variant="outline" 
+                className="border-blue-500/30 text-blue-500 bg-transparent"
+                onClick={() => onCopy(asset.content!)}
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy
+              </Button>
+              
+              <Button 
+                size="sm" 
+                variant="outline" 
+                className="border-green-500/30 text-green-400 bg-transparent"
+                onClick={() => {
+                  // Scroll to the text-to-speech component
+                  const ttsElement = document.querySelector(`[data-tts-asset="${asset.id}"]`)
+                  if (ttsElement) {
+                    ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  }
+                }}
+              >
+                <span className="mr-2">🎤</span>
+                Listen
+              </Button>
+            </>
           )}
         </div>
       </CardContent>

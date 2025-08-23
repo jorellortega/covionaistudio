@@ -8,9 +8,10 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Target, DollarSign, Film, Eye } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Target, DollarSign, Film, Eye, Volume2 } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import Header from '@/components/header'
+import TextToSpeech from '@/components/text-to-speech'
 import Link from 'next/link'
 
 export default function TreatmentDetailPage() {
@@ -205,13 +206,44 @@ export default function TreatmentDetailPage() {
             {/* Synopsis */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  Synopsis
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    Synopsis
+                  </CardTitle>
+                  {/* Quick Listen Button */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                    onClick={() => {
+                      // Scroll to the text-to-speech component
+                      const ttsElement = document.querySelector('[data-tts-synopsis]')
+                      if (ttsElement) {
+                        ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                      }
+                    }}
+                  >
+                    <Volume2 className="h-4 w-4 mr-2" />
+                    Listen to Synopsis
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
-                <p className="text-lg leading-relaxed">{treatment.synopsis}</p>
+                <div className="space-y-4">
+                  <p className="text-lg leading-relaxed">{treatment.synopsis}</p>
+                  
+                  {/* Text to Speech Component */}
+                  <div data-tts-synopsis>
+                    <TextToSpeech 
+                      text={treatment.synopsis}
+                      title={`${treatment.title} - Synopsis`}
+                      projectId={treatment.project_id}
+                      sceneId={null}
+                      className="mt-4"
+                    />
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
@@ -219,11 +251,43 @@ export default function TreatmentDetailPage() {
             {treatment.logline && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Logline</CardTitle>
-                  <CardDescription>One-sentence summary</CardDescription>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle>Logline</CardTitle>
+                      <CardDescription>One-sentence summary</CardDescription>
+                    </div>
+                    {/* Quick Listen Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                      onClick={() => {
+                        const ttsElement = document.querySelector('[data-tts-logline]')
+                        if (ttsElement) {
+                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        }
+                      }}
+                    >
+                      <Volume2 className="h-4 w-4 mr-2" />
+                      Listen
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-lg font-medium italic">"{treatment.logline}"</p>
+                  <div className="space-y-4">
+                    <p className="text-lg font-medium italic">"{treatment.logline}"</p>
+                    
+                    {/* Text to Speech Component */}
+                    <div data-tts-logline>
+                      <TextToSpeech 
+                        text={treatment.logline}
+                        title={`${treatment.title} - Logline`}
+                        projectId={treatment.project_id}
+                        sceneId={null}
+                        className="mt-4"
+                      />
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -232,10 +296,40 @@ export default function TreatmentDetailPage() {
             {treatment.characters && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Characters</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Characters</CardTitle>
+                    {/* Quick Listen Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                      onClick={() => {
+                        const ttsElement = document.querySelector('[data-tts-characters]')
+                        if (ttsElement) {
+                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        }
+                      }}
+                    >
+                      <Volume2 className="h-4 w-4 mr-2" />
+                      Listen
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="whitespace-pre-line">{treatment.characters}</p>
+                  <div className="space-y-4">
+                    <p className="whitespace-pre-line">{treatment.characters}</p>
+                    
+                    {/* Text to Speech Component */}
+                    <div data-tts-characters>
+                      <TextToSpeech 
+                        text={treatment.characters}
+                        title={`${treatment.title} - Characters`}
+                        projectId={treatment.project_id}
+                        sceneId={null}
+                        className="mt-4"
+                      />
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -244,10 +338,40 @@ export default function TreatmentDetailPage() {
             {treatment.themes && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Themes</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Themes</CardTitle>
+                    {/* Quick Listen Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                      onClick={() => {
+                        const ttsElement = document.querySelector('[data-tts-themes]')
+                        if (ttsElement) {
+                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        }
+                      }}
+                    >
+                      <Volume2 className="h-4 w-4 mr-2" />
+                      Listen
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="whitespace-pre-line">{treatment.themes}</p>
+                  <div className="space-y-4">
+                    <p className="whitespace-pre-line">{treatment.themes}</p>
+                    
+                    {/* Text to Speech Component */}
+                    <div data-tts-themes>
+                      <TextToSpeech 
+                        text={treatment.themes}
+                        title={`${treatment.title} - Themes`}
+                        projectId={treatment.project_id}
+                        sceneId={null}
+                        className="mt-4"
+                      />
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -268,10 +392,40 @@ export default function TreatmentDetailPage() {
             {treatment.notes && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Notes</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Notes</CardTitle>
+                    {/* Quick Listen Button */}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                      onClick={() => {
+                        const ttsElement = document.querySelector('[data-tts-notes]')
+                        if (ttsElement) {
+                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        }
+                      }}
+                    >
+                      <Volume2 className="h-4 w-4 mr-2" />
+                      Listen
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  <p className="whitespace-pre-line">{treatment.notes}</p>
+                  <div className="space-y-4">
+                    <p className="whitespace-pre-line">{treatment.notes}</p>
+                    
+                    {/* Text to Speech Component */}
+                    <div data-tts-notes>
+                      <TextToSpeech 
+                        text={treatment.notes}
+                        title={`${treatment.title} - Notes`}
+                        projectId={treatment.project_id}
+                        sceneId={null}
+                        className="mt-4"
+                      />
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )}

@@ -27,7 +27,10 @@ export function isDalleUrlExpired(url: string): boolean {
     const urlParams = new URLSearchParams(url.split('?')[1])
     const expirationParam = urlParams.get('se')
     
-    if (!expirationParam) return true
+    if (!expirationParam) {
+      console.log('No expiration parameter found in DALL-E URL, assuming not expired')
+      return false // Don't assume expired if we can't find the parameter
+    }
     
     // Parse the expiration timestamp (format: 2025-08-21T21:32:00Z)
     const expirationDate = new Date(decodeURIComponent(expirationParam))
@@ -35,10 +38,22 @@ export function isDalleUrlExpired(url: string): boolean {
     
     // Add a small buffer (5 minutes) to account for timezone differences
     const bufferTime = 5 * 60 * 1000
-    return now.getTime() > (expirationDate.getTime() - bufferTime)
+    const isExpired = now.getTime() > (expirationDate.getTime() - bufferTime)
+    
+    console.log('DALL-E URL expiration check:', {
+      url: url.substring(0, 100) + '...',
+      expirationParam,
+      expirationDate: expirationDate.toISOString(),
+      now: now.toISOString(),
+      isExpired,
+      timeUntilExpiry: expirationDate.getTime() - now.getTime()
+    })
+    
+    return isExpired
   } catch (error) {
     console.error('Error parsing DALL-E URL expiration:', error)
-    return true // Assume expired if we can't parse
+    console.log('Assuming DALL-E URL is NOT expired due to parsing error')
+    return false // Assume NOT expired if we can't parse (safer default)
   }
 }
 

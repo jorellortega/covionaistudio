@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -13,7 +13,7 @@ import { ProjectsService, DashboardProject } from "@/lib/projects-service"
 import { StoryboardsService } from "@/lib/storyboards-service"
 
 export default function DashboardPage() {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, signOut } = useAuth()
   const [treatmentsCount, setTreatmentsCount] = useState(0)
   const [recentProjects, setRecentProjects] = useState<DashboardProject[]>([])
   const [isLoadingProjects, setIsLoadingProjects] = useState(true)
@@ -21,41 +21,77 @@ export default function DashboardPage() {
   const [totalScenes, setTotalScenes] = useState(0)
   const [storyboardsCount, setStoryboardsCount] = useState(0)
 
+  // Debug logging for authentication state
+  useEffect(() => {
+    console.log('🏠 DASHBOARD - Auth State Change:', {
+      user: user ? { id: user.id, email: user.email, name: user.name } : null,
+      isLoading,
+      timestamp: new Date().toISOString()
+    })
+  }, [user, isLoading])
+
   useEffect(() => {
     const fetchData = async () => {
+      console.log('🏠 DASHBOARD - Starting data fetch:', { userId: user?.id, timestamp: new Date().toISOString() })
+      
       try {
         // Fetch treatments count
+        console.log('🏠 DASHBOARD - Fetching treatments...')
         const treatments = await TreatmentsService.getTreatments()
+        console.log('🏠 DASHBOARD - Treatments fetched:', treatments.length)
         setTreatmentsCount(treatments.length)
 
         // Fetch recent projects
+        console.log('🏠 DASHBOARD - Fetching recent projects...')
         const projects = await ProjectsService.getRecentProjects()
+        console.log('🏠 DASHBOARD - Recent projects fetched:', projects.length)
         setRecentProjects(projects)
         
         // Fetch total counts
+        console.log('🏠 DASHBOARD - Fetching all projects...')
         const allProjects = await ProjectsService.getProjects()
+        console.log('🏠 DASHBOARD - All projects fetched:', allProjects.length)
         setTotalProjects(allProjects.length)
         
         // Calculate total scenes from all projects
         const totalScenesCount = allProjects.reduce((sum, project) => sum + (project.scenes || 0), 0)
+        console.log('🏠 DASHBOARD - Total scenes calculated:', totalScenesCount)
         setTotalScenes(totalScenesCount)
         
         // Fetch storyboards count
+        console.log('🏠 DASHBOARD - Fetching storyboards count...')
         const storyboards = await StoryboardsService.getStoryboardsCount()
+        console.log('🏠 DASHBOARD - Storyboards count fetched:', storyboards)
         setStoryboardsCount(storyboards)
+        
+        console.log('🏠 DASHBOARD - All data fetch completed successfully')
       } catch (error) {
-        console.error('Error fetching dashboard data:', error)
+        console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
       } finally {
+        console.log('🏠 DASHBOARD - Setting loading state to false')
         setIsLoadingProjects(false)
       }
     }
 
     if (user) {
       fetchData()
+    } else {
+      console.log('🏠 DASHBOARD - No user, skipping data fetch')
     }
   }, [user])
 
+  const handleSignOut = async () => {
+    console.log('🏠 DASHBOARD - Sign out initiated')
+    try {
+      await signOut()
+      console.log('🏠 DASHBOARD - Sign out completed')
+    } catch (error) {
+      console.error('🏠 DASHBOARD - Error signing out:', error)
+    }
+  }
+
   if (isLoading) {
+    console.log('🏠 DASHBOARD - Showing loading state')
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">
         <div className="mb-8">
@@ -68,6 +104,7 @@ export default function DashboardPage() {
   }
 
   if (!user) {
+    console.log('🏠 DASHBOARD - No user, showing sign in prompt')
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">
         <div className="text-center">
@@ -80,20 +117,32 @@ export default function DashboardPage() {
     )
   }
 
+  console.log('🏠 DASHBOARD - Rendering dashboard with user:', user.name)
+
   return (
     <div className="container mx-auto px-4 sm:px-6 py-8">
       {/* Header with User Info */}
       <div className="mb-8">
-        <div className="flex items-center gap-4 mb-4">
-          <div className="p-3 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400">
-            <User className="h-8 w-8 text-white" />
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400">
+              <User className="h-8 w-8 text-white" />
+            </div>
+            <div>
+              <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+                Welcome back, {user.name}! 🎬
+              </h1>
+              <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              Welcome back, {user.name}! 🎬
-            </h1>
-            <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
-          </div>
+          <Button 
+            onClick={handleSignOut}
+            variant="outline" 
+            className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-colors"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign Out
+          </Button>
         </div>
         <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
@@ -193,12 +242,8 @@ export default function DashboardPage() {
 
       {/* Recent Projects */}
       <div className="mb-8">
-        <div className="flex items-center justify-between mb-6">
+        <div className="mb-6">
           <h2 className="text-2xl font-bold">Recent Projects</h2>
-          <Button className="gradient-button neon-glow text-white px-8 py-3 text-lg">
-            <Plus className="mr-2 h-5 w-5" />
-            New Project
-          </Button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -231,47 +276,49 @@ export default function DashboardPage() {
               </Card>
             ))
           ) : recentProjects.length > 0 ? (
-                        recentProjects.map((project) => (
-              <Card key={project.id} className="cinema-card hover:neon-glow transition-all duration-300">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{project.title}</CardTitle>
-                    <Badge
-                      variant="secondary"
-                      className={
-                        project.status === "Completed" || project.status === "Distribution"
-                          ? "bg-green-500/20 text-green-500 border-green-500/30"
-                          : project.status === "In Progress" || project.status === "Production" || project.status === "Post-Production"
-                          ? "bg-blue-500/20 text-blue-500 border-blue-500/30"
-                          : "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
-                      }
-                    >
-                      {project.status}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span>Progress</span>
-                      <span className="text-blue-500">{project.progress}%</span>
+            recentProjects.map((project) => (
+              <Link key={project.id} href={`/timeline?movie=${project.id}`}>
+                <Card className="cinema-card hover:neon-glow transition-all duration-300 cursor-pointer">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-lg">{project.title}</CardTitle>
+                      <Badge
+                        variant="secondary"
+                        className={
+                          project.status === "Completed" || project.status === "Distribution"
+                            ? "bg-green-500/20 text-green-500 border-green-500/30"
+                            : project.status === "In Progress" || project.status === "Production" || project.status === "Post-Production"
+                            ? "bg-blue-500/20 text-blue-500 border-blue-500/30"
+                            : "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
+                        }
+                      >
+                        {project.status}
+                      </Badge>
                     </div>
-                    <div className="w-full bg-muted rounded-full h-2">
-                      <div
-                        className="bg-gradient-to-r from-blue-500 to-cyan-400 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${project.progress}%` }}
-                      ></div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-sm">
+                        <span>Progress</span>
+                        <span className="text-blue-500">{project.progress}%</span>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-2">
+                        <div
+                          className="bg-gradient-to-r from-blue-500 to-cyan-400 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${project.progress}%` }}
+                        ></div>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Users className="h-4 w-4" />
-                      <span>{project.team} members</span>
+                    <div className="flex items-center justify-between text-sm text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Users className="h-4 w-4" />
+                        <span>{project.team} members</span>
+                      </div>
+                      <span>{project.lastUpdated}</span>
                     </div>
-                    <span>{project.lastUpdated}</span>
-                  </div>
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+              </Link>
             ))
           ) : (
             // Empty state

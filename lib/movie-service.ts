@@ -3,10 +3,14 @@ import { Database } from './supabase'
 
 export type Movie = Database['public']['Tables']['projects']['Row'] & {
   project_type: 'movie'
+  writer?: string
+  cowriters?: string[]
 }
 
 export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Insert'], 'id' | 'user_id' | 'created_at' | 'updated_at'> & {
   project_type: 'movie'
+  writer?: string
+  cowriters?: string[]
 }
 
 export class MovieService {

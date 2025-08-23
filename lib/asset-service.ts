@@ -180,6 +180,24 @@ export class AssetService {
     
     console.log('AssetService.getAssetsForScene called with:', { sceneId, userId: user.id })
     
+    // First, let's check what's in the assets table for this user
+    console.log('AssetService - Checking all assets for user first...')
+    const { data: allUserAssets, error: allUserError } = await supabase
+      .from('assets')
+      .select('*')
+      .eq('user_id', user.id)
+    
+    if (allUserError) {
+      console.error('AssetService - Error fetching all user assets:', allUserError)
+    } else {
+      console.log('AssetService - All user assets:', {
+        count: allUserAssets?.length || 0,
+        assets: allUserAssets?.map(a => ({ id: a.id, title: a.title, scene_id: a.scene_id, project_id: a.project_id }))
+      })
+    }
+    
+    // Now check specifically for this scene
+    console.log('AssetService - Fetching assets for specific scene...')
     const { data, error } = await supabase
       .from('assets')
       .select('*')
@@ -188,11 +206,18 @@ export class AssetService {
       .order('version', { ascending: false })
 
     if (error) {
-      console.error('Error fetching scene assets:', error)
+      console.error('AssetService - Error fetching scene assets:', error)
       throw error
     }
 
-    console.log('AssetService.getAssetsForScene result:', { data, count: data?.length || 0 })
+    console.log('AssetService.getAssetsForScene result:', { 
+      data, 
+      count: data?.length || 0,
+      sceneId,
+      userId: user.id,
+      query: `scene_id = '${sceneId}' AND user_id = '${user.id}'`
+    })
+    
     return data as Asset[]
   }
 

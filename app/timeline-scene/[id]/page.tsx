@@ -41,6 +41,8 @@ import {
   Edit,
   Copy,
   Bot,
+  Upload,
+  Volume2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -49,6 +51,8 @@ import { AssetService, type Asset } from "@/lib/asset-service"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
+import FileImport from "@/components/file-import"
+import TextToSpeech from "@/components/text-to-speech"
 
 export default function ScenePage() {
   const params = useParams()
@@ -59,8 +63,19 @@ export default function ScenePage() {
 
 function ScenePageClient({ id }: { id: string }) {
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const router = useRouter()
+
+  // Debug logging for authentication state
+  useEffect(() => {
+    console.log('🎬 TIMELINE-SCENE - Auth State Change:', {
+      userId: user?.id,
+      userEmail: user?.email,
+      authLoading,
+      sceneId: id,
+      timestamp: new Date().toISOString()
+    })
+  }, [user, authLoading, id])
 
   // State variables
   const [activeTab, setActiveTab] = useState("scripts")
@@ -81,87 +96,221 @@ function ScenePageClient({ id }: { id: string }) {
     version_name: '',
     content: ''
   })
+  const [projectId, setProjectId] = useState<string>("")
   
-  // Speech synthesis state
-  const [isSpeaking, setIsSpeaking] = useState(false)
-  const [speakingAssetId, setSpeakingAssetId] = useState<string | null>(null)
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
-  const [speechSettings, setSpeechSettings] = useState({
-    rate: 0.9,
-    pitch: 1.0,
-    volume: 1.0,
-    voice: ''
-  })
-  const [showSpeechSettings, setShowSpeechSettings] = useState(false)
+  const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
 
   // Effect to fetch scene data
   useEffect(() => {
+    let mounted = true
+    
     const fetchSceneData = async () => {
-      if (!id || !user?.id) return
+      console.log('🎬 TIMELINE-SCENE - Starting scene data fetch:', { 
+        sceneId: id, 
+        userId: user?.id, 
+        timestamp: new Date().toISOString() 
+      })
+      
+      if (!id || !user?.id) {
+        console.log('🎬 TIMELINE-SCENE - Missing required data for fetch:', { hasId: !!id, hasUserId: !!user?.id })
+        return
+      }
+
+      // Validate scene ID format
+      if (!id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        console.error('🎬 TIMELINE-SCENE - Invalid scene ID format:', id)
+        setLoading(false)
+        return
+      }
       
       try {
+        console.log('🎬 TIMELINE-SCENE - Setting loading state to true')
         setLoading(true)
+        
+        console.log('🎬 TIMELINE-SCENE - Calling TimelineService.getSceneById...')
+        const startTime = Date.now()
+        
+        // First check if scene exists in database
+        console.log('🎬 TIMELINE-SCENE - Checking if scene exists in database...')
+        const { data: sceneCheck, error: sceneCheckError } = await supabase
+          .from('scenes')
+          .select('id, name, user_id, project_id')
+          .eq('id', id)
+          .single()
+        
+        if (sceneCheckError) {
+          console.error('🎬 TIMELINE-SCENE - Scene check error:', sceneCheckError)
+          if (sceneCheckError.code === 'PGRST116') {
+            console.error('🎬 TIMELINE-SCENE - Scene not found in database')
+            setLoading(false)
+            return
+          }
+        } else {
+          console.log('🎬 TIMELINE-SCENE - Scene found in database:', sceneCheck)
+          
+          // Check if user has access to this scene
+          if (sceneCheck.user_id !== user.id) {
+            console.error('🎬 TIMELINE-SCENE - User does not have access to this scene')
+            setLoading(false)
+            return
+          }
+          
+          // Check what other scenes exist for this user
+          const { data: userScenes, error: userScenesError } = await supabase
+            .from('scenes')
+            .select('id, name, project_id')
+            .eq('user_id', user.id)
+          
+          if (userScenesError) {
+            console.error('🎬 TIMELINE-SCENE - Error fetching user scenes:', userScenesError)
+          } else {
+            console.log('🎬 TIMELINE-SCENE - All user scenes:', userScenes)
+          }
+        }
+        
         const scene = await TimelineService.getSceneById(id)
-        setScene(scene)
-      } catch (error) {
-        console.error('Error fetching scene:', error)
-        toast({
-          title: "Error",
-          description: "Failed to load scene data.",
-          variant: "destructive",
+        const fetchTime = Date.now() - startTime
+        console.log('🎬 TIMELINE-SCENE - Scene fetched successfully:', { 
+          sceneId: scene?.id, 
+          sceneName: scene?.name, 
+          fetchTimeMs: fetchTime,
+          sceneData: scene,
+          sceneType: typeof scene,
+          isNull: scene === null,
+          isUndefined: scene === undefined
         })
+        
+        if (scene && mounted) {
+          console.log('🎬 TIMELINE-SCENE - Scene is valid, setting state')
+          setScene(scene)
+          
+          // Get project ID through timeline
+          try {
+            console.log('🎬 TIMELINE-SCENE - Fetching timeline for project ID...')
+            const timelineStartTime = Date.now()
+            const { data: timeline, error } = await supabase
+              .from('timelines')
+              .select('project_id')
+              .eq('id', scene.timeline_id)
+              .single()
+            
+            const timelineFetchTime = Date.now() - timelineStartTime
+            console.log('🎬 TIMELINE-SCENE - Timeline fetch result:', { 
+              timeline, 
+              error, 
+              fetchTimeMs: timelineFetchTime 
+            })
+            
+            if (timeline && !error && mounted) {
+              console.log('🎬 TIMELINE-SCENE - Setting project ID:', timeline.project_id)
+              setProjectId(timeline.project_id)
+            }
+          } catch (timelineError) {
+            console.error('🎬 TIMELINE-SCENE - Error fetching timeline:', timelineError)
+          }
+        } else if (mounted) {
+          console.error('🎬 TIMELINE-SCENE - Scene is null/undefined, this will cause infinite loading')
+          // Set loading to false to prevent infinite loading
+          setLoading(false)
+        }
+      } catch (error) {
+        console.error('🎬 TIMELINE-SCENE - Error fetching scene:', error)
+        if (mounted) {
+          toast({
+            title: "Error",
+            description: "Failed to load scene data.",
+            variant: "destructive",
+          })
+        }
       } finally {
+        if (mounted) {
+          console.log('🎬 TIMELINE-SCENE - Setting loading state to false')
+          setLoading(false)
+        }
+      }
+    }
+
+    // Safety timeout to prevent infinite loading
+    const safetyTimeout = setTimeout(() => {
+      if (mounted && loading) {
+        console.warn('🎬 TIMELINE-SCENE - Safety timeout triggered, forcing loading to false')
         setLoading(false)
       }
-    }
+    }, 10000) // 10 second timeout
 
     fetchSceneData()
-  }, [id, user?.id, toast])
 
-  // Cleanup speech synthesis on unmount
-  useEffect(() => {
     return () => {
-      if (window.speechSynthesis) {
-        window.speechSynthesis.cancel()
-      }
+      mounted = false
+      clearTimeout(safetyTimeout)
     }
-  }, [])
+  }, [id, user?.id]) // Removed toast dependency to prevent infinite loops
 
   // Effect to fetch assets
   useEffect(() => {
+    let mounted = true
+    
     const fetchAssets = async () => {
-      if (!id || !user?.id) return
+      console.log('🎬 TIMELINE-SCENE - Starting assets fetch:', { 
+        sceneId: id, 
+        userId: user?.id, 
+        timestamp: new Date().toISOString() 
+      })
+      
+      if (!id || !user?.id) {
+        console.log('🎬 TIMELINE-SCENE - Missing required data for assets fetch:', { hasId: !!id, hasUserId: !!user?.id })
+        return
+      }
       
       try {
+        console.log('🎬 TIMELINE-SCENE - Setting assets loading state to true')
         setAssetsLoading(true)
-        console.log('Fetching assets for scene:', id)
-        console.log('Current user:', user.id)
         
-        // First, let's check the database schema
-        const { data: schemaCheck, error: schemaError } = await supabase
+        console.log('🎬 TIMELINE-SCENE - Fetching assets for scene:', id)
+        console.log('🎬 TIMELINE-SCENE - Current user:', user.id)
+        
+        // First, let's check the database schema and see what assets exist
+        console.log('🎬 TIMELINE-SCENE - Checking database schema and assets...')
+        const schemaStartTime = Date.now()
+        
+        // Check if assets table has any data at all
+        const { data: allAssetsGlobal, error: allAssetsGlobalError } = await supabase
           .from('assets')
           .select('*')
-          .limit(1)
         
-        if (schemaError) {
-          console.error('Schema check error:', schemaError)
+        const schemaCheckTime = Date.now() - schemaStartTime
+        if (allAssetsGlobalError) {
+          console.error('🎬 TIMELINE-SCENE - Assets table error:', allAssetsGlobalError)
         } else {
-          console.log('Database schema check - Sample asset:', schemaCheck?.[0])
-          console.log('Available columns:', schemaCheck?.[0] ? Object.keys(schemaCheck[0]) : 'No data')
+          console.log('🎬 TIMELINE-SCENE - Assets table check completed:', { 
+            totalAssets: allAssetsGlobal?.length || 0,
+            sampleAsset: allAssetsGlobal?.[0], 
+            availableColumns: allAssetsGlobal?.[0] ? Object.keys(allAssetsGlobal?.[0]) : 'No data',
+            checkTimeMs: schemaCheckTime,
+            sceneIds: allAssetsGlobal?.map(a => a.scene_id).filter(Boolean),
+            userIds: allAssetsGlobal?.map(a => a.user_id).filter(Boolean)
+          })
         }
         
         // First, let's check if there are any assets at all for this user
-        const { data: allAssets, error: allAssetsError } = await supabase
+        console.log('🎬 TIMELINE-SCENE - Fetching all assets for user...')
+        const allAssetsStartTime = Date.now()
+        const { data: allUserAssets, error: allUserAssetsError } = await supabase
           .from('assets')
           .select('*')
           .eq('user_id', user.id)
         
-        if (allAssetsError) {
-          console.error('Error fetching all assets:', allAssetsError)
+        const allAssetsTime = Date.now() - allAssetsStartTime
+        if (allUserAssetsError) {
+          console.error('🎬 TIMELINE-SCENE - Error fetching all assets:', allUserAssetsError)
         } else {
-          console.log('All assets for user:', allAssets)
-          allAssets?.forEach((asset, index) => {
-            console.log(`Asset ${index + 1}:`, {
+          console.log('🎬 TIMELINE-SCENE - All assets for user fetched:', { 
+            count: allUserAssets?.length, 
+            fetchTimeMs: allAssetsTime 
+          })
+          allUserAssets?.forEach((asset, index) => {
+            console.log(`🎬 TIMELINE-SCENE - Asset ${index + 1}:`, {
               id: asset.id,
               title: asset.title,
               content_type: asset.content_type,
@@ -175,36 +324,109 @@ function ScenePageClient({ id }: { id: string }) {
         }
         
         // Now fetch assets for this specific scene
+        console.log('🎬 TIMELINE-SCENE - Fetching assets for specific scene...')
+        const sceneAssetsStartTime = Date.now()
         const fetchedAssets = await AssetService.getAssetsForScene(id)
-        console.log('Fetched assets for scene:', fetchedAssets)
+        const sceneAssetsTime = Date.now() - sceneAssetsStartTime
+        console.log('🎬 TIMELINE-SCENE - Scene assets fetched:', { 
+          count: fetchedAssets.length, 
+          fetchTimeMs: sceneAssetsTime 
+        })
         
         // Also check manually for assets linked to this scene
+        console.log('🎬 TIMELINE-SCENE - Manual scene assets fetch...')
+        const manualStartTime = Date.now()
+        
+        // Try different query approaches to debug the issue
+        console.log('🎬 TIMELINE-SCENE - Trying different query approaches...')
+        
+        // Approach 1: Just by scene_id
+        const { data: sceneAssetsOnly, error: sceneAssetsOnlyError } = await supabase
+          .from('assets')
+          .select('*')
+          .eq('scene_id', id)
+        
+        console.log('🎬 TIMELINE-SCENE - Assets by scene_id only:', { 
+          count: sceneAssetsOnly?.length, 
+          error: sceneAssetsOnlyError,
+          sceneId: id
+        })
+        
+        // Approach 2: By user_id and scene_id
         const { data: manualSceneAssets, error: manualError } = await supabase
           .from('assets')
           .select('*')
           .eq('user_id', user.id)
           .eq('scene_id', id)
         
+        const manualTime = Date.now() - manualStartTime
         if (manualError) {
-          console.error('Manual scene assets fetch error:', manualError)
+          console.error('🎬 TIMELINE-SCENE - Manual scene assets fetch error:', manualError)
         } else {
-          console.log('Manual scene assets fetch:', manualSceneAssets)
+          console.log('🎬 TIMELINE-SCENE - Manual scene assets fetch completed:', { 
+            count: manualSceneAssets?.length, 
+            fetchTimeMs: manualTime 
+          })
         }
         
-        setAssets(fetchedAssets)
-      } catch (error) {
-        console.error('Error fetching assets:', error)
-        toast({
-          title: "Error fetching assets",
-          description: "Failed to load scene assets.",
-          variant: "destructive",
+        // Approach 3: Check if there are any assets with null scene_id
+        const { data: nullSceneAssets, error: nullSceneError } = await supabase
+          .from('assets')
+          .select('*')
+          .eq('user_id', user.id)
+          .is('scene_id', null)
+        
+        console.log('🎬 TIMELINE-SCENE - Assets with null scene_id:', { 
+          count: nullSceneAssets?.length, 
+          error: nullSceneError 
         })
+        
+        if (mounted) {
+          console.log('🎬 TIMELINE-SCENE - Setting assets state...')
+          setAssets(fetchedAssets)
+        }
+      } catch (error) {
+        console.error('🎬 TIMELINE-SCENE - Error fetching assets:', error)
+        if (mounted) {
+          toast({
+            title: "Error fetching assets",
+            description: "Failed to load scene assets.",
+            variant: "destructive",
+          })
+        }
       } finally {
-        setAssetsLoading(false)
+        if (mounted) {
+          console.log('🎬 TIMELINE-SCENE - Setting assets loading state to false')
+          setAssetsLoading(false)
+        }
       }
     }
+
+    // Safety timeout to prevent infinite loading
+    const safetyTimeout = setTimeout(() => {
+      if (mounted && assetsLoading) {
+        console.warn('🎬 TIMELINE-SCENE - Assets safety timeout triggered, forcing loading to false')
+        setAssetsLoading(false)
+      }
+    }, 10000) // 10 second timeout
+
     fetchAssets()
-  }, [id, toast, user])
+
+    return () => {
+      mounted = false
+      clearTimeout(safetyTimeout)
+    }
+  }, [id, user?.id]) // Removed toast dependency to prevent infinite loops
+
+  // Effect to set initial active script
+  useEffect(() => {
+    const scriptAssets = assets.filter(a => a.content_type === 'script')
+    if (scriptAssets.length > 0 && !activeScriptId) {
+      // Set the latest version as the initial active script
+      const latestScript = scriptAssets.find(a => a.is_latest_version) || scriptAssets[0]
+      setActiveScriptId(latestScript.id)
+    }
+  }, [assets, activeScriptId])
 
   // Function to refresh assets
   const refreshAssets = async () => {
@@ -219,7 +441,7 @@ function ScenePageClient({ id }: { id: string }) {
         description: "Scene assets have been updated.",
       })
     } catch (error) {
-      console.error('Error refreshing assets:', error)
+      console.error('🎬 TIMELINE-SCENE - Error refreshing assets:', error)
       toast({
         title: "Error refreshing assets",
         description: "Failed to refresh scene assets.",
@@ -255,77 +477,8 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }
 
-  // Speech synthesis functions
-  const speakScript = (script: Asset) => {
-    if (!script.content) {
-      toast({
-        title: "No Content",
-        description: "This script has no content to read.",
-        variant: "destructive",
-      })
-      return
-    }
 
-    // Stop any currently speaking
-    if (isSpeaking) {
-      window.speechSynthesis.cancel()
-      setIsSpeaking(false)
-      setSpeakingAssetId(null)
-      return
-    }
 
-    const utterance = new SpeechSynthesisUtterance(script.content)
-    utterance.rate = speechSettings.rate
-    utterance.pitch = speechSettings.pitch
-    utterance.volume = speechSettings.volume
-
-    // Get available voices and set the selected one or a good default
-    const voices = window.speechSynthesis.getVoices()
-    let selectedVoice = null
-    
-    if (speechSettings.voice) {
-      selectedVoice = voices.find(voice => voice.name === speechSettings.voice)
-    }
-    
-    if (!selectedVoice) {
-      selectedVoice = voices.find(voice => 
-        voice.lang.includes('en') && voice.name.includes('Alex')
-      ) || voices.find(voice => voice.lang.includes('en')) || voices[0]
-    }
-    
-    if (selectedVoice) {
-      utterance.voice = selectedVoice
-    }
-
-    utterance.onstart = () => {
-      setIsSpeaking(true)
-      setSpeakingAssetId(script.id)
-    }
-
-    utterance.onend = () => {
-      setIsSpeaking(false)
-      setSpeakingAssetId(null)
-    }
-
-    utterance.onerror = (event) => {
-      console.error('Speech synthesis error:', event)
-      setIsSpeaking(false)
-      setSpeakingAssetId(null)
-      toast({
-        title: "Speech Error",
-        description: "Failed to read the script aloud.",
-        variant: "destructive",
-      })
-    }
-
-    window.speechSynthesis.speak(utterance)
-  }
-
-  const stopSpeaking = () => {
-    window.speechSynthesis.cancel()
-    setIsSpeaking(false)
-    setSpeakingAssetId(null)
-  }
 
   // Version selection functions
   const selectVersion = (assetId: string, version: Asset) => {
@@ -428,11 +581,47 @@ function ScenePageClient({ id }: { id: string }) {
     })
   }
 
-  if (loading || !scene) {
+  if (loading) {
+    console.log('🎬 TIMELINE-SCENE - Showing loading state:', { loading, hasScene: !!scene, userId: user?.id, sceneId: id })
     return (
       <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
-        <Loader2 className="h-12 w-12 animate-spin text-primary" />
-        <p className="ml-4 text-muted-foreground">Loading scene data...</p>
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto mb-4" />
+          <p className="text-muted-foreground mb-2">Loading scene data...</p>
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p>Debug Info:</p>
+            <p>• Loading: {loading.toString()}</p>
+            <p>• Has Scene: {!!scene ? 'Yes' : 'No'}</p>
+            <p>• User ID: {user?.id || 'None'}</p>
+            <p>• Scene ID: {id}</p>
+            <p>• Auth Loading: {authLoading.toString()}</p>
+            <p>• Assets Loading: {assetsLoading.toString()}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!scene) {
+    console.log('🎬 TIMELINE-SCENE - Scene not found, showing error state')
+    return (
+      <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-destructive mb-4">
+            <h1 className="text-2xl font-bold mb-2">Scene Not Found</h1>
+            <p className="text-muted-foreground">The scene you're looking for doesn't exist or you don't have access to it.</p>
+          </div>
+          <div className="text-xs text-muted-foreground space-y-1 mb-4">
+            <p>Debug Info:</p>
+            <p>• Scene ID: {id}</p>
+            <p>• User ID: {user?.id || 'None'}</p>
+            <p>• Loading: {loading.toString()}</p>
+            <p>• Auth Loading: {authLoading.toString()}</p>
+          </div>
+          <Button asChild>
+            <Link href="/timeline">Back to Timeline</Link>
+          </Button>
+        </div>
       </div>
     )
   }
@@ -465,19 +654,15 @@ function ScenePageClient({ id }: { id: string }) {
             </div>
           </div>
           <div className="flex gap-3">
-            {/* Global Speech Control */}
-            {isSpeaking && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={stopSpeaking}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10 bg-transparent"
-              >
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Stop All Speech
-              </Button>
-            )}
-            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setActiveTab("import")}
+              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Import Files
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -514,81 +699,65 @@ function ScenePageClient({ id }: { id: string }) {
           </div>
         </div>
 
-        {/* Debug Info - Remove this after fixing */}
-        {process.env.NODE_ENV === 'development' && (
-          <Card className="bg-card border-red-500/20 mb-6">
-            <CardHeader>
-              <CardTitle className="text-red-500">Debug Info (Development Only)</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2 text-sm">
-                <div><strong>Scene ID:</strong> {id}</div>
-                <div><strong>User ID:</strong> {user?.id}</div>
-                <div><strong>Assets Count:</strong> {assets.length}</div>
-                <div><strong>Assets Loading:</strong> {assetsLoading ? 'Yes' : 'No'}</div>
-                <div><strong>All Assets in DB:</strong> Check console for details</div>
-                <div><strong>Database Schema Check:</strong> Running...</div>
-              </div>
-              
-              {/* Test Database Button */}
-              <Button
-                onClick={async () => {
-                  try {
-                    console.log('=== MANUAL DATABASE TEST ===')
-                    
-                    // Test 1: Basic query
-                    const { data: test1, error: error1 } = await supabase
-                      .from('assets')
-                      .select('count')
-                      .eq('user_id', user?.id)
-                    
-                    console.log('Test 1 - Count query:', { data: test1, error: error1 })
-                    
-                    // Test 2: Get one asset
-                    const { data: test2, error: error2 } = await supabase
-                      .from('assets')
-                      .select('*')
-                      .eq('user_id', user?.id)
-                      .limit(1)
-                    
-                    console.log('Test 2 - Get one asset:', { data: test2, error: error2 })
-                    
-                    // Test 3: Check schema
-                    if (test2?.[0]) {
-                      console.log('Available columns:', Object.keys(test2[0]))
-                      console.log('Sample asset data:', test2[0])
-                    }
-                    
-                    // Test 4: Scene-specific query
-                    const { data: test3, error: error3 } = await supabase
-                      .from('assets')
-                      .select('*')
-                      .eq('user_id', user?.id)
-                      .eq('scene_id', id)
-                    
-                    console.log('Test 3 - Scene assets:', { data: test3, error: error3 })
-                    
-                    toast({
-                      title: "Database Test Complete",
-                      description: "Check console for results",
-                    })
-                  } catch (error) {
-                    console.error('Database test error:', error)
-                    toast({
-                      title: "Database Test Failed",
-                      description: "Check console for error",
-                      variant: "destructive",
-                    })
-                  }
-                }}
-                className="mt-4 bg-blue-500 hover:bg-blue-600"
-                size="sm"
-              >
-                🔍 Test Database Connection
-              </Button>
-            </CardContent>
-          </Card>
-        )}
+        {/* Debug Info Panel */}
+        <div className="mb-6 p-4 bg-muted/20 border border-border rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-muted-foreground">Debug Information</h3>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                console.log('🎬 TIMELINE-SCENE - Debug panel refresh clicked')
+                console.log('🎬 TIMELINE-SCENE - Current state:', {
+                  user: user ? { id: user.id, email: user.email } : null,
+                  scene: scene ? { id: scene.id, name: scene.name } : null,
+                  assets: assets.length,
+                  loading,
+                  assetsLoading,
+                  authLoading,
+                  projectId
+                })
+              }}
+              className="text-xs"
+            >
+              Refresh Debug
+            </Button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
+            <div>
+              <p className="text-muted-foreground">User ID:</p>
+              <p className="font-mono">{user?.id || 'None'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Scene ID:</p>
+              <p className="font-mono">{id}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Project ID:</p>
+              <p className="font-mono">{projectId || 'None'}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Assets Count:</p>
+              <p className="font-mono">{assets.length}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Loading:</p>
+              <p className="font-mono">{loading.toString()}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Assets Loading:</p>
+              <p className="font-mono">{assetsLoading.toString()}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Auth Loading:</p>
+              <p className="font-mono">{authLoading.toString()}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Timestamp:</p>
+              <p className="font-mono">{new Date().toLocaleTimeString()}</p>
+            </div>
+          </div>
+        </div>
 
         {/* Unlinked Assets Section */}
         {assets.length === 0 && (
@@ -620,7 +789,7 @@ function ScenePageClient({ id }: { id: string }) {
                         .eq('project_id', allAssets[0].project_id) // Only link assets from same project
                       
                       if (error) {
-                        console.error('Error linking assets:', error)
+                        console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
                         toast({
                           title: "Error",
                           description: "Failed to link assets to scene.",
@@ -636,7 +805,7 @@ function ScenePageClient({ id }: { id: string }) {
                       }
                     }
                   } catch (error) {
-                    console.error('Error linking assets:', error)
+                    console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
                     toast({
                       title: "Error",
                       description: "Failed to link assets to scene.",
@@ -713,30 +882,17 @@ function ScenePageClient({ id }: { id: string }) {
             >
               Audio ({assets.filter(a => a.content_type === 'audio').length})
             </TabsTrigger>
+            <TabsTrigger
+              value="import"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+            >
+              Import Files
+            </TabsTrigger>
           </TabsList>
 
           {/* Scripts Tab */}
           <TabsContent value="scripts" className="space-y-6">
-            {/* Debug Info for Scripts */}
-            {process.env.NODE_ENV === 'development' && (
-              <Card className="bg-card border-blue-500/20 mb-4">
-                <CardHeader>
-                  <CardTitle className="text-blue-500">Scripts Debug Info</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2 text-sm">
-                    <div><strong>Total Assets:</strong> {assets.length}</div>
-                    <div><strong>Script Assets:</strong> {assets.filter(a => a.content_type === 'script').length}</div>
-                    <div><strong>Script Assets Details:</strong></div>
-                    {assets.filter(a => a.content_type === 'script').map((script, index) => (
-                      <div key={script.id} className="ml-4 text-xs">
-                        {index + 1}. ID: {script.id} | Title: {script.title} | Version: {script.version} | Parent: {script.parent_asset_id || 'None'}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+
             <div className="flex justify-between items-center">
               <div>
                 <h3 className="text-xl font-semibold text-primary">Scene Scripts</h3>
@@ -745,30 +901,7 @@ function ScenePageClient({ id }: { id: string }) {
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                  onClick={() => setShowSpeechSettings(true)}
-                >
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Speech Settings
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                  onClick={() => {
-                    // Show speech settings info
-                    toast({
-                      title: "Speech Synthesis Active",
-                      description: "Click 'Read Aloud' on any script to hear it. Use the global 'Stop All Speech' button to stop.",
-                    })
-                  }}
-                >
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Speech Help
-                </Button>
+
                 <Button
                   size="sm"
                   className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
@@ -785,7 +918,7 @@ function ScenePageClient({ id }: { id: string }) {
                             {(() => {
               // Group scripts by parent to show version history
               const scriptAssets = assets.filter(a => a.content_type === 'script')
-              console.log('Script assets found:', scriptAssets)
+              console.log('🎬 TIMELINE-SCENE - Script assets found:', scriptAssets)
               
               // FORCE VERSION TABS TO SHOW - TEST
               if (scriptAssets.length > 0) {
@@ -798,13 +931,11 @@ function ScenePageClient({ id }: { id: string }) {
                            <button
                              key={script.id}
                              onClick={() => {
-                               console.log('Clicking version:', script.version, 'ID:', script.id)
-                               selectVersion(script.id, script)
-                               // Force re-render
-                               setAssets([...assets])
+                               console.log('🎬 TIMELINE-SCENE - Clicking version:', script.version, 'ID:', script.id)
+                               setActiveScriptId(script.id)
                              }}
                              className={`px-4 py-2 text-sm font-medium transition-all duration-200 border-b-2 ${
-                               (selectedVersions[script.id] || scriptAssets[0]).id === script.id
+                               activeScriptId === script.id
                                  ? 'text-green-400 border-green-400 bg-green-500/10'
                                  : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
                              }`}
@@ -824,38 +955,80 @@ function ScenePageClient({ id }: { id: string }) {
                          <div className="flex items-start justify-between">
                            <div className="flex-1">
                              <div className="flex items-center gap-3 mb-2">
-                               <h4 className="text-xl font-bold text-primary">{(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).title}</h4>
+                               <h4 className="text-xl font-bold text-primary">{(() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 return activeScript.title
+                               })()}</h4>
                                <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                 {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).version_name || `v${(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).version}`}
+                                 {(() => {
+                                   const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                   return activeScript.version_name || `v${activeScript.version}`
+                                 })()}
                                </Badge>
-                               {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).is_latest_version && (
-                                 <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
-                                   LATEST
-                                 </Badge>
-                               )}
+                               {(() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 return activeScript.is_latest_version && (
+                                   <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
+                                     LATEST
+                                   </Badge>
+                                 )
+                               })()}
                              </div>
                              <p className="text-sm text-muted-foreground mb-3">
-                               Generated with {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).model} • {new Date((selectedVersions[scriptAssets[0].id] || scriptAssets[0]).created_at).toLocaleDateString()}
+                               Generated with {(() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 return activeScript.model
+                               })()} • {(() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 return new Date(activeScript.created_at).toLocaleDateString()
+                               })()}
                              </p>
                            </div>
                            <div className="flex gap-2">
+                             {/* Quick Text to Speech Button */}
                              <Button
                                variant="outline"
                                size="sm"
-                               className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                               onClick={() => speakScript(selectedVersions[scriptAssets[0].id] || scriptAssets[0])}
+                               className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                               onClick={() => {
+                                 // Scroll to the text-to-speech component
+                                 const ttsElement = document.querySelector('[data-tts-component]')
+                                 if (ttsElement) {
+                                   ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                                 }
+                               }}
                              >
-                               <MessageSquare className="h-4 w-4 mr-2" />
-                               Read Aloud
+                               <Volume2 className="h-4 w-4 mr-2" />
+                               Listen to Script
                              </Button>
                            </div>
                          </div>
                        </CardHeader>
                        <CardContent>
-                         <div className="bg-muted/20 p-4 rounded-lg border border-border">
+                         <div className="bg-muted/20 p-4 rounded-lg border border-border mb-4">
                            <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
-                             {(selectedVersions[scriptAssets[0].id] || scriptAssets[0]).content || 'No content available'}
+                             {(() => {
+                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                               return activeScript.content || 'No content available'
+                             })()}
                            </pre>
+                         </div>
+                         
+                         {/* Text to Speech Component */}
+                         <div data-tts-component>
+                           <TextToSpeech 
+                             text={(() => {
+                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                               return activeScript.content || ''
+                             })()}
+                             title={(() => {
+                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                               return activeScript.title || 'Script'
+                             })()}
+                             className="mt-4"
+                             projectId={projectId}
+                             sceneId={id}
+                           />
                          </div>
                        </CardContent>
                      </Card>
@@ -872,7 +1045,7 @@ function ScenePageClient({ id }: { id: string }) {
                 return acc
               }, {} as Record<string, typeof scriptAssets>)
               
-              console.log('Grouped scripts:', groupedScripts)
+              console.log('🎬 TIMELINE-SCENE - Grouped scripts:', groupedScripts)
 
               return Object.entries(groupedScripts).map(([parentId, versions]) => {
                     // Sort versions by version number
@@ -923,28 +1096,21 @@ function ScenePageClient({ id }: { id: string }) {
                                </div>
                             </div>
                             <div className="flex gap-2">
-                              {/* Speech Synthesis Button */}
+                              {/* Quick Text to Speech Button */}
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className={`${
-                                  speakingAssetId === selectedVersion.id 
-                                    ? 'border-red-500/30 text-red-400 hover:bg-red-500/10' 
-                                    : 'border-purple-500/30 text-purple-400 hover:bg-purple-500/10'
-                                }`}
-                                onClick={() => speakScript(selectedVersion)}
+                                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                onClick={() => {
+                                  // Scroll to the text-to-speech component
+                                  const ttsElement = document.querySelector('[data-tts-component]')
+                                  if (ttsElement) {
+                                    ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                                  }
+                                }}
                               >
-                                {speakingAssetId === selectedVersion.id ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                    Stop Reading
-                                  </>
-                                ) : (
-                                  <>
-                                    <MessageSquare className="h-4 w-4 mr-2" />
-                                    Read Aloud
-                                  </>
-                                )}
+                                <Volume2 className="h-4 w-4 mr-2" />
+                                Listen to Script
                               </Button>
                               
                               <Button
@@ -1006,10 +1172,21 @@ function ScenePageClient({ id }: { id: string }) {
                           </div>
                         </CardHeader>
                         <CardContent>
-                          <div className="bg-muted/20 p-4 rounded-lg border border-border">
+                          <div className="bg-muted/20 p-4 rounded-lg border border-border mb-4">
                             <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
                               {selectedVersion.content || 'No content available'}
                             </pre>
+                          </div>
+                          
+                          {/* Text to Speech Component */}
+                          <div data-tts-component>
+                            <TextToSpeech 
+                              text={selectedVersion.content || ''}
+                              title={selectedVersion.title || 'Script'}
+                              className="mt-4"
+                              projectId={projectId}
+                              sceneId={id}
+                            />
                           </div>
                         </CardContent>
                       </Card>
@@ -1321,6 +1498,44 @@ function ScenePageClient({ id }: { id: string }) {
             )}
           </TabsContent>
 
+          {/* Import Files Tab */}
+          <TabsContent value="import" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-semibold text-primary">Import Documents</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Import PDF, Word, and text files into your scene as assets
+                </p>
+              </div>
+            </div>
+
+            {projectId ? (
+              <FileImport
+                projectId={projectId}
+                sceneId={id}
+                onFileImported={(assetId) => {
+                  // Refresh assets after import
+                  refreshAssets()
+                  toast({
+                    title: "File Imported",
+                    description: "Your file has been imported and saved as a scene asset!",
+                  })
+                }}
+              />
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">Loading project information...</p>
+                  <div className="animate-pulse">
+                    <div className="h-4 bg-muted rounded w-32 mx-auto mb-2"></div>
+                    <div className="h-3 bg-muted rounded w-48 mx-auto"></div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
           {/* Versions Tab Content */}
           <TabsContent value="versions" className="space-y-6">
             {/* Version Management Header */}
@@ -1402,7 +1617,7 @@ function ScenePageClient({ id }: { id: string }) {
                                           {latestVersion.version_name || `v${latestVersion.version}`}
                                         </Badge>
                                         {latestVersion.metadata?.version_label && (
-                                          <Badge variant="outline" className="text-lg px-3 py-1 border-blue-500 text-blue-400 bg-blue-500/10">
+                                          <Badge variant="outline" className="px-2 py-1 border-blue-500 text-blue-400 bg-blue-500/10">
                                             {latestVersion.metadata.version_label}
                                           </Badge>
                                         )}
@@ -1445,6 +1660,23 @@ function ScenePageClient({ id }: { id: string }) {
                                   
                                   {/* Version Actions */}
                                   <div className="flex gap-2">
+                                    {/* Quick Text to Speech Button */}
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                      onClick={() => {
+                                        // Scroll to the text-to-speech component
+                                        const ttsElement = document.querySelector('[data-tts-component]')
+                                        if (ttsElement) {
+                                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                                        }
+                                      }}
+                                    >
+                                      <Volume2 className="h-4 w-4 mr-2" />
+                                      Listen to Script
+                                    </Button>
+                                    
                                     <Button
                                       variant="outline"
                                       size="sm"
@@ -1534,12 +1766,25 @@ function ScenePageClient({ id }: { id: string }) {
                                 {/* Content Preview */}
                                 <div className="mb-4">
                                   {latestVersion.content_type === 'script' && (
-                                    <div className="bg-muted/50 p-4 rounded-lg border border-border">
-                                      <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono">
-                                        {latestVersion.content?.substring(0, 300)}
-                                        {latestVersion.content && latestVersion.content.length > 300 && '...'}
-                                      </pre>
-                                    </div>
+                                    <>
+                                      <div className="bg-muted/50 p-4 rounded-lg border border-border max-h-96 overflow-y-auto mb-4">
+                                        <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono">
+                                          {latestVersion.content?.substring(0, 300)}
+                                          {latestVersion.content && latestVersion.content.length > 300 && '...'}
+                                        </pre>
+                                      </div>
+                                      
+                                      {/* Text to Speech Component for Scripts */}
+                                      <div data-tts-component>
+                                        <TextToSpeech 
+                                          text={latestVersion.content || ''}
+                                          title={latestVersion.title || 'Script'}
+                                          className="mt-4"
+                                          projectId={projectId}
+                                          sceneId={id}
+                                        />
+                                      </div>
+                                    </>
                                   )}
                                   {latestVersion.content_type === 'image' && latestVersion.content_url && (
                                     <div className="flex justify-center">
@@ -1762,11 +2007,24 @@ function ScenePageClient({ id }: { id: string }) {
                       
                       <CardContent>
                         {version.content_type === 'script' && (
-                          <div className="bg-muted/50 p-4 rounded-lg border border-border max-h-96 overflow-y-auto">
-                            <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono">
-                              {version.content}
-                            </pre>
-                          </div>
+                          <>
+                            <div className="bg-muted/50 p-4 rounded-lg border border-border max-h-96 overflow-y-auto mb-4">
+                              <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono">
+                                {version.content}
+                              </pre>
+                            </div>
+                            
+                            {/* Text to Speech Component for Scripts in Comparison */}
+                            <div data-tts-component>
+                              <TextToSpeech 
+                                text={version.content || ''}
+                                title={version.title || 'Script'}
+                                className="mt-4"
+                                projectId={projectId}
+                                sceneId={id}
+                              />
+                            </div>
+                          </>
                         )}
                         {version.content_type === 'image' && version.content_url && (
                           <div className="flex justify-center">
@@ -1877,24 +2135,37 @@ function ScenePageClient({ id }: { id: string }) {
                   </div>
 
                   {editingVersion.content_type === 'script' && (
-                    <div>
-                      <Label htmlFor="edit-content" className="text-sm font-medium">
-                        Script Content
-                      </Label>
-                      <textarea
-                        id="edit-content"
-                        value={versionEditForm.content}
-                        onChange={(e) => setVersionEditForm(prev => ({
-                          ...prev,
-                          content: e.target.value
-                        }))}
-                        placeholder="Edit your script content here..."
-                        className="mt-1 w-full h-64 p-3 border border-border rounded-md bg-background text-foreground resize-none font-mono text-sm"
-                      />
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Make changes to your script content. This will create a new version.
-                      </p>
-                    </div>
+                    <>
+                      <div>
+                        <Label htmlFor="edit-content" className="text-sm font-medium">
+                          Script Content
+                        </Label>
+                        <textarea
+                          id="edit-content"
+                          value={versionEditForm.content}
+                          onChange={(e) => setVersionEditForm(prev => ({
+                            ...prev,
+                            content: e.target.value
+                          }))}
+                          placeholder="Edit your script content here..."
+                          className="mt-1 w-full h-64 p-3 border border-border rounded-md bg-background text-foreground resize-none font-mono text-sm"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Make changes to your script content. This will create a new version.
+                        </p>
+                      </div>
+                      
+                      {/* Text to Speech Component for Script Editing */}
+                      <div data-tts-component>
+                        <TextToSpeech 
+                          text={versionEditForm.content || ''}
+                          title={editingVersion.title || 'Script'}
+                          className="mt-4"
+                          projectId={projectId}
+                          sceneId={id}
+                        />
+                      </div>
+                    </>
                   )}
 
                   {editingVersion.content_type === 'image' && (
@@ -1958,7 +2229,7 @@ function ScenePageClient({ id }: { id: string }) {
                         setEditingVersion(null)
                         
                       } catch (error) {
-                        console.error('Error updating version:', error)
+                        console.error('🎬 TIMELINE-SCENE - Error updating version:', error)
                         toast({
                           title: "Update Failed",
                           description: "Failed to create new version. Please try again.",
@@ -1978,130 +2249,10 @@ function ScenePageClient({ id }: { id: string }) {
           </DialogContent>
         </Dialog>
 
-        {/* Speech Settings Dialog */}
-        <Dialog open={showSpeechSettings} onOpenChange={setShowSpeechSettings}>
-          <DialogContent className="bg-background border-primary/20 max-w-md">
-            <DialogHeader>
-              <DialogTitle className="text-primary">Speech Synthesis Settings</DialogTitle>
-              <DialogDescription>
-                Customize how your scripts are read aloud
-              </DialogDescription>
-            </DialogHeader>
-            
-            <div className="space-y-4 py-4">
-              {/* Speech Rate */}
-              <div>
-                <Label htmlFor="speech-rate" className="text-foreground">Speech Rate</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">Slow</span>
-                  <input
-                    id="speech-rate"
-                    type="range"
-                    min="0.5"
-                    max="2.0"
-                    step="0.1"
-                    value={speechSettings.rate}
-                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, rate: parseFloat(e.target.value) }))}
-                    className="flex-1"
-                  />
-                  <span className="text-xs text-muted-foreground">Fast</span>
-                  <span className="text-xs font-mono text-primary w-8 text-center">
-                    {speechSettings.rate.toFixed(1)}
-                  </span>
-                </div>
-              </div>
 
-              {/* Speech Pitch */}
-              <div>
-                <Label htmlFor="speech-pitch" className="text-foreground">Speech Pitch</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">Low</span>
-                  <input
-                    id="speech-pitch"
-                    type="range"
-                    min="0.5"
-                    max="2.0"
-                    step="0.1"
-                    value={speechSettings.pitch}
-                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, pitch: parseFloat(e.target.value) }))}
-                    className="flex-1"
-                  />
-                  <span className="text-xs text-muted-foreground">High</span>
-                  <span className="text-xs font-mono text-primary w-8 text-center">
-                    {speechSettings.pitch.toFixed(1)}
-                  </span>
-                </div>
-              </div>
 
-              {/* Speech Volume */}
-              <div>
-                <Label htmlFor="speech-volume" className="text-foreground">Speech Volume</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-xs text-muted-foreground">Quiet</span>
-                  <input
-                    id="speech-volume"
-                    type="range"
-                    min="0.0"
-                    max="1.0"
-                    step="0.1"
-                    value={speechSettings.volume}
-                    onChange={(e) => setSpeechSettings(prev => ({ ...prev, volume: parseFloat(e.target.value) }))}
-                    className="flex-1"
-                  />
-                  <span className="text-xs text-muted-foreground">Loud</span>
-                  <span className="text-xs font-mono text-primary w-8 text-center">
-                    {speechSettings.volume.toFixed(1)}
-                  </span>
-                </div>
-              </div>
 
-              {/* Voice Selection */}
-              <div>
-                <Label htmlFor="speech-voice" className="text-foreground">Voice</Label>
-                <Select 
-                  value={speechSettings.voice} 
-                  onValueChange={(voice) => setSpeechSettings(prev => ({ ...prev, voice }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a voice" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(() => {
-                      const voices = window.speechSynthesis.getVoices()
-                      return voices.map((voice) => (
-                        <SelectItem key={voice.name} value={voice.name}>
-                          {voice.name} ({voice.lang})
-                        </SelectItem>
-                      ))
-                    })()}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
 
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setShowSpeechSettings(false)}
-                className="border-primary/30"
-              >
-                Close
-              </Button>
-              <Button
-                onClick={() => {
-                  setShowSpeechSettings(false)
-                  toast({
-                    title: "Settings Saved",
-                    description: "Your speech synthesis settings have been updated.",
-                  })
-                }}
-                className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90"
-              >
-                Save Settings
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </div>
   )

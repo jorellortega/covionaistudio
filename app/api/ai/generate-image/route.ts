@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
         
         // Use the OpenAIService from ai-services.ts
         const dalleResponse = await OpenAIService.generateImage({
-          prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
+          prompt: prompt, // Send only the user's exact prompt
           style: 'cinematic',
           model: 'dall-e-3',
           apiKey
@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
         console.log('Using API key:', apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined')
         
         const openartResponse = await OpenArtService.generateImage({
-          prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
+          prompt: prompt, // Send only the user's exact prompt
           style: 'cinematic',
           model: 'sdxl',
           apiKey
@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
       case 'stable-diffusion':
         // For now, using OpenArt as Stable Diffusion alternative
         const sdResponse = await OpenArtService.generateImage({
-          prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
+          prompt: prompt, // Send only the user's exact prompt
           style: 'cinematic',
           model: 'sdxl',
           apiKey
@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
             'Authorization': `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
+            prompt: prompt, // Send only the user's exact prompt
             modelId: "6bef9f1b-29cb-40c7-b9df-32b51c1ed67c", // Leonardo Creative
             width: 1024,
             height: 1024,
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             model: "gen-2",
             input: {
-              prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
+              prompt: prompt, // Send only the user's exact prompt
               image_dimensions: "1024x1024"
             },
           })

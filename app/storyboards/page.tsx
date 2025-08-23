@@ -72,11 +72,26 @@ export default function StoryboardsPage() {
       
       try {
         const settings = await AISettingsService.getUserSettings(user.id)
-        setAiSettings(settings)
+        
+        // Ensure default settings exist for all tabs
+        const defaultSettings = await Promise.all([
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+        ])
+        
+        // Merge existing settings with default ones, preferring existing
+        const mergedSettings = defaultSettings.map(defaultSetting => {
+          const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+          return existingSetting || defaultSetting
+        })
+        
+        setAiSettings(mergedSettings)
         setAiSettingsLoaded(true)
         
         // Auto-select locked model for images tab if available
-        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        const imagesSetting = mergedSettings.find(setting => setting.tab_type === 'images')
         if (imagesSetting?.is_locked) {
           console.log('Setting locked model for images:', imagesSetting.locked_model)
           setSelectedAIService(imagesSetting.locked_model)
@@ -316,7 +331,8 @@ export default function StoryboardsPage() {
     }
 
     // Use locked model if available, otherwise use selected service
-    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    const lockedModel = getImagesTabLockedModel()
+    const serviceToUse = (isImagesTabLocked() && lockedModel) ? lockedModel : selectedAIService
     
     if (!serviceToUse) {
       toast({
@@ -475,7 +491,8 @@ export default function StoryboardsPage() {
     }
 
     // Use locked model if available, otherwise use selected service
-    const serviceToUse = isImagesTabLocked() ? getImagesTabLockedModel() : selectedAIService
+    const lockedModel = getImagesTabLockedModel()
+    const serviceToUse = (isImagesTabLocked() && lockedModel) ? lockedModel : selectedAIService
     
     if (!serviceToUse) {
       toast({
