@@ -32,6 +32,7 @@ interface AuthContextType {
   updateApiKey: (apiKey: string) => Promise<void>
   updateServiceApiKey: (service: string, apiKey: string) => Promise<void>
   refreshUser: () => Promise<void>
+  resetLoadingState: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -152,7 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Handle session changes
+  // Simplified session change handler
   const handleSessionChange = useCallback(async (session: Session | null) => {
     try {
       if (session?.user) {
@@ -173,19 +174,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error('Error handling session change:', error)
       setUser(null)
     } finally {
+      // Always ensure loading is false and initialized is true
       if (!isInitialized) {
         setIsInitialized(true)
-        setIsLoading(false)
       }
+      setIsLoading(false)
     }
   }, [fetchUserProfile, isInitialized])
 
   // Initialize auth state
   useEffect(() => {
     let mounted = true
+    let safetyTimeout: NodeJS.Timeout
 
     const initializeAuth = async () => {
       try {
+        console.log('Initializing auth...')
+        setIsLoading(true)
+        
+        // Set a safety timeout to prevent infinite loading
+        safetyTimeout = setTimeout(() => {
+          if (mounted && !isInitialized) {
+            console.warn('Auth initialization taking too long, forcing completion')
+            setIsLoading(false)
+            setIsInitialized(true)
+          }
+        }, 10000) // 10 second safety timeout
+        
         // Get initial session
         const { data: { session } } = await withTimeout(
           supabase.auth.getSession(),
@@ -193,11 +208,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         )
         
         if (mounted) {
+          console.log('Initial session:', session ? 'found' : 'none')
+          clearTimeout(safetyTimeout)
           await handleSessionChange(session)
         }
       } catch (error) {
         console.error('Error initializing auth:', error)
         if (mounted) {
+          clearTimeout(safetyTimeout)
           setIsLoading(false)
           setIsInitialized(true)
         }
@@ -213,9 +231,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         if (mounted) {
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            console.log('Setting loading state for auth event:', event)
             setIsLoading(true) // Set loading while fetching profile
             await handleSessionChange(session)
           } else if (event === 'SIGNED_OUT') {
+            console.log('User signed out, clearing state')
             setUser(null)
             setIsLoading(false)
           }
@@ -225,6 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       mounted = false
+      clearTimeout(safetyTimeout)
       subscription.unsubscribe()
     }
   }, [handleSessionChange])
@@ -261,6 +282,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Sign in successful, user:', data.user?.id)
       
       // The session change will be handled by the auth state listener
+      // But we need to ensure loading state is managed properly
       return { error: null }
     } catch (error) {
       console.error('Sign in exception:', error)
@@ -301,8 +323,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await withTimeout(supabase.auth.signOut(), OPERATION_TIMEOUT)
       setUser(null)
+      setIsLoading(false)
     } catch (error) {
       console.error('Error signing out:', error)
+      // Even if there's an error, clear the user state
+      setUser(null)
+      setIsLoading(false)
     }
   }
 
@@ -401,6 +427,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user?.role === role;
   };
 
+  const resetLoadingState = () => {
+    setIsLoading(false);
+  };
+
   return (
     <AuthContext.Provider value={{
       user,
@@ -414,6 +444,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       updateApiKey,
       updateServiceApiKey,
       refreshUser,
+      resetLoadingState,
     }}>
       {children}
     </AuthContext.Provider>

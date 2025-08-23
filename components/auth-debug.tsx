@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 
 export function AuthDebug() {
-  const { user, loading, signOut } = useAuth()
+  const { user, loading, signOut, resetLoadingState } = useAuth()
 
   const handleSignOut = async () => {
     try {
@@ -14,6 +14,10 @@ export function AuthDebug() {
     } catch (error) {
       console.error('Error signing out:', error)
     }
+  }
+
+  const handleResetLoading = () => {
+    resetLoadingState()
   }
 
   const clearLocalStorage = () => {
@@ -63,6 +67,9 @@ export function AuthDebug() {
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleSignOut} variant="outline" size="sm">
               Sign Out
+            </Button>
+            <Button onClick={handleResetLoading} variant="outline" size="sm">
+              Reset Loading State
             </Button>
             <Button onClick={clearLocalStorage} variant="outline" size="sm">
               Clear Local Storage

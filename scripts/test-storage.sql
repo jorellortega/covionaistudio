@@ -1,53 +1,75 @@
--- Test Storage Setup
--- Run this after setting up the storage bucket to verify everything works
+-- Test Storage Access After Fix
+-- Run this script to verify that storage is working correctly
 
--- 1. Check if the bucket exists
+-- Check bucket status
 SELECT 
-  id, 
-  name, 
-  public, 
+  'Bucket Status' as test_type,
+  id,
+  name,
+  public,
   file_size_limit,
   allowed_mime_types
 FROM storage.buckets 
 WHERE id = 'cinema_files';
 
--- 2. Check if RLS is enabled on storage.objects
+-- Check storage policies
 SELECT 
-  schemaname,
-  tablename,
-  rowsecurity
-FROM pg_tables 
-WHERE schemaname = 'storage' 
-  AND tablename = 'objects';
-
--- 3. Check if policies are created
-SELECT 
+  'Storage Policies' as test_type,
   policyname,
   permissive,
   cmd,
-  qual,
-  with_check
+  CASE 
+    WHEN cmd = 'SELECT' THEN 'READ ACCESS'
+    WHEN cmd = 'INSERT' THEN 'UPLOAD ACCESS'
+    WHEN cmd = 'UPDATE' THEN 'UPDATE ACCESS'
+    WHEN cmd = 'DELETE' THEN 'DELETE ACCESS'
+    ELSE cmd
+  END as operation_type
 FROM pg_policies 
 WHERE tablename = 'objects' 
   AND schemaname = 'storage'
-ORDER BY policyname;
+  AND policyname LIKE '%cinema_files%'
+ORDER BY cmd, policyname;
 
--- 4. Test file path parsing (this should work)
+-- Check if there are any files in the bucket
 SELECT 
-  '78ed2283-ef51-4613-90bb-a6d3299837d4/60761e6c-19c4-4edc-9918-45d0d3f651db/image/test.png' as file_path,
-  (string_to_array('78ed2283-ef51-4613-90bb-a6d3299837d4/60761e6c-19c4-4edc-9918-45d0d3f651db/image/test.png', '/'))[1] as user_id,
-  (string_to_array('78ed2283-ef51-4613-90bb-a6d3299837d4/60761e6c-19c4-4edc-9918-45d0d3f651db/image/test.png', '/'))[2] as project_id,
-  (string_to_array('78ed2283-ef51-4613-90bb-a6d3299837d4/60761e6c-19c4-4edc-9918-45d0d3f651db/image/test.png', '/'))[3] as file_type;
+  'File Count' as test_type,
+  COUNT(*) as total_files,
+  COUNT(CASE WHEN created_at >= NOW() - INTERVAL '1 day' THEN 1 END) as files_last_24h
+FROM storage.objects 
+WHERE bucket_id = 'cinema_files';
 
--- 5. Test if current user can be authenticated
-SELECT auth.uid() as current_user_id;
-
--- 6. Check storage permissions
+-- Show sample files (if any exist)
 SELECT 
+  'Sample Files' as test_type,
+  name,
+  bucket_id,
+  created_at,
+  updated_at,
+  metadata
+FROM storage.objects 
+WHERE bucket_id = 'cinema_files' 
+ORDER BY created_at DESC
+LIMIT 3;
+
+-- Test RLS status
+SELECT 
+  'RLS Status' as test_type,
+  schemaname,
+  tablename,
+  rowsecurity as rls_enabled
+FROM pg_tables 
+WHERE tablename = 'objects' 
+  AND schemaname = 'storage';
+
+-- Check permissions
+SELECT 
+  'Permissions' as test_type,
   grantee,
   privilege_type,
   is_grantable
 FROM information_schema.role_table_grants 
 WHERE table_name = 'objects' 
   AND table_schema = 'storage'
-  AND grantee = 'authenticated';
+  AND grantee IN ('authenticated', 'anon')
+ORDER BY grantee, privilege_type;

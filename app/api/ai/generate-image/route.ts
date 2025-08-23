@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
         console.log('Generating DALL-E image with prompt:', prompt)
         console.log('Using API key:', apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined')
         
+        // Use the OpenAIService from ai-services.ts
         const dalleResponse = await OpenAIService.generateImage({
           prompt: `Cinematic storyboard scene: ${prompt}. High quality, detailed, professional filmmaking style.`,
           style: 'cinematic',
@@ -112,7 +113,9 @@ export async function POST(request: NextRequest) {
         })
         
         if (!leonardoResponse.ok) {
-          throw new Error('Leonardo AI API failed')
+          const errorText = await leonardoResponse.text()
+          console.error('Leonardo AI API error:', leonardoResponse.status, errorText)
+          throw new Error(`Leonardo AI API failed: ${leonardoResponse.status} - ${errorText}`)
         }
         
         const leonardoData = await leonardoResponse.json()
@@ -141,7 +144,9 @@ export async function POST(request: NextRequest) {
         })
         
         if (!runwayResponse.ok) {
-          throw new Error('Runway ML API failed')
+          const errorText = await runwayResponse.text()
+          console.error('Runway ML API error:', runwayResponse.status, errorText)
+          throw new Error(`Runway ML API failed: ${runwayResponse.status} - ${errorText}`)
         }
         
         const runwayData = await runwayResponse.json()
@@ -167,10 +172,26 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('AI image generation error:', error)
     console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace')
+    
+    // Provide more specific error messages
+    let errorMessage = 'Unknown error occurred'
+    if (error instanceof Error) {
+      if (error.message.includes('OpenAI API error')) {
+        errorMessage = 'DALL-E API request failed. Please check your API key and try again.'
+      } else if (error.message.includes('OpenArt API error')) {
+        errorMessage = 'OpenArt API request failed. Please check your API key and try again.'
+      } else if (error.message.includes('Invalid response structure')) {
+        errorMessage = 'AI service returned an invalid response. Please try again.'
+      } else {
+        errorMessage = error.message
+      }
+    }
+    
     return NextResponse.json(
       { 
-        error: error instanceof Error ? error.message : 'Unknown error occurred',
-        success: false
+        error: errorMessage,
+        success: false,
+        details: error instanceof Error ? error.message : 'Unknown error'
       },
       { status: 500 }
     )

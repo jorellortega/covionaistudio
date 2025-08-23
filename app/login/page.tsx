@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Film, ArrowLeft, AlertCircle, Bug } from "lucide-react"
+import { Film, ArrowLeft, AlertCircle, Bug, Loader2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context-fixed"
@@ -15,22 +15,12 @@ import { AuthDebug } from "@/components/auth-debug"
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [timeoutId, setTimeoutId] = useState<NodeJS.Timeout | null>(null)
   const [showDebug, setShowDebug] = useState(false)
   const router = useRouter()
-  const { signIn, user, loading: authLoading } = useAuth()
+  const { signIn, user, loading: authLoading, resetLoadingState } = useAuth()
   const { toast } = useToast()
-
-  // Clear any existing timeout when component unmounts
-  useEffect(() => {
-    return () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId)
-      }
-    }
-  }, [timeoutId])
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -39,32 +29,34 @@ export default function LoginPage() {
     }
   }, [user, authLoading, router])
 
-  // Set a timeout for the sign-in operation
-  const startTimeout = () => {
-    const id = setTimeout(() => {
-      setIsLoading(false)
-      setError("Sign-in is taking longer than expected. Please try again.")
-      toast({
-        title: "Timeout",
-        description: "Sign-in is taking longer than expected. Please try again.",
-        variant: "destructive",
-      })
-    }, 30000) // 30 second timeout
-    setTimeoutId(id)
-  }
-
-  const clearLocalTimeout = () => {
-    if (timeoutId) {
-      clearTimeout(timeoutId)
-      setTimeoutId(null)
+  // Reset error when user starts typing
+  useEffect(() => {
+    if (error) {
+      setError(null)
     }
-  }
+  }, [email, password])
+
+  // Safety timeout to prevent stuck loading states
+  useEffect(() => {
+    if (isSubmitting) {
+      const timeout = setTimeout(() => {
+        console.warn('Login submission taking too long, resetting state')
+        setIsSubmitting(false)
+        resetLoadingState()
+        setError('Login is taking too long. Please try again.')
+      }, 15000) // 15 second timeout
+
+      return () => clearTimeout(timeout)
+    }
+  }, [isSubmitting, resetLoadingState])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    
+    if (isSubmitting) return // Prevent double submission
+    
     setError(null)
-    setIsLoading(true)
-    startTimeout()
+    setIsSubmitting(true)
     
     try {
       const { error: signInError } = await signIn(email, password)
@@ -73,22 +65,14 @@ export default function LoginPage() {
         throw signInError
       }
       
-      // Clear timeout since sign-in was successful
-      clearLocalTimeout()
-      
+      // Success - show toast and redirect will happen via useEffect
       toast({
         title: "Success",
         description: "Welcome back! You've been successfully signed in.",
       })
       
-      // Small delay to ensure auth state is updated
-      setTimeout(() => {
-        router.push("/dashboard")
-      }, 500)
-      
     } catch (error: any) {
-      clearLocalTimeout()
-      setIsLoading(false)
+      setIsSubmitting(false)
       
       const errorMessage = error.message || "Failed to sign in. Please check your credentials."
       setError(errorMessage)
@@ -103,7 +87,7 @@ export default function LoginPage() {
 
   const handleRetry = () => {
     setError(null)
-    setIsLoading(false)
+    setIsSubmitting(false)
   }
 
   // Show debug component if in debug mode
@@ -116,6 +100,18 @@ export default function LoginPage() {
           </Button>
         </div>
         <AuthDebug />
+      </div>
+    )
+  }
+
+  // Show loading state while auth is initializing
+  if (authLoading && !user) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-500" />
+          <p className="text-muted-foreground">Initializing authentication...</p>
+        </div>
       </div>
     )
   }
@@ -167,7 +163,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  disabled={isLoading}
+                  disabled={isSubmitting}
                   className="bg-background/50 border-border/50"
                 />
               </div>
@@ -180,7 +176,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
-                  disabled={isLoading}
+                  disabled={isSubmitting}
                   className="bg-background/50 border-border/50"
                 />
               </div>
@@ -202,18 +198,32 @@ export default function LoginPage() {
                   <Button 
                     type="submit" 
                     className="w-full bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                    disabled={isLoading}
+                    disabled={isSubmitting}
                   >
-                    {isLoading ? "Signing in..." : "Sign In"}
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        Signing in...
+                      </>
+                    ) : (
+                      "Sign In"
+                    )}
                   </Button>
                 </div>
               ) : (
                 <Button 
                   type="submit" 
                   className="w-full gradient-button neon-glow text-white"
-                  disabled={isLoading}
+                  disabled={isSubmitting}
                 >
-                  {isLoading ? "Signing in..." : "Sign In"}
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Signing in...
+                    </>
+                  ) : (
+                    "Sign In"
+                  )}
                 </Button>
               )}
               
