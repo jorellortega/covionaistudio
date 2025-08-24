@@ -76,7 +76,7 @@ export class AssetService {
     }
     
     // Check if there's an existing asset for this scene to determine version
-    let version = 1
+    let version = assetData.version || 1  // Use provided version or default to 1
     let parentAssetId: string | undefined = undefined
     
     if (assetData.scene_id) {
@@ -85,7 +85,10 @@ export class AssetService {
         // Find the latest version
         const latestAsset = existingAssets.find(asset => asset.is_latest_version)
         if (latestAsset) {
-          version = latestAsset.version + 1
+          // Only auto-increment if no version was provided
+          if (!assetData.version) {
+            version = latestAsset.version + 1
+          }
           parentAssetId = latestAsset.id
           
           // Mark previous version as not latest

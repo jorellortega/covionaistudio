@@ -426,18 +426,18 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
   if (!user?.elevenlabsApiKey) {
     return (
-      <Card className={`bg-card border-orange-500/20 ${className}`}>
-        <CardHeader>
-          <CardTitle className="text-orange-500">ElevenLabs Not Configured</CardTitle>
+      <Card className={`bg-card border-orange-500/20 w-full overflow-hidden ${className}`}>
+        <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
+          <CardTitle className="text-orange-500 text-base sm:text-lg">ElevenLabs Not Configured</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-4 py-3 sm:px-6 sm:py-4">
           <p className="text-sm text-muted-foreground mb-3">
             To use text-to-speech, please configure your ElevenLabs API key in settings.
           </p>
           <Button
             variant="outline"
             size="sm"
-            className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+            className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10 w-full sm:w-auto"
             onClick={() => window.location.href = '/settings'}
           >
             Go to Settings
@@ -448,22 +448,22 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }
 
   return (
-    <Card className={`bg-card border-blue-500/20 ${className}`}>
-      <CardHeader>
-        <CardTitle className="text-blue-500 flex items-center gap-2">
-          <Volume2 className="h-5 w-5" />
+    <Card className={`bg-card border-blue-500/20 w-full overflow-hidden ${className}`}>
+      <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
+        <CardTitle className="text-blue-500 flex items-center gap-2 text-base sm:text-lg">
+          <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
           Text to Speech
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 py-3 sm:px-6 sm:py-4">
         {/* Voice Selection */}
-        <div className="space-y-2">
+        <div className="space-y-3">
           <label className="text-sm font-medium text-foreground">Select Voice</label>
           <Select value={selectedVoice} onValueChange={setSelectedVoice}>
-            <SelectTrigger className="bg-card border-blue-500/30">
+            <SelectTrigger className="bg-card border-blue-500/30 w-full">
               <SelectValue placeholder="Loading voices..." />
             </SelectTrigger>
-            <SelectContent className="bg-card border-blue-500/30">
+            <SelectContent className="bg-card border-blue-500/30 max-h-60 overflow-y-auto">
               {isLoadingVoices ? (
                 <div className="flex items-center gap-2 p-2">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -472,10 +472,10 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
               ) : (
                 voices.map((voice) => (
                   <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                    <div className="flex flex-col">
-                      <span className="font-medium">{voice.name}</span>
+                    <div className="flex flex-col min-w-0">
+                      <span className="font-medium truncate">{voice.name}</span>
                       {voice.description && (
-                        <span className="text-xs text-muted-foreground">{voice.description}</span>
+                        <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
                       )}
                     </div>
                   </SelectItem>
@@ -484,7 +484,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             </SelectContent>
           </Select>
           {selectedVoice && (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400">
                 {getSelectedVoiceName()}
               </Badge>
@@ -518,7 +518,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         
         {/* No Audio Generated Yet */}
         {!audioUrl && (
-          <div className="text-center py-4 text-sm text-muted-foreground">
+          <div className="text-center py-4 text-sm text-muted-foreground px-2">
             <div className="mb-2">🎤 Ready to generate speech</div>
             <div className="text-xs">Select a voice and click "Generate Speech" to get started</div>
           </div>
@@ -610,7 +610,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
         {/* Success Indicator */}
         {savedAssetId && (
-          <div className="text-xs text-green-400 text-center mt-2">
+          <div className="text-xs text-green-400 text-center mt-2 px-2">
             ✓ Audio saved as asset #{savedAssetId.slice(0, 8)}...
           </div>
         )}
@@ -642,9 +642,9 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             </div>
 
             {savedAudioFiles.length > 0 ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {savedAudioFiles.map((file, index) => (
-                  <div key={index} className="flex items-center justify-between p-2 bg-muted/20 rounded border border-border">
+                  <div key={index} className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-muted/20 rounded border border-border">
                     <div className="flex-1 min-w-0">
                       {editingAudioId === file.id ? (
                         <div className="flex items-center gap-2">
@@ -705,11 +705,11 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
                         {(file.size / 1024 / 1024).toFixed(2)} MB • {new Date(file.created_at).toLocaleDateString()}
                       </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <audio
                         src={file.public_url}
                         controls
-                        className="h-8"
+                        className="h-8 w-full sm:w-auto"
                         preload="none"
                       />
                       <Button
@@ -738,7 +738,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
                 ))}
               </div>
             ) : (
-              <div className="text-center py-4 text-sm text-muted-foreground">
+              <div className="text-center py-4 text-sm text-muted-foreground px-2">
                 {isLoadingSavedAudio ? 'Loading saved audio...' : 'No saved audio files yet'}
               </div>
             )}

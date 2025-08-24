@@ -533,13 +533,37 @@ function ScenePageClient({ id }: { id: string }) {
     setInlineEditing(prev => prev ? { ...prev, value } : null)
   }
 
-  // Enhanced text selection handler
+  // Enhanced text selection handler with mobile support
   const handleTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
     e.stopPropagation()
     e.preventDefault()
     
     const target = e.target as HTMLTextAreaElement
-    const selection = target.value.substring(target.selectionStart, target.selectionEnd)
+    let selection = ''
+    
+    // Handle mobile vs desktop text selection
+    if (isMobile) {
+      // On mobile, try to get selection from multiple sources
+      try {
+        // Try the standard way first
+        if (target.selectionStart !== undefined && target.selectionEnd !== undefined) {
+          selection = target.value.substring(target.selectionStart, target.selectionEnd)
+        }
+        
+        // Fallback for mobile: check if there's any selected text
+        if (!selection && window.getSelection) {
+          const windowSelection = window.getSelection()
+          if (windowSelection && windowSelection.toString().length > 0) {
+            selection = windowSelection.toString()
+          }
+        }
+      } catch (error) {
+        console.log('🎬 Mobile text selection fallback:', error)
+      }
+    } else {
+      // Desktop: use standard selection properties
+      selection = target.value.substring(target.selectionStart, target.selectionEnd)
+    }
     
     if (selection.length > 0) {
       // Store selection for context menu actions
@@ -716,17 +740,17 @@ function ScenePageClient({ id }: { id: string }) {
         .replace(/\s+/g, ' ')
         .trim()
     } else {
-      // For version names, create shorter, descriptive names
+      // For version names, respect the exact input unless it's a pattern that needs formatting
       if (originalName.includes('v3')) return isMobile ? 'V3' : 'Version 3'
       if (originalName.includes('v2')) return isMobile ? 'V2' : 'Version 2'
       if (originalName.includes('v1')) return isMobile ? 'V1' : 'Version 1'
-      if (originalName.includes('Final')) return isMobile ? 'Final' : 'Final Version'
-      if (originalName.includes('Draft')) return isMobile ? 'Draft' : 'Draft'
       if (originalName.includes('Scene_1')) return isMobile ? 'S1' : 'Scene 1'
       if (originalName.includes('Scene_2')) return isMobile ? 'S2' : 'Scene 2'
-      if (originalName.includes('Copy')) return isMobile ? 'Copy' : 'Copy'
-      if (originalName.includes('Edited')) return isMobile ? 'Edited' : 'Edited'
-      if (originalName.includes('Revised')) return isMobile ? 'Revised' : 'Revised'
+      
+      // For simple names like "Final", "Draft", etc., return them exactly as entered
+      if (['Final', 'Draft', 'Copy', 'Edited', 'Revised'].includes(originalName.trim())) {
+        return originalName.trim()
+      }
       
       // Try to extract version number from the name
       const versionMatch = originalName.match(/version\s*(\d+)/i)
@@ -748,22 +772,27 @@ function ScenePageClient({ id }: { id: string }) {
     console.log('🎬 DEBUG - script.version:', script.version, 'type:', typeof script.version)
     console.log('🎬 DEBUG - script.version_name:', script.version_name)
     
-    // Always prioritize the version number for display formatting
+    // First priority: Check if version_name exists and is meaningful (not just a number)
+    if (script.version_name && script.version_name.trim()) {
+      const isJustNumber = /^\d+$/.test(script.version_name.trim())
+      if (!isJustNumber) {
+        const cleanName = generateCleanName(script.version_name, 'version_name', isMobile)
+        // Add the version number to show both name and number
+        if (script.version !== undefined && script.version !== null) {
+          const result = `${cleanName} • Version ${script.version}`
+          console.log('🎬 DEBUG - Using meaningful version_name with number, result:', result)
+          return result
+        }
+        console.log('🎬 DEBUG - Using meaningful version_name, result:', cleanName)
+        return cleanName
+      }
+    }
+    
+    // Second priority: Use version number for display formatting
     if (script.version !== undefined && script.version !== null) {
       const result = isMobile ? `V${script.version}` : `Version ${script.version}`
       console.log('🎬 DEBUG - Using version number, result:', result)
       return result
-    }
-    
-    // If no version number, check if version_name exists and is meaningful
-    if (script.version_name && script.version_name.trim()) {
-      // Only use version_name if it's not just a number
-      const isJustNumber = /^\d+$/.test(script.version_name.trim())
-      if (!isJustNumber) {
-        const cleanName = generateCleanName(script.version_name, 'version_name', isMobile)
-        console.log('🎬 DEBUG - Using meaningful version_name, result:', cleanName)
-        return cleanName
-      }
     }
     
     // Fallback
@@ -1383,12 +1412,101 @@ function ScenePageClient({ id }: { id: string }) {
                                  </div>
                                  )
                                })()}</h4>
-                               <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                 {(() => {
-                                   const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                                   return getCleanVersionName(activeScript, isMobile)
-                                 })()}
-                               </Badge>
+                               {(() => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 
+                                 // Check if we're editing this specific script's version
+                                 if (inlineEditing?.assetId === activeScript.id && inlineEditing.field === 'version_name') {
+                                   return (
+                                     <div className="flex items-center gap-2">
+                                       <input
+                                         type="text"
+                                         value={inlineEditing.value}
+                                         onChange={(e) => handleInlineEditChange(e.target.value)}
+                                         placeholder="Version name (e.g., Final, Draft)"
+                                         className="px-2 py-1 text-sm bg-background border border-green-500/30 text-green-400 rounded"
+                                         autoFocus
+                                       />
+                                       <span className="text-green-400">•</span>
+                                                                                <input
+                                           type="number"
+                                           value={activeScript.version || 1}
+                                           onChange={(e) => {
+                                             const newVersion = parseInt(e.target.value) || 1
+                                             // Update the script's version directly in assets
+                                             setAssets(prev => prev.map((s: any) => 
+                                               s.id === activeScript.id ? { ...s, version: newVersion } : s
+                                             ))
+                                           }}
+                                           min="1"
+                                           className="px-2 py-1 text-sm bg-background border border-green-500/30 text-green-400 rounded w-16"
+                                         />
+                                       <div className="flex gap-1">
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={async () => {
+                                             // Update the existing asset instead of creating a new version
+                                             try {
+                                               const { error } = await supabase
+                                                 .from('assets')
+                                                 .update({ 
+                                                   version_name: inlineEditing.value,
+                                                   version: activeScript.version 
+                                                 })
+                                                 .eq('id', activeScript.id)
+                                               
+                                               if (error) throw error
+                                               
+                                               // Refresh assets to show the updated name
+                                               refreshAssets()
+                                               
+                                               // Clear inline editing
+                                               setInlineEditing(null)
+                                               
+                                               toast({
+                                                 title: "Version Updated!",
+                                                 description: "Version name has been updated.",
+                                               })
+                                             } catch (error) {
+                                               console.error('Error updating version:', error)
+                                               toast({
+                                                 title: "Update Failed",
+                                                 description: "Could not update version name.",
+                                                 variant: "destructive",
+                                               })
+                                             }
+                                           }}
+                                           className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                         >
+                                           <Save className="h-3 w-3" />
+                                         </Button>
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={cancelInlineEditing}
+                                           className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                         >
+                                           ×
+                                         </Button>
+                                       </div>
+                                     </div>
+                                   )
+                                 }
+                                 
+                                 return (
+                                   <Badge 
+                                     variant="outline" 
+                                     className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10 cursor-pointer hover:bg-green-500/20 transition-colors"
+                                     onClick={(e) => {
+                                       e.stopPropagation()
+                                       startInlineEditing(activeScript.id, 'version_name', activeScript.version_name || '')
+                                     }}
+                                   >
+                                     {getCleanVersionName(activeScript, isMobile)}
+                                   </Badge>
+                                 )
+                               })()}
                                {(() => {
                                  const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
                                  return activeScript.is_latest_version && (
@@ -1604,6 +1722,9 @@ function ScenePageClient({ id }: { id: string }) {
                                      onMouseUp={(e) => e.stopPropagation()}
                                      onClick={(e) => e.stopPropagation()}
                                      onFocus={(e) => e.stopPropagation()}
+                                     onTouchStart={(e) => e.stopPropagation()}
+                                     onTouchEnd={(e) => e.stopPropagation()}
+                                     onTouchMove={(e) => e.stopPropagation()}
                                      onKeyDown={(e) => {
                                        // Handle keyboard shortcuts
                                        if (e.ctrlKey || e.metaKey) {
@@ -1799,24 +1920,25 @@ function ScenePageClient({ id }: { id: string }) {
                            })()}
                          </div>
                          
-                         {/* Text to Speech Component */}
-                         <div data-tts-component>
-                           <TextToSpeech 
-                             text={(() => {
-                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                               return activeScript.content || ''
-                             })()}
-                             title={(() => {
-                               const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                               return generateCleanName(activeScript.title, 'title') || 'Script'
-                             })()}
-                             className="mt-4"
-                             projectId={projectId}
-                             sceneId={id}
-                           />
-                         </div>
                        </CardContent>
                      </Card>
+                     
+                     {/* Text to Speech Card - Separated */}
+                     <div className="w-full">
+                       <TextToSpeech 
+                         text={(() => {
+                           const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                           return activeScript.content || ''
+                         })()}
+                         title={(() => {
+                           const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                           return generateCleanName(activeScript.title, 'title') || 'Script'
+                         })()}
+                         className="w-full"
+                         projectId={projectId}
+                         sceneId={id}
+                       />
+                     </div>
                   </div>
                 )
               }
@@ -2254,21 +2376,14 @@ function ScenePageClient({ id }: { id: string }) {
                             })()}
                           </div>
                           
-                          {/* Text to Speech Component */}
-                          <div data-tts-component>
-                            <TextToSpeech 
-                              text={selectedVersion.content || ''}
-                              title={generateCleanName(selectedVersion.title, 'title') || 'Script'}
-                              className="mt-4"
-                              projectId={projectId}
-                              sceneId={id}
-                            />
-                          </div>
                         </CardContent>
                       </Card>
+                      
                     )
                   })
                 })()}
+                
+
               </div>
             ) : (
               <Card className="bg-card border-primary/20">
