@@ -724,8 +724,29 @@ function ScenePageClient({ id }: { id: string }) {
       if (originalName.includes('Draft')) return 'Draft'
       if (originalName.includes('Scene_1')) return 'Scene 1'
       if (originalName.includes('Scene_2')) return 'Scene 2'
+      if (originalName.includes('Copy')) return 'Copy'
+      if (originalName.includes('Edited')) return 'Edited'
+      if (originalName.includes('Revised')) return 'Revised'
       return 'New Version'
     }
+  }
+
+  // Helper function to get clean version name for display
+  const getCleanVersionName = (script: any) => {
+    // If version_name exists and is not empty, use it
+    if (script.version_name && script.version_name.trim()) {
+      // Clean up the version name if it's too long
+      const cleanName = generateCleanName(script.version_name, 'version_name')
+      return cleanName
+    }
+    
+    // Otherwise, generate a clean version name based on version number
+    if (script.version) {
+      return `Version ${script.version}`
+    }
+    
+    // Fallback
+    return 'Version 1'
   }
 
   const saveInlineEdit = async () => {
@@ -945,100 +966,10 @@ function ScenePageClient({ id }: { id: string }) {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
+
         </div>
 
-        {/* Debug Info Panel */}
-        <div className="mb-6 p-4 bg-muted/20 border border-border rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-muted-foreground">Debug Information</h3>
-            <div className="flex gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  console.log('🎬 TIMELINE-SCENE - Debug panel refresh clicked')
-                  console.log('🎬 TIMELINE-SCENE - Current state:', {
-                    user: user ? { id: user.id, email: user.email } : null,
-                    scene: scene ? { id: scene.id, name: scene.name } : null,
-                    assets: assets.length,
-                    loading,
-                    assetsLoading,
-                    authLoading,
-                    projectId
-                  })
-                }}
-                className="text-xs"
-              >
-                Refresh Debug
-              </Button>
-              
-              {/* Test Delete Button */}
-              {assets.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
-                  onClick={async () => {
-                    const firstAsset = assets[0]
-                    console.log('🎬 TIMELINE-SCENE - Testing delete with first asset:', firstAsset.id)
-                    
-                    const result = await testDeleteAsset(firstAsset.id)
-                    
-                    if (result.success) {
-                      toast({
-                        title: "Delete Test Passed!",
-                        description: "Asset was successfully deleted. Refreshing assets...",
-                      })
-                      refreshAssets()
-                    } else {
-                      toast({
-                        title: "Delete Test Failed",
-                        description: result.error || "Unknown error occurred",
-                        variant: "destructive",
-                      })
-                    }
-                  }}
-                >
-                  Test Delete
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-            <div>
-              <p className="text-muted-foreground">User ID:</p>
-              <p className="font-mono">{user?.id || 'None'}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Scene ID:</p>
-              <p className="font-mono">{id}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Project ID:</p>
-              <p className="font-mono">{projectId || 'None'}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Assets Count:</p>
-              <p className="font-mono">{assets.length}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Loading:</p>
-              <p className="font-mono">{loading.toString()}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Assets Loading:</p>
-              <p className="font-mono">{assetsLoading.toString()}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Auth Loading:</p>
-              <p className="font-mono">{authLoading.toString()}</p>
-            </div>
-            <div>
-              <p className="text-muted-foreground">Timestamp:</p>
-              <p className="font-mono">{new Date().toLocaleTimeString()}</p>
-            </div>
-          </div>
-        </div>
+
 
         {/* Unlinked Assets Section */}
         {assets.length === 0 && (
@@ -1399,7 +1330,7 @@ function ScenePageClient({ id }: { id: string }) {
                                  }`}
                                >
                                  <div className="flex items-center gap-2">
-                                   <span>{script.version_name || `Version ${script.version}`}</span>
+                                   <span>{getCleanVersionName(script)}</span>
                                    {script.is_latest_version && (
                                      <span className="text-xs text-green-300">★</span>
                                    )}
@@ -1408,9 +1339,9 @@ function ScenePageClient({ id }: { id: string }) {
                                      variant="ghost"
                                      onClick={(e) => {
                                        e.stopPropagation()
-                                       startInlineEditing(script.id, 'version_name', script.version_name || `Version ${script.version}`)
+                                       startInlineEditing(script.id, 'version_name', getCleanVersionName(script))
                                      }}
-                                     className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity p-0 hover:bg-green-500/20"
+                                     className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity p-0 hover:bg-green-500/10"
                                    >
                                      <Edit className="h-3 w-3" />
                                    </Button>
@@ -1430,12 +1361,12 @@ function ScenePageClient({ id }: { id: string }) {
                              size="sm"
                              variant="ghost"
                              onClick={() => {
-                               const cleanName = generateCleanName(script.version_name || `Version ${script.version}`, 'version_name')
+                               const cleanName = generateCleanName(getCleanVersionName(script), 'version_name')
                                startInlineEditing(script.id, 'version_name', cleanName)
                              }}
                              className="h-6 px-2 text-xs hover:bg-green-500/10 hover:text-green-400"
                            >
-                             {generateCleanName(script.version_name || `Version ${script.version}`, 'version_name')}
+                             {generateCleanName(getCleanVersionName(script), 'version_name')}
                            </Button>
                          ))}
                        </div>
@@ -1490,23 +1421,23 @@ function ScenePageClient({ id }: { id: string }) {
                                  }
                                  
                                  return (
-                                   <div className="flex items-center gap-2 group">
-                                     <span>{activeScript.title}</span>
-                                     <Button
-                                       size="sm"
-                                       variant="ghost"
-                                       onClick={() => startInlineEditing(activeScript.id, 'title', activeScript.title)}
-                                       className="h-6 px-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                                     >
-                                       <Edit className="h-3 w-3" />
-                                     </Button>
-                                   </div>
+                                                                    <div className="flex items-center gap-2 group">
+                                   <span>{generateCleanName(activeScript.title, 'title')}</span>
+                                   <Button
+                                     size="sm"
+                                     variant="ghost"
+                                     onClick={() => startInlineEditing(activeScript.id, 'title', activeScript.title)}
+                                     className="h-6 px-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                   >
+                                     <Edit className="h-3 w-3" />
+                                   </Button>
+                                 </div>
                                  )
                                })()}</h4>
                                <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
                                  {(() => {
                                    const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                                   return activeScript.version_name || `v${activeScript.version}`
+                                   return getCleanVersionName(activeScript)
                                  })()}
                                </Badge>
                                {(() => {
@@ -2012,7 +1943,7 @@ function ScenePageClient({ id }: { id: string }) {
                              })()}
                              title={(() => {
                                const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                               return activeScript.title || 'Script'
+                               return generateCleanName(activeScript.title, 'title') || 'Script'
                              })()}
                              className="mt-4"
                              projectId={projectId}
@@ -2048,9 +1979,9 @@ function ScenePageClient({ id }: { id: string }) {
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-3 mb-2">
-                                <h4 className="text-xl font-bold text-primary">{selectedVersion.title}</h4>
+                                <h4 className="text-xl font-bold text-primary">{generateCleanName(selectedVersion.title, 'title')}</h4>
                                 <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                  {selectedVersion.version_name || `v${selectedVersion.version}`}
+                                  {getCleanVersionName(selectedVersion)}
                                 </Badge>
                                 {selectedVersion.is_latest_version && (
                                   <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
@@ -2075,7 +2006,7 @@ function ScenePageClient({ id }: { id: string }) {
                                            : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
                                        }`}
                                      >
-                                       {version.version_name || `Version ${version.version}`}
+                                       {getCleanVersionName(version)}
                                        {version.is_latest_version && (
                                          <span className="ml-1 text-xs text-green-300">★</span>
                                        )}
@@ -2462,7 +2393,7 @@ function ScenePageClient({ id }: { id: string }) {
                           <div data-tts-component>
                             <TextToSpeech 
                               text={selectedVersion.content || ''}
-                              title={selectedVersion.title || 'Script'}
+                              title={generateCleanName(selectedVersion.title, 'title') || 'Script'}
                               className="mt-4"
                               projectId={projectId}
                               sceneId={id}
@@ -2519,14 +2450,14 @@ function ScenePageClient({ id }: { id: string }) {
                         {image.content_url ? (
                           <img 
                             src={image.content_url} 
-                            alt={image.title}
+                            alt={generateCleanName(image.title, 'title')}
                             className="w-full h-full object-cover"
                           />
                         ) : (
                           <ImageIcon className="h-8 w-8 text-muted-foreground" />
                         )}
                       </div>
-                      <h4 className="font-medium text-foreground mb-1">{image.title}</h4>
+                      <h4 className="font-medium text-foreground mb-1">{generateCleanName(image.title, 'title')}</h4>
                       <p className="text-sm text-muted-foreground mb-2">
                         Generated with {image.model} • {new Date(image.created_at).toLocaleDateString()}
                       </p>
@@ -2895,11 +2826,11 @@ function ScenePageClient({ id }: { id: string }) {
                                 <div className="flex items-start justify-between">
                                   <div className="flex-1">
                                     <div className="flex items-center gap-3 mb-2">
-                                      <h4 className="text-xl font-bold text-green-400">{latestVersion.title}</h4>
+                                      <h4 className="text-xl font-bold text-green-400">{generateCleanName(latestVersion.title, 'title')}</h4>
                                       {/* BIG VERSION LABEL */}
                                       <div className="flex items-center gap-2">
                                         <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                          {latestVersion.version_name || `v${latestVersion.version}`}
+                                          {getCleanVersionName(latestVersion)}
                                         </Badge>
                                         {latestVersion.metadata?.version_label && (
                                           <Badge variant="outline" className="px-2 py-1 border-blue-500 text-blue-400 bg-blue-500/10">
@@ -2932,7 +2863,7 @@ function ScenePageClient({ id }: { id: string }) {
                                                   ? 'bg-green-300'
                                                   : 'bg-gray-400 hover:bg-gray-300'
                                               }`}
-                                              title={`Version ${version.version} - ${new Date(version.created_at).toLocaleDateString()}`}
+                                              title={`${getCleanVersionName(version)} - ${new Date(version.created_at).toLocaleDateString()}`}
                                             />
                                           ))}
                                         </div>
@@ -3186,7 +3117,7 @@ function ScenePageClient({ id }: { id: string }) {
                                       <div data-tts-component>
                                         <TextToSpeech 
                                           text={latestVersion.content || ''}
-                                          title={latestVersion.title || 'Script'}
+                                          title={generateCleanName(latestVersion.title, 'title') || 'Script'}
                                           className="mt-4"
                                           projectId={projectId}
                                           sceneId={id}
@@ -3198,7 +3129,7 @@ function ScenePageClient({ id }: { id: string }) {
                                     <div className="flex justify-center">
                                       <img
                                         src={latestVersion.content_url}
-                                        alt={latestVersion.title}
+                                        alt={generateCleanName(latestVersion.title, 'title')}
                                         className="max-w-full h-48 object-cover rounded-lg border border-border"
                                       />
                                     </div>
@@ -3393,7 +3324,7 @@ function ScenePageClient({ id }: { id: string }) {
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                              {version.version_name || `v${version.version}`}
+                              {getCleanVersionName(version)}
                             </Badge>
                             {version.metadata?.version_label && (
                               <Badge variant="outline" className="px-2 py-1 border-blue-500 text-blue-400 bg-blue-500/10">
@@ -3410,7 +3341,7 @@ function ScenePageClient({ id }: { id: string }) {
                             {new Date(version.created_at).toLocaleDateString()}
                           </span>
                         </div>
-                        <h4 className="text-lg font-semibold text-green-400">{version.title}</h4>
+                        <h4 className="text-lg font-semibold text-green-400">{generateCleanName(version.title, 'title')}</h4>
                       </CardHeader>
                       
                       <CardContent>
@@ -3426,7 +3357,7 @@ function ScenePageClient({ id }: { id: string }) {
                             <div data-tts-component>
                               <TextToSpeech 
                                 text={version.content || ''}
-                                title={version.title || 'Script'}
+                                title={generateCleanName(version.title, 'title') || 'Script'}
                                 className="mt-4"
                                 projectId={projectId}
                                 sceneId={id}
@@ -3438,7 +3369,7 @@ function ScenePageClient({ id }: { id: string }) {
                           <div className="flex justify-center">
                             <img
                               src={version.content_url}
-                              alt={version.title}
+                              alt={generateCleanName(version.title, 'title')}
                               className="max-w-full h-64 object-cover rounded-lg border border-border"
                             />
                           </div>
@@ -3488,7 +3419,7 @@ function ScenePageClient({ id }: { id: string }) {
                 <div className="p-4 bg-green-500/10 rounded-lg border border-green-500/20">
                   <div className="flex items-center gap-3 mb-3">
                     <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                      {editingVersion.version_name || `v${editingVersion.version}`}
+                      {getCleanVersionName(editingVersion)}
                     </Badge>
                     <Badge className="bg-green-500 text-white px-2 py-1 text-sm">
                       {editingVersion.content_type.toUpperCase()}
@@ -3669,7 +3600,7 @@ function ScenePageClient({ id }: { id: string }) {
                       <div data-tts-component>
                         <TextToSpeech 
                           text={versionEditForm.content || ''}
-                          title={editingVersion.title || 'Script'}
+                                                          title={generateCleanName(editingVersion.title, 'title') || 'Script'}
                           className="mt-4"
                           projectId={projectId}
                           sceneId={id}
