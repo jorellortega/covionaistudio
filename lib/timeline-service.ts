@@ -131,7 +131,7 @@ export class TimelineService {
         .select('*')
         .eq('timeline_id', timelineId)
         .eq('user_id', user.id)
-        .order('start_time_seconds', { ascending: true })
+        .order('order_index', { ascending: true })
 
       if (error) {
         console.error('Error fetching scenes:', error)
@@ -210,11 +210,15 @@ export class TimelineService {
   static async createScene(sceneData: CreateSceneData): Promise<Scene> {
     const user = await this.ensureAuthenticated()
     
+    // Get the next available order index for this timeline
+    const nextOrderIndex = await this.getNextSceneOrderIndex(sceneData.timeline_id)
+    
     const { data, error } = await supabase
       .from('scenes')
       .insert({
         ...sceneData,
         user_id: user.id,
+        order_index: nextOrderIndex,
       })
       .select()
       .single()
@@ -247,16 +251,22 @@ export class TimelineService {
 
   static async deleteScene(sceneId: string): Promise<void> {
     const user = await this.ensureAuthenticated()
-    const { error } = await supabase
+    
+    // Get the timeline_id for this scene before deleting
+    const { data: scene, error: fetchError } = await supabase
       .from('scenes')
-      .delete()
+      .select('timeline_id')
       .eq('id', sceneId)
       .eq('user_id', user.id)
+      .single()
 
-    if (error) {
-      console.error('Error deleting scene:', error)
-      throw error
+    if (fetchError) {
+      console.error('Error fetching scene timeline_id:', fetchError)
+      throw fetchError
     }
+
+    // Use the new reordering method to properly handle scene deletion
+    await this.removeSceneAndReorder(scene.timeline_id, sceneId)
   }
 
   static async refreshSceneThumbnail(sceneId: string): Promise<string | null> {
@@ -568,6 +578,192 @@ export class TimelineService {
     } catch (error) {
       console.error('Error in cleanupDuplicateTimelines:', error)
       return { success: false, error: 'Timeline cleanup failed', details: error }
+    }
+  }
+
+  // Scene ordering methods
+  static async reorderScenes(timelineId: string, sceneOrder: { id: string; order_index: number }[]): Promise<boolean> {
+    try {
+      const user = await this.ensureAuthenticated()
+      console.log('Reordering scenes for timeline:', timelineId, 'new order:', sceneOrder)
+      
+      // Update each scene with its new order_index
+      for (const sceneUpdate of sceneOrder) {
+        const { error } = await supabase
+          .from('scenes')
+          .update({ order_index: sceneUpdate.order_index })
+          .eq('id', sceneUpdate.id)
+          .eq('timeline_id', timelineId)
+          .eq('user_id', user.id)
+
+        if (error) {
+          console.error('Error updating scene order:', error)
+          throw error
+        }
+      }
+
+      console.log('Scene reordering completed successfully')
+      return true
+    } catch (error) {
+      console.error('Error in reorderScenes:', error)
+      throw error
+    }
+  }
+
+  static async insertSceneAtPosition(
+    timelineId: string, 
+    sceneData: CreateSceneData, 
+    position: number
+  ): Promise<Scene> {
+    try {
+      const user = await this.ensureAuthenticated()
+      console.log('Inserting scene at position:', position, 'for timeline:', timelineId)
+      
+      // First, shift existing scenes to make room for the new position
+      const { data: existingScenes, error: fetchError } = await supabase
+        .from('scenes')
+        .select('id, order_index')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .gte('order_index', position)
+        .order('order_index', { ascending: true })
+
+      if (fetchError) {
+        console.error('Error fetching existing scenes:', fetchError)
+        throw fetchError
+      }
+
+      // Shift scenes to make room
+      for (const scene of existingScenes || []) {
+        const { error: updateError } = await supabase
+          .from('scenes')
+          .update({ order_index: scene.order_index + 1 })
+          .eq('id', scene.id)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error shifting scene:', updateError)
+          throw updateError
+        }
+      }
+
+      // Insert the new scene at the specified position
+      const { data: newScene, error: insertError } = await supabase
+        .from('scenes')
+        .insert({
+          ...sceneData,
+          timeline_id: timelineId,
+          user_id: user.id,
+          order_index: position
+        })
+        .select()
+        .single()
+
+      if (insertError) {
+        console.error('Error inserting new scene:', insertError)
+        throw insertError
+      }
+
+      console.log('Scene inserted successfully at position:', position)
+      return newScene
+    } catch (error) {
+      console.error('Error in insertSceneAtPosition:', error)
+      throw error
+    }
+  }
+
+  static async removeSceneAndReorder(timelineId: string, sceneId: string): Promise<boolean> {
+    try {
+      const user = await this.ensureAuthenticated()
+      console.log('Removing scene and reordering:', sceneId, 'from timeline:', timelineId)
+      
+      // Get the scene's current position
+      const { data: scene, error: fetchError } = await supabase
+        .from('scenes')
+        .select('order_index')
+        .eq('id', sceneId)
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching scene position:', fetchError)
+        throw fetchError
+      }
+
+      const removedPosition = scene.order_index
+
+      // Delete the scene
+      const { error: deleteError } = await supabase
+        .from('scenes')
+        .delete()
+        .eq('id', sceneId)
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+
+      if (deleteError) {
+        console.error('Error deleting scene:', deleteError)
+        throw deleteError
+      }
+
+      // Shift remaining scenes to fill the gap
+      const { data: remainingScenes, error: shiftError } = await supabase
+        .from('scenes')
+        .select('id, order_index')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .gt('order_index', removedPosition)
+        .order('order_index', { ascending: true })
+
+      if (shiftError) {
+        console.error('Error fetching remaining scenes:', shiftError)
+        throw shiftError
+      }
+
+      // Shift scenes down to fill the gap
+      for (const remainingScene of remainingScenes || []) {
+        const { error: updateError } = await supabase
+          .from('scenes')
+          .update({ order_index: remainingScene.order_index - 1 })
+          .eq('id', remainingScene.id)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error shifting remaining scene:', updateError)
+          throw updateError
+        }
+      }
+
+      console.log('Scene removal and reordering completed successfully')
+      return true
+    } catch (error) {
+      console.error('Error in removeSceneAndReorder:', error)
+      throw error
+    }
+  }
+
+  static async getNextSceneOrderIndex(timelineId: string): Promise<number> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      const { data, error } = await supabase
+        .from('scenes')
+        .select('order_index')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .order('order_index', { ascending: false })
+        .limit(1)
+
+      if (error) {
+        console.error('Error getting next scene order index:', error)
+        throw error
+      }
+
+      // Return the next available order index
+      return (data?.[0]?.order_index || 0) + 1
+    } catch (error) {
+      console.error('Error in getNextSceneOrderIndex:', error)
+      throw error
     }
   }
 }

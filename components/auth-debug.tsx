@@ -1,103 +1,96 @@
 "use client"
 
-import { useAuth } from "@/lib/auth-context-fixed"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
+import { useAuth } from '@/lib/auth-context-fixed'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function AuthDebug() {
-  const { user, loading, signOut, resetLoadingState } = useAuth()
+  const { user, isLoading, isInitialized, signOut } = useAuth()
 
   const handleSignOut = async () => {
     try {
       await signOut()
+      console.log('Sign out successful')
     } catch (error) {
-      console.error('Error signing out:', error)
+      console.error('Sign out error:', error)
     }
   }
 
-  const handleResetLoading = () => {
-    resetLoadingState()
-  }
-
-  const clearLocalStorage = () => {
-    localStorage.clear()
-    sessionStorage.clear()
-    window.location.reload()
-  }
-
-  const clearSupabaseStorage = () => {
-    // Clear Supabase-specific storage
-    localStorage.removeItem('sb-auth-token')
-    localStorage.removeItem('supabase.auth.token')
-    sessionStorage.removeItem('sb-auth-token')
-    sessionStorage.removeItem('supabase.auth.token')
-    window.location.reload()
+  const handleRefreshSession = async () => {
+    try {
+      const { data: { session } } = await fetch('/api/auth/refresh', {
+        method: 'POST',
+      }).then(res => res.json())
+      
+      console.log('Session refresh result:', session)
+    } catch (error) {
+      console.error('Session refresh error:', error)
+    }
   }
 
   return (
-    <Card className="w-full max-w-2xl mx-auto">
+    <Card className="w-full max-w-md mx-auto">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          🔐 Authentication Debug
-          <Badge variant={loading ? "secondary" : user ? "default" : "destructive"}>
-            {loading ? "Loading..." : user ? "Authenticated" : "Not Authenticated"}
-          </Badge>
-        </CardTitle>
+        <CardTitle>Auth Debug Panel</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <h3 className="font-semibold">Current State:</h3>
-          <div className="text-sm space-y-1">
-            <div>Loading: {loading.toString()}</div>
-            <div>User: {user ? "Yes" : "No"}</div>
-            {user && (
-              <>
-                <div>User ID: {user.id}</div>
-                <div>Email: {user.email}</div>
-                <div>Name: {user.name}</div>
-                <div>Role: {user.role}</div>
-              </>
-            )}
+          <div className="flex justify-between">
+            <span className="font-medium">Loading:</span>
+            <span className={isLoading ? 'text-yellow-500' : 'text-green-500'}>
+              {isLoading ? 'Yes' : 'No'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-medium">Initialized:</span>
+            <span className={isInitialized ? 'text-green-500' : 'text-red-500'}>
+              {isInitialized ? 'Yes' : 'No'}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-medium">User:</span>
+            <span className={user ? 'text-green-500' : 'text-gray-500'}>
+              {user ? user.email : 'None'}
+            </span>
           </div>
         </div>
 
-        <div className="space-y-2">
-          <h3 className="font-semibold">Debug Actions:</h3>
-          <div className="flex flex-wrap gap-2">
-            <Button onClick={handleSignOut} variant="outline" size="sm">
+        {user && (
+          <div className="space-y-2 p-3 bg-gray-50 rounded">
+            <div className="text-sm">
+              <strong>User ID:</strong> {user.id}
+            </div>
+            <div className="text-sm">
+              <strong>Name:</strong> {user.name}
+            </div>
+            <div className="text-sm">
+              <strong>Role:</strong> {user.role}
+            </div>
+          </div>
+        )}
+
+        <div className="flex space-x-2">
+          <Button 
+            onClick={handleRefreshSession}
+            variant="outline"
+            size="sm"
+          >
+            Refresh Session
+          </Button>
+          {user && (
+            <Button 
+              onClick={handleSignOut}
+              variant="destructive"
+              size="sm"
+            >
               Sign Out
             </Button>
-            <Button onClick={handleResetLoading} variant="outline" size="sm">
-              Reset Loading State
-            </Button>
-            <Button onClick={clearLocalStorage} variant="outline" size="sm">
-              Clear Local Storage
-            </Button>
-            <Button onClick={clearSupabaseStorage} variant="outline" size="sm">
-              Clear Supabase Storage
-            </Button>
-            <Button onClick={() => window.location.reload()} variant="outline" size="sm">
-              Reload Page
-            </Button>
-          </div>
+          )}
         </div>
 
-        <div className="space-y-2">
-          <h3 className="font-semibold">Storage Check:</h3>
-          <div className="text-sm space-y-1">
-            <div>Local Storage Keys: {Object.keys(localStorage).length}</div>
-            <div>Session Storage Keys: {Object.keys(sessionStorage).length}</div>
-            <div>Cookies: {document.cookie ? document.cookie.split(';').length : 0}</div>
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="font-semibold">Environment Check:</h3>
-          <div className="text-sm space-y-1">
-            <div>Supabase URL: {process.env.NEXT_PUBLIC_SUPABASE_URL ? "✅ Set" : "❌ Missing"}</div>
-            <div>Supabase Key: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? "✅ Set" : "❌ Missing"}</div>
-          </div>
+        <div className="text-xs text-gray-500">
+          <p>Use this panel to debug authentication issues.</p>
+          <p>Check the console for detailed logs.</p>
         </div>
       </CardContent>
     </Card>
