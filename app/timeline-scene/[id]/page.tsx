@@ -53,6 +53,7 @@ import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 import FileImport from "@/components/file-import"
 import TextToSpeech from "@/components/text-to-speech"
+import AITextEditor from "@/components/ai-text-editor"
 
 export default function ScenePage() {
   const params = useParams()
@@ -90,7 +91,13 @@ function ScenePageClient({ id }: { id: string }) {
   const [versionEditForm, setVersionEditForm] = useState({
     title: '',
     version_name: '',
-    content: ''
+    content: '',
+    selection: ''
+  } as {
+    title: string;
+    version_name: string;
+    content: string;
+    selection?: string;
   })
   const [projectId, setProjectId] = useState<string>("")
   
@@ -99,12 +106,21 @@ function ScenePageClient({ id }: { id: string }) {
     assetId: string;
     field: 'title' | 'content' | 'version_name';
     value: string;
+    selection?: string;
   } | null>(null)
-  const [autoSaveTimer, setAutoSaveTimer] = useState<NodeJS.Timeout | null>(null)
   const [savingStatus, setSavingStatus] = useState<{
     assetId: string;
     status: 'idle' | 'saving' | 'saved' | 'error';
     message?: string;
+  } | null>(null)
+
+  // AI text editing states
+  const [showAITextEditor, setShowAITextEditor] = useState(false)
+  const [aiEditData, setAiEditData] = useState<{
+    selectedText: string;
+    fullContent: string;
+    assetId: string;
+    field: 'content';
   } | null>(null)
 
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
@@ -196,15 +212,11 @@ function ScenePageClient({ id }: { id: string }) {
   // Cleanup function for inline editing
   useEffect(() => {
     return () => {
-      // Clear any pending timers
-      if (autoSaveTimer) {
-        clearTimeout(autoSaveTimer)
-      }
       // Clear editing states
       setInlineEditing(null)
       setSavingStatus(null)
     }
-  }, [autoSaveTimer])
+  }, [])
 
   // Effect to fetch assets
   useEffect(() => {
@@ -513,28 +525,184 @@ function ScenePageClient({ id }: { id: string }) {
   const cancelInlineEditing = () => {
     setInlineEditing(null)
     setSavingStatus(null)
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer)
-      setAutoSaveTimer(null)
-    }
   }
 
   const handleInlineEditChange = (value: string) => {
     if (!inlineEditing) return
     
     setInlineEditing(prev => prev ? { ...prev, value } : null)
+  }
+
+  // Enhanced text selection handler
+  const handleTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation()
+    e.preventDefault()
     
-    // Clear existing timer
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer)
+    const target = e.target as HTMLTextAreaElement
+    const selection = target.value.substring(target.selectionStart, target.selectionEnd)
+    
+    if (selection.length > 0) {
+      // Store selection for context menu actions
+      setInlineEditing(prev => prev ? { ...prev, selection } : null)
+    } else {
+      // Clear selection
+      setInlineEditing(prev => prev ? { ...prev, selection: undefined } : null)
+    }
+  }
+
+  // AI text editing handler
+  const handleAITextEdit = (selectedText: string, fullContent: string, assetId: string) => {
+    setAiEditData({
+      selectedText,
+      fullContent,
+      assetId,
+      field: 'content'
+    })
+    setShowAITextEditor(true)
+  }
+
+  // Handle AI text replacement
+  const handleAITextReplace = (newText: string) => {
+    if (!aiEditData || !inlineEditing) return
+    
+    // Replace the selected text with the new AI-generated text
+    const target = document.querySelector('textarea') as HTMLTextAreaElement
+    if (target) {
+      const start = target.selectionStart
+      const end = target.selectionEnd
+      const currentValue = target.value
+      const newValue = currentValue.substring(0, start) + newText + currentValue.substring(end)
+      
+      // Update the inline editing value
+      handleInlineEditChange(newValue)
+      
+      // Clear the AI edit data
+      setAiEditData(null)
+      setShowAITextEditor(false)
+    }
+  }
+
+  // Recursive delete function that handles complex circular references
+  const deleteAssetWithVersioning = async (assetId: string) => {
+    console.log('🎬 TIMELINE-SCENE - Recursive delete for asset:', assetId)
+    
+    try {
+      // Step 1: Get the asset and its relationships
+      const { data: asset, error: assetError } = await supabase
+        .from('assets')
+        .select('*')
+        .eq('id', assetId)
+        .single()
+      
+      if (assetError) {
+        throw new Error(`Asset not found: ${assetError.message}`)
+      }
+      
+      console.log('🎬 TIMELINE-SCENE - Asset to delete:', asset)
+      
+      // Step 2: Find ALL assets that reference this asset (direct and indirect)
+      const assetsToDelete = new Set<string>()
+      const processedAssets = new Set<string>()
+      
+      // Recursive function to find all related assets
+      const findRelatedAssets = async (currentAssetId: string) => {
+        if (processedAssets.has(currentAssetId)) return
+        processedAssets.add(currentAssetId)
+        
+        // Add current asset to deletion list
+        assetsToDelete.add(currentAssetId)
+        
+        // Find assets that reference this asset as parent
+        const { data: children, error: childError } = await supabase
+          .from('assets')
+          .select('id, parent_asset_id')
+          .eq('parent_asset_id', currentAssetId)
+        
+        if (childError) {
+          console.error('🎬 TIMELINE-SCENE - Error finding children:', childError)
+          return
+        }
+        
+        // Recursively find children of children
+        if (children) {
+          for (const child of children) {
+            await findRelatedAssets(child.id)
+          }
+        }
+      }
+      
+      // Start the recursive search
+      await findRelatedAssets(assetId)
+      
+      console.log('🎬 TIMELINE-SCENE - Assets to delete (including related):', Array.from(assetsToDelete))
+      
+      // Step 3: Delete all related assets in the correct order
+      // We need to delete from leaves to root (children before parents)
+      const assetsArray = Array.from(assetsToDelete)
+      
+      // Sort assets so children are deleted before parents
+      // This is a simple approach - in a more complex scenario, you might need topological sorting
+      for (let i = 0; i < assetsArray.length; i++) {
+        const currentAssetId = assetsArray[i]
+        
+        // Check if this asset has any remaining children that haven't been deleted yet
+        const { data: remainingChildren, error: checkError } = await supabase
+          .from('assets')
+          .select('id')
+          .eq('parent_asset_id', currentAssetId)
+          .in('id', assetsArray) // Only check assets in our deletion list
+        
+        if (checkError) {
+          console.error('🎬 TIMELINE-SCENE - Error checking remaining children:', checkError)
+          continue
+        }
+        
+        // If this asset still has children in our deletion list, skip it for now
+        if (remainingChildren && remainingChildren.length > 0) {
+          // Move this asset to the end of the list to process later
+          assetsArray.push(assetsArray.splice(i, 1)[0])
+          i-- // Re-process this index
+          continue
+        }
+        
+        // Safe to delete this asset
+        console.log('🎬 TIMELINE-SCENE - Deleting asset:', currentAssetId)
+        const { error: deleteError } = await supabase
+          .from('assets')
+          .delete()
+          .eq('id', currentAssetId)
+          .eq('user_id', user?.id)
+        
+        if (deleteError) {
+          console.error('🎬 TIMELINE-SCENE - Failed to delete asset:', currentAssetId, deleteError)
+          throw new Error(`Failed to delete asset ${currentAssetId}: ${deleteError.message}`)
+        }
+        
+        console.log('🎬 TIMELINE-SCENE - Successfully deleted asset:', currentAssetId)
+      }
+      
+      console.log('🎬 TIMELINE-SCENE - All related assets deleted successfully!')
+      return { success: true, error: null }
+      
+    } catch (error) {
+      console.error('🎬 TIMELINE-SCENE - Recursive delete error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
+  // Test delete function to debug issues
+  const testDeleteAsset = async (assetId: string) => {
+    console.log('🎬 TIMELINE-SCENE - Testing smart delete for asset:', assetId)
+    
+    const result = await deleteAssetWithVersioning(assetId)
+    
+    if (result.success) {
+      console.log('🎬 TIMELINE-SCENE - Smart delete test passed!')
+    } else {
+      console.error('🎬 TIMELINE-SCENE - Smart delete test failed:', result.error)
     }
     
-    // Set new auto-save timer (2 seconds delay)
-    const timer = setTimeout(() => {
-      saveInlineEdit()
-    }, 2000)
-    
-    setAutoSaveTimer(timer)
+    return result
   }
 
   // Helper function to generate shorter, cleaner names
@@ -605,10 +773,6 @@ function ScenePageClient({ id }: { id: string }) {
       
       // Clear inline editing
       setInlineEditing(null)
-      if (autoSaveTimer) {
-        clearTimeout(autoSaveTimer)
-        setAutoSaveTimer(null)
-      }
       
       // Clear success status after 3 seconds
       setTimeout(() => {
@@ -637,10 +801,6 @@ function ScenePageClient({ id }: { id: string }) {
   }
 
   const saveInlineEditImmediately = () => {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer)
-      setAutoSaveTimer(null)
-    }
     saveInlineEdit()
   }
 
@@ -680,6 +840,69 @@ function ScenePageClient({ id }: { id: string }) {
         
         {/* Action Buttons */}
         <div className="flex justify-end gap-3 mb-6">
+          {/* Create New Script Version */}
+          {assets.filter(a => a.content_type === 'script').length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-transparent"
+              onClick={async () => {
+                const scriptAssets = assets.filter(a => a.content_type === 'script')
+                const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                
+                try {
+                  setLoading(true)
+                  
+                  // Create a new version by duplicating the current script
+                  const newAssetData = {
+                    project_id: activeScript.project_id,
+                    scene_id: activeScript.scene_id,
+                    title: `${activeScript.title} (Copy)`,
+                    content_type: activeScript.content_type,
+                    content: activeScript.content,
+                    content_url: activeScript.content_url,
+                    prompt: activeScript.prompt,
+                    model: activeScript.model,
+                    version_name: `Version ${(activeScript.version || 0) + 1}`,
+                    generation_settings: activeScript.generation_settings,
+                    metadata: {
+                      ...activeScript.metadata,
+                      duplicated_from_version: activeScript.version,
+                      duplicated_at: new Date().toISOString(),
+                      duplicated_from_asset_id: activeScript.id,
+                      is_duplicate: true
+                    }
+                  }
+                  
+                  // Save as new version
+                  await AssetService.createAsset(newAssetData)
+                  
+                  // Refresh assets
+                  refreshAssets()
+                  
+                  toast({
+                    title: "New Version Created!",
+                    description: `A copy of "${activeScript.title}" has been created as a new version.`,
+                  })
+                  
+                } catch (error) {
+                  console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                  toast({
+                    title: "Error",
+                    description: "Failed to create new version. Please try again.",
+                    variant: "destructive",
+                  })
+                } finally {
+                  setLoading(false)
+                }
+              }}
+              disabled={loading}
+            >
+              <Copy className="h-4 w-4 mr-2" />
+              Duplicate Script
+            </Button>
+          )}
+          
           <Button
             variant="outline"
             size="sm"
@@ -728,25 +951,58 @@ function ScenePageClient({ id }: { id: string }) {
         <div className="mb-6 p-4 bg-muted/20 border border-border rounded-lg">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-medium text-muted-foreground">Debug Information</h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                console.log('🎬 TIMELINE-SCENE - Debug panel refresh clicked')
-                console.log('🎬 TIMELINE-SCENE - Current state:', {
-                  user: user ? { id: user.id, email: user.email } : null,
-                  scene: scene ? { id: scene.id, name: scene.name } : null,
-                  assets: assets.length,
-                  loading,
-                  assetsLoading,
-                  authLoading,
-                  projectId
-                })
-              }}
-              className="text-xs"
-            >
-              Refresh Debug
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  console.log('🎬 TIMELINE-SCENE - Debug panel refresh clicked')
+                  console.log('🎬 TIMELINE-SCENE - Current state:', {
+                    user: user ? { id: user.id, email: user.email } : null,
+                    scene: scene ? { id: scene.id, name: scene.name } : null,
+                    assets: assets.length,
+                    loading,
+                    assetsLoading,
+                    authLoading,
+                    projectId
+                  })
+                }}
+                className="text-xs"
+              >
+                Refresh Debug
+              </Button>
+              
+              {/* Test Delete Button */}
+              {assets.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  onClick={async () => {
+                    const firstAsset = assets[0]
+                    console.log('🎬 TIMELINE-SCENE - Testing delete with first asset:', firstAsset.id)
+                    
+                    const result = await testDeleteAsset(firstAsset.id)
+                    
+                    if (result.success) {
+                      toast({
+                        title: "Delete Test Passed!",
+                        description: "Asset was successfully deleted. Refreshing assets...",
+                      })
+                      refreshAssets()
+                    } else {
+                      toast({
+                        title: "Delete Test Failed",
+                        description: result.error || "Unknown error occurred",
+                        variant: "destructive",
+                      })
+                    }
+                  }}
+                >
+                  Test Delete
+                </Button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
             <div>
@@ -926,6 +1182,68 @@ function ScenePageClient({ id }: { id: string }) {
                 </p>
               </div>
               <div className="flex gap-2">
+                {/* Create New Version from Current Script */}
+                {assets.filter(a => a.content_type === 'script').length > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-transparent"
+                    onClick={async () => {
+                      const scriptAssets = assets.filter(a => a.content_type === 'script')
+                      const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                      
+                      try {
+                        setLoading(true)
+                        
+                        // Create a new version by duplicating the current script
+                        const newAssetData = {
+                          project_id: activeScript.project_id,
+                          scene_id: activeScript.scene_id,
+                          title: `${activeScript.title} (Copy)`,
+                          content_type: activeScript.content_type,
+                          content: activeScript.content,
+                          content_url: activeScript.content_url,
+                          prompt: activeScript.prompt,
+                          model: activeScript.model,
+                          version_name: `Version ${(activeScript.version || 0) + 1}`,
+                          generation_settings: activeScript.generation_settings,
+                          metadata: {
+                            ...activeScript.metadata,
+                            duplicated_from_version: activeScript.version,
+                            duplicated_at: new Date().toISOString(),
+                            duplicated_from_asset_id: activeScript.id,
+                            is_duplicate: true
+                          }
+                        }
+                        
+                        // Save as new version
+                        await AssetService.createAsset(newAssetData)
+                        
+                        // Refresh assets
+                        refreshAssets()
+                        
+                        toast({
+                          title: "New Version Created!",
+                          description: `A copy of "${activeScript.title}" has been created as a new version.`,
+                        })
+                        
+                      } catch (error) {
+                        console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                        toast({
+                          title: "Error",
+                          description: "Failed to create new version. Please try again.",
+                          variant: "destructive",
+                        })
+                      } finally {
+                        setLoading(false)
+                      }
+                    }}
+                    disabled={loading}
+                  >
+                    <Copy className="h-4 w-4 mr-2" />
+                    Duplicate Current Script
+                  </Button>
+                )}
 
                 <Button
                   size="sm"
@@ -937,6 +1255,93 @@ function ScenePageClient({ id }: { id: string }) {
                 </Button>
               </div>
             </div>
+
+            {/* Version Management Info */}
+            <Card className="bg-card border-purple-500/20 mb-4">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-purple-500/20 rounded-lg">
+                    <Copy className="h-5 w-5 text-purple-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-medium text-purple-400 mb-1">Script Versioning</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Create new versions of your scripts to track changes, experiment with variations, or maintain different drafts. 
+                      Each version preserves the original content while allowing you to make modifications.
+                    </p>
+                    <div className="flex gap-2 mt-3">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-transparent"
+                        onClick={() => {
+                          const scriptAssets = assets.filter(a => a.content_type === 'script')
+                          if (scriptAssets.length > 0) {
+                            const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                            
+                            // Create a new version by duplicating the current script
+                            const newAssetData = {
+                              project_id: activeScript.project_id,
+                              scene_id: activeScript.scene_id,
+                              title: `${activeScript.title} (Copy)`,
+                              content_type: activeScript.content_type,
+                              content: activeScript.content,
+                              content_url: activeScript.content_url,
+                              prompt: activeScript.prompt,
+                              model: activeScript.model,
+                              version_name: `Version ${(activeScript.version || 0) + 1}`,
+                              generation_settings: activeScript.generation_settings,
+                              metadata: {
+                                ...activeScript.metadata,
+                                duplicated_from_version: activeScript.version,
+                                duplicated_at: new Date().toISOString(),
+                                duplicated_from_asset_id: activeScript.id,
+                                is_duplicate: true
+                              }
+                            }
+                            
+                            // Save as new version
+                            AssetService.createAsset(newAssetData).then(() => {
+                              refreshAssets()
+                              toast({
+                                title: "New Version Created!",
+                                description: `A copy of "${activeScript.title}" has been created as a new version.`,
+                              })
+                            }).catch((error) => {
+                              console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                              toast({
+                                title: "Error",
+                                description: "Failed to create new version. Please try again.",
+                                variant: "destructive",
+                              })
+                            })
+                          }
+                        }}
+                        disabled={assets.filter(a => a.content_type === 'script').length === 0}
+                      >
+                        <Copy className="h-4 w-4 mr-2" />
+                        Create New Version
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-muted-foreground hover:text-purple-400"
+                        onClick={() => {
+                          // Scroll to the versions tab
+                          const versionsTab = document.querySelector('[data-value="versions"]')
+                          if (versionsTab) {
+                            setActiveTab("versions")
+                          }
+                        }}
+                      >
+                        <GitCompare className="h-4 w-4 mr-2" />
+                        View All Versions
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {assets.filter(a => a.content_type === 'script').length > 0 ? (
               <div className="space-y-4">
@@ -1155,6 +1560,204 @@ function ScenePageClient({ id }: { id: string }) {
                                <Edit className="h-4 w-4 mr-2" />
                                Quick Edit
                              </Button>
+                             
+                             {/* Delete Version Button */}
+                             <AlertDialog>
+                               <AlertDialogTrigger asChild>
+                                 <Button
+                                   variant="outline"
+                                   size="sm"
+                                   className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                   disabled={inlineEditing !== null}
+                                 >
+                                   <Trash2 className="h-4 w-4 mr-2" />
+                                   Delete Version
+                                 </Button>
+                               </AlertDialogTrigger>
+                               <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                                 <AlertDialogHeader>
+                                   <AlertDialogTitle className="text-red-400">Delete Script Version</AlertDialogTitle>
+                                   <AlertDialogDescription className="text-muted-foreground">
+                                     This version may have related versions. How would you like to proceed?
+                                   </AlertDialogDescription>
+                                 </AlertDialogHeader>
+                                 <div className="py-4 space-y-3">
+                                   <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                                     <h4 className="font-medium text-blue-400 mb-2">Option 1: Delete All Related Versions</h4>
+                                     <p className="text-sm text-muted-foreground">
+                                       Removes this version and all its child versions completely. This is irreversible.
+                                     </p>
+                                   </div>
+                                   <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
+                                     <h4 className="font-medium text-green-400 mb-2">Option 2: Unlink Only</h4>
+                                     <p className="text-sm text-muted-foreground">
+                                       Removes the version relationship but keeps all assets. You can manually manage them later.
+                                     </p>
+                                   </div>
+                                 </div>
+                                 <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+                                   <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                                   <div className="flex gap-2">
+                                     <Button
+                                       variant="outline"
+                                       className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                       onClick={async () => {
+                                         const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                         
+                                         try {
+                                           setLoading(true)
+                                           
+                                           // Option 2: Just unlink the parent relationship
+                                           const { error: unlinkError } = await supabase
+                                             .from('assets')
+                                             .update({ parent_asset_id: null })
+                                             .eq('parent_asset_id', activeScript.id)
+                                             .eq('user_id', user?.id)
+                                           
+                                           if (unlinkError) {
+                                             throw new Error(`Failed to unlink: ${unlinkError.message}`)
+                                           }
+                                           
+                                           // Now delete the main asset
+                                           const { error: deleteError } = await supabase
+                                             .from('assets')
+                                             .delete()
+                                             .eq('id', activeScript.id)
+                                             .eq('user_id', user?.id)
+                                           
+                                           if (deleteError) {
+                                             throw new Error(`Failed to delete: ${deleteError.message}`)
+                                           }
+                                           
+                                           // Refresh assets
+                                           refreshAssets()
+                                           
+                                           toast({
+                                             title: "Version Unlinked & Deleted!",
+                                             description: `"${activeScript.title}" has been removed. Related versions are now independent.`,
+                                           })
+                                           
+                                         } catch (error) {
+                                           console.error('🎬 TIMELINE-SCENE - Error unlinking version:', error)
+                                           toast({
+                                             title: "Unlink Failed",
+                                             description: error instanceof Error ? error.message : "Failed to unlink version.",
+                                             variant: "destructive",
+                                           })
+                                         } finally {
+                                           setLoading(false)
+                                         }
+                                       }}
+                                       disabled={loading}
+                                     >
+                                       <Copy className="h-4 w-4 mr-2" />
+                                       Unlink Only
+                                     </Button>
+                                     <Button
+                                       className="bg-red-500 hover:bg-red-600"
+                                       onClick={async () => {
+                                         const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                         
+                                         try {
+                                           setLoading(true)
+                                           
+                                           const result = await deleteAssetWithVersioning(activeScript.id)
+                                           
+                                           if (result.success) {
+                                             // Refresh assets
+                                             refreshAssets()
+                                             
+                                             toast({
+                                               title: "All Versions Deleted!",
+                                               description: `"${activeScript.title}" and all related versions have been permanently removed.`,
+                                             })
+                                           } else {
+                                             toast({
+                                               title: "Delete Failed",
+                                               description: result.error || "Failed to delete version. Please try again.",
+                                               variant: "destructive",
+                                             })
+                                           }
+                                         } catch (error) {
+                                           console.error('🎬 TIMELINE-SCENE - Error deleting version:', error)
+                                           toast({
+                                             title: "Delete Failed",
+                                             description: error instanceof Error ? error.message : "Failed to delete version. Please try again.",
+                                             variant: "destructive",
+                                           })
+                                         } finally {
+                                           setLoading(false)
+                                         }
+                                       }}
+                                       disabled={loading}
+                                     >
+                                       <Trash2 className="h-4 w-4 mr-2" />
+                                       Delete All
+                                     </Button>
+                                   </div>
+                                 </AlertDialogFooter>
+                               </AlertDialogContent>
+                             </AlertDialog>
+                             
+                             {/* Create New Version Button */}
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                               onClick={async () => {
+                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                 
+                                 try {
+                                   setLoading(true)
+                                   
+                                   // Create a new version by duplicating the current script
+                                   const newAssetData = {
+                                     project_id: activeScript.project_id,
+                                     scene_id: activeScript.scene_id,
+                                     title: `${activeScript.title} (Copy)`,
+                                     content_type: activeScript.content_type,
+                                     content: activeScript.content,
+                                     content_url: activeScript.content_url,
+                                     prompt: activeScript.prompt,
+                                     model: activeScript.model,
+                                     version_name: `Version ${(activeScript.version || 0) + 1}`,
+                                     generation_settings: activeScript.generation_settings,
+                                     metadata: {
+                                       ...activeScript.metadata,
+                                       duplicated_from_version: activeScript.version,
+                                       duplicated_at: new Date().toISOString(),
+                                       duplicated_from_asset_id: activeScript.id,
+                                       is_duplicate: true
+                                     }
+                                   }
+                                   
+                                   // Save as new version
+                                   await AssetService.createAsset(newAssetData)
+                                   
+                                   // Refresh assets
+                                   refreshAssets()
+                                   
+                                   toast({
+                                     title: "New Version Created!",
+                                     description: `A copy of "${activeScript.title}" has been created as a new version.`,
+                                   })
+                                   
+                                 } catch (error) {
+                                   console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                                   toast({
+                                     title: "Error",
+                                     description: "Failed to create new version. Please try again.",
+                                     variant: "destructive",
+                                   })
+                                 } finally {
+                                   setLoading(false)
+                                 }
+                               }}
+                               disabled={loading}
+                             >
+                               <Copy className="h-4 w-4 mr-2" />
+                               Create New Version
+                             </Button>
                            </div>
                          </div>
                        </CardHeader>
@@ -1171,6 +1774,9 @@ function ScenePageClient({ id }: { id: string }) {
                                      <Label className="text-sm font-medium text-muted-foreground">
                                        Editing Script Content
                                      </Label>
+                                     <div className="text-xs text-blue-400">
+                                       💡 Select text for copy/clear/paste actions • Click Save when ready
+                                     </div>
                                      <div className="flex gap-2">
                                        <Button
                                          size="sm"
@@ -1197,7 +1803,164 @@ function ScenePageClient({ id }: { id: string }) {
                                      placeholder="Edit your script content here..."
                                      className="w-full h-96 p-4 border border-primary/30 focus:border-primary bg-background text-foreground resize-none font-mono text-sm leading-relaxed"
                                      autoFocus
+                                     onSelect={handleTextSelection}
+                                     onMouseDown={(e) => e.stopPropagation()}
+                                     onMouseUp={(e) => e.stopPropagation()}
+                                     onClick={(e) => e.stopPropagation()}
+                                     onFocus={(e) => e.stopPropagation()}
+                                     onKeyDown={(e) => {
+                                       // Handle keyboard shortcuts
+                                       if (e.ctrlKey || e.metaKey) {
+                                         if (e.key === 'Enter') {
+                                           // Ctrl/Cmd + Enter to save
+                                           e.preventDefault()
+                                           saveInlineEditImmediately()
+                                         }
+                                       }
+                                       
+                                       // Ctrl/Cmd + Shift + A for AI edit
+                                       if (e.ctrlKey || e.metaKey) {
+                                         if (e.shiftKey && e.key === 'A') {
+                                           e.preventDefault()
+                                           if (inlineEditing?.selection && inlineEditing.assetId) {
+                                             const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                             handleAITextEdit(
+                                               inlineEditing.selection,
+                                               activeScript.content || '',
+                                               inlineEditing.assetId
+                                             )
+                                           }
+                                         }
+                                       }
+                                     }}
                                    />
+                                   
+                                   {/* Text Selection Actions */}
+                                   {inlineEditing?.selection && (
+                                     <div className="space-y-3">
+                                       {/* Selection Info */}
+                                       <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg border border-border">
+                                         <span className="text-xs text-muted-foreground">
+                                           Selected: {inlineEditing.selection.length} characters
+                                         </span>
+                                         <span className="text-xs text-blue-400">
+                                           💡 Use Ctrl/Cmd + Shift + A for quick AI editing
+                                         </span>
+                                       </div>
+                                       
+                                       {/* Quick Action Buttons */}
+                                       <div className="flex gap-1">
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={(e) => {
+                                             e.preventDefault()
+                                             e.stopPropagation()
+                                             navigator.clipboard.writeText(inlineEditing.selection || '')
+                                             toast({
+                                               title: "Copied!",
+                                               description: "Selected text copied to clipboard",
+                                             })
+                                           }}
+                                           className="h-6 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                         >
+                                           <Copy className="h-3 w-3 mr-1" />
+                                           Copy
+                                         </Button>
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={(e) => {
+                                             e.preventDefault()
+                                             e.stopPropagation()
+                                             const target = document.querySelector('textarea') as HTMLTextAreaElement
+                                             if (target) {
+                                               const start = target.selectionStart
+                                               const end = target.selectionEnd
+                                               const newValue = target.value.substring(0, start) + target.value.substring(end)
+                                               handleInlineEditChange(newValue)
+                                               // Clear selection
+                                               setInlineEditing(prev => prev ? { ...prev, selection: undefined } : null)
+                                               toast({
+                                                 title: "Cleared!",
+                                                 description: "Selected text has been removed",
+                                               })
+                                             }
+                                           }}
+                                           className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                         >
+                                           <Trash2 className="h-3 w-3 mr-1" />
+                                           Clear
+                                         </Button>
+                                         <Button
+                                           size="sm"
+                                           variant="outline"
+                                           onClick={async (e) => {
+                                             e.preventDefault()
+                                             e.stopPropagation()
+                                             try {
+                                               const clipboardText = await navigator.clipboard.readText()
+                                               if (clipboardText) {
+                                                 const target = document.querySelector('textarea') as HTMLTextAreaElement
+                                                 if (target) {
+                                                   const start = target.selectionStart
+                                                   const end = target.selectionEnd
+                                                   const newValue = target.value.substring(0, start) + clipboardText + target.value.substring(end)
+                                                   handleInlineEditChange(newValue)
+                                                   toast({
+                                                     title: "Pasted!",
+                                                     description: "Clipboard content pasted",
+                                                   })
+                                                 }
+                                               }
+                                             } catch (error) {
+                                               toast({
+                                                 title: "Paste Failed",
+                                                 description: "Could not access clipboard. Try using Ctrl+V instead.",
+                                                 variant: "destructive",
+                                               })
+                                             }
+                                           }}
+                                           className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                         >
+                                           <Upload className="h-3 w-3 mr-1" />
+                                           Paste
+                                         </Button>
+                                       </div>
+                                       
+                                       {/* AI Edit Section */}
+                                       <div className="p-3 bg-purple-500/10 rounded-lg border border-purple-500/20">
+                                         <div className="flex items-center justify-between mb-2">
+                                           <span className="text-xs font-medium text-purple-400">
+                                             🤖 AI-Powered Text Editing
+                                           </span>
+                                           <Button
+                                             size="sm"
+                                             variant="outline"
+                                             onClick={(e) => {
+                                               e.preventDefault()
+                                               e.stopPropagation()
+                                               if (inlineEditing?.selection && inlineEditing.assetId) {
+                                                 const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                                 handleAITextEdit(
+                                                   inlineEditing.selection,
+                                                   activeScript.content || '',
+                                                   inlineEditing.assetId
+                                                 )
+                                               }
+                                             }}
+                                             className="h-7 px-3 text-xs border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-purple-500/5"
+                                           >
+                                             <Bot className="h-3 w-3 mr-1" />
+                                             Edit with AI
+                                           </Button>
+                                         </div>
+                                         <p className="text-xs text-muted-foreground">
+                                           Use AI to rewrite, improve, or modify your selected text while maintaining context with the rest of your scene.
+                                         </p>
+                                       </div>
+                                     </div>
+                                   )}
                                    {savingStatus?.assetId === activeScript.id && (
                                      <div className="flex items-center gap-2 text-sm">
                                        <span className={`${
@@ -1215,14 +1978,8 @@ function ScenePageClient({ id }: { id: string }) {
                                      </div>
                                    )}
                                    <div className="text-xs text-muted-foreground">
-                                     💡 Auto-save in 2 seconds • Press Save to save immediately
+                                     💡 Click Save when you're ready to save your changes
                                    </div>
-                                   {autoSaveTimer && (
-                                     <div className="flex items-center gap-2 text-xs text-blue-400">
-                                       <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
-                                       <span>Auto-save pending...</span>
-                                     </div>
-                                   )}
                                  </div>
                                )
                              }
@@ -1392,7 +2149,8 @@ function ScenePageClient({ id }: { id: string }) {
                                   setVersionEditForm({
                                     title: selectedVersion.title,
                                     version_name: selectedVersion.version_name || `Version ${selectedVersion.version}`,
-                                    content: selectedVersion.content || ''
+                                    content: selectedVersion.content || '',
+                                    selection: ''
                                   })
                                   setShowVersionEdit(true)
                                 }}
@@ -1400,6 +2158,128 @@ function ScenePageClient({ id }: { id: string }) {
                                 <Edit className="h-4 w-4 mr-2" />
                                 Edit
                               </Button>
+                              
+                              {/* Create New Version Button */}
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                                onClick={async () => {
+                                  try {
+                                    setLoading(true)
+                                    
+                                    // Create a new version by duplicating the current script
+                                    const newAssetData = {
+                                      project_id: selectedVersion.project_id,
+                                      scene_id: selectedVersion.scene_id,
+                                      title: `${selectedVersion.title} (Copy)`,
+                                      content_type: selectedVersion.content_type,
+                                      content: selectedVersion.content,
+                                      content_url: selectedVersion.content_url,
+                                      prompt: selectedVersion.prompt,
+                                      model: selectedVersion.model,
+                                      version_name: `Version ${(selectedVersion.version || 0) + 1}`,
+                                      generation_settings: selectedVersion.generation_settings,
+                                      metadata: {
+                                        ...selectedVersion.metadata,
+                                        duplicated_from_version: selectedVersion.version,
+                                        duplicated_at: new Date().toISOString(),
+                                        duplicated_from_asset_id: selectedVersion.id,
+                                        is_duplicate: true
+                                       }
+                                     }
+                                     
+                                     // Save as new version
+                                     await AssetService.createAsset(newAssetData)
+                                     
+                                     // Refresh assets
+                                     refreshAssets()
+                                     
+                                     toast({
+                                       title: "New Version Created!",
+                                       description: `A copy of "${selectedVersion.title}" has been created as a new version.`,
+                                     })
+                                     
+                                   } catch (error) {
+                                     console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                                     toast({
+                                       title: "Error",
+                                       description: "Failed to create new version. Please try again.",
+                                       variant: "destructive",
+                                     })
+                                   } finally {
+                                     setLoading(false)
+                                   }
+                                 }}
+                                 disabled={loading}
+                               >
+                                 <Copy className="h-4 w-4 mr-2" />
+                                 Create New Version
+                               </Button>
+                               
+                               {/* Delete Version Button */}
+                               <AlertDialog>
+                                 <AlertDialogTrigger asChild>
+                                   <Button
+                                     variant="outline"
+                                     size="sm"
+                                     className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                   >
+                                     <Trash2 className="h-4 w-4 mr-2" />
+                                     Delete Version
+                                   </Button>
+                                 </AlertDialogTrigger>
+                                 <AlertDialogContent className="bg-background border-red-500/20">
+                                   <AlertDialogHeader>
+                                     <AlertDialogTitle className="text-red-400">Delete Script Version</AlertDialogTitle>
+                                     <AlertDialogDescription className="text-muted-foreground">
+                                       Are you sure you want to delete "{selectedVersion.title}" version {selectedVersion.version_name || `v${selectedVersion.version}`}?
+                                       <br /><br />
+                                       <strong>This action cannot be undone.</strong> The version will be permanently removed.
+                                     </AlertDialogDescription>
+                                   </AlertDialogHeader>
+                                   <AlertDialogFooter>
+                                     <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                                     <AlertDialogAction 
+                                       className="bg-red-500 hover:bg-red-600"
+                                       onClick={async () => {
+                                         try {
+                                           setLoading(true)
+                                           
+                                           const result = await deleteAssetWithVersioning(selectedVersion.id)
+                                           
+                                           if (result.success) {
+                                             // Refresh assets
+                                             refreshAssets()
+                                             
+                                             toast({
+                                               title: "Version Deleted!",
+                                               description: `"${selectedVersion.title}" version ${selectedVersion.version_name || `v${selectedVersion.version}`} has been permanently removed.`,
+                                             })
+                                           } else {
+                                             toast({
+                                               title: "Delete Failed",
+                                               description: result.error || "Failed to delete version. Please try again.",
+                                               variant: "destructive",
+                                             })
+                                           }
+                                         } catch (error) {
+                                           console.error('🎬 TIMELINE-SCENE - Error deleting version:', error)
+                                           toast({
+                                             title: "Delete Failed",
+                                             description: error instanceof Error ? error.message : "Failed to delete version. Please try again.",
+                                             variant: "destructive",
+                                           })
+                                         } finally {
+                                           setLoading(false)
+                                         }
+                                       }}
+                                     >
+                                       Delete Version
+                                     </AlertDialogAction>
+                                   </AlertDialogFooter>
+                                 </AlertDialogContent>
+                               </AlertDialog>
                             </div>
                           </div>
                         </CardHeader>
@@ -1414,6 +2294,9 @@ function ScenePageClient({ id }: { id: string }) {
                                       <Label className="text-sm font-medium text-muted-foreground">
                                         Editing Script Content
                                       </Label>
+                                      <div className="text-xs text-blue-400">
+                                        💡 Select text for copy/clear/paste actions • Click Save when ready
+                                      </div>
                                       <div className="flex gap-2">
                                         <Button
                                           size="sm"
@@ -1440,7 +2323,99 @@ function ScenePageClient({ id }: { id: string }) {
                                       placeholder="Edit your script content here..."
                                       className="w-full h-96 p-4 border border-primary/30 focus:border-primary bg-background text-foreground resize-none font-mono text-sm leading-relaxed"
                                       autoFocus
+                                      onSelect={handleTextSelection}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      onMouseUp={(e) => e.stopPropagation()}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onFocus={(e) => e.stopPropagation()}
+                                      onKeyDown={(e) => {
+                                        // Handle keyboard shortcuts if needed
+                                        if (e.ctrlKey || e.metaKey) {
+                                          // Keyboard shortcuts can be added here
+                                        }
+                                      }}
                                     />
+                                    
+                                    {/* Text Selection Actions */}
+                                    {inlineEditing?.selection && (
+                                      <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg border border-border">
+                                        <span className="text-xs text-muted-foreground">
+                                          Selected: {inlineEditing.selection.length} characters
+                                        </span>
+                                        <div className="flex gap-1">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                              navigator.clipboard.writeText(inlineEditing.selection || '')
+                                              toast({
+                                                title: "Copied!",
+                                                description: "Selected text copied to clipboard",
+                                              })
+                                            }}
+                                            className="h-6 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                          >
+                                            <Copy className="h-3 w-3 mr-1" />
+                                            Copy
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => {
+                                              const target = document.querySelector('textarea') as HTMLTextAreaElement
+                                              if (target) {
+                                                const start = target.selectionStart
+                                                const end = target.selectionEnd
+                                                const newValue = target.value.substring(0, start) + target.value.substring(end)
+                                                handleInlineEditChange(newValue)
+                                                // Clear selection
+                                                setInlineEditing(prev => prev ? { ...prev, selection: undefined } : null)
+                                                toast({
+                                                  title: "Cleared!",
+                                                  description: "Selected text has been removed",
+                                                })
+                                              }
+                                            }}
+                                            className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                          >
+                                            <Trash2 className="h-3 w-3 mr-1" />
+                                            Clear
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={async () => {
+                                              try {
+                                                const clipboardText = await navigator.clipboard.readText()
+                                                if (clipboardText) {
+                                                  const target = document.querySelector('textarea') as HTMLTextAreaElement
+                                                  if (target) {
+                                                    const start = target.selectionStart
+                                                    const end = target.selectionEnd
+                                                    const newValue = target.value.substring(0, start) + clipboardText + target.value.substring(end)
+                                                    handleInlineEditChange(newValue)
+                                                    toast({
+                                                      title: "Pasted!",
+                                                      description: "Clipboard content pasted",
+                                                    })
+                                                  }
+                                                }
+                                              } catch (error) {
+                                                toast({
+                                                  title: "Paste Failed",
+                                                  description: "Could not access clipboard. Try using Ctrl+V instead.",
+                                                  variant: "destructive",
+                                                })
+                                              }
+                                            }}
+                                            className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                          >
+                                            <Upload className="h-3 w-3 mr-1" />
+                                            Paste
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )}
                                     {savingStatus?.assetId === selectedVersion.id && (
                                       <div className="flex items-center gap-2 text-sm">
                                         <span className={`${
@@ -1457,15 +2432,9 @@ function ScenePageClient({ id }: { id: string }) {
                                         )}
                                       </div>
                                     )}
-                                    <div className="text-xs text-muted-foreground">
-                                      💡 Auto-save in 2 seconds • Press Save to save immediately
-                                    </div>
-                                    {autoSaveTimer && (
-                                      <div className="flex items-center gap-2 text-xs text-blue-400">
-                                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse"></div>
-                                        <span>Auto-save pending...</span>
-                                      </div>
-                                    )}
+                                                                         <div className="text-xs text-muted-foreground">
+                                       💡 Click Save when you're ready to save your changes
+                                     </div>
                                   </div>
                                 )
                               }
@@ -1510,13 +2479,18 @@ function ScenePageClient({ id }: { id: string }) {
                 <CardContent className="p-8 text-center">
                   <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground mb-4">No scripts generated for this scene yet</p>
-                  <Button
-                    onClick={() => router.push('/ai-studio')}
-                    className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
-                  >
-                    <Bot className="h-4 w-4 mr-2" />
-                    Generate Your First Script
-                  </Button>
+                  <div className="space-y-3">
+                    <Button
+                      onClick={() => router.push('/ai-studio')}
+                      className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
+                    >
+                      <Bot className="h-4 w-4 mr-2" />
+                      Generate Your First Script
+                    </Button>
+                    <div className="text-xs text-muted-foreground">
+                      💡 Once you have a script, you can create new versions to track changes and experiment with variations
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             )}
@@ -2061,13 +3035,136 @@ function ScenePageClient({ id }: { id: string }) {
                                         setVersionEditForm({
                                           title: latestVersion.title,
                                           version_name: latestVersion.version_name || `Version ${latestVersion.version}`,
-                                          content: latestVersion.content || ''
+                                          content: latestVersion.content || '',
+                                          selection: ''
                                         })
                                         setShowVersionEdit(true)
                                       }}
                                     >
                                       <Edit className="h-4 w-4 mr-2" />
                                       Edit
+                                    </Button>
+                                    
+                                    {/* Delete Version Button */}
+                                    <AlertDialog>
+                                      <AlertDialogTrigger asChild>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                        >
+                                          <Trash2 className="h-4 w-4 mr-2" />
+                                          Delete
+                                        </Button>
+                                      </AlertDialogTrigger>
+                                      <AlertDialogContent className="bg-background border-red-500/20">
+                                        <AlertDialogHeader>
+                                          <AlertDialogTitle className="text-red-400">Delete Asset Version</AlertDialogTitle>
+                                          <AlertDialogDescription className="text-muted-foreground">
+                                            Are you sure you want to delete "{latestVersion.title}" version {latestVersion.version_name || `v${latestVersion.version}`}?
+                                            <br /><br />
+                                            <strong>This action cannot be undone.</strong> The version will be permanently removed.
+                                          </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                          <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                                          <AlertDialogAction 
+                                            className="bg-red-500 hover:bg-red-600"
+                                            onClick={async () => {
+                                              try {
+                                                setLoading(true)
+                                                
+                                                const result = await deleteAssetWithVersioning(latestVersion.id)
+                                                
+                                                if (result.success) {
+                                                  // Refresh assets
+                                                  refreshAssets()
+                                                  
+                                                  toast({
+                                                    title: "Version Deleted!",
+                                                    description: `"${latestVersion.title}" version ${latestVersion.version_name || `v${latestVersion.version}`} has been permanently removed.`,
+                                                  })
+                                                } else {
+                                                  toast({
+                                                    title: "Delete Failed",
+                                                    description: result.error || "Failed to delete version. Please try again.",
+                                                    variant: "destructive",
+                                                  })
+                                                }
+                                              } catch (error) {
+                                                console.error('🎬 TIMELINE-SCENE - Error deleting version:', error)
+                                                toast({
+                                                  title: "Delete Failed",
+                                                  description: error instanceof Error ? error.message : "Failed to delete version. Please try again.",
+                                                  variant: "destructive",
+                                                })
+                                              } finally {
+                                                setLoading(false)
+                                              }
+                                            }}
+                                          >
+                                            Delete Version
+                                          </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                      </AlertDialogContent>
+                                    </AlertDialog>
+                                    
+                                    {/* Create New Version Button */}
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                                      onClick={async () => {
+                                        try {
+                                          setLoading(true)
+                                          
+                                          // Create a new version by duplicating the current script
+                                          const newAssetData = {
+                                            project_id: latestVersion.project_id,
+                                            scene_id: latestVersion.scene_id,
+                                            title: `${latestVersion.title} (Copy)`,
+                                            content_type: latestVersion.content_type,
+                                            content: latestVersion.content,
+                                            content_url: latestVersion.content_url,
+                                            prompt: latestVersion.prompt,
+                                            model: latestVersion.model,
+                                            version_name: `Version ${(latestVersion.version || 0) + 1}`,
+                                            generation_settings: latestVersion.generation_settings,
+                                            metadata: {
+                                              ...latestVersion.metadata,
+                                              duplicated_from_version: latestVersion.version,
+                                              duplicated_at: new Date().toISOString(),
+                                              duplicated_from_asset_id: latestVersion.id,
+                                              is_duplicate: true
+                                            }
+                                          }
+                                          
+                                          // Save as new version
+                                          await AssetService.createAsset(newAssetData)
+                                          
+                                          // Refresh assets
+                                          refreshAssets()
+                                          
+                                          toast({
+                                            title: "New Version Created!",
+                                            description: `A copy of "${latestVersion.title}" has been created as a new version.`,
+                                          })
+                                          
+                                        } catch (error) {
+                                          console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
+                                          toast({
+                                            title: "Error",
+                                            description: "Failed to create new version. Please try again.",
+                                            variant: "destructive",
+                                          })
+                                        } finally {
+                                          setLoading(false)
+                                        }
+                                      }}
+                                      disabled={loading}
+                                    >
+                                      <Copy className="h-4 w-4 mr-2" />
+                                      Create New Version
                                     </Button>
                                   </div>
                                 </div>
@@ -2451,6 +3548,9 @@ function ScenePageClient({ id }: { id: string }) {
                         <Label htmlFor="edit-content" className="text-sm font-medium">
                           Script Content
                         </Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          💡 <strong>Pro tip:</strong> Select text to see copy, clear, and paste actions
+                        </p>
                         <textarea
                           id="edit-content"
                           value={versionEditForm.content}
@@ -2460,7 +3560,106 @@ function ScenePageClient({ id }: { id: string }) {
                           }))}
                           placeholder="Edit your script content here..."
                           className="mt-1 w-full h-64 p-3 border border-border rounded-md bg-background text-foreground resize-none font-mono text-sm"
+                          onSelect={(e) => {
+                            e.stopPropagation()
+                            const target = e.target as HTMLTextAreaElement
+                            const selection = target.value.substring(target.selectionStart, target.selectionEnd)
+                            if (selection.length > 0) {
+                              // Store selection for context menu actions
+                              setVersionEditForm(prev => ({ ...prev, selection }))
+                            }
+                          }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onMouseUp={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          onFocus={(e) => e.stopPropagation()}
                         />
+                        
+                        {/* Text Selection Actions for Version Edit Modal */}
+                        {versionEditForm.selection && (
+                          <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg border border-border mt-2">
+                            <span className="text-xs text-muted-foreground">
+                              Selected: {versionEditForm.selection.length} characters
+                            </span>
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(versionEditForm.selection || '')
+                                  toast({
+                                    title: "Copied!",
+                                    description: "Selected text copied to clipboard",
+                                  })
+                                }}
+                                className="h-6 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                              >
+                                <Copy className="h-3 w-3 mr-1" />
+                                Copy
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  const target = document.getElementById('edit-content') as HTMLTextAreaElement
+                                  if (target) {
+                                    const start = target.selectionStart
+                                    const end = target.selectionEnd
+                                    const newValue = target.value.substring(0, start) + target.value.substring(end)
+                                    setVersionEditForm(prev => ({ 
+                                      ...prev, 
+                                      content: newValue,
+                                      selection: undefined 
+                                    }))
+                                    toast({
+                                      title: "Cleared!",
+                                      description: "Selected text has been removed",
+                                    })
+                                  }
+                                }}
+                                className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                              >
+                                <Trash2 className="h-3 w-3 mr-1" />
+                                Clear
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={async () => {
+                                  try {
+                                    const clipboardText = await navigator.clipboard.readText()
+                                    if (clipboardText) {
+                                      const target = document.getElementById('edit-content') as HTMLTextAreaElement
+                                      if (target) {
+                                        const start = target.selectionStart
+                                        const end = target.selectionEnd
+                                        const newValue = target.value.substring(0, start) + clipboardText + target.value.substring(end)
+                                        setVersionEditForm(prev => ({ 
+                                          ...prev, 
+                                          content: newValue 
+                                        }))
+                                        toast({
+                                          title: "Pasted!",
+                                          description: "Clipboard content pasted",
+                                        })
+                                      }
+                                    }
+                                  } catch (error) {
+                                    toast({
+                                      title: "Paste Failed",
+                                      description: "Could not access clipboard. Try using Ctrl+V instead.",
+                                      variant: "destructive",
+                                    })
+                                  }
+                                }}
+                                className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                              >
+                                <Upload className="h-3 w-3 mr-1" />
+                                Paste
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                         <p className="text-xs text-muted-foreground mt-1">
                           Make changes to your script content. This will create a new version.
                         </p>
@@ -2560,9 +3759,21 @@ function ScenePageClient({ id }: { id: string }) {
           </DialogContent>
         </Dialog>
 
-
-
-
+        {/* AI Text Editor */}
+        {showAITextEditor && aiEditData && (
+          <AITextEditor
+            isOpen={showAITextEditor}
+            onClose={() => {
+              setShowAITextEditor(false)
+              setAiEditData(null)
+            }}
+            selectedText={aiEditData.selectedText}
+            fullContent={aiEditData.fullContent}
+            sceneContext={scene?.description}
+            onTextReplace={handleAITextReplace}
+            contentType="script"
+          />
+        )}
 
       </div>
     </div>
