@@ -45,6 +45,7 @@ import { useAuth } from "@/lib/auth-context-fixed"
 import { analyzeImageUrl } from "@/lib/image-utils"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { AssetService } from "@/lib/asset-service"
+import { ProjectSelector } from "@/components/project-selector"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -64,7 +65,7 @@ const moodColors = {
 
 export default function TimelinePage() {
   const searchParams = useSearchParams()
-  const movieId = searchParams.get("movie")
+  const movieId = searchParams.get("movie") || searchParams.get("project")
   const [movie, setMovie] = useState<any>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [loading, setLoading] = useState(false) // Start with false so page shows immediately
@@ -1179,6 +1180,20 @@ export default function TimelinePage() {
             <Play className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No movie selected</h3>
             <p className="text-muted-foreground mb-4">Please select a movie to view its timeline</p>
+            
+            {/* Project Selector for selecting a movie */}
+            <div className="max-w-md mx-auto mb-6">
+              <ProjectSelector 
+                onProjectChange={(newProjectId) => {
+                  if (newProjectId) {
+                    window.location.href = `/timeline?movie=${newProjectId}`
+                  }
+                }}
+                placeholder="Select a movie to view its timeline"
+                showCreateNew={true}
+              />
+            </div>
+            
             <Link href="/movies">
               <Button className="gradient-button text-white">
                 <ArrowLeft className="mr-2 h-5 w-5" />
@@ -1233,6 +1248,20 @@ export default function TimelinePage() {
               <p className="text-muted-foreground">Organize and manage your film scenes</p>
             </div>
           </div>
+          
+          {/* Project Selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Switch to:</span>
+            <ProjectSelector 
+              selectedProject={movieId}
+              onProjectChange={(newProjectId) => {
+                if (newProjectId && newProjectId !== movieId) {
+                  window.location.href = `/timeline?movie=${newProjectId}`
+                }
+              }}
+              placeholder="Select a different movie"
+            />
+          </div>
 
           <div className="flex flex-wrap items-center gap-2 lg:gap-4">
             <Link href={`/ai-studio?project=${movieId}`}>
@@ -1249,116 +1278,15 @@ export default function TimelinePage() {
               </Button>
             </Link>
 
-            <Button 
-              variant="outline" 
-              onClick={async () => {
-                try {
-                  const debug = await TimelineService.debugMovieScenes(movieId!)
-                  console.log('Debug info:', debug)
-                  toast({
-                    title: "Debug Info",
-                    description: `Movie: ${debug.movie?.name}, Timeline: ${debug.timeline?.id}, Scenes: ${debug.scenes.length}`,
-                  })
-                } catch (error) {
-                  console.error('Debug error:', error)
-                  toast({
-                    title: "Debug Error",
-                    description: "Check console for details",
-                    variant: "destructive",
-                  })
-                }
-              }}
-              className="border-border bg-transparent hover:bg-muted"
-            >
-              🐛 Debug
-            </Button>
 
-            <Button 
-              variant="outline" 
-              onClick={refreshScenes}
-              className="border-border bg-transparent hover:bg-muted"
-            >
-              🔄 Refresh
-            </Button>
 
-            <Button 
-              variant="outline" 
-              onClick={handleRefreshAllThumbnails}
-              className="border-border bg-transparent hover:bg-muted"
-              title="Refresh all scene thumbnails from asset library"
-            >
-              🖼️ Refresh Thumbnails
-            </Button>
 
-            <Button 
-              variant="outline" 
-              onClick={async () => {
-                try {
-                  const result = await TimelineService.testDatabaseAccess()
-                  console.log('Database access test result:', result)
-                  toast({
-                    title: result.success ? "Database Access OK" : "Database Access Failed",
-                    description: result.success ? result.message : result.error,
-                    variant: result.success ? "default" : "destructive",
-                  })
-                } catch (error) {
-                  console.error('Database access test error:', error)
-                  toast({
-                    title: "Database Access Test Error",
-                    description: "Check console for details",
-                    variant: "destructive",
-                  })
-                }
-              }}
-              className="border-border bg-transparent hover:bg-muted"
-            >
-              🧪 Test DB
-            </Button>
 
-            <Button 
-              variant="outline" 
-              onClick={async () => {
-                if (!movieId) {
-                  toast({
-                    title: "Error",
-                    description: "No movie selected",
-                    variant: "destructive",
-                  })
-                  return
-                }
-                
-                try {
-                  const result = await TimelineService.cleanupDuplicateTimelines(movieId)
-                  console.log('Timeline cleanup result:', result)
-                  
-                  if (result.success) {
-                    toast({
-                      title: "Timeline Cleanup Complete",
-                      description: result.message,
-                    })
-                    
-                    // Refresh the page to show the consolidated timeline
-                    await loadMovieAndScenes()
-                  } else {
-                    toast({
-                      title: "Timeline Cleanup Failed",
-                      description: result.error,
-                      variant: "destructive",
-                    })
-                  }
-                } catch (error) {
-                  console.error('Timeline cleanup error:', error)
-                  toast({
-                    title: "Timeline Cleanup Error",
-                    description: "Check console for details",
-                    variant: "destructive",
-                  })
-                }
-              }}
-              className="border-border bg-transparent hover:bg-muted"
-            >
-              🧹 Cleanup
-            </Button>
+
+
+
+
+
 
             <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "cinema" | "video")} className="w-auto">
               <TabsList className="grid w-full grid-cols-2">
@@ -1367,10 +1295,7 @@ export default function TimelinePage() {
               </TabsList>
             </Tabs>
 
-            <Button className="gradient-button neon-glow text-white">
-              <Save className="mr-2 h-4 w-4" />
-              Save Timeline
-            </Button>
+
           </div>
         </div>
 
@@ -1458,12 +1383,7 @@ export default function TimelinePage() {
                 </DialogDescription>
               </DialogHeader>
               
-              {/* Debug info */}
-              {editingScene && (
-                <div className="mb-4 p-2 bg-blue-500/10 rounded text-xs text-blue-600">
-                  Debug: Editing scene {editingScene.id} - {editingScene.name}
-                </div>
-              )}
+
 
               <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
                 <div className="grid grid-cols-2 gap-4">
@@ -1899,8 +1819,7 @@ export default function TimelinePage() {
                                     src={scene.metadata.thumbnail}
                                     alt=""
                                     className="w-full h-full object-cover md:object-contain md:rounded-r-lg"
-                                    onLoad={() => console.log('🎬 TIMELINE - Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail)}
-                                    onError={() => console.log('🎬 TIMELINE - Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail)}
+
                                   />
                                   
                                   {/* Scene number overlay */}
@@ -2122,8 +2041,7 @@ export default function TimelinePage() {
                                         src={scene.metadata.thumbnail}
                                         alt=""
                                         className="w-full h-full object-contain rounded-r-lg"
-                                        onLoad={() => console.log('🎬 TIMELINE - Scene thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail)}
-                                        onError={() => console.log('🎬 TIMELINE - Scene thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail)}
+
                                       />
                                       
                                       {/* Scene number overlay */}
@@ -2262,8 +2180,7 @@ export default function TimelinePage() {
                                   src={scene.metadata.thumbnail}
                                   alt=""
                                   className="w-full h-full object-cover"
-                                  onLoad={() => console.log('🎬 TIMELINE - Video view thumbnail loaded:', scene.name, 'URL:', scene.metadata.thumbnail)}
-                                  onError={() => console.log('🎬 TIMELINE - Video view thumbnail failed to load:', scene.name, 'URL:', scene.metadata.thumbnail)}
+
                                 />
                                 
                                 {/* Image status indicator */}

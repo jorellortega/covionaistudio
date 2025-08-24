@@ -489,94 +489,91 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
         {/* Asset Details Dialog */}
         <Dialog open={showAssetDetails} onOpenChange={setShowAssetDetails}>
-          <DialogContent className="bg-background border-primary/20 max-w-4xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="text-primary">Asset Details</DialogTitle>
+          <DialogContent className="bg-background border-primary/20 w-[95vw] max-w-[95vw] max-h-[85vh] overflow-y-auto">
+            <DialogHeader className="pb-6">
+              <DialogTitle className="text-primary text-2xl">Asset Details</DialogTitle>
             </DialogHeader>
             {selectedAsset && (
-              <div className="space-y-6">
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Title:</span>
-                    <p className="text-foreground font-medium">{selectedAsset.title}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Type:</span>
-                    <Badge className={`ml-2 ${getContentTypeColor(selectedAsset.content_type)}`}>
+              <div className="space-y-8 min-w-0 overflow-hidden">
+                {/* Clean Header with Essential Info */}
+                <div className="flex items-center justify-between pb-4 border-b border-border/30">
+                  <div className="flex items-center gap-4">
+                    <h2 className="text-2xl font-bold text-foreground">{selectedAsset.title}</h2>
+                    <Badge className={`${getContentTypeColor(selectedAsset.content_type)}`}>
                       {selectedAsset.content_type}
                     </Badge>
+                    <span className="text-muted-foreground">v{selectedAsset.version}</span>
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Version:</span>
-                    <p className="text-foreground">v{selectedAsset.version}</p>
+                  <div className="text-right text-sm text-muted-foreground">
+                    <div>Created: {new Date(selectedAsset.created_at).toLocaleDateString()}</div>
+                    {selectedAsset.model && <div>Model: {selectedAsset.model}</div>}
                   </div>
-                  <div>
-                    <span className="text-muted-foreground">Created:</span>
-                    <p className="text-foreground">{new Date(selectedAsset.created_at).toLocaleDateString()}</p>
-                  </div>
-                  {selectedAsset.prompt && (
-                    <div className="col-span-2">
-                      <span className="text-muted-foreground">Prompt:</span>
-                      <p className="text-foreground">{selectedAsset.prompt}</p>
-                    </div>
-                  )}
-                  {selectedAsset.model && (
-                    <div>
-                      <span className="text-muted-foreground">Model:</span>
-                      <p className="text-foreground">{selectedAsset.model}</p>
-                    </div>
-                  )}
                 </div>
+                
+                {/* Prompt Section - Only if exists */}
+                {selectedAsset.prompt && (
+                  <div className="bg-muted/20 rounded-lg p-4">
+                    <span className="text-sm font-medium text-muted-foreground">Prompt:</span>
+                    <p className="text-foreground mt-1">{selectedAsset.prompt}</p>
+                  </div>
+                )}
 
                 {selectedAsset.content_type === 'script' && selectedAsset.content && (
-                  <div className="space-y-4">
-                    <div>
-                      <span className="text-muted-foreground">Content:</span>
-                      <div className="bg-muted/20 rounded-lg p-4 mt-2 max-h-96 overflow-y-auto">
-                        <pre className="text-sm text-foreground font-mono whitespace-pre-wrap">
+                  <div className="space-y-6">
+                    {/* Script Content Section - Takes up most space */}
+                    <div className="bg-muted/20 rounded-xl p-6">
+                      <h3 className="text-lg font-semibold mb-4 text-foreground">Script Content</h3>
+                      <div className="bg-background rounded-lg p-6 max-h-[60vh] overflow-y-auto border border-border/30">
+                        <pre className="text-sm text-foreground font-mono whitespace-pre-wrap break-words leading-relaxed max-w-full">
                           {selectedAsset.content}
                         </pre>
                       </div>
                     </div>
                     
                     {/* Text to Speech Component */}
-                    <div data-tts-asset={selectedAsset.id}>
+                    <div className="bg-muted/20 rounded-xl p-8" data-tts-asset={selectedAsset.id}>
+                      <h3 className="text-xl font-semibold mb-6 text-foreground">Text to Speech</h3>
                       <TextToSpeech 
                         text={selectedAsset.content}
                         title={selectedAsset.title}
                         projectId={selectedAsset.project_id}
                         sceneId={selectedAsset.scene_id}
-                        className="mt-4"
+                        className="mt-6"
                       />
                     </div>
                   </div>
                 )}
 
                 {selectedAsset.content_type === 'image' && selectedAsset.content_url && (
-                  <div>
-                    <span className="text-muted-foreground">Image:</span>
-                    <div className="mt-2">
+                  <div className="bg-muted/20 rounded-xl p-8">
+                    <h3 className="text-xl font-semibold mb-6 text-foreground">Image Preview</h3>
+                    <div className="flex justify-center p-4">
                       <img 
                         src={selectedAsset.content_url} 
                         alt={selectedAsset.title}
-                        className="w-full max-h-96 object-contain rounded-lg"
+                        className="max-w-full max-h-96 object-contain rounded-xl border border-border/30 shadow-lg"
                       />
                     </div>
                   </div>
                 )}
 
-                <div className="flex gap-2 pt-4">
+                {/* Action Buttons */}
+                <div className="flex gap-4 pt-8 border-t border-border/30">
                   {selectedAsset.content_type === 'script' && selectedAsset.content && (
                     <Button
                       variant="outline"
                       onClick={() => handleCopyScript(selectedAsset.content!)}
-                      className="border-primary/30 text-primary bg-transparent"
+                      className="border-primary/30 text-primary bg-transparent hover:bg-primary/10 px-6 py-2"
                     >
                       <Copy className="h-4 w-4 mr-2" />
                       Copy Script
                     </Button>
                   )}
-                  <Button variant="outline" onClick={() => setShowAssetDetails(false)}>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setShowAssetDetails(false)}
+                    className="ml-auto border-border hover:bg-muted px-6 py-2"
+                  >
                     Close
                   </Button>
                 </div>

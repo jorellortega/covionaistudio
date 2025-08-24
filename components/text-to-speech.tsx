@@ -36,6 +36,12 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const [savedAssetId, setSavedAssetId] = useState<string | null>(null)
   const [savedAudioFiles, setSavedAudioFiles] = useState<any[]>([])
   const [isLoadingSavedAudio, setIsLoadingSavedAudio] = useState(false)
+  
+  // Audio editing state
+  const [editingAudioId, setEditingAudioId] = useState<string | null>(null)
+  const [editingAudioName, setEditingAudioName] = useState("")
+  const [isDeletingAudio, setIsDeletingAudio] = useState<string | null>(null)
+  const [isRenamingAudio, setIsRenamingAudio] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
 
   // Load available voices when component mounts
@@ -127,21 +133,38 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
     setIsLoading(true)
     try {
+      console.log('🎵 Client: Starting text-to-speech request...')
+      console.log('🎵 Client: Text length:', text.trim().length)
+      console.log('🎵 Client: Voice ID:', selectedVoice)
+      console.log('🎵 Client: API Key (first 10 chars):', user.elevenlabsApiKey.substring(0, 10) + '...')
+      console.log('🎵 Client: Request URL:', '/api/ai/text-to-speech')
+      
+      const requestBody = {
+        text: text.trim(),
+        voiceId: selectedVoice,
+        apiKey: user.elevenlabsApiKey
+      }
+      console.log('🎵 Client: Request body:', requestBody)
+      
       const response = await fetch('/api/ai/text-to-speech', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: text.trim(),
-          voiceId: selectedVoice,
-          apiKey: user.elevenlabsApiKey
-        })
+        body: JSON.stringify(requestBody)
       })
 
+      console.log('🎵 Client: Response received, status:', response.status)
+      console.log('🎵 Client: Response headers:', Object.fromEntries(response.headers.entries()))
+      
       if (!response.ok) {
-        throw new Error('Failed to generate speech')
+        console.log('🎵 Client: Response not OK, trying to parse error...')
+        const errorData = await response.json().catch(() => ({}))
+        console.log('🎵 Client: Error data:', errorData)
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate speech`)
       }
 
+      console.log('🎵 Client: Response OK, processing audio blob...')
       const audioBlob = await response.blob()
+      console.log('🎵 Client: Audio blob received, size:', audioBlob.size, 'bytes')
       const url = URL.createObjectURL(audioBlob)
       setAudioUrl(url)
 
@@ -151,9 +174,10 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       })
     } catch (error) {
       console.error('Error generating speech:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate speech'
       toast({
         title: "Error",
-        description: "Failed to generate speech. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {
@@ -289,6 +313,117 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     return voices.find(v => v.voice_id === selectedVoice)?.name || 'Select Voice'
   }
 
+  // Start editing audio name
+  const startEditingAudioName = (audioFile: any) => {
+    setEditingAudioId(audioFile.id)
+    setEditingAudioName(audioFile.name)
+  }
+
+  // Cancel editing audio name
+  const cancelEditingAudioName = () => {
+    setEditingAudioId(null)
+    setEditingAudioName("")
+  }
+
+  // Save edited audio name
+  const saveEditedAudioName = async (audioFile: any) => {
+    if (!editingAudioName.trim() || editingAudioName === audioFile.name) {
+      cancelEditingAudioName()
+      return
+    }
+
+    setIsRenamingAudio(audioFile.id)
+    try {
+      // Call API to rename the audio file
+      const response = await fetch('/api/ai/rename-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioId: audioFile.id,
+          newName: editingAudioName.trim(),
+          userId: user?.id
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to rename audio file')
+      }
+
+      const result = await response.json()
+      if (result.success) {
+        // Update local state
+        setSavedAudioFiles(prev => prev.map(file => 
+          file.id === audioFile.id 
+            ? { ...file, name: editingAudioName.trim() }
+            : file
+        ))
+        
+        toast({
+          title: "Audio Renamed",
+          description: "Audio file name has been updated successfully.",
+        })
+      } else {
+        throw new Error(result.error || 'Failed to rename audio file')
+      }
+    } catch (error) {
+      console.error('Error renaming audio:', error)
+      toast({
+        title: "Rename Failed",
+        description: error instanceof Error ? error.message : "Failed to rename audio file.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsRenamingAudio(null)
+      cancelEditingAudioName()
+    }
+  }
+
+  // Delete audio file
+  const deleteAudioFile = async (audioFile: any) => {
+    if (!confirm(`Are you sure you want to delete "${audioFile.name}"? This action cannot be undone.`)) {
+      return
+    }
+
+    setIsDeletingAudio(audioFile.id)
+    try {
+      // Call API to delete the audio file
+      const response = await fetch('/api/ai/delete-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioId: audioFile.id,
+          userId: user?.id
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete audio file')
+      }
+
+      const result = await response.json()
+      if (result.success) {
+        // Remove from local state
+        setSavedAudioFiles(prev => prev.filter(file => file.id !== audioFile.id))
+        
+        toast({
+          title: "Audio Deleted",
+          description: "Audio file has been deleted successfully.",
+        })
+      } else {
+        throw new Error(result.error || 'Failed to delete audio file')
+      }
+    } catch (error) {
+      console.error('Error deleting audio:', error)
+      toast({
+        title: "Delete Failed",
+        description: error instanceof Error ? error.message : "Failed to delete audio file.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeletingAudio(null)
+    }
+  }
+
   if (!user?.elevenlabsApiKey) {
     return (
       <Card className={`bg-card border-orange-500/20 ${className}`}>
@@ -379,10 +514,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
           )}
         </Button>
         
-        {/* Help Text */}
-        <div className="text-xs text-muted-foreground text-center">
-          After generating speech, you'll see Play, Download, and Save options
-        </div>
+
         
         {/* No Audio Generated Yet */}
         {!audioUrl && (
@@ -514,7 +646,61 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
                 {savedAudioFiles.map((file, index) => (
                   <div key={index} className="flex items-center justify-between p-2 bg-muted/20 rounded border border-border">
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">{file.name}</p>
+                      {editingAudioId === file.id ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={editingAudioName}
+                            onChange={(e) => setEditingAudioName(e.target.value)}
+                            className="text-sm font-medium text-foreground bg-background border border-border rounded px-2 py-1 flex-1"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                saveEditedAudioName(file)
+                              } else if (e.key === 'Escape') {
+                                cancelEditingAudioName()
+                              }
+                            }}
+                            autoFocus
+                          />
+                          <Button
+                            onClick={() => saveEditedAudioName(file)}
+                            disabled={isRenamingAudio === file.id}
+                            size="sm"
+                            className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                          >
+                            {isRenamingAudio === file.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              '✓'
+                            )}
+                          </Button>
+                          <Button
+                            onClick={cancelEditingAudioName}
+                            size="sm"
+                            className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 group">
+                          <p 
+                            className="text-sm font-medium text-foreground truncate cursor-pointer hover:text-blue-400 transition-colors"
+                            onClick={() => startEditingAudioName(file)}
+                            title="Click to rename"
+                          >
+                            {file.name}
+                          </p>
+                          <Button
+                            onClick={() => startEditingAudioName(file)}
+                            variant="ghost"
+                            size="sm"
+                            className="h-4 w-4 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-blue-400 hover:text-blue-300"
+                          >
+                            ✏️
+                          </Button>
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         {(file.size / 1024 / 1024).toFixed(2)} MB • {new Date(file.created_at).toLocaleDateString()}
                       </p>
@@ -533,6 +719,19 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
                         className="border-green-500/30 text-green-400 hover:bg-green-500/10"
                       >
                         <Download className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        onClick={() => deleteAudioFile(file)}
+                        disabled={isDeletingAudio === file.id}
+                        variant="outline"
+                        size="sm"
+                        className="border-gray-500/30 text-gray-400 hover:bg-gray-500/10"
+                      >
+                        {isDeletingAudio === file.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          '×'
+                        )}
                       </Button>
                     </div>
                   </div>

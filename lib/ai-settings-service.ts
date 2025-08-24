@@ -6,6 +6,7 @@ export interface AISetting {
   tab_type: 'scripts' | 'images' | 'videos' | 'audio'
   locked_model: string
   is_locked: boolean
+  quick_suggestions: string[]
   created_at: string
   updated_at: string
 }
@@ -14,6 +15,7 @@ export interface AISettingUpdate {
   tab_type: 'scripts' | 'images' | 'videos' | 'audio'
   locked_model: string
   is_locked: boolean
+  quick_suggestions?: string[]
 }
 
 export class AISettingsService {
@@ -199,6 +201,7 @@ export class AISettingsService {
           tab_type: setting.tab_type,
           locked_model: setting.locked_model,
           is_locked: setting.is_locked,
+          quick_suggestions: setting.quick_suggestions || [],
           updated_at: new Date().toISOString()
         }, {
           onConflict: 'user_id,tab_type'
@@ -235,6 +238,57 @@ export class AISettingsService {
     } catch (error) {
       console.error('Error in deleteTabSetting:', error)
       throw error
+    }
+  }
+
+  // Update quick suggestions for a specific tab
+  static async updateQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio', suggestions: string[]): Promise<AISetting> {
+    try {
+      console.log('Updating quick suggestions:', { userId, tabType, suggestions })
+      
+      const { data, error } = await supabase
+        .from('ai_settings')
+        .update({
+          quick_suggestions: suggestions,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId)
+        .eq('tab_type', tabType)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error updating quick suggestions:', error)
+        throw error
+      }
+
+      console.log('Quick suggestions updated successfully:', data)
+      return data
+    } catch (error) {
+      console.error('Error in updateQuickSuggestions:', error)
+      throw error
+    }
+  }
+
+  // Get quick suggestions for a specific tab
+  static async getQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<string[]> {
+    try {
+      const { data, error } = await supabase
+        .from('ai_settings')
+        .select('quick_suggestions')
+        .eq('user_id', userId)
+        .eq('tab_type', tabType)
+        .single()
+
+      if (error) {
+        console.error('Error fetching quick suggestions:', error)
+        return []
+      }
+
+      return data?.quick_suggestions || []
+    } catch (error) {
+      console.error('Error in getQuickSuggestions:', error)
+      return []
     }
   }
 

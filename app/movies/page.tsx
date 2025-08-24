@@ -500,6 +500,12 @@ export default function MoviesPage() {
       return
     }
 
+    // Normalize service name for locked models
+    const normalizedService = serviceToUse.toLowerCase().includes('dall') ? 'dalle' : 
+                             serviceToUse.toLowerCase().includes('openart') ? 'openart' : 
+                             serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
+                             serviceToUse
+
     if (!user) {
       toast({
         title: "Error",
@@ -510,7 +516,7 @@ export default function MoviesPage() {
     }
 
     // Check if user has the required API key for the service to use
-    if (serviceToUse === "dalle" && !user.openaiApiKey) {
+    if (normalizedService === "dalle" && !user.openaiApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenAI API key in settings to use DALL-E",
@@ -519,7 +525,7 @@ export default function MoviesPage() {
       return
     }
 
-    if (serviceToUse === "openart" && !user.openartApiKey) {
+    if (normalizedService === "openart" && !user.openartApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your OpenArt API key in settings to use OpenArt",
@@ -532,10 +538,10 @@ export default function MoviesPage() {
     try {
       let imageUrl = ""
       
-      console.log(`Generating movie cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      console.log(`Generating movie cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'}) - normalized to: ${normalizedService}`)
       
       // Use the service to use for cover generation
-      switch (serviceToUse) {
+      switch (normalizedService) {
         case "dalle":
           if (!user.openaiApiKey) {
             throw new Error("OpenAI API key not configured")
@@ -640,7 +646,7 @@ export default function MoviesPage() {
         
         toast({
           title: "AI Cover Generated & Uploaded",
-          description: `Cover generated and uploaded to storage using ${serviceToUse.toUpperCase()}`,
+          description: `Cover generated and uploaded to storage using ${normalizedService.toUpperCase()}`,
         })
       } catch (uploadError) {
         console.error('Failed to upload movie cover to Supabase:', uploadError)
@@ -914,6 +920,7 @@ export default function MoviesPage() {
                       />
                       <div className="flex gap-2 mt-2">
                         <Button
+                          type="button"
                           onClick={generateAICover}
                           disabled={isGeneratingCover || !aiPrompt.trim()}
                           variant="outline"
@@ -931,6 +938,7 @@ export default function MoviesPage() {
                         {/* Download Generated Cover Button */}
                         {generatedCoverUrl && (
                           <Button
+                            type="button"
                             onClick={downloadGeneratedCover}
                             variant="outline"
                             size="sm"
@@ -967,6 +975,7 @@ export default function MoviesPage() {
                           />
                           <div className="mt-2">
                             <Button
+                              type="button"
                               variant="outline"
                               size="sm"
                               onClick={downloadGeneratedCover}
@@ -1175,6 +1184,7 @@ export default function MoviesPage() {
                     />
                     <div className="flex gap-2 mt-2">
                       <Button
+                        type="button"
                         onClick={generateAICover}
                         disabled={isGeneratingCover || !aiPrompt.trim()}
                         variant="outline"
@@ -1192,6 +1202,7 @@ export default function MoviesPage() {
                       {/* Download Generated Cover Button */}
                       {generatedCoverUrl && (
                         <Button
+                          type="button"
                           onClick={downloadGeneratedCover}
                           variant="outline"
                           size="sm"
@@ -1228,6 +1239,7 @@ export default function MoviesPage() {
                         />
                         <div className="mt-2">
                           <Button
+                            type="button"
                             variant="outline"
                             size="sm"
                             onClick={downloadGeneratedCover}

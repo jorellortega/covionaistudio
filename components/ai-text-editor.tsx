@@ -3,12 +3,14 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Loader2, Bot, Sparkles, RotateCcw, CheckCircle, AlertCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth-context-fixed"
+import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
 
 interface AITextEditorProps {
   isOpen: boolean
@@ -48,6 +50,19 @@ export default function AITextEditor({
   const [error, setError] = useState<string | null>(null)
   const [showPreview, setShowPreview] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  
+  // AI Settings state
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Custom suggestions editing state
+  const [showEditSuggestions, setShowEditSuggestions] = useState(false)
+  const [editingSuggestions, setEditingSuggestions] = useState<string[]>([])
+  const [newSuggestion, setNewSuggestion] = useState("")
+  const [isSavingSuggestions, setIsSavingSuggestions] = useState(false)
+  
+  // Quick suggestions visibility state
+  const [showQuickSuggestions, setShowQuickSuggestions] = useState(false)
 
   // Auto-focus the prompt textarea when dialog opens
   useEffect(() => {
@@ -65,6 +80,52 @@ export default function AITextEditor({
       setShowPreview(false)
     }
   }, [isOpen])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!user) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(user.id)
+        
+        // Get or create default setting for scripts tab
+        const defaultSetting = await AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts')
+        
+        // Merge with existing setting, preferring existing
+        const existingSetting = settings.find(s => s.tab_type === 'scripts')
+        const finalSetting = existingSetting || defaultSetting
+        
+        setAiSettings([finalSetting])
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model if available
+        if (finalSetting.is_locked && finalSetting.locked_model) {
+          if (finalSetting.locked_model === 'ChatGPT') {
+            setSelectedService('openai')
+          } else if (finalSetting.locked_model === 'Claude') {
+            setSelectedService('anthropic')
+          }
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [user])
+
+  // Check if current content type is locked
+  const isCurrentContentTypeLocked = () => {
+    const setting = aiSettings.find(s => s.tab_type === 'scripts')
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for current content type
+  const getCurrentContentTypeLockedModel = () => {
+    const setting = aiSettings.find(s => s.tab_type === 'scripts')
+    return setting?.locked_model || ""
+  }
 
   // Check if user has required API key
   const hasRequiredApiKey = () => {
@@ -84,6 +145,85 @@ export default function AITextEditor({
       return user?.anthropicApiKey
     }
     return null
+  }
+
+  // Get quick suggestions from AI settings or use defaults
+  const getQuickSuggestions = () => {
+    // If we have custom suggestions from AI settings, use those
+    if (aiSettings.length > 0) {
+      const scriptSetting = aiSettings.find(s => s.tab_type === 'scripts')
+      if (scriptSetting?.quick_suggestions && scriptSetting.quick_suggestions.length > 0) {
+        return scriptSetting.quick_suggestions
+      }
+    }
+    
+    // Fallback to default suggestions based on content type
+    return getContentTypeSuggestions()
+  }
+
+  // Open suggestions editor
+  const openSuggestionsEditor = () => {
+    const currentSuggestions = getQuickSuggestions()
+    setEditingSuggestions([...currentSuggestions])
+    setShowEditSuggestions(true)
+  }
+
+  // Add new suggestion
+  const addSuggestion = () => {
+    if (newSuggestion.trim() && !editingSuggestions.includes(newSuggestion.trim())) {
+      setEditingSuggestions([...editingSuggestions, newSuggestion.trim()])
+      setNewSuggestion("")
+    }
+  }
+
+  // Remove suggestion
+  const removeSuggestion = (index: number) => {
+    setEditingSuggestions(editingSuggestions.filter((_, i) => i !== index))
+  }
+
+  // Save custom suggestions
+  const saveCustomSuggestions = async () => {
+    if (!user) return
+    
+    try {
+      setIsSavingSuggestions(true)
+      
+      // Update the AI settings with new suggestions
+      await AISettingsService.updateQuickSuggestions(
+        user.id,
+        'scripts',
+        editingSuggestions
+      )
+      
+      // Refresh AI settings
+      const settings = await AISettingsService.getUserSettings(user.id)
+      setAiSettings(settings)
+      
+      setShowEditSuggestions(false)
+      toast({
+        title: "Suggestions Saved!",
+        description: "Your custom quick suggestions have been updated.",
+      })
+    } catch (error) {
+      console.error('Error saving suggestions:', error)
+      toast({
+        title: "Save Failed",
+        description: "Failed to save your custom suggestions. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingSuggestions(false)
+    }
+  }
+
+  // Reset to default suggestions
+  const resetToDefaults = () => {
+    const defaultSuggestions = getContentTypeSuggestions()
+    setEditingSuggestions([...defaultSuggestions])
+    toast({
+      title: "Reset to Defaults",
+      description: "Suggestions have been reset to the default set.",
+    })
   }
 
   // Generate AI text
@@ -242,50 +382,62 @@ export default function AITextEditor({
         </DialogHeader>
 
         <div className="space-y-6">
-          {/* Service Selection */}
-          <div className="space-y-3">
-            <Label>AI Service</Label>
-            <div className="flex gap-3">
-              <Select value={selectedService} onValueChange={(value: 'openai' | 'anthropic') => setSelectedService(value)}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="openai">
-                    <div className="flex items-center gap-2">
-                      <span>ChatGPT (GPT-4)</span>
-                      {user?.openaiApiKey ? (
-                        <Badge variant="secondary" className="text-xs">✓ Available</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs text-red-400">No API Key</Badge>
-                      )}
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="anthropic">
-                    <div className="flex items-center gap-2">
-                      <span>Claude (Claude 3)</span>
-                      {user?.anthropicApiKey ? (
-                        <Badge variant="secondary" className="text-xs">✓ Available</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-xs text-red-400">No API Key</Badge>
-                      )}
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              
-              {!hasRequiredApiKey() && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => window.open('/setup-ai', '_blank')}
-                  className="text-orange-400 border-orange-400/30 hover:bg-orange-400/10"
-                >
-                  Setup API Key
-                </Button>
-              )}
+          {/* AI Service Selection - Only show if not locked */}
+          {!isCurrentContentTypeLocked() && (
+            <div className="space-y-3">
+              <Label>AI Service</Label>
+              <div className="flex gap-3">
+                <Select value={selectedService} onValueChange={(value: 'openai' | 'anthropic') => setSelectedService(value)}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">
+                      <div className="flex items-center gap-2">
+                        <span>ChatGPT (GPT-4)</span>
+                        {user?.openaiApiKey ? (
+                          <Badge variant="secondary" className="text-xs">✓ Available</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-red-400">No API Key</Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="anthropic">
+                      <div className="flex items-center gap-2">
+                        <span>Claude (Claude 3)</span>
+                        {user?.anthropicApiKey ? (
+                          <Badge variant="secondary" className="text-xs">✓ Available</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-red-400">No API Key</Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                
+                {!hasRequiredApiKey() && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open('/setup-ai', '_blank')}
+                    className="text-orange-400 border-orange-400/30 hover:bg-orange-400/10"
+                  >
+                    Setup API Key
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Show locked model info if content type is locked */}
+          {isCurrentContentTypeLocked() && (
+            <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+              <p className="text-sm text-green-600 flex items-center gap-2">
+                <CheckCircle className="h-4 w-4" />
+                AI Online
+              </p>
+            </div>
+          )}
 
           {/* Selected Text Display */}
           <div className="space-y-3">
@@ -316,20 +468,41 @@ export default function AITextEditor({
             
             {/* Quick Prompt Suggestions */}
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Quick Suggestions:</Label>
-              <div className="flex flex-wrap gap-2">
-                {getContentTypeSuggestions().map((suggestion, index) => (
-                  <Button
-                    key={index}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPrompt(suggestion)}
-                    className="text-xs h-7 px-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                  >
-                    {suggestion}
-                  </Button>
-                ))}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setShowQuickSuggestions(!showQuickSuggestions)}
+                  className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                >
+                  <span>Quick Suggestions</span>
+                  <span className={`transition-transform duration-200 ${showQuickSuggestions ? 'rotate-90' : ''}`}>
+                    &gt;
+                  </span>
+                </button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={openSuggestionsEditor}
+                  className="text-xs h-6 px-2 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                >
+                  Edit
+                </Button>
               </div>
+              
+              {showQuickSuggestions && (
+                <div className="flex flex-wrap gap-2">
+                  {getQuickSuggestions().map((suggestion, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPrompt(suggestion)}
+                      className="text-xs h-7 px-2 border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                    >
+                      {suggestion}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -427,6 +600,111 @@ export default function AITextEditor({
           </DialogFooter>
         )}
       </DialogContent>
+
+      {/* Custom Suggestions Editor Modal */}
+      <Dialog open={showEditSuggestions} onOpenChange={setShowEditSuggestions}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Quick Suggestions</DialogTitle>
+            <DialogDescription>
+              Customize your quick suggestions for AI text editing. These will be saved and used whenever you open the AI Text Editor.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* Add New Suggestion */}
+            <div className="space-y-2">
+              <Label>Add New Suggestion</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={newSuggestion}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewSuggestion(e.target.value)}
+                  placeholder="Enter a new suggestion..."
+                  onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                    if (e.key === 'Enter') {
+                      addSuggestion()
+                    }
+                  }}
+                />
+                <Button
+                  onClick={addSuggestion}
+                  disabled={!newSuggestion.trim() || editingSuggestions.includes(newSuggestion.trim())}
+                  size="sm"
+                  className="px-4"
+                >
+                  Add
+                </Button>
+              </div>
+            </div>
+
+            {/* Current Suggestions */}
+            <div className="space-y-2">
+              <Label>Current Suggestions ({editingSuggestions.length})</Label>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {editingSuggestions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    No suggestions yet. Add some above!
+                  </p>
+                ) : (
+                  editingSuggestions.map((suggestion, index) => (
+                    <div key={index} className="flex items-center gap-2 p-2 bg-muted/20 rounded-lg border border-border">
+                      <span className="flex-1 text-sm">{suggestion}</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeSuggestion(index)}
+                        className="h-6 w-6 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                      >
+                        ×
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Help Text */}
+            <div className="text-xs text-muted-foreground">
+              💡 <strong>Tip:</strong> You can have up to 20 suggestions. Keep them concise and specific to your workflow.
+            </div>
+          </div>
+
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={resetToDefaults}
+              disabled={isSavingSuggestions}
+              className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+            >
+              Reset to Defaults
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowEditSuggestions(false)}
+              disabled={isSavingSuggestions}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={saveCustomSuggestions}
+              disabled={isSavingSuggestions}
+              className="bg-blue-500 hover:bg-blue-600"
+            >
+              {isSavingSuggestions ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Save Suggestions
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

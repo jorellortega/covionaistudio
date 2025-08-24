@@ -21,7 +21,7 @@ export function Navigation() {
   const pathname = usePathname()
 
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex items-center gap-1 overflow-x-auto pb-2">
       {navigation.map((item) => {
         const isActive = pathname === item.href
         const Icon = item.icon

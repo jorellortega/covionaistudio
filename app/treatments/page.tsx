@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context-fixed'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2, CheckCircle } from 'lucide-react'
+import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2, CheckCircle, Download } from 'lucide-react'
 import { TreatmentsService, Treatment, CreateTreatmentData } from '@/lib/treatments-service'
 import Header from '@/components/header'
 import Link from 'next/link'
@@ -47,6 +47,12 @@ export default function TreatmentsPage() {
   const [selectedAIService, setSelectedAIService] = useState('dalle')
   const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const [generatedCoverUrl, setGeneratedCoverUrl] = useState('')
+  
+  // AI Script Generation States
+  const [scriptAiPrompt, setScriptAiPrompt] = useState('')
+  const [selectedScriptAIService, setSelectedScriptAIService] = useState('openai')
+  const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false)
+  const [generatedSynopsis, setGeneratedSynopsis] = useState('')
   
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
@@ -88,6 +94,13 @@ export default function TreatmentsPage() {
           console.log('Setting locked model for images:', imagesSetting.locked_model)
           setSelectedAIService(imagesSetting.locked_model)
         }
+        
+        // Auto-select locked model for scripts tab if available
+        const scriptsSetting = mergedSettings.find(setting => setting.tab_type === 'scripts')
+        if (scriptsSetting?.is_locked) {
+          console.log('Setting locked model for scripts:', scriptsSetting.locked_model)
+          setSelectedScriptAIService(scriptsSetting.locked_model)
+        }
       } catch (error) {
         console.error('Error loading AI settings:', error)
       }
@@ -95,6 +108,16 @@ export default function TreatmentsPage() {
 
     loadAISettings()
   }, [user])
+
+  // Debug: Monitor synopsis state changes
+  useEffect(() => {
+    console.log('Generated synopsis state changed:', generatedSynopsis)
+  }, [generatedSynopsis])
+
+  // Debug: Monitor treatment synopsis changes
+  useEffect(() => {
+    console.log('Treatment synopsis state changed:', newTreatment.synopsis)
+  }, [newTreatment.synopsis])
 
   const loadTreatments = async () => {
     try {
@@ -116,7 +139,7 @@ export default function TreatmentsPage() {
   // Upload generated image to Supabase storage
   const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
     try {
-      console.log('Uploading generated image to Supabase storage...')
+      console.log('Uploading generated treatment cover to Supabase storage...')
       
       // Use our API route to download and upload (bypasses CORS)
       const response = await fetch('/api/ai/download-and-store-image', {
@@ -140,14 +163,14 @@ export default function TreatmentsPage() {
       console.log('Image upload API response:', result)
       
       if (result.success && result.supabaseUrl) {
-        console.log('Image uploaded successfully to Supabase:', result.supabaseUrl)
+        console.log('Treatment cover uploaded successfully to Supabase:', result.supabaseUrl)
         return result.supabaseUrl
       } else {
         throw new Error('API did not return a valid Supabase URL')
       }
       
     } catch (error) {
-      console.error('Error uploading image to Supabase:', error)
+      console.error('Error uploading treatment cover to Supabase:', error)
       throw error
     }
   }
@@ -172,6 +195,23 @@ export default function TreatmentsPage() {
       return
     }
 
+    // Sanitize the prompt to avoid content filter issues
+    const sanitizedPrompt = aiPrompt
+      .replace(/godzilla/gi, 'giant monster')
+      .replace(/violence|blood|gore/gi, 'action')
+      .trim()
+
+    // Check prompt length for DALL-E 3 (1000 character limit)
+    const fullPrompt = `Treatment cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+    if (fullPrompt.length > 1000) {
+      toast({
+        title: "Prompt Too Long",
+        description: "Please keep your description shorter. DALL-E 3 has a 1000 character limit.",
+        variant: "destructive",
+      })
+      return
+    }
+
     // Use locked model if available, otherwise use selected service
     const lockedModel = getImagesTabLockedModel()
     const serviceToUse = (isImagesTabLocked() && lockedModel) ? lockedModel : selectedAIService
@@ -185,9 +225,15 @@ export default function TreatmentsPage() {
       return
     }
 
+    // Normalize service name for locked models
+    const normalizedService = serviceToUse.toLowerCase().includes('dall') ? 'dalle' : 
+                             serviceToUse.toLowerCase().includes('openart') ? 'openart' : 
+                             serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
+                             serviceToUse
+
     // Check if user has the required API key for the service to use
     let apiKey = ''
-    switch (serviceToUse) {
+    switch (normalizedService) {
       case 'dalle':
         if (!user.openaiApiKey) {
           toast({
@@ -222,41 +268,134 @@ export default function TreatmentsPage() {
         apiKey = user.leonardoApiKey
         break
       default:
-        throw new Error('Unsupported AI service')
+        throw new Error(`Unsupported AI service: ${serviceToUse} (normalized to: ${normalizedService})`)
     }
 
     try {
       setIsGeneratingCover(true)
 
-      console.log(`Generating treatment cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      console.log(`Generating treatment cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'}) - normalized to: ${normalizedService}`)
 
-      const response = await fetch('/api/ai/generate-image', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          service: serviceToUse,
-          apiKey: apiKey,
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
+      let imageUrl = ""
+      
+      // Use the service to use for cover generation
+      switch (normalizedService) {
+        case "dalle":
+          if (!user.openaiApiKey) {
+            throw new Error("OpenAI API key not configured")
+          }
+          
+          // Validate API key format
+          if (!user.openaiApiKey.startsWith('sk-')) {
+            throw new Error("Invalid OpenAI API key format")
+          }
+          
+          console.log('Making DALL-E request with prompt:', fullPrompt)
+          
+          const dalleResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: fullPrompt,
+              service: 'dalle',
+              apiKey: user.openaiApiKey
+            })
+          })
+          if (!dalleResponse.ok) {
+            const errorData = await dalleResponse.json().catch(() => ({}))
+            console.error('DALL-E API error details:', errorData)
+            throw new Error(`DALL-E API failed: ${dalleResponse.status} - ${errorData.error || 'Unknown error'}`)
+          }
+          const dalleData = await dalleResponse.json()
+          imageUrl = dalleData.imageUrl
+          break
+          
+        case "openart":
+          if (!user.openartApiKey) {
+            throw new Error("OpenArt API key not configured")
+          }
+          const openartResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
+              service: 'openart',
+              apiKey: user.openartApiKey
+            })
+          })
+          if (!openartResponse.ok) {
+            const errorData = await openartResponse.json().catch(() => ({}))
+            console.error('OpenArt API error details:', errorData)
+            throw new Error(`OpenArt API failed: ${openartResponse.status} - ${errorData.error || 'Unknown error'}`)
+          }
+          const openartData = await openartResponse.json()
+          imageUrl = openartData.imageUrl
+          break
+          
+        case "leonardo":
+          if (!user.leonardoApiKey) {
+            throw new Error("Leonardo AI requires API key")
+          }
+          const leonardoResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
+              service: 'leonardo',
+              apiKey: user.leonardoApiKey
+            })
+          })
+          if (!leonardoResponse.ok) throw new Error('Leonardo AI API request failed')
+          const leonardoData = await leonardoResponse.json()
+          imageUrl = leonardoData.imageUrl
+          break
+          
+        default:
+          // Fallback to DALL-E
+          if (!user.openaiApiKey) {
+            throw new Error("OpenAI API key not configured")
+          }
+          const fallbackResponse = await fetch('/api/ai/generate-image', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: fullPrompt,
+              service: 'dalle',
+              apiKey: user.openaiApiKey
+            })
+          })
+          if (!fallbackResponse.ok) throw new Error('DALL-E API request failed')
+          const fallbackData = await fallbackResponse.json()
+          imageUrl = fallbackData.imageUrl
       }
 
-      const result = await response.json()
-      console.log('AI cover generated:', result)
-
-      if (result.success && result.imageUrl) {
-        setGeneratedCoverUrl(result.imageUrl)
-        setNewTreatment(prev => ({ ...prev, cover_image_url: result.imageUrl }))
-        toast({
-          title: "Cover Generated",
-          description: "AI has generated your treatment cover!",
-        })
+      if (imageUrl) {
+        setGeneratedCoverUrl(imageUrl)
+        setNewTreatment(prev => ({ ...prev, cover_image_url: imageUrl }))
+        
+        // Upload the generated image to Supabase storage
+        try {
+          console.log('Uploading generated treatment cover to Supabase...')
+          const fileName = `treatment-cover-${Date.now()}`
+          const supabaseUrl = await uploadGeneratedImageToStorage(imageUrl, fileName)
+          
+          // Update with the Supabase URL instead of the temporary AI service URL
+          setGeneratedCoverUrl(supabaseUrl)
+          setNewTreatment(prev => ({ ...prev, cover_image_url: supabaseUrl }))
+          
+          toast({
+            title: "AI Cover Generated & Uploaded",
+            description: `Cover generated and uploaded to storage using ${normalizedService.toUpperCase()}`,
+          })
+        } catch (uploadError) {
+          console.error('Failed to upload treatment cover to Supabase:', uploadError)
+          toast({
+            title: "Cover Generated (Upload Failed)",
+            description: "Cover generated but failed to upload to storage. Using temporary URL.",
+            variant: "destructive",
+          })
+          // Keep the temporary URL if upload fails
+        }
       } else {
         throw new Error('No image URL received from AI service')
       }
@@ -271,6 +410,212 @@ export default function TreatmentsPage() {
       setIsGeneratingCover(false)
     }
   }
+
+  // Download generated cover image
+  const downloadGeneratedCover = () => {
+    if (!generatedCoverUrl) {
+      toast({
+        title: "No Generated Cover",
+        description: "Generate a cover first before downloading.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const link = document.createElement('a')
+      link.href = generatedCoverUrl
+      link.download = `generated_treatment_cover_${Date.now()}.png`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast({
+        title: "🎨 Download Started!",
+        description: "Generated cover image is downloading...",
+      })
+    } catch (error) {
+      console.error('Error downloading generated cover:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download the cover image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Download treatment cover image
+  const downloadTreatmentCover = async (treatment: Treatment) => {
+    if (!treatment.cover_image_url) {
+      toast({
+        title: "No Cover Image",
+        description: "This treatment doesn't have a cover image to download.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Create a temporary link element to trigger download
+      const link = document.createElement('a')
+      link.href = treatment.cover_image_url
+      link.download = `${treatment.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_cover.png`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast({
+        title: "📄 Download Started!",
+        description: `Cover for "${treatment.title}" is downloading...`,
+      })
+    } catch (error) {
+      console.error('Error downloading treatment cover:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download the cover image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Generate AI Synopsis
+  const generateAISynopsis = useCallback(async () => {
+    console.log('generateAISynopsis called with prompt:', scriptAiPrompt)
+    
+    if (isGeneratingSynopsis) {
+      console.log('Already generating synopsis, ignoring call')
+      return
+    }
+    
+    if (!scriptAiPrompt.trim()) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter a prompt to generate a synopsis.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Check if user is loaded
+    if (!user) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating synopsis.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Use locked model if available, otherwise use selected service
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please choose an AI service or configure your settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Normalize service name for locked models
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             serviceToUse.toLowerCase().includes('gemini') || serviceToUse.toLowerCase().includes('google') ? 'google' : 
+                             serviceToUse
+
+    // Check if user has the required API key for the service to use
+    let apiKey = ''
+    switch (normalizedService) {
+      case 'openai':
+        if (!user.openaiApiKey) {
+          toast({
+            title: "Missing API Key",
+            description: "Please configure your OpenAI API key in settings to use GPT-4.",
+            variant: "destructive",
+          })
+          return
+        }
+        apiKey = user.openaiApiKey
+        break
+      case 'anthropic':
+        if (!user.anthropicApiKey) {
+          toast({
+            title: "Missing API Key",
+            description: "Please configure your Anthropic API key in settings to use Claude.",
+            variant: "destructive",
+          })
+          return
+        }
+        apiKey = user.anthropicApiKey
+        break
+      case 'google':
+        toast({
+          title: "Service Not Available",
+          description: "Google Gemini is not currently configured. Please use OpenAI or Anthropic.",
+          variant: "destructive",
+        })
+        return
+      default:
+        throw new Error(`Unsupported AI service: ${serviceToUse} (normalized to: ${normalizedService})`)
+    }
+
+    try {
+      setIsGeneratingSynopsis(true)
+
+      console.log(`Generating treatment synopsis using ${serviceToUse} (${isScriptsTabLocked() ? 'locked model' : 'user selected'}) - normalized to: ${normalizedService}`)
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: `Write a compelling 2-3 paragraph movie treatment synopsis for: ${scriptAiPrompt}. Make it engaging, cinematic, and professional. Focus on the main plot, key characters, and dramatic stakes.`,
+          field: 'synopsis',
+          service: normalizedService,
+          apiKey: apiKey,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate synopsis')
+      }
+
+      const result = await response.json()
+      console.log('AI synopsis generated:', result)
+      console.log('Generated synopsis text:', result.text)
+
+      if (result.success && result.text) {
+        console.log('Setting generated synopsis:', result.text)
+        setGeneratedSynopsis(result.text)
+        // Automatically apply the synopsis to the treatment
+        setNewTreatment(prev => {
+          console.log('Previous treatment state:', prev)
+          const updated = { ...prev, synopsis: result.text }
+          console.log('Updated treatment state:', updated)
+          return updated
+        })
+        toast({
+          title: "Synopsis Generated & Applied",
+          description: "AI has generated and automatically applied your treatment synopsis!",
+        })
+      } else {
+        throw new Error('No synopsis text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI synopsis:', error)
+      toast({
+        title: "Generation Failed",
+        description: `Failed to generate synopsis: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingSynopsis(false)
+    }
+  }, [scriptAiPrompt, isGeneratingSynopsis, user, selectedScriptAIService, toast])
 
   const handleFileUpload = (file: File) => {
     const reader = new FileReader()
@@ -299,6 +644,9 @@ export default function TreatmentsPage() {
     setAiPrompt('')
     setSelectedAIService('dalle')
     setGeneratedCoverUrl('')
+    setScriptAiPrompt('')
+    setSelectedScriptAIService('openai')
+    setGeneratedSynopsis('')
   }
 
   // Get current images tab AI setting
@@ -318,6 +666,23 @@ export default function TreatmentsPage() {
     return setting?.locked_model || ""
   }
 
+  // Get current scripts tab AI setting
+  const getScriptsTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'scripts')
+  }
+
+  // Check if scripts tab has a locked model
+  const isScriptsTabLocked = () => {
+    const setting = getScriptsTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for scripts tab
+  const getScriptsTabLockedModel = () => {
+    const setting = getScriptsTabSetting()
+    return setting?.locked_model || ""
+  }
+
   const handleEditTreatment = (treatment: Treatment) => {
     setEditingTreatment(treatment)
     setNewTreatment({
@@ -330,6 +695,8 @@ export default function TreatmentsPage() {
       estimated_duration: treatment.estimated_duration || ''
     })
     setGeneratedCoverUrl(treatment.cover_image_url || '')
+    setGeneratedSynopsis('')
+    setScriptAiPrompt('')
     setIsEditDialogOpen(true)
   }
 
@@ -654,6 +1021,7 @@ export default function TreatmentsPage() {
                             className="flex-1 bg-input border-border"
                           />
                           <Button
+                            type="button"
                             onClick={generateAICoverImage}
                             disabled={isGeneratingCover || !aiPrompt.trim()}
                             variant="outline"
@@ -685,6 +1053,18 @@ export default function TreatmentsPage() {
                                 Generated ✓
                               </Badge>
                             </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              onClick={downloadGeneratedCover}
+                              variant="outline"
+                              size="sm"
+                              className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download Cover
+                            </Button>
                           </div>
                           <p className="text-xs text-muted-foreground">
                             This cover will be automatically saved when you create the treatment.
@@ -742,16 +1122,138 @@ export default function TreatmentsPage() {
                   </div>
                 </div>
               </div>
+              {/* AI Script Generation for Synopsis */}
+              <div className="space-y-4">
+                <Label>Synopsis</Label>
+                
+                {/* AI Script Generation */}
+                <div className="border rounded-lg p-4 bg-muted/50">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Sparkles className="h-5 w-5 text-blue-500" />
+                    <h3 className="font-semibold">AI Synopsis Generation</h3>
+                  </div>
+                  
+                  {!user ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mr-2" />
+                      <span className="text-muted-foreground">Loading user profile...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* AI Service Selection - Only show if not locked */}
+                      {!isScriptsTabLocked() && (
               <div>
-                <Label htmlFor="synopsis">Synopsis</Label>
+                          <Label htmlFor="script-ai-service">AI Service</Label>
+                          <Select value={selectedScriptAIService} onValueChange={setSelectedScriptAIService}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="openai">OpenAI GPT-4</SelectItem>
+                              <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
+                              <SelectItem value="google">Google Gemini</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Show locked model info if scripts tab is locked */}
+                      {isScriptsTabLocked() && (
+                        <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                          <p className="text-sm text-blue-600 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4" />
+                            AI Scripts Online
+                          </p>
+                        </div>
+                      )}
+                      
+                      {/* AI Prompt for Synopsis */}
+                      <div>
+                        <Label htmlFor="script-ai-prompt">AI Prompt</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="script-ai-prompt"
+                            value={scriptAiPrompt}
+                            onChange={(e) => setScriptAiPrompt(e.target.value)}
+                            placeholder="Describe your story concept (e.g., 'A sci-fi thriller about time travel and corporate espionage')"
+                            className="flex-1 bg-input border-border"
+                          />
+                          <Button
+                            type="button"
+                            onClick={generateAISynopsis}
+                            disabled={isGeneratingSynopsis || !scriptAiPrompt.trim()}
+                            variant="outline"
+                            size="sm"
+                            className="border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10"
+                          >
+                            {isGeneratingSynopsis ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4 mr-2" />
+                            )}
+                            Generate Synopsis
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {/* Generated Synopsis Preview */}
+                      {generatedSynopsis && (
+                        <div className="space-y-3">
+                          <Label>Generated Synopsis</Label>
+                          <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                            <p className="text-sm text-blue-600 mb-2 flex items-center gap-2">
+                              <CheckCircle className="h-4 w-4" />
+                              AI Generated
+                            </p>
+                            <p className="text-sm whitespace-pre-wrap">{generatedSynopsis}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setNewTreatment(prev => ({ ...prev, synopsis: generatedSynopsis }))
+                                setGeneratedSynopsis('')
+                                setScriptAiPrompt('')
+                                toast({
+                                  title: "Synopsis Applied",
+                                  description: "AI-generated synopsis has been added to your treatment.",
+                                })
+                              }}
+                              variant="outline"
+                              size="sm"
+                              className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                            >
+                              <CheckCircle className="h-4 w-4 mr-2" />
+                              Use This Synopsis
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => setGeneratedSynopsis('')}
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-500/20 hover:border-gray-500 hover:bg-gray-500/10"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Discard
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual Synopsis Input */}
+                <div>
                 <Textarea
                   id="synopsis"
                   value={newTreatment.synopsis}
                   onChange={(e) => setNewTreatment(prev => ({ ...prev, synopsis: e.target.value }))}
-                  placeholder="Enter a brief synopsis of your story"
+                    placeholder="Enter a brief synopsis of your story (or use AI generation above)"
                   rows={3}
                   required
                 />
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
@@ -895,6 +1397,7 @@ export default function TreatmentsPage() {
                             className="flex-1 bg-input border-border"
                           />
                           <Button
+                            type="button"
                             onClick={generateAICoverImage}
                             disabled={isGeneratingCover || !aiPrompt.trim()}
                             variant="outline"
@@ -926,6 +1429,18 @@ export default function TreatmentsPage() {
                                 Generated ✓
                               </Badge>
                             </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              onClick={downloadGeneratedCover}
+                              variant="outline"
+                              size="sm"
+                              className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                            >
+                              <Download className="h-4 w-4 mr-2" />
+                              Download Cover
+                            </Button>
                           </div>
                           <p className="text-xs text-muted-foreground">
                             This cover will be automatically saved when you update the treatment.
@@ -984,16 +1499,138 @@ export default function TreatmentsPage() {
                 </div>
               </div>
 
+              {/* AI Script Generation for Synopsis - Edit Form */}
+              <div className="space-y-4">
+                <Label>Synopsis</Label>
+                
+                {/* AI Script Generation */}
+                <div className="border rounded-lg p-4 bg-muted/50">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Sparkles className="h-5 w-5 text-blue-500" />
+                    <h3 className="font-semibold">AI Synopsis Generation</h3>
+                  </div>
+                  
+                  {!user ? (
+                    <div className="flex items-center justify-center py-4">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mr-2" />
+                      <span className="text-muted-foreground">Loading user profile...</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* AI Service Selection - Only show if not locked */}
+                      {!isScriptsTabLocked() && (
               <div>
-                <Label htmlFor="edit-synopsis">Synopsis</Label>
+                          <Label htmlFor="edit-script-ai-service">AI Service</Label>
+                          <Select value={selectedScriptAIService} onValueChange={setSelectedScriptAIService}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="openai">OpenAI GPT-4</SelectItem>
+                              <SelectItem value="anthropic">Claude (Anthropic)</SelectItem>
+                              <SelectItem value="google">Google Gemini</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+
+                      {/* Show locked model info if scripts tab is locked */}
+                      {isScriptsTabLocked() && (
+                        <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                          <p className="text-sm text-blue-600 flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4" />
+                            AI Scripts Online
+                          </p>
+                        </div>
+                      )}
+                      
+                      {/* AI Prompt for Synopsis */}
+                      <div>
+                        <Label htmlFor="edit-script-ai-prompt">AI Prompt</Label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="edit-script-ai-prompt"
+                            value={scriptAiPrompt}
+                            onChange={(e) => setScriptAiPrompt(e.target.value)}
+                            placeholder="Describe your story concept (e.g., 'A sci-fi thriller about time travel and corporate espionage')"
+                            className="flex-1 bg-input border-border"
+                          />
+                          <Button
+                            type="button"
+                            onClick={generateAISynopsis}
+                            disabled={isGeneratingSynopsis || !scriptAiPrompt.trim()}
+                            variant="outline"
+                            size="sm"
+                            className="border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10"
+                          >
+                            {isGeneratingSynopsis ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4 mr-2" />
+                            )}
+                            Generate Synopsis
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {/* Generated Synopsis Preview */}
+                      {generatedSynopsis && (
+                        <div className="space-y-3">
+                          <Label>Generated Synopsis</Label>
+                          <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                            <p className="text-sm text-blue-600 mb-2 flex items-center gap-2">
+                              <CheckCircle className="h-4 w-4" />
+                              AI Generated
+                            </p>
+                            <p className="text-sm whitespace-pre-wrap">{generatedSynopsis}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setNewTreatment(prev => ({ ...prev, synopsis: generatedSynopsis }))
+                                setGeneratedSynopsis('')
+                                setScriptAiPrompt('')
+                                toast({
+                                  title: "Synopsis Applied",
+                                  description: "AI-generated synopsis has been added to your treatment.",
+                                })
+                              }}
+                              variant="outline"
+                              size="sm"
+                              className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10"
+                            >
+                              <CheckCircle className="h-4 w-4 mr-2" />
+                              Use This Synopsis
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => setGeneratedSynopsis('')}
+                              variant="outline"
+                              size="sm"
+                              className="border-gray-500/20 hover:border-gray-500 hover:bg-gray-500/10"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Discard
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual Synopsis Input */}
+                <div>
                 <Textarea
                   id="edit-synopsis"
                   value={newTreatment.synopsis}
                   onChange={(e) => setNewTreatment(prev => ({ ...prev, synopsis: e.target.value }))}
-                  placeholder="Enter a brief synopsis of your story"
+                    placeholder="Enter a brief synopsis of your story (or use AI generation above)"
                   rows={3}
                   required
                 />
+                </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
@@ -1133,6 +1770,21 @@ export default function TreatmentsPage() {
                       Delete
                     </Button>
                   </div>
+                  
+                  {/* Download Cover Button */}
+                  {treatment.cover_image_url && (
+                    <div className="mt-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="w-full"
+                        onClick={() => downloadTreatmentCover(treatment)}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download Cover
+                      </Button>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))}

@@ -39,7 +39,7 @@ export default function Header() {
               Cinema Studio
             </h1>
           </Link>
-          <ProjectSelector />
+
         </div>
         <div className="flex items-center gap-4">
           <Navigation />

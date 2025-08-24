@@ -291,8 +291,31 @@ export class RunwayMLService {
 export class ElevenLabsService {
   static async generateAudio(request: GenerateAudioRequest): Promise<AIResponse> {
     try {
+      console.log('🎵 ElevenLabs generateAudio called with:', {
+        promptLength: request.prompt?.length || 0,
+        voiceId: request.voiceId,
+        hasApiKey: !!request.apiKey,
+        apiKeyStart: request.apiKey?.substring(0, 10) + '...',
+        type: request.type
+      })
+      
       // Use the voice from the request or default to Rachel
       const voiceId = request.voiceId || "21m00Tcm4TlvDq8ikWAM"
+      console.log('🎤 Using voice ID:', voiceId)
+      
+      const requestBody = {
+        text: request.prompt,
+        model_id: "eleven_monolingual_v1",
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.5,
+          style: 0.0,
+          use_speaker_boost: true,
+        },
+      }
+      
+      console.log('📤 Request body:', requestBody)
+      console.log('🔑 API Key header:', request.apiKey?.substring(0, 10) + '...')
       
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
@@ -300,50 +323,135 @@ export class ElevenLabsService {
           'Content-Type': 'application/json',
           'xi-api-key': request.apiKey,
         },
-        body: JSON.stringify({
-          text: request.prompt,
-          model_id: "eleven_monolingual_v1",
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.5,
-            style: 0.0,
-            use_speaker_boost: true,
-          },
-        }),
+        body: JSON.stringify(requestBody),
       })
 
+      console.log('📡 ElevenLabs TTS response status:', response.status)
+      console.log('📡 ElevenLabs TTS response headers:', Object.fromEntries(response.headers.entries()))
+      
       if (!response.ok) {
         const errorText = await response.text()
-        console.error('ElevenLabs API error:', response.status, errorText)
-        throw new Error(`ElevenLabs API error: ${response.status} - ${errorText}`)
+        console.error('❌ ElevenLabs TTS API error:', response.status, errorText)
+        
+        // Try to parse error response for more details
+        let errorDetails = errorText
+        try {
+          const errorJson = JSON.parse(errorText)
+          if (errorJson.detail) {
+            errorDetails = errorJson.detail
+          }
+          if (errorJson.message) {
+            errorDetails = errorJson.message
+          }
+        } catch (e) {
+          // If parsing fails, use the raw text
+        }
+        
+        // Handle specific error cases
+        if (response.status === 401) {
+          throw new Error('Invalid API key. Please check your ElevenLabs API key.')
+        } else if (response.status === 429) {
+          throw new Error('Rate limit exceeded. Please try again later.')
+        } else if (response.status === 400) {
+          throw new Error(`Invalid request: ${errorDetails}`)
+        } else if (response.status === 402) {
+          throw new Error(`Payment required: ${errorDetails}`)
+        } else if (response.status === 403) {
+          throw new Error(`Forbidden: ${errorDetails}`)
+        } else if (response.status === 413) {
+          throw new Error(`Text too long: ${errorDetails}`)
+        } else if (response.status === 422) {
+          throw new Error(`Validation error: ${errorDetails}`)
+        } else {
+          throw new Error(`ElevenLabs API error: ${response.status} - ${errorDetails}`)
+        }
       }
+      
+      console.log('✅ ElevenLabs TTS request successful, processing audio blob...')
       
       // ElevenLabs returns audio data, not JSON
       const audioBlob = await response.blob()
-      const audioUrl = URL.createObjectURL(audioBlob)
+      console.log('🎵 Audio blob received, size:', audioBlob.size, 'bytes')
       
       return { 
         success: true, 
         data: { 
-          audio_url: audioUrl, 
           audio_blob: audioBlob,
           message: "Audio generated successfully"
         } 
       }
     } catch (error) {
-      console.error('ElevenLabs generation error:', error)
+      console.error('❌ ElevenLabs generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }
 
   static async validateApiKey(apiKey: string): Promise<boolean> {
     try {
+      console.log('🔍 ElevenLabs: Validating API key...')
+      console.log('🔑 API Key (first 10 chars):', apiKey.substring(0, 10) + '...')
+      
       const response = await fetch('https://api.elevenlabs.io/v1/user', {
         headers: { 'xi-api-key': apiKey },
       })
-      return response.ok
-    } catch {
+      
+      console.log('📡 ElevenLabs validation response status:', response.status)
+      const isValid = response.ok
+      console.log('✅ API Key valid:', isValid)
+      
+      return isValid
+    } catch (error) {
+      console.error('❌ ElevenLabs validation error:', error)
       return false
+    }
+  }
+
+  static async getUserInfo(apiKey: string): Promise<AIResponse> {
+    try {
+      console.log('🔍 ElevenLabs: Fetching user info...')
+      console.log('🔑 API Key (first 10 chars):', apiKey.substring(0, 10) + '...')
+      
+      const response = await fetch('https://api.elevenlabs.io/v1/user', {
+        headers: { 'xi-api-key': apiKey },
+      })
+      
+      console.log('📡 ElevenLabs response status:', response.status)
+      console.log('📡 ElevenLabs response headers:', Object.fromEntries(response.headers.entries()))
+      
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('❌ ElevenLabs user info error:', response.status, errorText)
+        
+        // Try to parse error response for more details
+        let errorDetails = errorText
+        try {
+          const errorJson = JSON.parse(errorText)
+          if (errorJson.detail) {
+            errorDetails = errorJson.detail
+          }
+          if (errorJson.message) {
+            errorDetails = errorJson.message
+          }
+        } catch (e) {
+          // If parsing fails, use the raw text
+        }
+        
+        throw new Error(`ElevenLabs API error ${response.status}: ${errorDetails}`)
+      }
+      
+      const userInfo = await response.json()
+      console.log('✅ ElevenLabs user info:', userInfo)
+      
+      return { 
+        success: true, 
+        data: userInfo 
+      }
+    } catch (error) {
+      console.error('❌ ElevenLabs user info error:', error)
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      }
     }
   }
 

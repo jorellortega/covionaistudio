@@ -54,6 +54,8 @@ import { useRouter } from "next/navigation"
 import FileImport from "@/components/file-import"
 import TextToSpeech from "@/components/text-to-speech"
 import AITextEditor from "@/components/ai-text-editor"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { Navigation } from "@/components/navigation"
 
 export default function ScenePage() {
   const params = useParams()
@@ -66,13 +68,10 @@ function ScenePageClient({ id }: { id: string }) {
   const { toast } = useToast()
   const { user, loading: authLoading } = useAuth()
   const router = useRouter()
+  const isMobile = useIsMobile()
+  console.log('🎬 DEBUG - isMobile value:', isMobile)
 
-  // Debug logging for authentication state
-  useEffect(() => {
-    if (user?.id) {
-      console.log('🎬 TIMELINE-SCENE - User authenticated:', user.name)
-    }
-  }, [user])
+
 
   // State variables
   const [activeTab, setActiveTab] = useState("scripts")
@@ -127,9 +126,10 @@ function ScenePageClient({ id }: { id: string }) {
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
 
   // Helper function to get timeline navigation URL
+  // Note: projectId is actually the movie ID from the projects table
   const getTimelineUrl = () => {
     if (projectId) {
-      return `/timeline?project=${projectId}`
+      return `/timeline?movie=${projectId}`
     }
     // Fallback: try to get project ID from scene data
     if (scene?.timeline_id) {
@@ -144,16 +144,16 @@ function ScenePageClient({ id }: { id: string }) {
     let mounted = true
     
     const fetchSceneData = async () => {
-      console.log('🎬 TIMELINE-SCENE - Starting scene data fetch for scene:', id)
+
       
       if (!id || !user?.id) {
-        console.log('🎬 TIMELINE-SCENE - Missing required data for fetch')
+
         return
       }
 
       // Validate scene ID format
       if (!id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-        console.error('🎬 TIMELINE-SCENE - Invalid scene ID format:', id)
+
         setLoading(false)
         return
       }
@@ -165,7 +165,7 @@ function ScenePageClient({ id }: { id: string }) {
         const scene = await TimelineService.getSceneById(id)
         
         if (scene && mounted) {
-          console.log('🎬 TIMELINE-SCENE - Scene fetched successfully:', scene.name)
+
           setScene(scene)
           
           // Get project ID through timeline
@@ -180,14 +180,14 @@ function ScenePageClient({ id }: { id: string }) {
               setProjectId(timeline.project_id)
             }
           } catch (timelineError) {
-            console.error('🎬 TIMELINE-SCENE - Error fetching timeline:', timelineError)
+
           }
         } else if (mounted) {
-          console.error('🎬 TIMELINE-SCENE - Scene not found')
+
           setLoading(false)
         }
       } catch (error) {
-        console.error('🎬 TIMELINE-SCENE - Error fetching scene:', error)
+
         if (mounted) {
           toast({
             title: "Error",
@@ -223,10 +223,10 @@ function ScenePageClient({ id }: { id: string }) {
     let mounted = true
     
     const fetchAssets = async () => {
-      console.log('🎬 TIMELINE-SCENE - Starting assets fetch for scene:', id)
+
       
       if (!id || !user?.id) {
-        console.log('🎬 TIMELINE-SCENE - Missing required data for assets fetch')
+
         return
       }
       
@@ -241,19 +241,19 @@ function ScenePageClient({ id }: { id: string }) {
           .eq('user_id', user.id)
         
         if (error) {
-          console.error('🎬 TIMELINE-SCENE - Error fetching scene assets:', error)
+
           if (mounted) {
             setAssets([])
           }
         } else {
-          console.log('🎬 TIMELINE-SCENE - Scene assets fetched successfully:', sceneAssets?.length || 0)
+
           if (mounted) {
             setAssets(sceneAssets || [])
           }
         }
         
       } catch (error) {
-        console.error('🎬 TIMELINE-SCENE - Error fetching assets:', error)
+
         if (mounted) {
           setAssets([])
         }
@@ -292,12 +292,12 @@ function ScenePageClient({ id }: { id: string }) {
         .eq('user_id', user?.id)
       
       if (error) {
-        console.error('🎬 TIMELINE-SCENE - Error refreshing assets:', error)
+
       } else {
         setAssets(sceneAssets || [])
       }
     } catch (error) {
-      console.error('🎬 TIMELINE-SCENE - Error refreshing assets:', error)
+
     } finally {
       setAssetsLoading(false)
     }
@@ -706,7 +706,7 @@ function ScenePageClient({ id }: { id: string }) {
   }
 
   // Helper function to generate shorter, cleaner names
-  const generateCleanName = (originalName: string, type: 'title' | 'version_name') => {
+  const generateCleanName = (originalName: string, type: 'title' | 'version_name', isMobile: boolean = false) => {
     if (type === 'title') {
       // For titles, remove "Extracted from" and file extensions, keep meaningful parts
       return originalName
@@ -717,36 +717,59 @@ function ScenePageClient({ id }: { id: string }) {
         .trim()
     } else {
       // For version names, create shorter, descriptive names
-      if (originalName.includes('v3')) return 'Version 3'
-      if (originalName.includes('v2')) return 'Version 2'
-      if (originalName.includes('v1')) return 'Version 1'
-      if (originalName.includes('Final')) return 'Final Version'
-      if (originalName.includes('Draft')) return 'Draft'
-      if (originalName.includes('Scene_1')) return 'Scene 1'
-      if (originalName.includes('Scene_2')) return 'Scene 2'
-      if (originalName.includes('Copy')) return 'Copy'
-      if (originalName.includes('Edited')) return 'Edited'
-      if (originalName.includes('Revised')) return 'Revised'
-      return 'New Version'
+      if (originalName.includes('v3')) return isMobile ? 'V3' : 'Version 3'
+      if (originalName.includes('v2')) return isMobile ? 'V2' : 'Version 2'
+      if (originalName.includes('v1')) return isMobile ? 'V1' : 'Version 1'
+      if (originalName.includes('Final')) return isMobile ? 'Final' : 'Final Version'
+      if (originalName.includes('Draft')) return isMobile ? 'Draft' : 'Draft'
+      if (originalName.includes('Scene_1')) return isMobile ? 'S1' : 'Scene 1'
+      if (originalName.includes('Scene_2')) return isMobile ? 'S2' : 'Scene 2'
+      if (originalName.includes('Copy')) return isMobile ? 'Copy' : 'Copy'
+      if (originalName.includes('Edited')) return isMobile ? 'Edited' : 'Edited'
+      if (originalName.includes('Revised')) return isMobile ? 'Revised' : 'Revised'
+      
+      // Try to extract version number from the name
+      const versionMatch = originalName.match(/version\s*(\d+)/i)
+      if (versionMatch) {
+        return isMobile ? `V${versionMatch[1]}` : `Version ${versionMatch[1]}`
+      }
+      
+      // If no specific pattern found, return the original name (but cleaned up)
+      return originalName
+        .replace(/_/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
     }
   }
 
   // Helper function to get clean version name for display
-  const getCleanVersionName = (script: any) => {
-    // If version_name exists and is not empty, use it
-    if (script.version_name && script.version_name.trim()) {
-      // Clean up the version name if it's too long
-      const cleanName = generateCleanName(script.version_name, 'version_name')
-      return cleanName
+  const getCleanVersionName = (script: any, isMobile: boolean = false) => {
+    console.log('🎬 DEBUG - getCleanVersionName called with:', { script, isMobile })
+    console.log('🎬 DEBUG - script.version:', script.version, 'type:', typeof script.version)
+    console.log('🎬 DEBUG - script.version_name:', script.version_name)
+    
+    // Always prioritize the version number for display formatting
+    if (script.version !== undefined && script.version !== null) {
+      const result = isMobile ? `V${script.version}` : `Version ${script.version}`
+      console.log('🎬 DEBUG - Using version number, result:', result)
+      return result
     }
     
-    // Otherwise, generate a clean version name based on version number
-    if (script.version) {
-      return `Version ${script.version}`
+    // If no version number, check if version_name exists and is meaningful
+    if (script.version_name && script.version_name.trim()) {
+      // Only use version_name if it's not just a number
+      const isJustNumber = /^\d+$/.test(script.version_name.trim())
+      if (!isJustNumber) {
+        const cleanName = generateCleanName(script.version_name, 'version_name', isMobile)
+        console.log('🎬 DEBUG - Using meaningful version_name, result:', cleanName)
+        return cleanName
+      }
     }
     
     // Fallback
-    return 'Version 1'
+    const fallback = isMobile ? 'V1' : 'Version 1'
+    console.log('🎬 DEBUG - Using fallback, result:', fallback)
+    return fallback
   }
 
   const saveInlineEdit = async () => {
@@ -826,27 +849,36 @@ function ScenePageClient({ id }: { id: string }) {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-background text-foreground">
+      {/* Navigation Bar */}
+      <div className="border-b border-border/40 bg-card/50">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4">
+          <Navigation />
+        </div>
+      </div>
+      
+      <div className="p-4 sm:p-6">
+        <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
+          <div className="flex items-center gap-3 sm:gap-4">
             <Link href={getTimelineUrl()}>
               <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10">
                 <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Timeline
+                <span className="hidden sm:inline">Back to Timeline</span>
+                <span className="sm:hidden">Back</span>
               </Button>
             </Link>
             <div>
-              <h1 className="text-3xl font-bold text-primary">
+              <h1 className="text-2xl sm:text-3xl font-bold text-primary">
                 Scene: {scene.name}
               </h1>
-              <p className="text-muted-foreground mt-1">{scene.description}</p>
+              <p className="text-sm sm:text-base text-muted-foreground mt-1">{scene.description}</p>
             </div>
           </div>
           
-          {/* Breadcrumb Navigation */}
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          {/* Breadcrumb Navigation - Hidden on mobile */}
+          <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
             <Link href="/dashboard" className="hover:text-primary transition-colors">
               Dashboard
             </Link>
@@ -860,7 +892,7 @@ function ScenePageClient({ id }: { id: string }) {
         </div>
         
         {/* Action Buttons */}
-        <div className="flex justify-end gap-3 mb-6">
+        <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-4 sm:mb-6">
           {/* Create New Script Version */}
           {assets.filter(a => a.content_type === 'script').length > 0 && (
             <Button
@@ -1035,7 +1067,7 @@ function ScenePageClient({ id }: { id: string }) {
         )}
 
         {/* Scene Info Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
           <Card className="bg-card border-primary/20">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
@@ -1068,8 +1100,8 @@ function ScenePageClient({ id }: { id: string }) {
         </div>
 
         {/* Main Content Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-card border-primary/20">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
+          <TabsList className="bg-card border-primary/20 flex-wrap">
             <TabsTrigger
               value="scripts"
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
@@ -1105,14 +1137,14 @@ function ScenePageClient({ id }: { id: string }) {
           {/* Scripts Tab */}
           <TabsContent value="scripts" className="space-y-6">
 
-            <div className="flex justify-between items-center">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
               <div>
-                <h3 className="text-xl font-semibold text-primary">Scene Scripts</h3>
-                <p className="text-sm text-muted-foreground mt-1">
+                <h3 className="text-lg sm:text-xl font-semibold text-primary">Scene Scripts</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   Read scripts aloud with speech synthesis • Toggle between versions • Generate new content
                 </p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {/* Create New Version from Current Script */}
                 {assets.filter(a => a.content_type === 'script').length > 0 && (
                   <Button
@@ -1187,92 +1219,7 @@ function ScenePageClient({ id }: { id: string }) {
               </div>
             </div>
 
-            {/* Version Management Info */}
-            <Card className="bg-card border-purple-500/20 mb-4">
-              <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-purple-500/20 rounded-lg">
-                    <Copy className="h-5 w-5 text-purple-400" />
-                  </div>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-purple-400 mb-1">Script Versioning</h4>
-                    <p className="text-sm text-muted-foreground">
-                      Create new versions of your scripts to track changes, experiment with variations, or maintain different drafts. 
-                      Each version preserves the original content while allowing you to make modifications.
-                    </p>
-                    <div className="flex gap-2 mt-3">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-transparent"
-                        onClick={() => {
-                          const scriptAssets = assets.filter(a => a.content_type === 'script')
-                          if (scriptAssets.length > 0) {
-                            const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                            
-                            // Create a new version by duplicating the current script
-                            const newAssetData = {
-                              project_id: activeScript.project_id,
-                              scene_id: activeScript.scene_id,
-                              title: `${activeScript.title} (Copy)`,
-                              content_type: activeScript.content_type,
-                              content: activeScript.content,
-                              content_url: activeScript.content_url,
-                              prompt: activeScript.prompt,
-                              model: activeScript.model,
-                              version_name: `Version ${(activeScript.version || 0) + 1}`,
-                              generation_settings: activeScript.generation_settings,
-                              metadata: {
-                                ...activeScript.metadata,
-                                duplicated_from_version: activeScript.version,
-                                duplicated_at: new Date().toISOString(),
-                                duplicated_from_asset_id: activeScript.id,
-                                is_duplicate: true
-                              }
-                            }
-                            
-                            // Save as new version
-                            AssetService.createAsset(newAssetData).then(() => {
-                              refreshAssets()
-                              toast({
-                                title: "New Version Created!",
-                                description: `A copy of "${activeScript.title}" has been created as a new version.`,
-                              })
-                            }).catch((error) => {
-                              console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
-                              toast({
-                                title: "Error",
-                                description: "Failed to create new version. Please try again.",
-                                variant: "destructive",
-                              })
-                            })
-                          }
-                        }}
-                        disabled={assets.filter(a => a.content_type === 'script').length === 0}
-                      >
-                        <Copy className="h-4 w-4 mr-2" />
-                        Create New Version
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="text-muted-foreground hover:text-purple-400"
-                        onClick={() => {
-                          // Scroll to the versions tab
-                          const versionsTab = document.querySelector('[data-value="versions"]')
-                          if (versionsTab) {
-                            setActiveTab("versions")
-                          }
-                        }}
-                      >
-                        <GitCompare className="h-4 w-4 mr-2" />
-                        View All Versions
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+
 
             {assets.filter(a => a.content_type === 'script').length > 0 ? (
               <div className="space-y-4">
@@ -1287,7 +1234,7 @@ function ScenePageClient({ id }: { id: string }) {
                   <div className="space-y-4">
                                          {/* FORCED VERSION TABS - TEST */}
                      <div className="border-b border-green-400/30 mb-4">
-                       <div className="flex space-x-1">
+                       <div className="flex flex-wrap gap-1">
                          {scriptAssets.map((script) => (
                            <div key={script.id} className="relative group">
                              {inlineEditing?.assetId === script.id && inlineEditing.field === 'version_name' ? (
@@ -1330,7 +1277,7 @@ function ScenePageClient({ id }: { id: string }) {
                                  }`}
                                >
                                  <div className="flex items-center gap-2">
-                                   <span>{getCleanVersionName(script)}</span>
+                                   <span>{getCleanVersionName(script, isMobile)}</span>
                                    {script.is_latest_version && (
                                      <span className="text-xs text-green-300">★</span>
                                    )}
@@ -1339,7 +1286,7 @@ function ScenePageClient({ id }: { id: string }) {
                                      variant="ghost"
                                      onClick={(e) => {
                                        e.stopPropagation()
-                                       startInlineEditing(script.id, 'version_name', getCleanVersionName(script))
+                                       startInlineEditing(script.id, 'version_name', getCleanVersionName(script, isMobile))
                                      }}
                                      className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity p-0 hover:bg-green-500/10"
                                    >
@@ -1353,31 +1300,33 @@ function ScenePageClient({ id }: { id: string }) {
                        </div>
                        
                        {/* Quick Rename Suggestions */}
-                       <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                       <div className="mt-2 flex flex-col sm:flex-row sm:items-center gap-2 text-xs text-muted-foreground">
                          <span>💡 Quick rename suggestions:</span>
-                         {scriptAssets.map((script) => (
-                           <Button
-                             key={script.id}
-                             size="sm"
-                             variant="ghost"
-                             onClick={() => {
-                               const cleanName = generateCleanName(getCleanVersionName(script), 'version_name')
-                               startInlineEditing(script.id, 'version_name', cleanName)
-                             }}
-                             className="h-6 px-2 text-xs hover:bg-green-500/10 hover:text-green-400"
-                           >
-                             {generateCleanName(getCleanVersionName(script), 'version_name')}
-                           </Button>
-                         ))}
+                         <div className="flex flex-wrap gap-1">
+                           {scriptAssets.map((script) => (
+                             <Button
+                               key={script.id}
+                               size="sm"
+                               variant="ghost"
+                               onClick={() => {
+                                 const cleanName = generateCleanName(getCleanVersionName(script, isMobile), 'version_name', isMobile)
+                                 startInlineEditing(script.id, 'version_name', cleanName)
+                               }}
+                               className="h-6 px-2 text-xs hover:bg-green-500/10 hover:text-green-400"
+                             >
+                               {generateCleanName(getCleanVersionName(script, isMobile), 'version_name', isMobile)}
+                             </Button>
+                           ))}
+                         </div>
                        </div>
                      </div>
                      
                      {/* Script Content Display */}
                      <Card className="bg-card border-primary/20">
                        <CardHeader>
-                         <div className="flex items-start justify-between">
+                         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                            <div className="flex-1">
-                             <div className="flex items-center gap-3 mb-2">
+                             <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
                                <h4 className="text-xl font-bold text-primary">{(() => {
                                  const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
                                  
@@ -1437,7 +1386,7 @@ function ScenePageClient({ id }: { id: string }) {
                                <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
                                  {(() => {
                                    const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                                   return getCleanVersionName(activeScript)
+                                   return getCleanVersionName(activeScript, isMobile)
                                  })()}
                                </Badge>
                                {(() => {
@@ -1459,23 +1408,8 @@ function ScenePageClient({ id }: { id: string }) {
                                })()}
                              </p>
                            </div>
-                           <div className="flex gap-2">
-                             {/* Quick Text to Speech Button */}
-                             <Button
-                               variant="outline"
-                               size="sm"
-                               className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                               onClick={() => {
-                                 // Scroll to the text-to-speech component
-                                 const ttsElement = document.querySelector('[data-tts-component]')
-                                 if (ttsElement) {
-                                   ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                                 }
-                               }}
-                             >
-                               <Volume2 className="h-4 w-4 mr-2" />
-                               Listen to Script
-                             </Button>
+                           <div className="flex flex-wrap gap-2">
+
                              
                              {/* Quick Edit Button */}
                              <Button
@@ -1507,125 +1441,56 @@ function ScenePageClient({ id }: { id: string }) {
                                </AlertDialogTrigger>
                                <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
                                  <AlertDialogHeader>
-                                   <AlertDialogTitle className="text-red-400">Delete Script Version</AlertDialogTitle>
+                                   <AlertDialogTitle className="text-red-400">Delete This Version Only</AlertDialogTitle>
                                    <AlertDialogDescription className="text-muted-foreground">
-                                     This version may have related versions. How would you like to proceed?
+                                     This will delete only the current version you're viewing. Other versions will remain untouched.
                                    </AlertDialogDescription>
                                  </AlertDialogHeader>
-                                 <div className="py-4 space-y-3">
-                                   <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                                     <h4 className="font-medium text-blue-400 mb-2">Option 1: Delete All Related Versions</h4>
-                                     <p className="text-sm text-muted-foreground">
-                                       Removes this version and all its child versions completely. This is irreversible.
-                                     </p>
-                                   </div>
-                                   <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
-                                     <h4 className="font-medium text-green-400 mb-2">Option 2: Unlink Only</h4>
-                                     <p className="text-sm text-muted-foreground">
-                                       Removes the version relationship but keeps all assets. You can manually manage them later.
-                                     </p>
-                                   </div>
-                                 </div>
-                                 <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+                                 <AlertDialogFooter className="flex gap-2">
                                    <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
-                                   <div className="flex gap-2">
-                                     <Button
-                                       variant="outline"
-                                       className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                                       onClick={async () => {
-                                         const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                   <Button
+                                     className="bg-red-500 hover:bg-red-600"
+                                     onClick={async () => {
+                                       const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                       
+                                       try {
+                                         setLoading(true)
                                          
-                                         try {
-                                           setLoading(true)
-                                           
-                                           // Option 2: Just unlink the parent relationship
-                                           const { error: unlinkError } = await supabase
-                                             .from('assets')
-                                             .update({ parent_asset_id: null })
-                                             .eq('parent_asset_id', activeScript.id)
-                                             .eq('user_id', user?.id)
-                                           
-                                           if (unlinkError) {
-                                             throw new Error(`Failed to unlink: ${unlinkError.message}`)
-                                           }
-                                           
-                                           // Now delete the main asset
-                                           const { error: deleteError } = await supabase
-                                             .from('assets')
-                                             .delete()
-                                             .eq('id', activeScript.id)
-                                             .eq('user_id', user?.id)
-                                           
-                                           if (deleteError) {
-                                             throw new Error(`Failed to delete: ${deleteError.message}`)
-                                           }
-                                           
-                                           // Refresh assets
-                                           refreshAssets()
-                                           
-                                           toast({
-                                             title: "Version Unlinked & Deleted!",
-                                             description: `"${activeScript.title}" has been removed. Related versions are now independent.`,
-                                           })
-                                           
-                                         } catch (error) {
-                                           console.error('🎬 TIMELINE-SCENE - Error unlinking version:', error)
-                                           toast({
-                                             title: "Unlink Failed",
-                                             description: error instanceof Error ? error.message : "Failed to unlink version.",
-                                             variant: "destructive",
-                                           })
-                                         } finally {
-                                           setLoading(false)
-                                         }
-                                       }}
-                                       disabled={loading}
-                                     >
-                                       <Copy className="h-4 w-4 mr-2" />
-                                       Unlink Only
-                                     </Button>
-                                     <Button
-                                       className="bg-red-500 hover:bg-red-600"
-                                       onClick={async () => {
-                                         const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
+                                         // Delete only this specific version
+                                         const { error: deleteError } = await supabase
+                                           .from('assets')
+                                           .delete()
+                                           .eq('id', activeScript.id)
+                                           .eq('user_id', user?.id)
                                          
-                                         try {
-                                           setLoading(true)
-                                           
-                                           const result = await deleteAssetWithVersioning(activeScript.id)
-                                           
-                                           if (result.success) {
-                                             // Refresh assets
-                                             refreshAssets()
-                                             
-                                             toast({
-                                               title: "All Versions Deleted!",
-                                               description: `"${activeScript.title}" and all related versions have been permanently removed.`,
-                                             })
-                                           } else {
-                                             toast({
-                                               title: "Delete Failed",
-                                               description: result.error || "Failed to delete version. Please try again.",
-                                               variant: "destructive",
-                                             })
-                                           }
-                                         } catch (error) {
-                                           console.error('🎬 TIMELINE-SCENE - Error deleting version:', error)
-                                           toast({
-                                             title: "Delete Failed",
-                                             description: error instanceof Error ? error.message : "Failed to delete version. Please try again.",
-                                             variant: "destructive",
-                                           })
-                                         } finally {
-                                           setLoading(false)
+                                         if (deleteError) {
+                                           throw new Error(`Failed to delete: ${deleteError.message}`)
                                          }
-                                       }}
-                                       disabled={loading}
-                                     >
-                                       <Trash2 className="h-4 w-4 mr-2" />
-                                       Delete All
-                                     </Button>
-                                   </div>
+                                         
+                                         // Refresh assets
+                                         refreshAssets()
+                                         
+                                         toast({
+                                           title: "Version Deleted!",
+                                           description: `"${activeScript.title}" has been removed. Other versions are unaffected.`,
+                                         })
+                                         
+                                       } catch (error) {
+                                         console.error('🎬 TIMELINE-SCENE - Error deleting version:', error)
+                                         toast({
+                                           title: "Delete Failed",
+                                           description: error instanceof Error ? error.message : "Failed to delete version. Please try again.",
+                                           variant: "destructive",
+                                         })
+                                       } finally {
+                                         setLoading(false)
+                                       }
+                                     }}
+                                     disabled={loading}
+                                   >
+                                     <Trash2 className="h-4 w-4 mr-2" />
+                                     Delete This Version Only
+                                   </Button>
                                  </AlertDialogFooter>
                                </AlertDialogContent>
                              </AlertDialog>
@@ -1981,7 +1846,7 @@ function ScenePageClient({ id }: { id: string }) {
                               <div className="flex items-center gap-3 mb-2">
                                 <h4 className="text-xl font-bold text-primary">{generateCleanName(selectedVersion.title, 'title')}</h4>
                                 <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                  {getCleanVersionName(selectedVersion)}
+                                  {getCleanVersionName(selectedVersion, isMobile)}
                                 </Badge>
                                 {selectedVersion.is_latest_version && (
                                   <Badge className="bg-green-500 text-white px-3 py-1 text-sm">
@@ -2006,7 +1871,7 @@ function ScenePageClient({ id }: { id: string }) {
                                            : 'text-green-400/60 border-transparent hover:text-green-400 hover:border-green-400/40'
                                        }`}
                                      >
-                                       {getCleanVersionName(version)}
+                                       {getCleanVersionName(version, isMobile)}
                                        {version.is_latest_version && (
                                          <span className="ml-1 text-xs text-green-300">★</span>
                                        )}
@@ -2830,7 +2695,7 @@ function ScenePageClient({ id }: { id: string }) {
                                       {/* BIG VERSION LABEL */}
                                       <div className="flex items-center gap-2">
                                         <Badge variant="outline" className="text-lg px-3 py-1 border-green-500 text-green-400 bg-green-500/10">
-                                          {getCleanVersionName(latestVersion)}
+                                          {getCleanVersionName(latestVersion, isMobile)}
                                         </Badge>
                                         {latestVersion.metadata?.version_label && (
                                           <Badge variant="outline" className="px-2 py-1 border-blue-500 text-blue-400 bg-blue-500/10">
@@ -2863,7 +2728,7 @@ function ScenePageClient({ id }: { id: string }) {
                                                   ? 'bg-green-300'
                                                   : 'bg-gray-400 hover:bg-gray-300'
                                               }`}
-                                              title={`${getCleanVersionName(version)} - ${new Date(version.created_at).toLocaleDateString()}`}
+                                              title={`${getCleanVersionName(version, isMobile)} - ${new Date(version.created_at).toLocaleDateString()}`}
                                             />
                                           ))}
                                         </div>
@@ -3706,6 +3571,7 @@ function ScenePageClient({ id }: { id: string }) {
           />
         )}
 
+        </div>
       </div>
     </div>
   )
