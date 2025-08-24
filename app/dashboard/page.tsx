@@ -13,7 +13,7 @@ import { ProjectsService, DashboardProject } from "@/lib/projects-service"
 import { StoryboardsService } from "@/lib/storyboards-service"
 
 export default function DashboardPage() {
-  const { user, isLoading, signOut } = useAuth()
+  const { user, loading, signOut } = useAuth()
   const [treatmentsCount, setTreatmentsCount] = useState(0)
   const [recentProjects, setRecentProjects] = useState<DashboardProject[]>([])
   const [isLoadingProjects, setIsLoadingProjects] = useState(true)
@@ -25,10 +25,10 @@ export default function DashboardPage() {
   useEffect(() => {
     console.log('🏠 DASHBOARD - Auth State Change:', {
       user: user ? { id: user.id, email: user.email, name: user.name } : null,
-      isLoading,
+      loading,
       timestamp: new Date().toISOString()
     })
-  }, [user, isLoading])
+  }, [user, loading])
 
   useEffect(() => {
     const fetchData = async () => {
@@ -90,7 +90,7 @@ export default function DashboardPage() {
     }
   }
 
-  if (isLoading) {
+  if (loading) {
     console.log('🏠 DASHBOARD - Showing loading state')
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">

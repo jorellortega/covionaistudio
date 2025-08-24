@@ -17,11 +17,11 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function Header() {
-  const { user, logout } = useAuth()
+  const { user, signOut } = useAuth()
 
   const handleLogout = async () => {
     try {
-      await logout()
+      await signOut()
     } catch (error) {
       console.error('Error logging out:', error)
     }

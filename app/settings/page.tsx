@@ -12,7 +12,7 @@ import { LogOut, User, Key, Save, Settings } from 'lucide-react'
 import Link from 'next/link'
 
 export default function SettingsPage() {
-  const { user, logout, updateServiceApiKey } = useAuth()
+  const { user, signOut, updateServiceApiKey } = useAuth()
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
   const [apiKeys, setApiKeys] = useState({
@@ -46,7 +46,7 @@ export default function SettingsPage() {
 
   const handleLogout = async () => {
     try {
-      await logout()
+      await signOut()
       toast({
         title: "Logged out",
         description: "You have been successfully logged out",

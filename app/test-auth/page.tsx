@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export default function TestAuthPage() {
-  const { user, isLoading, isInitialized, signIn, logout } = useAuth()
+  const { user, loading, signIn, signOut } = useAuth()
 
   const handleTestSignIn = async () => {
     try {
@@ -25,7 +25,7 @@ export default function TestAuthPage() {
   const handleTestSignOut = async () => {
     try {
       console.log('Testing sign out...')
-      await logout()
+      await signOut()
       console.log('Test sign out completed')
     } catch (error) {
       console.error('Test sign out error:', error)
@@ -43,8 +43,7 @@ export default function TestAuthPage() {
             <div className="space-y-2">
               <h3 className="font-semibold">Current State:</h3>
               <div className="text-sm space-y-1">
-                <div>Loading: {isLoading.toString()}</div>
-                <div>Initialized: {isInitialized.toString()}</div>
+                <div>Loading: {loading.toString()}</div>
                 <div>User: {user ? 'Yes' : 'No'}</div>
                 {user && (
                   <>

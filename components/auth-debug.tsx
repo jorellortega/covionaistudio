@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function AuthDebug() {
-  const { user, isLoading, isInitialized, signOut } = useAuth()
+  const { user, loading, signOut } = useAuth()
 
   const handleSignOut = async () => {
     try {
@@ -37,14 +37,8 @@ export function AuthDebug() {
         <div className="space-y-2">
           <div className="flex justify-between">
             <span className="font-medium">Loading:</span>
-            <span className={isLoading ? 'text-yellow-500' : 'text-green-500'}>
-              {isLoading ? 'Yes' : 'No'}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="font-medium">Initialized:</span>
-            <span className={isInitialized ? 'text-green-500' : 'text-red-500'}>
-              {isInitialized ? 'Yes' : 'No'}
+            <span className={loading ? 'text-yellow-500' : 'text-green-500'}>
+              {loading ? 'Yes' : 'No'}
             </span>
           </div>
           <div className="flex justify-between">
