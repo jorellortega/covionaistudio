@@ -68,7 +68,7 @@ function ScenePageClient({ id }: { id: string }) {
   const { toast } = useToast()
   const { user, loading: authLoading } = useAuth()
   const router = useRouter()
-  const isMobile = useIsMobile()
+  const isMobile = false // FORCE DESKTOP VIEW
   console.log('🎬 DEBUG - isMobile value:', isMobile)
 
 
@@ -2485,6 +2485,11 @@ function ScenePageClient({ id }: { id: string }) {
 
           {/* Audio Tab */}
           <TabsContent value="audio" className="space-y-6">
+            {(() => {
+              console.log('🎵 AUDIO-TAB - Assets array:', assets)
+              console.log('🎵 AUDIO-TAB - Audio assets:', assets.filter(a => a.content_type === 'audio'))
+              return null
+            })()}
             <div className="flex justify-between items-center">
               <h3 className="text-xl font-semibold text-primary">Scene Audio</h3>
               <Button
@@ -2556,6 +2561,47 @@ function ScenePageClient({ id }: { id: string }) {
                         >
                           <Bot className="h-4 w-4 mr-2" />
                           Generate Variation
+                        </Button>
+                        {(() => {
+                          console.log('🎵 RENDERING - About to render delete button for audio:', audio.title, 'ID:', audio.id)
+                          return null
+                        })()}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          onClick={() => {
+                            console.log('🎵 DELETE-CLICKED - Button clicked for audio:', audio)
+                            console.log('🎵 DELETE-CLICKED - Audio ID:', audio.id)
+                            console.log('🎵 DELETE-CLICKED - User ID:', user?.id)
+                            
+                            if (confirm(`Delete "${audio.title}"?`)) {
+                              console.log('🎵 DELETE-CLICKED - Confirmed deletion, sending request...')
+                              
+                              fetch('/api/ai/delete-audio', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ audioId: audio.id, userId: user?.id })
+                              })
+                              .then(response => response.json())
+                              .then(result => {
+                                console.log('🎵 DELETE-CLICKED - Response received:', result)
+                                if (result.success) {
+                                  toast({ title: "Deleted!", description: "Audio removed successfully." })
+                                  refreshAssets()
+                                } else {
+                                  toast({ title: "Error", description: result.error || "Failed to delete", variant: "destructive" })
+                                }
+                              })
+                              .catch(error => {
+                                console.error('🎵 DELETE-CLICKED - Error:', error)
+                                toast({ title: "Error", description: "Failed to delete audio", variant: "destructive" })
+                              })
+                            }
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 mr-2" />
+                          DELETE TEST BUTTON
                         </Button>
                       </div>
                     </CardContent>

@@ -20,65 +20,47 @@ export default function DashboardPage() {
   const [totalProjects, setTotalProjects] = useState(0)
   const [totalScenes, setTotalScenes] = useState(0)
   const [storyboardsCount, setStoryboardsCount] = useState(0)
+  const [hasFetchedData, setHasFetchedData] = useState(false)
 
-  // Debug logging for authentication state
-  useEffect(() => {
-    console.log('🏠 DASHBOARD - Auth State Change:', {
-      user: user ? { id: user.id, email: user.email, name: user.name } : null,
-      loading,
-      timestamp: new Date().toISOString()
-    })
-  }, [user, loading])
-
+  // Fetch data only once when user is available
   useEffect(() => {
     const fetchData = async () => {
-      console.log('🏠 DASHBOARD - Starting data fetch:', { userId: user?.id, timestamp: new Date().toISOString() })
+      if (!user || hasFetchedData) return
+      
+      console.log('🏠 DASHBOARD - Starting data fetch')
+      setIsLoadingProjects(true)
       
       try {
         // Fetch treatments count
-        console.log('🏠 DASHBOARD - Fetching treatments...')
         const treatments = await TreatmentsService.getTreatments()
-        console.log('🏠 DASHBOARD - Treatments fetched:', treatments.length)
         setTreatmentsCount(treatments.length)
 
         // Fetch recent projects
-        console.log('🏠 DASHBOARD - Fetching recent projects...')
         const projects = await ProjectsService.getRecentProjects()
-        console.log('🏠 DASHBOARD - Recent projects fetched:', projects.length)
         setRecentProjects(projects)
         
         // Fetch total counts
-        console.log('🏠 DASHBOARD - Fetching all projects...')
         const allProjects = await ProjectsService.getProjects()
-        console.log('🏠 DASHBOARD - All projects fetched:', allProjects.length)
         setTotalProjects(allProjects.length)
         
         // Calculate total scenes from all projects
         const totalScenesCount = allProjects.reduce((sum, project) => sum + (project.scenes || 0), 0)
-        console.log('🏠 DASHBOARD - Total scenes calculated:', totalScenesCount)
         setTotalScenes(totalScenesCount)
         
         // Fetch storyboards count
-        console.log('🏠 DASHBOARD - Fetching storyboards count...')
         const storyboards = await StoryboardsService.getStoryboardsCount()
-        console.log('🏠 DASHBOARD - Storyboards count fetched:', storyboards)
         setStoryboardsCount(storyboards)
         
-        console.log('🏠 DASHBOARD - All data fetch completed successfully')
+        setHasFetchedData(true)
       } catch (error) {
         console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
       } finally {
-        console.log('🏠 DASHBOARD - Setting loading state to false')
         setIsLoadingProjects(false)
       }
     }
 
-    if (user) {
-      fetchData()
-    } else {
-      console.log('🏠 DASHBOARD - No user, skipping data fetch')
-    }
-  }, [user])
+    fetchData()
+  }, [user, hasFetchedData])
 
   const handleSignOut = async () => {
     console.log('🏠 DASHBOARD - Sign out initiated')
@@ -91,7 +73,6 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    console.log('🏠 DASHBOARD - Showing loading state')
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">
         <div className="mb-8">
@@ -104,7 +85,6 @@ export default function DashboardPage() {
   }
 
   if (!user) {
-    console.log('🏠 DASHBOARD - No user, showing sign in prompt')
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">
         <div className="text-center">

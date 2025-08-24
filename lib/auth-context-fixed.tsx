@@ -37,15 +37,16 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-// Timeout for operations (30 seconds)
-const OPERATION_TIMEOUT = 30000
+// Simplified timeout for operations (60 seconds)
+const OPERATION_TIMEOUT = 60000
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [loading, setLoading] = useState(true)
   const [isInitialized, setIsInitialized] = useState(false)
-  const [isFetchingProfile, setIsFetchingProfile] = useState(false)
   const initializationRef = useRef(false)
+  const profileFetchRef = useRef<Promise<User | null> | null>(null)
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Helper function to add timeout to async operations
   const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
@@ -57,64 +58,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ])
   }
 
-  // Helper function to add timeout to Supabase queries
-  const withSupabaseTimeout = <T,>(query: any, timeoutMs: number): Promise<T> => {
-    return withTimeout(query, timeoutMs)
-  }
+  // Debounced user state update to prevent rapid changes
+  const setUserDebounced = useCallback((newUser: User | null) => {
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current)
+    }
+    
+    debounceTimeoutRef.current = setTimeout(() => {
+      setUser(newUser)
+    }, 100) // 100ms debounce
+  }, [])
 
-  // Memoized function to fetch user profile
+  // Memoized function to fetch user profile with deduplication
   const fetchUserProfile = useCallback(async (userId: string): Promise<User | null> => {
+    // If we're already fetching a profile, return the existing promise
+    if (profileFetchRef.current) {
+      console.log('Profile fetch already in progress, returning existing promise')
+      return profileFetchRef.current
+    }
+
     try {
       console.log('Fetching profile for user:', userId)
       
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single()
+      const profilePromise = (async () => {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', userId)
+          .single()
 
-      if (error) {
-        console.error('Error fetching user profile:', error)
-        
-        // Handle different error cases
-        if (error.code === 'PGRST116') {
-          // Profile not found - create it
-          console.log('Profile not found, attempting to create...')
-          return await createUserProfile(userId)
-        } else if (error.code === 'PGRST200') {
-          // Multiple rows found - this shouldn't happen
-          console.error('Multiple profiles found for user:', userId)
-          return null
-        } else {
-          // Other errors - log and return null
-          console.error('Unexpected error fetching profile:', error)
-          return null
+        if (error) {
+          console.error('Error fetching user profile:', error)
+          
+          // Handle different error cases
+          if (error.code === 'PGRST116') {
+            // Profile not found - create it
+            console.log('Profile not found, attempting to create...')
+            return await createUserProfile(userId)
+          } else if (error.code === 'PGRST200') {
+            // Multiple rows found - this shouldn't happen
+            console.error('Multiple profiles found for user:', userId)
+            return null
+          } else {
+            // Other errors - log and return null
+            console.error('Unexpected error fetching profile:', error)
+            return null
+          }
         }
-      }
 
-      if (data) {
-        console.log('Profile fetched successfully:', data)
-        const userData: User = {
-          id: data.id,
-          email: data.email,
-          name: data.name,
-          role: data.role as 'user' | 'cinema' | 'ceo',
-          openaiApiKey: data.openai_api_key,
-          anthropicApiKey: data.anthropic_api_key,
-          openartApiKey: data.openart_api_key,
-          klingApiKey: data.kling_api_key,
-          runwayApiKey: data.runway_api_key,
-          elevenlabsApiKey: data.elevenlabs_api_key,
-          sunoApiKey: data.suno_api_key,
-          leonardoApiKey: data.leonardo_api_key,
-          created_at: data.created_at,
+        if (data) {
+          console.log('Profile fetched successfully:', data)
+          const userData: User = {
+            id: data.id,
+            email: data.email,
+            name: data.name,
+            role: data.role as 'user' | 'cinema' | 'ceo',
+            openaiApiKey: data.openai_api_key,
+            anthropicApiKey: data.anthropic_api_key,
+            openartApiKey: data.openart_api_key,
+            klingApiKey: data.kling_api_key,
+            runwayApiKey: data.runway_api_key,
+            elevenlabsApiKey: data.elevenlabs_api_key,
+            sunoApiKey: data.suno_api_key,
+            leonardoApiKey: data.leonardo_api_key,
+            created_at: data.created_at,
+          }
+          return userData
         }
-        return userData
-      }
 
-      return null
+        return null
+      })()
+
+      // Store the promise reference
+      profileFetchRef.current = profilePromise
+      
+      // Wait for the result
+      const result = await profilePromise
+      
+      // Clear the reference
+      profileFetchRef.current = null
+      
+      return result
     } catch (error) {
       console.error('Error in fetchUserProfile:', error)
+      // Clear the reference on error
+      profileFetchRef.current = null
       return null
     }
   }, [])
@@ -164,56 +192,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Simplified session change handler
   const handleSessionChange = useCallback(async (session: Session | null) => {
-    // Prevent multiple simultaneous profile fetches
-    if (isFetchingProfile) {
-      console.log('Profile fetch already in progress, skipping...')
-      return
-    }
-    
     try {
-      setIsFetchingProfile(true)
-      
       if (session?.user) {
         console.log('Session found, fetching user profile...')
         
-        // Add a timeout for profile fetching to prevent infinite loading
-        const profilePromise = fetchUserProfile(session.user.id)
-        const timeoutPromise = new Promise<null>((_, reject) => 
-          setTimeout(() => reject(new Error('Profile fetch timeout')), 15000)
-        )
-        
-        const userProfile = await Promise.race([profilePromise, timeoutPromise])
+        const userProfile = await fetchUserProfile(session.user.id)
         
         if (userProfile) {
-          setUser(userProfile)
+          setUserDebounced(userProfile)
         } else {
           console.error('Failed to fetch user profile, signing out')
           await supabase.auth.signOut()
-          setUser(null)
+          setUserDebounced(null)
         }
       } else {
         console.log('No session, clearing user')
-        setUser(null)
+        setUserDebounced(null)
       }
     } catch (error) {
       console.error('Error handling session change:', error)
       // Don't sign out on timeout, just clear user and continue
-      setUser(null)
+      setUserDebounced(null)
     } finally {
       // Always ensure loading is false and initialized is true
-      setIsLoading(false)
-      setIsFetchingProfile(false)
-      
-      // Set initialized only if not already set
-      setIsInitialized(prev => {
-        if (!prev) {
-          console.log('Setting auth as initialized')
-          return true
-        }
-        return prev
-      })
+      setLoading(false)
+      setIsInitialized(true)
     }
-  }, [fetchUserProfile, isFetchingProfile]) // Removed isInitialized dependency
+  }, [fetchUserProfile, setUserDebounced])
 
   // Initialize auth state - only run once on mount
   useEffect(() => {
@@ -224,22 +229,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     
     let mounted = true
-    let safetyTimeout: NodeJS.Timeout
 
     const initializeAuth = async () => {
       try {
         console.log('Initializing auth...')
         initializationRef.current = true
-        setIsLoading(true)
-        
-        // Set a safety timeout to prevent infinite loading
-        safetyTimeout = setTimeout(() => {
-          if (mounted && !isInitialized) {
-            console.warn('Auth initialization taking too long, forcing completion')
-            setIsLoading(false)
-            setIsInitialized(true)
-          }
-        }, 10000) // 10 second safety timeout
+        setLoading(true)
         
         // Get initial session
         const { data: { session } } = await withTimeout(
@@ -249,14 +244,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         if (mounted) {
           console.log('Initial session:', session ? 'found' : 'none')
-          clearTimeout(safetyTimeout)
           await handleSessionChange(session)
         }
       } catch (error) {
         console.error('Error initializing auth:', error)
         if (mounted) {
-          clearTimeout(safetyTimeout)
-          setIsLoading(false)
+          setLoading(false)
           setIsInitialized(true)
         }
       }
@@ -271,17 +264,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         
         if (mounted) {
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-            // Only set loading if we're not already fetching a profile
-            if (!isFetchingProfile) {
-              console.log('Setting loading state for auth event:', event)
-              setIsLoading(true) // Set loading while fetching profile
-            }
+            setLoading(true)
             await handleSessionChange(session)
           } else if (event === 'SIGNED_OUT') {
             console.log('User signed out, clearing state')
-            setUser(null)
-            setIsLoading(false)
-            setIsFetchingProfile(false)
+            setUserDebounced(null)
+            setLoading(false)
+            
+            // Redirect to homepage when signed out
+            if (typeof window !== 'undefined') {
+              window.location.href = '/'
+            }
           }
         }
       }
@@ -289,7 +282,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return () => {
       mounted = false
-      clearTimeout(safetyTimeout)
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current)
+      }
       subscription.unsubscribe()
     }
   }, []) // Empty dependency array - only run once on mount
@@ -326,7 +321,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Sign in successful, user:', data.user?.id)
       
       // The session change will be handled by the auth state listener
-      // But we need to ensure loading state is managed properly
       return { error: null }
     } catch (error) {
       console.error('Sign in exception:', error)
@@ -368,9 +362,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Starting sign out process...')
       
       // Clear user state immediately for better UX
-      setUser(null)
-      setIsLoading(false)
-      setIsFetchingProfile(false)
+      setUserDebounced(null)
+      setLoading(false)
       
       // Sign out from Supabase
       const { error } = await withTimeout(supabase.auth.signOut(), OPERATION_TIMEOUT)
@@ -386,14 +379,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsInitialized(false)
       initializationRef.current = false
       
+      // Redirect to homepage
+      if (typeof window !== 'undefined') {
+        window.location.href = '/'
+      }
+      
     } catch (error) {
       console.error('Error in logout function:', error)
       // Ensure state is cleared even on error
-      setUser(null)
-      setIsLoading(false)
-      setIsFetchingProfile(false)
+      setUserDebounced(null)
+      setLoading(false)
       setIsInitialized(false)
       initializationRef.current = false
+      
+      // Redirect to homepage even on error
+      if (typeof window !== 'undefined') {
+        window.location.href = '/'
+      }
     }
   }
 
@@ -401,7 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user?.id) {
       const userProfile = await fetchUserProfile(user.id)
       if (userProfile) {
-        setUser(userProfile)
+        setUserDebounced(userProfile)
       }
     }
   }
@@ -420,7 +422,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const updatedUser = { ...user, openaiApiKey: apiKey }
-      setUser(updatedUser)
+      setUserDebounced(updatedUser)
     } catch (error) {
       console.error('Error updating API key:', error)
       throw error
@@ -473,7 +475,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const updatedUser = { ...user, [userProperty]: apiKey }
-      setUser(updatedUser)
+      setUserDebounced(updatedUser)
     } catch (error) {
       console.error('Error updating service API key:', error)
       throw error
@@ -493,13 +495,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resetLoadingState = () => {
-    setIsLoading(false);
+    setLoading(false);
   };
 
   return (
     <AuthContext.Provider value={{
       user,
-      loading: isLoading,
+      loading,
       signIn: signIn,
       signUp: signup,
       signOut: logout,

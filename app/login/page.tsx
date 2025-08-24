@@ -19,26 +19,11 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [showDebug, setShowDebug] = useState(false)
   const router = useRouter()
-  const { signIn, user, loading: authLoading, resetLoadingState } = useAuth()
+  const { signIn, user, loading: authLoading } = useAuth()
   const { toast } = useToast()
 
-  // Debug logging for authentication state
+  // Redirect if already authenticated - simplified to reduce re-renders
   useEffect(() => {
-    console.log('🔐 LOGIN PAGE - Auth State Change:', {
-      user: user ? { id: user.id, email: user.email, name: user.name } : null,
-      authLoading,
-      timestamp: new Date().toISOString()
-    })
-  }, [user, authLoading])
-
-  // Redirect if already authenticated
-  useEffect(() => {
-    console.log('🔐 LOGIN PAGE - Redirect Check:', {
-      hasUser: !!user,
-      authLoading,
-      willRedirect: user && !authLoading
-    })
-    
     if (user && !authLoading) {
       console.log('🔐 LOGIN PAGE - Redirecting to dashboard')
       router.push("/dashboard")
@@ -52,33 +37,17 @@ export default function LoginPage() {
     }
   }, [email, password])
 
-  // Safety timeout to prevent stuck loading states
-  useEffect(() => {
-    if (isSubmitting) {
-      console.log('🔐 LOGIN PAGE - Setting safety timeout for submission')
-      const timeout = setTimeout(() => {
-        console.warn('🔐 LOGIN PAGE - Login submission taking too long, resetting state')
-        setIsSubmitting(false)
-        resetLoadingState()
-        setError('Login is taking too long. Please try again.')
-      }, 15000) // 15 second timeout
-
-      return () => clearTimeout(timeout)
-    }
-  }, [isSubmitting, resetLoadingState])
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     
     if (isSubmitting) return // Prevent double submission
     
-    console.log('🔐 LOGIN PAGE - Form submission started:', { email, timestamp: new Date().toISOString() })
+    console.log('🔐 LOGIN PAGE - Form submission started')
     
     setError(null)
     setIsSubmitting(true)
     
     try {
-      console.log('🔐 LOGIN PAGE - Calling signIn function')
       const { error: signInError } = await signIn(email, password)
       
       if (signInError) {
@@ -131,19 +100,15 @@ export default function LoginPage() {
 
   // Show loading state while auth is initializing
   if (authLoading && !user) {
-    console.log('🔐 LOGIN PAGE - Showing auth loading state')
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-4">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-500" />
           <p className="text-muted-foreground">Initializing authentication...</p>
-          <p className="text-xs text-muted-foreground mt-2">Debug: authLoading={authLoading.toString()}, user={user ? 'exists' : 'null'}</p>
         </div>
       </div>
     )
   }
-
-  console.log('🔐 LOGIN PAGE - Rendering main login form')
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
