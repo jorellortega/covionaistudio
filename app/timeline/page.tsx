@@ -37,6 +37,7 @@ import {
   ImageIcon,
   RefreshCw,
   CheckCircle,
+  FileText,
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
@@ -2144,6 +2145,19 @@ export default function TimelinePage() {
                                     Assets
                                   </Button>
                                   <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      window.location.href = `/storyboards/${scene.id}`
+                                    }}
+                                    className="text-xs h-6 px-2 bg-transparent hover:bg-purple-500/10 hover:text-purple-500"
+                                  >
+                                    <FileText className="mr-1 h-2 w-2" />
+                                    Storyboards
+                                  </Button>
+                                  <Button
                                     variant="ghost"
                                     size="icon"
                                     onClick={(e) => {
@@ -2366,6 +2380,19 @@ export default function TimelinePage() {
                                         Assets
                                       </Button>
                                       <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          window.location.href = `/storyboards/${scene.id}`
+                                        }}
+                                        className="text-xs h-6 px-2 bg-transparent hover:bg-purple-500/10 hover:text-purple-500"
+                                      >
+                                        <FileText className="mr-1 h-2 w-2" />
+                                        Storyboards
+                                      </Button>
+                                      <Button
                                         variant="ghost"
                                         size="icon"
                                         onClick={(e) => {
@@ -2580,6 +2607,10 @@ export default function TimelinePage() {
                               <Button size="sm" variant="outline" onClick={() => handleViewAssets(scene.id)}>
                                 <FolderOpen className="mr-2 h-4 w-4" />
                                 Assets
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => window.location.href = `/storyboards/${scene.id}`}>
+                                <FileText className="mr-2 h-4 w-4" />
+                                Storyboards
                               </Button>
                               <Button size="sm" variant="outline" onClick={() => handleEditScene(scene)}>
                                 <Edit className="mr-2 h-4 w-4" />

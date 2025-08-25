@@ -6,6 +6,7 @@ export interface Storyboard {
   title: string
   description: string
   scene_number: number
+  shot_number: number
   shot_type: string
   camera_angle: string
   movement: string
@@ -15,6 +16,7 @@ export interface Storyboard {
   image_url?: string
   ai_generated: boolean
   project_id?: string
+  scene_id?: string
   created_at: string
   updated_at: string
 }
@@ -23,6 +25,7 @@ export interface CreateStoryboardData {
   title: string
   description: string
   scene_number: number
+  shot_number: number
   shot_type: string
   camera_angle: string
   movement: string
@@ -31,6 +34,7 @@ export interface CreateStoryboardData {
   visual_notes?: string
   image_url?: string
   project_id?: string
+  scene_id?: string
 }
 
 export interface UpdateStoryboardData extends Partial<CreateStoryboardData> {
@@ -45,6 +49,7 @@ export class StoryboardsService {
         .from('storyboards')
         .select('*')
         .order('scene_number', { ascending: true })
+        .order('shot_number', { ascending: true })
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -88,11 +93,18 @@ export class StoryboardsService {
         throw new Error('User not authenticated')
       }
 
+      // Ensure shot_number has a default value if not provided
+      const shotNumber = storyboardData.shot_number || 1
+
+      // Clean up project_id - if it's an empty string, set to undefined
+      const projectId = storyboardData.project_id === '' ? undefined : storyboardData.project_id
+
       const storyboardWithUserId = {
         user_id: user.id,
         title: storyboardData.title,
         description: storyboardData.description,
         scene_number: storyboardData.scene_number,
+        shot_number: shotNumber,
         shot_type: storyboardData.shot_type,
         camera_angle: storyboardData.camera_angle,
         movement: storyboardData.movement,
@@ -100,7 +112,8 @@ export class StoryboardsService {
         action: storyboardData.action || null,
         visual_notes: storyboardData.visual_notes || null,
         image_url: storyboardData.image_url || null,
-        project_id: storyboardData.project_id || null,
+        project_id: projectId,
+        scene_id: storyboardData.scene_id,
         ai_generated: false
       }
 
@@ -125,15 +138,32 @@ export class StoryboardsService {
   // Update an existing storyboard
   static async updateStoryboard(id: string, storyboardData: UpdateStoryboardData): Promise<Storyboard> {
     try {
+      // Clean up the data - ensure project_id is valid UUID or null
+      const cleanData = { ...storyboardData }
+      
+      // Validate project_id - if it's an empty string, set to undefined
+      if (cleanData.project_id === '') {
+        cleanData.project_id = undefined
+      }
+      
+      // Ensure shot_number has a default value if not provided
+      const updateData = {
+        ...cleanData,
+        shot_number: cleanData.shot_number || 1
+      }
+
+      console.log('Updating storyboard with data:', { id, updateData })
+
       const { data, error } = await supabase
         .from('storyboards')
-        .update(storyboardData)
+        .update(updateData)
         .eq('id', id)
         .select()
         .single()
 
       if (error) {
         console.error('Error updating storyboard:', error)
+        console.error('Update data that caused error:', updateData)
         throw error
       }
 
@@ -170,6 +200,7 @@ export class StoryboardsService {
         .select('*')
         .eq('project_id', projectId)
         .order('scene_number', { ascending: true })
+        .order('shot_number', { ascending: true })
 
       if (error) {
         console.error('Error fetching storyboards by project:', error)
@@ -191,6 +222,7 @@ export class StoryboardsService {
         .select('*')
         .eq('shot_type', shotType)
         .order('scene_number', { ascending: true })
+        .order('shot_number', { ascending: true })
 
       if (error) {
         console.error('Error fetching storyboards by shot type:', error)
@@ -233,6 +265,7 @@ export class StoryboardsService {
         .select('*')
         .or(`title.ilike.%${query}%,description.ilike.%${query}%,dialogue.ilike.%${query}%,action.ilike.%${query}%`)
         .order('scene_number', { ascending: true })
+        .order('shot_number', { ascending: true })
 
       if (error) {
         console.error('Error searching storyboards:', error)
@@ -305,6 +338,55 @@ export class StoryboardsService {
       return data
     } catch (error) {
       console.error('Error in updateStoryboardImage:', error)
+      throw error
+    }
+  }
+
+  // Get storyboards by scene
+  static async getStoryboardsByScene(sceneId: string): Promise<Storyboard[]> {
+    try {
+      const { data, error } = await supabase
+        .from('storyboards')
+        .select('*')
+        .eq('scene_id', sceneId)
+        .order('shot_number', { ascending: true })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching storyboards by scene:', error)
+        throw error
+      }
+
+      return data || []
+    } catch (error) {
+      console.error('Error in getStoryboardsByScene:', error)
+      throw error
+    }
+  }
+
+  // Get storyboards by timeline (movie)
+  static async getStoryboardsByTimeline(timelineId: string): Promise<Storyboard[]> {
+    try {
+      const { data, error } = await supabase
+        .from('storyboards')
+        .select(`
+          *,
+          scenes!inner(
+            timeline_id
+          )
+        `)
+        .eq('scenes.timeline_id', timelineId)
+        .order('scenes.start_time_seconds', { ascending: true })
+        .order('shot_number', { ascending: true })
+
+      if (error) {
+        console.error('Error fetching storyboards by timeline:', error)
+        throw error
+      }
+
+      return data || []
+    } catch (error) {
+      console.error('Error in getStoryboardsByTimeline:', error)
       throw error
     }
   }

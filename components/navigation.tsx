@@ -10,7 +10,7 @@ const fullNavigation = [
   { name: "Dashboard", href: "/dashboard", icon: Home },
   { name: "Movies", href: "/movies", icon: Film },
   { name: "Treatments", href: "/treatments", icon: FileText },
-  { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
+  { name: "Storyboards", href: "/movies", icon: ImageIcon },
   { name: "Videos", href: "/videos", icon: Video },
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
