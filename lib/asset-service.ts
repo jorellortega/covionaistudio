@@ -267,14 +267,103 @@ export class AssetService {
   static async deleteAsset(assetId: string): Promise<void> {
     const user = await this.ensureAuthenticated()
     
-    const { error } = await supabase
-      .from('assets')
-      .delete()
-      .eq('id', assetId)
-      .eq('user_id', user.id)
-
-    if (error) {
-      console.error('Error deleting asset:', error)
+    console.log('AssetService - Starting smart delete for asset:', assetId)
+    
+    try {
+      // Step 1: Get the asset and check if it has children
+      const { data: asset, error: assetError } = await supabase
+        .from('assets')
+        .select('*')
+        .eq('id', assetId)
+        .eq('user_id', user.id)
+        .single()
+      
+      if (assetError) {
+        throw new Error(`Asset not found: ${assetError.message}`)
+      }
+      
+      console.log('AssetService - Asset to delete:', { id: asset.id, title: asset.title, content_type: asset.content_type })
+      
+      // Step 2: Find all assets that reference this asset as parent
+      const { data: children, error: childrenError } = await supabase
+        .from('assets')
+        .select('id, title, parent_asset_id')
+        .eq('parent_asset_id', assetId)
+        .eq('user_id', user.id)
+      
+      if (childrenError) {
+        console.error('AssetService - Error finding children:', childrenError)
+        throw childrenError
+      }
+      
+      console.log('AssetService - Found children:', children?.length || 0)
+      
+      if (children && children.length > 0) {
+        // Option 1: Update children to remove parent reference (safer approach)
+        console.log('AssetService - Updating children to remove parent reference...')
+        
+        for (const child of children) {
+          const { error: updateError } = await supabase
+            .from('assets')
+            .update({ parent_asset_id: null })
+            .eq('id', child.id)
+            .eq('user_id', user.id)
+          
+          if (updateError) {
+            console.error('AssetService - Error updating child:', child.id, updateError)
+            throw updateError
+          }
+          
+          console.log('AssetService - Updated child:', child.id, 'removed parent reference')
+        }
+        
+        console.log('AssetService - All children updated successfully')
+      }
+      
+      // Step 3: Delete the asset from storage if it has a content_url
+      if (asset.content_url && asset.content_url.includes('cinema_files')) {
+        try {
+          // Extract the file path from the URL
+          const urlParts = asset.content_url.split('cinema_files/')
+          if (urlParts.length > 1) {
+            const filePath = urlParts[1]
+            console.log('AssetService - Deleting from storage:', filePath)
+            
+            const { error: storageError } = await supabase.storage
+              .from('cinema_files')
+              .remove([filePath])
+            
+            if (storageError) {
+              console.warn('AssetService - Warning: Could not delete from storage:', storageError)
+              // Continue with database deletion even if storage deletion fails
+            } else {
+              console.log('AssetService - Successfully deleted from storage:', filePath)
+            }
+          }
+        } catch (storageError) {
+          console.warn('AssetService - Warning: Storage deletion failed:', storageError)
+          // Continue with database deletion
+        }
+      }
+      
+      // Step 4: Delete the asset record from the database
+      console.log('AssetService - Deleting asset from database:', assetId)
+      
+      const { error: deleteError } = await supabase
+        .from('assets')
+        .delete()
+        .eq('id', assetId)
+        .eq('user_id', user.id)
+      
+      if (deleteError) {
+        console.error('AssetService - Failed to delete asset from database:', deleteError)
+        throw deleteError
+      }
+      
+      console.log('AssetService - Asset deleted successfully:', assetId)
+      
+    } catch (error) {
+      console.error('AssetService - Smart delete failed:', error)
       throw error
     }
   }

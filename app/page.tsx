@@ -62,6 +62,158 @@ export default function HomePage() {
           </div>
         </section>
 
+        {/* AI Prompt Studio Section */}
+        <section className="container mx-auto px-4 sm:px-6 py-16 sm:py-20 bg-gradient-to-br from-blue-50/50 to-cyan-50/50 dark:from-blue-950/20 dark:to-cyan-950/20">
+          <div className="text-center mb-12 sm:mb-16">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-4 flex items-center justify-center gap-3">
+              <Sparkles className="h-8 w-8 text-blue-500" />
+              Try Our AI Prompt Studio
+            </h2>
+            <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto">
+              Experience the power of AI-driven creativity. Generate scripts and images instantly with our advanced models.
+            </p>
+          </div>
+
+          <div className="max-w-4xl mx-auto">
+            <Card className="cinema-card border-2 border-blue-200/50 dark:border-blue-800/50">
+              <CardHeader className="text-center pb-6">
+                <CardTitle className="text-2xl text-blue-600 dark:text-blue-400">AI Prompt Studio</CardTitle>
+                <CardDescription className="text-lg">
+                  Transform your ideas into cinematic content with cutting-edge AI
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* AI Status Display */}
+                <div className="p-4 bg-muted/50 rounded-lg">
+                  <h4 className="font-medium mb-3 flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-blue-500" />
+                    AI Status
+                  </h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Script Generation:</span>
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-xs rounded-full">
+                          Available
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Image Generation:</span>
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-xs rounded-full">
+                          Available
+                        </span>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Video Generation:</span>
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-xs rounded-full">
+                          Available
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">Audio Generation:</span>
+                        <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 text-xs rounded-full">
+                          Available
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Prompt Input */}
+                <div>
+                  <label htmlFor="demo-prompt" className="block text-sm font-medium mb-2">
+                    Describe your movie idea or scene
+                  </label>
+                  <textarea
+                    id="demo-prompt"
+                    placeholder="e.g., 'A young filmmaker discovers an AI that can bring their wildest cinematic visions to life, but at what cost?'"
+                    rows={4}
+                    className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                  />
+                </div>
+
+                {/* Action Buttons */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <Button className="gradient-button neon-glow text-white px-4 py-3 text-sm">
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    Script
+                  </Button>
+                  <Button variant="outline" className="border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10 px-4 py-3 text-sm">
+                    <Film className="mr-2 h-4 w-4" />
+                    Image
+                  </Button>
+                  <Button variant="outline" className="border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10 px-4 py-3 text-sm">
+                    <Play className="mr-2 h-4 w-4" />
+                    Video
+                  </Button>
+                  <Button variant="outline" className="border-green-500/20 hover:border-green-500 hover:bg-green-500/10 px-4 py-3 text-sm">
+                    <span className="mr-2 h-4 w-4">🎵</span>
+                    Audio
+                  </Button>
+                </div>
+
+                {/* AI Capabilities Showcase */}
+                <div className="pt-6 border-t border-border/50">
+                  <h4 className="font-medium mb-4 text-center">AI-Powered Capabilities</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-lg border border-blue-200/50 dark:border-blue-800/50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Sparkles className="h-4 w-4 text-blue-500" />
+                        <span className="text-sm font-medium">Script & Story</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Generate compelling scripts, dialogue, treatments, and story concepts
+                      </p>
+                    </div>
+                    <div className="p-3 bg-cyan-50/50 dark:bg-cyan-950/20 rounded-lg border border-cyan-200/50 dark:border-cyan-800/50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Film className="h-4 w-4 text-cyan-500" />
+                        <span className="text-sm font-medium">Visual Content</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Create concept art, storyboards, and cinematic images
+                      </p>
+                    </div>
+                    <div className="p-3 bg-purple-50/50 dark:bg-purple-950/20 rounded-lg border border-purple-200/50 dark:border-purple-800/50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Play className="h-4 w-4 text-purple-500" />
+                        <span className="text-sm font-medium">Video Generation</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Generate short video clips, trailers, and motion content
+                      </p>
+                    </div>
+                    <div className="p-3 bg-green-50/50 dark:bg-green-950/20 rounded-lg border border-green-200/50 dark:border-green-800/50">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="h-4 w-4">🎵</span>
+                        <span className="text-sm font-medium">Audio & Music</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Create soundtracks, voice-overs, and ambient audio
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Call to Action */}
+                <div className="text-center pt-6">
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Ready to start creating? Sign up to unlock unlimited AI generation and save your ideas.
+                  </p>
+                  <Link href="/signup">
+                    <Button className="gradient-button neon-glow text-white">
+                      Get Started with AI Studio
+                      <ArrowRight className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
         {/* Features Section */}
         <section className="container mx-auto px-4 sm:px-6 py-16 sm:py-20">
           <div className="text-center mb-12 sm:mb-16">

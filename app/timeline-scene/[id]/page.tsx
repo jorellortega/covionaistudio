@@ -217,6 +217,9 @@ function ScenePageClient({ id }: { id: string }) {
         // Fetch scene data directly
         const scene = await TimelineService.getSceneById(id)
         
+        console.log('🎬 SCENE FETCH - Scene ID from params:', id)
+        console.log('🎬 SCENE FETCH - Scene data:', scene)
+        
         if (scene && mounted) {
 
           setScene(scene)
@@ -293,14 +296,22 @@ function ScenePageClient({ id }: { id: string }) {
           .eq('scene_id', id)
           .eq('user_id', user.id)
         
+        console.log('🔍 ASSET FETCH - Scene ID being queried:', id)
+        console.log('🔍 ASSET FETCH - User ID:', user.id)
+        console.log('🔍 ASSET FETCH - Raw sceneAssets:', sceneAssets)
+        console.log('🔍 ASSET FETCH - Error if any:', error)
+        
         if (error) {
-
+          console.error('🔍 ASSET FETCH - Supabase error:', error)
           if (mounted) {
             setAssets([])
           }
         } else {
-
+          console.log('🔍 ASSET FETCH - Assets found:', sceneAssets?.length || 0)
+          console.log('🔍 ASSET FETCH - Asset types:', sceneAssets?.map(a => ({ id: a.id, type: a.content_type, title: a.title })))
+          
           if (mounted) {
+            console.log('🔍 ASSET FETCH - Setting assets in state:', sceneAssets?.length || 0)
             setAssets(sceneAssets || [])
           }
         }
@@ -338,19 +349,24 @@ function ScenePageClient({ id }: { id: string }) {
   const refreshAssets = async () => {
     try {
       setAssetsLoading(true)
+      console.log('🔄 REFRESH ASSETS - Refreshing assets for scene:', id)
+      
       const { data: sceneAssets, error } = await supabase
         .from('assets')
         .select('*')
         .eq('scene_id', id)
         .eq('user_id', user?.id)
       
+      console.log('🔄 REFRESH ASSETS - Assets found:', sceneAssets?.length || 0)
+      console.log('🔄 REFRESH ASSETS - Asset types:', sceneAssets?.map(a => ({ id: a.id, type: a.content_type, title: a.title })))
+      
       if (error) {
-
+        console.error('🔄 REFRESH ASSETS - Error:', error)
       } else {
         setAssets(sceneAssets || [])
       }
     } catch (error) {
-
+      console.error('🔄 REFRESH ASSETS - Exception:', error)
     } finally {
       setAssetsLoading(false)
     }
@@ -1640,15 +1656,22 @@ function ScenePageClient({ id }: { id: string }) {
                                        try {
                                          setLoading(true)
                                          
-                                         // Delete only this specific version
-                                         const { error: deleteError } = await supabase
-                                           .from('assets')
-                                           .delete()
-                                           .eq('id', activeScript.id)
-                                           .eq('user_id', user?.id)
+                                         // Use the new delete-asset API endpoint to handle foreign key constraints
+                                         const response = await fetch('/api/ai/delete-asset', {
+                                           method: 'POST',
+                                           headers: {
+                                             'Content-Type': 'application/json',
+                                           },
+                                           body: JSON.stringify({
+                                             assetId: activeScript.id,
+                                             userId: user?.id
+                                           })
+                                         })
                                          
-                                         if (deleteError) {
-                                           throw new Error(`Failed to delete: ${deleteError.message}`)
+                                         const result = await response.json()
+                                         
+                                         if (!response.ok) {
+                                           throw new Error(result.error || 'Failed to delete asset')
                                          }
                                          
                                          // Refresh assets
@@ -2213,7 +2236,7 @@ function ScenePageClient({ id }: { id: string }) {
                                      Delete Version
                                    </Button>
                                  </AlertDialogTrigger>
-                                 <AlertDialogContent className="bg-background border-red-500/20">
+                                 <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
                                    <AlertDialogHeader>
                                      <AlertDialogTitle className="text-red-400">Delete Script Version</AlertDialogTitle>
                                      <AlertDialogDescription className="text-muted-foreground">
@@ -2546,6 +2569,77 @@ function ScenePageClient({ id }: { id: string }) {
                           <Bot className="h-4 w-4 mr-2" />
                           Generate Variation
                         </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="text-red-400">Delete Image</AlertDialogTitle>
+                              <AlertDialogDescription className="text-muted-foreground">
+                                Are you sure you want to delete "{generateCleanName(image.title, 'title')}"?
+                                <br /><br />
+                                <strong>This action cannot be undone.</strong> The image will be permanently removed.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter className="flex gap-2">
+                              <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                              <Button
+                                className="bg-red-500 hover:bg-red-600"
+                                onClick={async () => {
+                                  try {
+                                    setLoading(true)
+                                    
+                                    // Use the new delete-asset API endpoint to handle foreign key constraints
+                                    const response = await fetch('/api/ai/delete-asset', {
+                                      method: 'POST',
+                                      headers: {
+                                        'Content-Type': 'application/json',
+                                      },
+                                      body: JSON.stringify({
+                                        assetId: image.id,
+                                        userId: user?.id
+                                      })
+                                    })
+                                    
+                                    const result = await response.json()
+                                    
+                                    if (!response.ok) {
+                                      throw new Error(result.error || 'Failed to delete asset')
+                                    }
+                                    
+                                    // Refresh assets
+                                    refreshAssets()
+                                    
+                                    toast({
+                                      title: "Image Deleted!",
+                                      description: `"${generateCleanName(image.title, 'title')}" has been permanently removed.`,
+                                    })
+                                  } catch (error) {
+                                    console.error('🎬 TIMELINE-SCENE - Error deleting image:', error)
+                                    toast({
+                                      title: "Delete Failed",
+                                      description: error instanceof Error ? error.message : "Failed to delete image. Please try again.",
+                                      variant: "destructive",
+                                    })
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete Image
+                              </Button>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </CardContent>
                   </Card>
@@ -2642,6 +2736,70 @@ function ScenePageClient({ id }: { id: string }) {
                           <Bot className="h-4 w-4 mr-2" />
                           Generate Variation
                         </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="text-red-400">Delete Video</AlertDialogTitle>
+                              <AlertDialogDescription className="text-muted-foreground">
+                                Are you sure you want to delete "{video.title}"?
+                                <br /><br />
+                                <strong>This action cannot be undone.</strong> The video will be permanently removed.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter className="flex gap-2">
+                              <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                              <Button
+                                className="bg-red-500 hover:bg-red-600"
+                                onClick={async () => {
+                                  try {
+                                    setLoading(true)
+                                    
+                                    // Simple delete - only delete this specific video
+                                    const { error: deleteError } = await supabase
+                                      .from('assets')
+                                      .delete()
+                                      .eq('id', video.id)
+                                      .eq('user_id', user?.id)
+                                    
+                                    if (deleteError) {
+                                      throw new Error(`Failed to delete: ${deleteError.message}`)
+                                    }
+                                    
+                                    // Refresh assets
+                                    refreshAssets()
+                                    
+                                    toast({
+                                      title: "Video Deleted!",
+                                      description: `"${video.title}" has been permanently removed.`,
+                                    })
+                                  } catch (error) {
+                                    console.error('🎬 TIMELINE-SCENE - Error deleting video:', error)
+                                    toast({
+                                      title: "Delete Failed",
+                                      description: error instanceof Error ? error.message : "Failed to delete video. Please try again.",
+                                      variant: "destructive",
+                                    })
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete Video
+                              </Button>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </CardContent>
                   </Card>
@@ -2743,47 +2901,70 @@ function ScenePageClient({ id }: { id: string }) {
                           <Bot className="h-4 w-4 mr-2" />
                           Generate Variation
                         </Button>
-                        {(() => {
-                          console.log('🎵 RENDERING - About to render delete button for audio:', audio.title, 'ID:', audio.id)
-                          return null
-                        })()}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          onClick={() => {
-                            console.log('🎵 DELETE-CLICKED - Button clicked for audio:', audio)
-                            console.log('🎵 DELETE-CLICKED - Audio ID:', audio.id)
-                            console.log('🎵 DELETE-CLICKED - User ID:', user?.id)
-                            
-                            if (confirm(`Delete "${audio.title}"?`)) {
-                              console.log('🎵 DELETE-CLICKED - Confirmed deletion, sending request...')
-                              
-                              fetch('/api/ai/delete-audio', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ audioId: audio.id, userId: user?.id })
-                              })
-                              .then(response => response.json())
-                              .then(result => {
-                                console.log('🎵 DELETE-CLICKED - Response received:', result)
-                                if (result.success) {
-                                  toast({ title: "Deleted!", description: "Audio removed successfully." })
-                                  refreshAssets()
-                                } else {
-                                  toast({ title: "Error", description: result.error || "Failed to delete", variant: "destructive" })
-                                }
-                              })
-                              .catch(error => {
-                                console.error('🎵 DELETE-CLICKED - Error:', error)
-                                toast({ title: "Error", description: "Failed to delete audio", variant: "destructive" })
-                              })
-                            }
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          DELETE TEST BUTTON
-                        </Button>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                            <AlertDialogHeader>
+                              <AlertDialogTitle className="text-red-400">Delete Audio</AlertDialogTitle>
+                              <AlertDialogDescription className="text-muted-foreground">
+                                Are you sure you want to delete "{audio.title}"?
+                                <br /><br />
+                                <strong>This action cannot be undone.</strong> The audio will be permanently removed.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter className="flex gap-2">
+                              <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                              <Button
+                                className="bg-red-500 hover:bg-red-600"
+                                onClick={async () => {
+                                  try {
+                                    setLoading(true)
+                                    
+                                    // Simple delete - only delete this specific audio
+                                    const { error: deleteError } = await supabase
+                                      .from('assets')
+                                      .delete()
+                                      .eq('id', audio.id)
+                                      .eq('user_id', user?.id)
+                                    
+                                    if (deleteError) {
+                                      throw new Error(`Failed to delete: ${deleteError.message}`)
+                                    }
+                                    
+                                    // Refresh assets
+                                    refreshAssets()
+                                    
+                                    toast({
+                                      title: "Audio Deleted!",
+                                      description: `"${audio.title}" has been permanently removed.`,
+                                    })
+                                  } catch (error) {
+                                    console.error('🎬 TIMELINE-SCENE - Error deleting audio:', error)
+                                    toast({
+                                      title: "Delete Failed",
+                                      description: error instanceof Error ? error.message : "Failed to delete audio. Please try again.",
+                                      variant: "destructive",
+                                    })
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Delete Audio
+                              </Button>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </CardContent>
                   </Card>

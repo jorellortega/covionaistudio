@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
       .eq('user_id', userId)
 
     if (deleteError) {
-      console.error('🎵 DELETE-AUDIO - Error deleting asset from database:', deleteError)
+      console.error('🎵 DELETE-AUDIO - Failed to delete audio file from database:', deleteError)
       return NextResponse.json(
         { success: false, error: 'Failed to delete audio file from database' },
         { status: 500 }

@@ -17,6 +17,7 @@ import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
 import { AssetService } from "@/lib/asset-service"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
+import { supabase } from "@/lib/supabase"
 import Link from "next/link"
 import {
   Dialog,
@@ -47,6 +48,7 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
+import { ContentViolationDialog } from "@/components/content-violation-dialog"
 
 // Real data types
 interface Scene {
@@ -110,9 +112,7 @@ const handleCopy = (content: string) => {
   console.log('Content copied to clipboard')
 }
 
-const handleLinkToScene = (item: any, type: string, sceneId: string) => {
-  console.log(`Linking ${item.title} to scene ${sceneId}`)
-}
+
 
 export default function AIStudioPage() {
   // State variables
@@ -149,8 +149,78 @@ export default function AIStudioPage() {
     content: string
     prompt: string
   } | null>(null)
+  
+  // Scene scripts state
+  const [sceneScripts, setSceneScripts] = useState<any[]>([])
+  const [selectedSceneScript, setSelectedSceneScript] = useState("none")
+  const [isLoadingSceneScripts, setIsLoadingSceneScripts] = useState(false)
+
+  // Content violation dialog state
+  const [showContentViolationDialog, setShowContentViolationDialog] = useState(false)
+  const [contentViolationData, setContentViolationData] = useState<{
+    type: 'script' | 'image' | 'video' | 'audio'
+    prompt: string
+  } | null>(null)
 
   const { toast } = useToast()
+
+  // Content violation handling functions
+  const handleContentViolation = (type: 'script' | 'image' | 'video' | 'audio', prompt: string) => {
+    setContentViolationData({ type, prompt })
+    setShowContentViolationDialog(true)
+  }
+
+  const handleTryDifferentPrompt = () => {
+    setShowContentViolationDialog(false)
+    // Focus on the appropriate prompt input based on content type
+    if (contentViolationData?.type === 'script') {
+      // Focus script prompt
+      document.getElementById('script-prompt')?.focus()
+    } else if (contentViolationData?.type === 'image') {
+      // Focus image prompt
+      document.getElementById('image-prompt')?.focus()
+    } else if (contentViolationData?.type === 'video') {
+      // Focus video prompt
+      document.getElementById('video-prompt')?.focus()
+    } else if (contentViolationData?.type === 'audio') {
+      // Focus audio prompt
+      document.getElementById('audio-prompt')?.focus()
+    }
+  }
+
+  const handleTryDifferentAI = () => {
+    setShowContentViolationDialog(false)
+    // Switch to a different AI model for the same content type
+    if (contentViolationData?.type === 'image') {
+      // Switch from DALL-E 3 to OpenArt
+      setSelectedModel('OpenArt')
+      toast({
+        title: "Switched to OpenArt",
+        description: "Try generating your image with OpenArt instead.",
+      })
+    } else if (contentViolationData?.type === 'script') {
+      // Switch from ChatGPT to Claude
+      setSelectedModel('Claude')
+      toast({
+        title: "Switched to Claude",
+        description: "Try generating your script with Claude instead.",
+      })
+    } else if (contentViolationData?.type === 'video') {
+      // Switch from Kling to Runway ML
+      setSelectedModel('Runway ML')
+      toast({
+        title: "Switched to Runway ML",
+        description: "Try generating your video with Runway ML instead.",
+      })
+    } else if (contentViolationData?.type === 'audio') {
+      // Switch from ElevenLabs to Suno AI
+      setSelectedModel('Suno AI')
+      toast({
+        title: "Switched to Suno AI",
+        description: "Try generating your audio with Suno AI instead.",
+      })
+    }
+  }
 
   // Real data state
   const [movies, setMovies] = useState<Movie[]>([])
@@ -220,6 +290,53 @@ export default function AIStudioPage() {
     loadAISettings()
   }, [user])
 
+  // Function to fetch scene scripts when scene is selected
+  const fetchSceneScripts = async (sceneId: string) => {
+    if (!sceneId || sceneId === 'none') {
+      setSceneScripts([])
+      setSelectedSceneScript("none")
+      return
+    }
+    
+    try {
+      setIsLoadingSceneScripts(true)
+      
+      // Fetch scripts for the selected scene
+      const { data: scripts, error } = await supabase
+        .from('assets')
+        .select('*')
+        .eq('scene_id', sceneId)
+        .eq('content_type', 'script')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false })
+      
+      if (error) {
+        console.error('Error fetching scene scripts:', error)
+        toast({
+          title: "Error",
+          description: "Failed to load scene scripts",
+          variant: "destructive",
+        })
+        return
+      }
+      
+      setSceneScripts(scripts || [])
+      setSelectedSceneScript("none")
+      
+      console.log('Scene scripts loaded:', scripts)
+      
+    } catch (error) {
+      console.error('Error fetching scene scripts:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load scene scripts",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingSceneScripts(false)
+    }
+  }
+
   // Auto-select locked models when AI settings change
   useEffect(() => {
     if (aiSettings.length > 0 && activeTab) {
@@ -230,6 +347,16 @@ export default function AIStudioPage() {
       }
     }
   }, [aiSettings, activeTab])
+
+  // Fetch scene scripts when scene selection changes
+  useEffect(() => {
+    if (selectedScene && selectedScene !== 'none') {
+      fetchSceneScripts(selectedScene)
+    } else {
+      setSceneScripts([])
+      setSelectedSceneScript("none")
+    }
+  }, [selectedScene])
 
   // Get current tab's AI setting
   const getCurrentTabSetting = () => {
@@ -283,27 +410,8 @@ export default function AIStudioPage() {
         const userMovies = await MovieService.getMovies()
         setMovies(userMovies)
         
-        // Load generated content (we'll implement this later)
-        setGeneratedContent([
-          {
-            id: "1",
-            title: "Sample Script - Opening Scene",
-            content: "FADE IN:\n\nEXT. NEO TOKYO STREETS - NIGHT\n\nNeon lights reflect off wet pavement as a lone figure walks through the rain...",
-            prompt: "Write an opening scene for a cyberpunk movie",
-            type: 'script',
-            model: 'ChatGPT',
-            created_at: new Date().toISOString(),
-          },
-          {
-            id: "2", 
-            title: "Sample Image - Cyberpunk City",
-            prompt: "Futuristic cyberpunk city at night with neon lights and flying cars",
-            type: 'image',
-            model: 'DALL-E 3',
-            created_at: new Date().toISOString(),
-            url: "/cyberpunk-city-concept.png"
-          }
-        ])
+        // Initialize with empty generated content
+        setGeneratedContent([])
         
       } catch (error) {
         console.error('Error loading data:', error)
@@ -439,6 +547,62 @@ export default function AIStudioPage() {
       return
     }
 
+    // Helper function to enhance prompt with selected script content
+    const enhancePromptWithScript = (basePrompt: string, type: string) => {
+      console.log(`🔍 ENHANCE PROMPT - Type: ${type}, Base Prompt: "${basePrompt}"`)
+      console.log(`🔍 ENHANCE PROMPT - Selected Script ID: ${selectedSceneScript}`)
+      console.log(`🔍 ENHANCE PROMPT - Available Scripts:`, sceneScripts.map(s => ({ id: s.id, title: s.title })))
+      
+      if (!selectedSceneScript || !sceneScripts.find(s => s.id === selectedSceneScript)) {
+        console.log(`🔍 ENHANCE PROMPT - No script selected, returning base prompt`)
+        console.log(`🔍 ENHANCE PROMPT - Base prompt length: ${basePrompt.length} characters`)
+        return basePrompt
+      }
+      
+      const selectedScript = sceneScripts.find(s => s.id === selectedSceneScript)
+      console.log(`🔍 ENHANCE PROMPT - Selected Script:`, { 
+        id: selectedScript?.id, 
+        title: selectedScript?.title, 
+        version: selectedScript?.version_name || selectedScript?.version,
+        contentLength: selectedScript?.content?.length || 0
+      })
+      
+      if (!selectedScript?.content) {
+        console.log(`🔍 ENHANCE PROMPT - No script content found, returning base prompt`)
+        return basePrompt
+      }
+      
+      // Send the FULL script content, not just a preview
+      const scriptInfo = `\n\n--- REFERENCE SCRIPT ---\nTitle: ${selectedScript.title}\nVersion: ${selectedScript.version_name || `Version ${selectedScript.version}`}\nFull Script Content:\n${selectedScript.content}\n--- END REFERENCE ---\n\n`
+      
+      let enhancedPrompt = ""
+      switch (type) {
+        case 'script':
+          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nPlease use the above reference script as context and inspiration. Build upon the existing story, characters, and style while creating something new that fits seamlessly with the established narrative.`
+          break
+        case 'image':
+          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nCreate an image that visually represents the scene described in the reference script above. The image should capture the mood, setting, and visual elements mentioned in the script.`
+          break
+        case 'video':
+          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nGenerate a video that brings to life the scene from the reference script above. Consider the pacing, mood, and visual style established in the script.`
+          break
+        case 'audio':
+          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nCreate audio that complements the mood and atmosphere described in the reference script above. The audio should enhance the emotional impact and setting of the scene.`
+          break
+        default:
+          enhancedPrompt = basePrompt
+      }
+      
+      console.log(`🔍 ENHANCE PROMPT - Final Enhanced Prompt:`)
+      console.log(`🔍 ENHANCE PROMPT - ${enhancedPrompt}`)
+      console.log(`🔍 ENHANCE PROMPT - Script Info Added: ${scriptInfo}`)
+      console.log(`🔍 ENHANCE PROMPT - Total Prompt Length: ${enhancedPrompt.length} characters`)
+      console.log(`🔍 ENHANCE PROMPT - Full Script Content Length: ${selectedScript.content.length} characters`)
+      console.log(`🔍 ENHANCE PROMPT - AI now receives: 100% of the script (${selectedScript.content.length} characters)`)
+      
+      return enhancedPrompt
+    }
+
     setIsGenerating(true)
     setGenerationProgress(0)
 
@@ -462,8 +626,13 @@ export default function AIStudioPage() {
           return
         }
         
-                  const response = await OpenAIService.generateScript({
-            prompt: scriptPrompt,
+                  const enhancedPrompt = enhancePromptWithScript(scriptPrompt, 'script')
+        console.log(`🚀 SCRIPT GENERATION - Final Prompt Sent to OpenAI:`)
+        console.log(`🚀 SCRIPT GENERATION - ${enhancedPrompt}`)
+        console.log(`🚀 SCRIPT GENERATION - Template: ${selectedTemplate || "Write a creative script based on:"}`)
+        
+        const response = await OpenAIService.generateScript({
+            prompt: enhancedPrompt,
             template: selectedTemplate || "Write a creative script based on:",
             apiKey: user.openaiApiKey!,
           })
@@ -485,7 +654,16 @@ export default function AIStudioPage() {
           setGeneratedContent(prev => [newContent, ...prev])
           setScriptPrompt("") // Clear the prompt after successful generation
         } else {
-          alert(`Error generating script: ${response.error}`)
+          // Check if it's a content policy violation
+          if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+            handleContentViolation('script', scriptPrompt)
+          } else {
+            toast({
+              title: "Script Generation Failed",
+              description: `Error: ${response.error}`,
+              variant: "destructive",
+            })
+          }
         }
       } else if (type === "image" && selectedModel === "DALL-E 3") {
         console.log('Attempting to generate image with:', {
@@ -506,8 +684,13 @@ export default function AIStudioPage() {
           return
         }
         
+        const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
+        console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to DALL-E 3:`)
+        console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
+        console.log(`🚀 IMAGE GENERATION - Style: ${selectedStyle || "Cinematic"}`)
+        
         const response = await OpenAIService.generateImage({
-          prompt: imagePrompt,
+          prompt: enhancedPrompt,
           style: selectedStyle || "Cinematic",
           apiKey: user.openaiApiKey!,
         })
@@ -529,7 +712,16 @@ export default function AIStudioPage() {
           setGeneratedContent(prev => [newContent, ...prev])
           setImagePrompt("") // Clear the prompt after successful generation
         } else {
-          alert(`Error generating image: ${response.error}`)
+          // Check if it's a content policy violation
+          if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+            handleContentViolation('image', imagePrompt)
+          } else {
+            toast({
+              title: "Image Generation Failed",
+              description: `Error: ${response.error}`,
+              variant: "destructive",
+            })
+          }
         }
               } else if (type === "video" && selectedModel === "Runway ML") {
           console.log('Attempting to generate video with Runway ML:', {
@@ -622,8 +814,13 @@ export default function AIStudioPage() {
           // Import the Kling service
           const { KlingService } = await import('@/lib/ai-services')
           
+          const enhancedPrompt = enhancePromptWithScript(videoPrompt, 'video')
+          console.log(`🚀 VIDEO GENERATION (Kling) - Final Prompt Sent to Kling:`)
+          console.log(`🚀 VIDEO GENERATION (Kling) - ${enhancedPrompt}`)
+          console.log(`🚀 VIDEO GENERATION (Kling) - Duration: 10s`)
+          
           const response = await KlingService.generateVideo({
-            prompt: videoPrompt,
+            prompt: enhancedPrompt,
             duration: "10s",
             model: selectedModel,
             apiKey: user.klingApiKey!,
@@ -647,7 +844,16 @@ export default function AIStudioPage() {
             setGeneratedContent(prev => [newContent, ...prev])
             setVideoPrompt("") // Clear the prompt after successful generation
           } else {
-            alert(`Error generating video: ${response.error}`)
+            // Check if it's a content policy violation
+            if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+              handleContentViolation('video', videoPrompt)
+            } else {
+              toast({
+                title: "Video Generation Failed",
+                description: `Error: ${response.error}`,
+                variant: "destructive",
+              })
+            }
           }
         } else if (type === "audio" && selectedModel === "ElevenLabs") {
           console.log('Attempting to generate audio with ElevenLabs:', {
@@ -677,21 +883,25 @@ export default function AIStudioPage() {
             return
           }
           
-          // Build enhanced prompt based on audio type
-          let enhancedPrompt = audioPrompt
+          // Build enhanced prompt based on audio type and selected script
+          let enhancedPrompt = enhancePromptWithScript(audioPrompt, 'audio')
+          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Base Enhanced Prompt:`)
+          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
+          
           if (selectedAudioType === "music") {
-            enhancedPrompt = `Background music: ${audioPrompt}`
+            enhancedPrompt = `Background music: ${enhancedPrompt}`
           } else if (selectedAudioType === "sfx") {
-            enhancedPrompt = `Sound effect: ${audioPrompt}`
+            enhancedPrompt = `Sound effect: ${enhancedPrompt}`
           } else if (selectedAudioType === "ambient") {
-            enhancedPrompt = `Ambient sound: ${audioPrompt}`
+            enhancedPrompt = `Ambient sound: ${enhancedPrompt}`
           } else if (selectedAudioType === "dialogue") {
-            enhancedPrompt = audioPrompt // Keep original for voice generation
+            enhancedPrompt = enhancedPrompt // Keep enhanced for voice generation
           } else if (selectedAudioType === "score") {
-            enhancedPrompt = `Film score: ${audioPrompt}`
+            enhancedPrompt = `Film score: ${enhancedPrompt}`
           }
           
-          console.log('Enhanced prompt for ElevenLabs:', enhancedPrompt)
+          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Final Prompt After Audio Type Enhancement:`)
+          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
           
           const response = await ElevenLabsService.generateAudio({
             prompt: enhancedPrompt,
@@ -733,11 +943,16 @@ export default function AIStudioPage() {
             }
           } else {
             console.error('ElevenLabs audio generation failed:', response.error)
-            toast({
-              title: "Audio Generation Failed",
-              description: `Error: ${response.error}. Please check your ElevenLabs API key and try again.`,
-              variant: "destructive",
-            })
+            // Check if it's a content policy violation
+            if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+              handleContentViolation('audio', audioPrompt)
+            } else {
+              toast({
+                title: "Audio Generation Failed",
+                description: `Error: ${response.error}. Please check your ElevenLabs API key and try again.`,
+                variant: "destructive",
+              })
+            }
           }
         } else if (type === "audio" && selectedModel === "Suno AI") {
           console.log('Attempting to generate audio with Suno AI:', {
@@ -766,19 +981,23 @@ export default function AIStudioPage() {
             return
           }
           
-          // Build enhanced prompt based on audio type
-          let enhancedPrompt = audioPrompt
+          // Build enhanced prompt based on audio type and selected script
+          let enhancedPrompt = enhancePromptWithScript(audioPrompt, 'audio')
+          console.log(`🚀 AUDIO GENERATION (Suno AI) - Base Enhanced Prompt:`)
+          console.log(`🚀 AUDIO GENERATION (Suno AI) - ${enhancedPrompt}`)
+          
           if (selectedAudioType === "music") {
-            enhancedPrompt = `Music: ${audioPrompt}`
+            enhancedPrompt = `Music: ${enhancedPrompt}`
           } else if (selectedAudioType === "sfx") {
-            enhancedPrompt = `Sound effect: ${audioPrompt}`
+            enhancedPrompt = `Sound effect: ${enhancedPrompt}`
           } else if (selectedAudioType === "ambient") {
-            enhancedPrompt = `Ambient: ${audioPrompt}`
+            enhancedPrompt = `Ambient: ${enhancedPrompt}`
           } else if (selectedAudioType === "score") {
-            enhancedPrompt = `Film score: ${audioPrompt}`
+            enhancedPrompt = `Film score: ${enhancedPrompt}`
           }
           
-          console.log('Enhanced prompt for Suno AI:', enhancedPrompt)
+          console.log(`🚀 AUDIO GENERATION (Suno AI) - Final Prompt After Audio Type Enhancement:`)
+          console.log(`🚀 AUDIO GENERATION (Suno AI) - ${enhancedPrompt}`)
           
           const response = await SunoAIService.generateAudio({
             prompt: enhancedPrompt,
@@ -819,11 +1038,16 @@ export default function AIStudioPage() {
             }
           } else {
             console.error('Suno AI audio generation failed:', response.error)
-            toast({
-              title: "Audio Generation Failed",
-              description: `Error: ${response.error}. Please check your Suno AI API key and try again.`,
-              variant: "destructive",
-            })
+            // Check if it's a content policy violation
+            if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+              handleContentViolation('audio', audioPrompt)
+            } else {
+              toast({
+                title: "Audio Generation Failed",
+                description: `Error: ${response.error}. Please check your Suno AI API key and try again.`,
+                variant: "destructive",
+              })
+            }
           }
         } else {
           // For other models, show a message that they're not implemented yet
@@ -834,9 +1058,70 @@ export default function AIStudioPage() {
 
       setGenerationProgress(100)
     } catch (error) {
-      alert(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      console.error('Unexpected error in handleGenerate:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      // Check if it's a content policy violation
+      if (errorMessage.includes('content_policy_violation') || errorMessage.includes('safety system')) {
+        // Determine the content type based on the current state
+        let contentType: 'script' | 'image' | 'video' | 'audio' = 'script'
+        let prompt = ''
+        
+        if (activeTab === 'scripts') {
+          contentType = 'script'
+          prompt = scriptPrompt
+        } else if (activeTab === 'images') {
+          contentType = 'image'
+          prompt = imagePrompt
+        } else if (activeTab === 'videos') {
+          contentType = 'video'
+          prompt = videoPrompt
+        } else if (activeTab === 'audio') {
+          contentType = 'audio'
+          prompt = audioPrompt
+        }
+        
+        handleContentViolation(contentType, prompt)
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: `Unexpected error: ${errorMessage}`,
+          variant: "destructive",
+        })
+      }
     } finally {
       setIsGenerating(false)
+    }
+  }
+
+  const handleLinkToScene = (item: any, type: string, sceneId: string) => {
+    console.log(`🔗 LINKING - ${item.title} to scene ${sceneId}`)
+    console.log(`🔗 LINKING - Current selectedScene: ${selectedScene}`)
+    console.log(`🔗 LINKING - Available scenes:`, scenes.map(s => ({ id: s.id, name: s.name })))
+    
+    // Update the generated content with the scene_id
+    setGeneratedContent(prev => prev.map(content => {
+      if (content.id === item.id) {
+        return {
+          ...content,
+          scene_id: sceneId === 'none' ? undefined : sceneId
+        }
+      }
+      return content
+    }))
+    
+    // Show toast notification
+    if (sceneId === 'none') {
+      toast({
+        title: "Scene Link Removed",
+        description: `${item.title} is no longer linked to a specific scene.`,
+      })
+    } else {
+      const sceneName = scenes.find(s => s.id === sceneId)?.name || 'Unknown Scene'
+      toast({
+        title: "Scene Linked",
+        description: `${item.title} is now linked to ${sceneName}.`,
+      })
     }
   }
 
@@ -1383,20 +1668,32 @@ export default function AIStudioPage() {
 
         {/* AI Tools Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-4 mb-8 bg-muted/50">
-            <TabsTrigger value="scripts" className="flex items-center gap-2">
+          <TabsList className="grid w-full grid-cols-4 mb-8 bg-muted/50 border border-border">
+            <TabsTrigger 
+              value="scripts" 
+              className="flex items-center gap-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:font-bold data-[state=active]:shadow-xl data-[state=active]:border-2 data-[state=active]:border-blue-300 data-[state=active]:scale-110 data-[state=active]:rounded-lg transition-all duration-300"
+            >
               <FileText className="h-4 w-4" />
               Scripts
             </TabsTrigger>
-            <TabsTrigger value="images" className="flex items-center gap-2">
+            <TabsTrigger 
+              value="images" 
+              className="flex items-center gap-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:font-bold data-[state=active]:shadow-xl data-[state=active]:border-2 data-[state=active]:border-blue-300 data-[state=active]:scale-110 data-[state=active]:rounded-lg transition-all duration-300"
+            >
               <ImageIcon className="h-4 w-4" />
               Images
             </TabsTrigger>
-            <TabsTrigger value="videos" className="flex items-center gap-2">
+            <TabsTrigger 
+              value="videos" 
+              className="flex items-center gap-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:font-bold data-[state=active]:shadow-xl data-[state=active]:border-2 data-[state=active]:border-blue-300 data-[state=active]:scale-110 data-[state=active]:rounded-lg transition-all duration-300"
+            >
               <Video className="h-4 w-4" />
               Videos
             </TabsTrigger>
-            <TabsTrigger value="audio" className="flex items-center gap-2">
+            <TabsTrigger 
+              value="audio" 
+              className="flex items-center gap-2 data-[state=active]:bg-gradient-to-r data-[state=active]:from-blue-500 data-[state=active]:to-purple-600 data-[state=active]:text-white data-[state=active]:font-bold data-[state=active]:shadow-xl data-[state=active]:border-2 data-[state=active]:border-blue-300 data-[state=active]:scale-110 data-[state=active]:rounded-lg transition-all duration-300"
+            >
               <Sparkles className="h-4 w-4" />
               Audio
             </TabsTrigger>
@@ -1452,6 +1749,75 @@ export default function AIStudioPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Scene Scripts Dropdown - Only show if scene is selected */}
+                  {selectedScene && selectedScene !== 'none' && (
+                    <div className="grid gap-2">
+                      <Label>Scene Scripts</Label>
+                      <Select value={selectedSceneScript} onValueChange={setSelectedSceneScript}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select a script to reference..." />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {isLoadingSceneScripts ? (
+                            <SelectItem value="loading" disabled>
+                              <div className="flex items-center gap-2">
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                Loading scripts...
+                              </div>
+                            </SelectItem>
+                          ) : sceneScripts.length === 0 ? (
+                            <SelectItem value="none" disabled>
+                              No scripts found in this scene
+                            </SelectItem>
+                          ) : (
+                            <>
+                              <SelectItem value="none">
+                                <span className="text-muted-foreground">No script selected</span>
+                              </SelectItem>
+                              {sceneScripts.map((script) => (
+                                <SelectItem key={script.id} value={script.id}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{script.title}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {script.version_name || `Version ${script.version}`} • {new Date(script.created_at).toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Help text */}
+                      <p className="text-xs text-muted-foreground">
+                        💡 Select a script to automatically enhance your prompt with scene context. The AI will use the selected script as reference to create content that fits seamlessly with your existing story.
+                      </p>
+                      
+                      {/* Show selected script preview */}
+                      {selectedSceneScript && sceneScripts.find(s => s.id === selectedSceneScript) && (
+                        <div className="p-3 bg-muted/30 rounded-lg border border-border">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-muted-foreground">Selected Script:</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setSelectedSceneScript("none")}
+                              className="h-6 px-2 text-xs"
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground max-h-20 overflow-y-auto">
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content?.substring(0, 200)}
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content && 
+                             sceneScripts.find(s => s.id === selectedSceneScript)?.content.length > 200 && '...'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* AI Model Selection - Only show if not locked */}
                   {!isCurrentTabLocked() && (
@@ -1524,6 +1890,7 @@ export default function AIStudioPage() {
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
                     <Textarea
+                      id="script-prompt"
                       value={scriptPrompt}
                       onChange={(e) => setScriptPrompt(e.target.value)}
                       placeholder="Describe what you want to generate..."
@@ -1582,18 +1949,7 @@ export default function AIStudioPage() {
                   )}
                 </CardHeader>
                 <CardContent>
-                  {isLoadingData ? (
-                    <div className="text-center py-8">
-                      <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-2 text-muted-foreground" />
-                      <p className="text-muted-foreground">Loading...</p>
-                    </div>
-                  ) : generatedContent.filter(item => item.type === 'script').length === 0 ? (
-                    <div className="text-center py-8">
-                      <FileText className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                      <p className="text-muted-foreground">No scripts generated yet</p>
-                      <p className="text-xs text-muted-foreground">Use the generator on the left to create your first script</p>
-                    </div>
-                  ) : (
+                  {generatedContent.filter(item => item.type === 'script').length > 0 ? (
                     <div className="space-y-4">
                       {generatedContent
                         .filter(item => item.type === 'script')
@@ -1613,7 +1969,10 @@ export default function AIStudioPage() {
                               {selectedProject && scenes.length > 0 && (
                                 <div className="mb-3 p-2 bg-background/50 rounded border">
                                   <label className="text-xs font-medium mb-1 block">Link to Scene:</label>
-                                  <Select onValueChange={(sceneId) => handleLinkToScene(script, "script", sceneId)}>
+                                  <Select 
+                                    value={script.scene_id || selectedScene !== 'none' ? selectedScene : 'none'} 
+                                    onValueChange={(sceneId) => handleLinkToScene(script, "script", sceneId)}
+                                  >
                                     <SelectTrigger className="h-7 text-xs">
                                       <SelectValue placeholder="Choose scene" />
                                     </SelectTrigger>
@@ -1657,7 +2016,7 @@ export default function AIStudioPage() {
                           </Card>
                         ))}
                     </div>
-                  )}
+                  ) : null}
                 </CardContent>
               </Card>
             </div>
@@ -1688,6 +2047,70 @@ export default function AIStudioPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Scene Scripts Dropdown - Only show if scene is selected */}
+                  {selectedScene && selectedScene !== 'none' && (
+                    <div className="grid gap-2">
+                      <Label>Scene Scripts</Label>
+                      <Select value={selectedSceneScript} onValueChange={setSelectedSceneScript}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select a script to reference..." />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {isLoadingSceneScripts ? (
+                            <SelectItem value="loading" disabled>
+                              <div className="flex items-center gap-2">
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                Loading scripts...
+                              </div>
+                            </SelectItem>
+                          ) : sceneScripts.length === 0 ? (
+                            <SelectItem value="none" disabled>
+                              No scripts found in this scene
+                            </SelectItem>
+                          ) : (
+                            <>
+                              <SelectItem value="none">
+                                <span className="text-muted-foreground">No script selected</span>
+                              </SelectItem>
+                              {sceneScripts.map((script) => (
+                                <SelectItem key={script.id} value={script.id}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{script.title}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {script.version_name || `Version ${script.version}`} • {new Date(script.created_at).toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Show selected script preview */}
+                      {selectedSceneScript && sceneScripts.find(s => s.id === selectedSceneScript) && (
+                        <div className="p-3 bg-muted/30 rounded-lg border border-border">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-muted-foreground">Selected Script:</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setSelectedSceneScript("none")}
+                              className="h-6 px-2 text-xs"
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground max-h-16 overflow-y-auto">
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content?.substring(0, 150)}
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content && 
+                             sceneScripts.find(s => s.id === selectedSceneScript)?.content.length > 150 && '...'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* AI Model Selection - Only show if not locked */}
                   {!isCurrentTabLocked() && (
@@ -1751,6 +2174,7 @@ export default function AIStudioPage() {
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
                     <Textarea
+                      id="image-prompt"
                       value={imagePrompt}
                       onChange={(e) => setImagePrompt(e.target.value)}
                       placeholder="Describe the image you want to generate..."
@@ -1832,26 +2256,15 @@ export default function AIStudioPage() {
                           <h4 className="text-sm font-medium mb-1">{image.title}</h4>
                           <p className="text-xs text-muted-foreground mb-2 line-clamp-2">{image.prompt}</p>
                           
-                          {/* Storage Status Indicator */}
-                          <div className="mb-2">
-                            {image.url && image.url.includes('supabase.co') ? (
-                              <Badge variant="default" className="text-xs bg-green-500/20 text-green-600 border-green-500/30">
-                                ✅ Stored in Supabase
-                              </Badge>
-                            ) : image.url && image.url.includes('oaidalleapiprodscus.blob.core.windows.net') ? (
-                              <Badge variant="secondary" className="text-xs bg-orange-500/20 text-orange-600 border-orange-500/30">
-                                ⚠️ OpenAI URL (Save to upload to Supabase)
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-xs">
-                                ❓ No URL
-                              </Badge>
-                            )}
-                          </div>
+
 
                           {selectedProject && scenes.length > 0 && (
                             <div className="mb-2">
-                              <Select onValueChange={(sceneId) => handleLinkToScene(image, "image", sceneId)}>
+                              <label className="text-xs font-medium mb-1 block">Link to Scene:</label>
+                              <Select 
+                                value={image.scene_id || selectedScene !== 'none' ? selectedScene : 'none'} 
+                                onValueChange={(sceneId) => handleLinkToScene(image, "image", sceneId)}
+                              >
                                 <SelectTrigger className="h-6 text-xs">
                                   <SelectValue placeholder="Link to scene" />
                                 </SelectTrigger>
@@ -1929,6 +2342,70 @@ export default function AIStudioPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Scene Scripts Dropdown - Only show if scene is selected */}
+                  {selectedScene && selectedScene !== 'none' && (
+                    <div className="grid gap-2">
+                      <Label>Scene Scripts</Label>
+                      <Select value={selectedSceneScript} onValueChange={setSelectedSceneScript}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select a script to reference..." />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {isLoadingSceneScripts ? (
+                            <SelectItem value="loading" disabled>
+                              <div className="flex items-center gap-2">
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                Loading scripts...
+                              </div>
+                            </SelectItem>
+                          ) : sceneScripts.length === 0 ? (
+                            <SelectItem value="none" disabled>
+                              No scripts found in this scene
+                            </SelectItem>
+                          ) : (
+                            <>
+                              <SelectItem value="none">
+                                <span className="text-muted-foreground">No script selected</span>
+                              </SelectItem>
+                              {sceneScripts.map((script) => (
+                                <SelectItem key={script.id} value={script.id}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{script.title}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {script.version_name || `Version ${script.version}`} • {new Date(script.created_at).toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Show selected script preview */}
+                      {selectedSceneScript && sceneScripts.find(s => s.id === selectedSceneScript) && (
+                        <div className="p-3 bg-muted/30 rounded-lg border border-border">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-muted-foreground">Selected Script:</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setSelectedSceneScript("none")}
+                              className="h-6 px-2 text-xs"
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground max-h-16 overflow-y-auto">
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content?.substring(0, 150)}
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content && 
+                             sceneScripts.find(s => s.id === selectedSceneScript)?.content.length > 150 && '...'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {selectedModel === "Runway ML" && (
                     <>
@@ -2087,6 +2564,7 @@ export default function AIStudioPage() {
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
                     <Textarea
+                      id="video-prompt"
                       value={videoPrompt}
                       onChange={(e) => setVideoPrompt(e.target.value)}
                       placeholder="Describe the video you want to generate..."
@@ -2169,7 +2647,11 @@ export default function AIStudioPage() {
 
                           {selectedProject && scenes.length > 0 && (
                             <div className="mb-3">
-                              <Select onValueChange={(sceneId) => handleLinkToScene(video, "video", sceneId)}>
+                              <label className="text-xs font-medium mb-1 block">Link to Scene:</label>
+                              <Select 
+                                value={video.scene_id || selectedScene !== 'none' ? selectedScene : 'none'} 
+                                onValueChange={(sceneId) => handleLinkToScene(video, "video", sceneId)}
+                              >
                                 <SelectTrigger className="h-7 text-xs">
                                   <SelectValue placeholder="Link to scene" />
                                 </SelectTrigger>
@@ -2250,6 +2732,70 @@ export default function AIStudioPage() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Scene Scripts Dropdown - Only show if scene is selected */}
+                  {selectedScene && selectedScene !== 'none' && (
+                    <div className="grid gap-2">
+                      <Label>Scene Scripts</Label>
+                      <Select value={selectedSceneScript} onValueChange={setSelectedSceneScript}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select a script to reference..." />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {isLoadingSceneScripts ? (
+                            <SelectItem value="loading" disabled>
+                              <div className="flex items-center gap-2">
+                                <RefreshCw className="h-4 w-4 animate-spin" />
+                                Loading scripts...
+                              </div>
+                            </SelectItem>
+                          ) : sceneScripts.length === 0 ? (
+                            <SelectItem value="none" disabled>
+                              No scripts found in this scene
+                            </SelectItem>
+                          ) : (
+                            <>
+                              <SelectItem value="none">
+                                <span className="text-muted-foreground">No script selected</span>
+                              </SelectItem>
+                              {sceneScripts.map((script) => (
+                                <SelectItem key={script.id} value={script.id}>
+                                  <div className="flex flex-col">
+                                    <span className="font-medium">{script.title}</span>
+                                    <span className="text-xs text-muted-foreground">
+                                      {script.version_name || `Version ${script.version}`} • {new Date(script.created_at).toLocaleDateString()}
+                                    </span>
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Show selected script preview */}
+                      {selectedSceneScript && sceneScripts.find(s => s.id === selectedSceneScript) && (
+                        <div className="p-3 bg-muted/30 rounded-lg border border-border">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-muted-foreground">Selected Script:</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setSelectedSceneScript("none")}
+                              className="h-6 px-2 text-xs"
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground max-h-16 overflow-y-auto">
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content?.substring(0, 150)}
+                            {sceneScripts.find(s => s.id === selectedSceneScript)?.content && 
+                             sceneScripts.find(s => s.id === selectedSceneScript)?.content.length > 150 && '...'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* AI Model Selection - Only show if not locked */}
                   {!isCurrentTabLocked() && (
@@ -2446,6 +2992,7 @@ export default function AIStudioPage() {
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
                     <Textarea
+                      id="audio-prompt"
                       value={audioPrompt}
                       onChange={(e) => setAudioPrompt(e.target.value)}
                       placeholder="Describe the audio you want to generate..."
@@ -2607,6 +3154,16 @@ export default function AIStudioPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Content Violation Dialog */}
+        <ContentViolationDialog
+          isOpen={showContentViolationDialog}
+          onClose={() => setShowContentViolationDialog(false)}
+          onTryDifferentPrompt={handleTryDifferentPrompt}
+          onTryDifferentAI={handleTryDifferentAI}
+          contentType={contentViolationData?.type || 'script'}
+          originalPrompt={contentViolationData?.prompt || ''}
+        />
       </main>
     </div>
   )

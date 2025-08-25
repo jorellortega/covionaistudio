@@ -24,9 +24,25 @@ export default function LoginPage() {
 
   // Redirect if already authenticated - simplified to reduce re-renders
   useEffect(() => {
+    console.log('🔐 LOGIN PAGE - Redirect useEffect triggered:', { user: !!user, authLoading, userDetails: user })
+    
     if (user && !authLoading) {
       console.log('🔐 LOGIN PAGE - Redirecting to dashboard')
-      router.push("/dashboard")
+      // Reset submission state before redirecting
+      setIsSubmitting(false)
+      
+      // Use a small delay to ensure state is properly updated
+      const redirectTimer = setTimeout(() => {
+        console.log('🔐 LOGIN PAGE - Executing redirect to dashboard')
+        try {
+          router.push("/dashboard")
+        } catch (error) {
+          console.log('🔐 LOGIN PAGE - Router redirect failed, using window.location')
+          window.location.href = "/dashboard"
+        }
+      }, 100)
+      
+      return () => clearTimeout(redirectTimer)
     }
   }, [user, authLoading, router])
 
@@ -62,6 +78,22 @@ export default function LoginPage() {
         title: "Success",
         description: "Welcome back! You've been successfully signed in.",
       })
+      
+      // Reset submission state after successful sign-in
+      setIsSubmitting(false)
+      
+      // Fallback redirect in case useEffect doesn't trigger
+      setTimeout(() => {
+        if (user) {
+          console.log('🔐 LOGIN PAGE - Fallback redirect to dashboard')
+          try {
+            router.push("/dashboard")
+          } catch (error) {
+            console.log('🔐 LOGIN PAGE - Router redirect failed, using window.location')
+            window.location.href = "/dashboard"
+          }
+        }
+      }, 500)
       
     } catch (error: any) {
       console.error('🔐 LOGIN PAGE - SignIn exception:', error)

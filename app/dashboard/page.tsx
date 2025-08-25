@@ -4,22 +4,26 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TreatmentsService } from "@/lib/treatments-service"
 import { ProjectsService, DashboardProject } from "@/lib/projects-service"
 import { StoryboardsService } from "@/lib/storyboards-service"
+import { MovieIdeasService } from "@/lib/movie-ideas-service"
+import { useRouter } from "next/navigation"
 
 export default function DashboardPage() {
   const { user, loading, signOut } = useAuth()
+  const router = useRouter()
   const [treatmentsCount, setTreatmentsCount] = useState(0)
   const [recentProjects, setRecentProjects] = useState<DashboardProject[]>([])
   const [isLoadingProjects, setIsLoadingProjects] = useState(true)
   const [totalProjects, setTotalProjects] = useState(0)
   const [totalScenes, setTotalScenes] = useState(0)
   const [storyboardsCount, setStoryboardsCount] = useState(0)
+  const [ideasCount, setIdeasCount] = useState(0)
   const [hasFetchedData, setHasFetchedData] = useState(false)
 
   // Fetch data only once when user is available
@@ -51,6 +55,10 @@ export default function DashboardPage() {
         const storyboards = await StoryboardsService.getStoryboardsCount()
         setStoryboardsCount(storyboards)
         
+        // Fetch ideas count
+        const ideas = await MovieIdeasService.getUserIdeas(user.id)
+        setIdeasCount(ideas.length)
+        
         setHasFetchedData(true)
       } catch (error) {
         console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
@@ -67,8 +75,12 @@ export default function DashboardPage() {
     try {
       await signOut()
       console.log('🏠 DASHBOARD - Sign out completed')
+      // Redirect to login page after successful sign out
+      router.push('/login')
     } catch (error) {
       console.error('🏠 DASHBOARD - Error signing out:', error)
+      // Still redirect even on error to ensure user is logged out
+      router.push('/login')
     }
   }
 
@@ -196,6 +208,24 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-600">8</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-600 transition-colors" />
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
+          <Link href="/ideas">
+            <CardHeader className="pb-4">
+              <div className="p-3 rounded-lg bg-yellow-500/10 w-fit group-hover:bg-yellow-500/20 transition-colors">
+                <Lightbulb className="h-6 w-6 text-yellow-500" />
+              </div>
+              <CardTitle className="text-lg group-hover:text-yellow-500 transition-colors">Ideas</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CardDescription className="mb-4">Capture creative sparks</CardDescription>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-yellow-500">{ideasCount}</span>
+                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-yellow-500 transition-colors" />
               </div>
             </CardContent>
           </Link>

@@ -169,6 +169,16 @@ export class TimelineService {
           } else {
             assets = assetsData || []
             console.log('Fetched assets for scenes:', assets.length, 'assets')
+            
+            // Debug: Show what assets we got and their URLs
+            if (assets.length > 0) {
+              console.log('🔍 Asset details:')
+              assets.forEach((asset, index) => {
+                const isBucket = asset.content_url?.includes('cinema_files')
+                const isDalle = asset.content_url?.includes('oaidalleapiprodscus.blob.core.windows.net')
+                console.log(`  ${index + 1}. Scene: ${asset.scene_id}, Title: ${asset.title}, Type: ${asset.content_type}, URL Type: ${isBucket ? 'BUCKET' : isDalle ? 'DALL-E' : 'OTHER'}`)
+              })
+            }
           }
         } catch (assetsError) {
           console.warn('Failed to fetch assets for scenes:', assetsError)
@@ -177,17 +187,45 @@ export class TimelineService {
       
       // Parse metadata for each scene and ensure it's properly typed
       return sortedScenes.map(scene => {
-        // Find the most recent image asset for this scene
+        // Find the best image asset for this scene
         const sceneAssets = assets.filter(asset => asset.scene_id === scene.id)
-        const latestImageAsset = sceneAssets[0] // Already ordered by created_at desc
+        
+        // ONLY use bucket URLs - ignore temporary DALL-E URLs completely
+        const bucketAssets = sceneAssets.filter(asset => 
+          asset.content_url && 
+          asset.content_url.includes('cinema_files') && 
+          !asset.content_url.includes('oaidalleapiprodscus.blob.core.windows.net')
+        )
+        
+        // Log asset counts for debugging
+        if (sceneAssets.length > 0) {
+          console.log(`Scene "${scene.name}" has ${sceneAssets.length} total assets: ${bucketAssets.length} bucket, ${sceneAssets.length - bucketAssets.length} DALL-E (ignored)`)
+        }
+        
+        // Use ONLY bucket assets - get the most recent one, no fallback to DALL-E
+        let bestImageAsset = null
+        if (bucketAssets.length > 0) {
+          // Sort by created_at to get the most recent bucket image
+          const sortedBucketAssets = bucketAssets.sort((a, b) => 
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
+          bestImageAsset = sortedBucketAssets[0]
+          console.log(`🎯 Scene "${scene.name}" - Selected most recent bucket asset:`, {
+            title: bestImageAsset.title,
+            created_at: bestImageAsset.created_at,
+            url: bestImageAsset.content_url?.substring(0, 100) + '...'
+          })
+        }
         
         // Parse existing metadata
         const parsedMetadata = this.parseSceneMetadata(scene.metadata)
         
-        // Update thumbnail URL if we have a more recent asset
-        if (latestImageAsset?.content_url) {
-          parsedMetadata.thumbnail = latestImageAsset.content_url
-          console.log(`Updated scene "${scene.name}" thumbnail from asset:`, latestImageAsset.content_url)
+        // Update thumbnail URL if we have a valid asset
+        if (bestImageAsset?.content_url) {
+          parsedMetadata.thumbnail = bestImageAsset.content_url
+          console.log(`✅ Scene "${scene.name}" thumbnail set from bucket asset:`, bestImageAsset.content_url)
+        } else {
+          console.log(`❌ Scene "${scene.name}" has no bucket-saved images - no thumbnail available`)
         }
         
         return {
