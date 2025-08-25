@@ -8,9 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { useAuth } from "@/lib/auth-context-fixed"
 import { AISettingsService, AISetting, AISettingUpdate } from "@/lib/ai-settings-service"
 import { useToast } from "@/hooks/use-toast"
+import { supabase } from "@/lib/supabase"
 import { 
   FileText, 
   ImageIcon, 
@@ -23,7 +25,8 @@ import {
   Settings,
   CheckCircle,
   AlertCircle,
-  RotateCcw
+  RotateCcw,
+  Shield
 } from "lucide-react"
 
 const aiModels = {
@@ -54,6 +57,49 @@ export default function AISettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+
+  // Password protection state
+  const [isPasswordProtected, setIsPasswordProtected] = useState(false)
+  const [hasAccess, setHasAccess] = useState(false)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+
+  // Check if settings are password protected
+  useEffect(() => {
+    if (user?.settings_password_enabled) {
+      setIsPasswordProtected(true)
+      // Check if user already has access (from session storage)
+      const hasAccessFromStorage = sessionStorage.getItem('ai-settings-access')
+      if (hasAccessFromStorage === 'true') {
+        setHasAccess(true)
+      }
+    } else {
+      setIsPasswordProtected(false)
+      setHasAccess(true)
+    }
+  }, [user])
+
+  // Password verification
+  const verifyPassword = async (password: string) => {
+    try {
+      if (password === user?.settings_password_hash) {
+        setHasAccess(true)
+        sessionStorage.setItem('ai-settings-access', 'true')
+        setShowPasswordModal(false)
+        setPasswordInput('')
+        setPasswordError('')
+        toast({
+          title: "Access Granted",
+          description: "You can now access the AI settings page",
+        })
+      } else {
+        setPasswordError('Incorrect password')
+      }
+    } catch (error) {
+      setPasswordError('Error verifying password')
+    }
+  }
 
   // Load user's AI settings
   useEffect(() => {
@@ -337,6 +383,57 @@ export default function AISettingsPage() {
         variant: "destructive",
       })
     }
+  }
+
+  // Show password prompt if protected and no access
+  if (isPasswordProtected && !hasAccess) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-4xl px-6 py-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-blue-500" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">AI Settings Protected</h1>
+            <p className="text-muted-foreground mb-6">
+              Enter the settings password to access AI configuration
+            </p>
+            
+            <div className="max-w-md mx-auto space-y-4">
+              <div>
+                <Label htmlFor="ai-settings-password">Settings Password</Label>
+                <Input
+                  id="ai-settings-password"
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPasswordInput(e.target.value)}
+                  placeholder="Enter password"
+                  className="mt-1"
+                  onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                    if (e.key === 'Enter') {
+                      verifyPassword(passwordInput)
+                    }
+                  }}
+                />
+                {passwordError && (
+                  <p className="text-red-500 text-sm mt-1">{passwordError}</p>
+                )}
+              </div>
+              
+              <Button 
+                onClick={() => verifyPassword(passwordInput)}
+                disabled={!passwordInput.trim()}
+                className="w-full"
+              >
+                <Unlock className="h-4 w-4 mr-2" />
+                Access AI Settings
+              </Button>
+            </div>
+          </div>
+        </main>
+      </div>
+    )
   }
 
   if (loading) {

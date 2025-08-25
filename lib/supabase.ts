@@ -166,6 +166,7 @@ export type Database = {
           scene_type: string
           content_url?: string
           metadata: any
+          order_index: number
           created_at: string
           updated_at: string
         }
@@ -180,6 +181,7 @@ export type Database = {
           scene_type?: string
           content_url?: string
           metadata?: any
+          order_index?: number
           created_at?: string
           updated_at?: string
         }
@@ -194,6 +196,7 @@ export type Database = {
           scene_type?: string
           content_url?: string
           metadata?: any
+          order_index?: number
           created_at?: string
           updated_at?: string
         }

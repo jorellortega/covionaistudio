@@ -1,15 +1,18 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context-fixed'
+import { supabase } from '@/lib/supabase'
+import Header from '@/components/header'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { LogOut, User, Key, Save, Settings } from 'lucide-react'
+import { LogOut, User, Key, Save, Settings, Bot, Lock, Unlock, Shield } from 'lucide-react'
 import Link from 'next/link'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
 export default function SettingsPage() {
   const { user, signOut, updateServiceApiKey } = useAuth()
@@ -24,6 +27,85 @@ export default function SettingsPage() {
     elevenlabs: user?.elevenlabsApiKey || '',
     suno: user?.sunoApiKey || '',
   })
+
+  // Password management state
+  const [showPasswordManagement, setShowPasswordManagement] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordManagementError, setPasswordManagementError] = useState('')
+  
+  // Password management functions
+  const setSettingsPassword = async () => {
+    if (newPassword !== confirmPassword) {
+      setPasswordManagementError('Passwords do not match')
+      return
+    }
+    if (newPassword.length < 1 || newPassword.length > 10) {
+      setPasswordManagementError('Password must be 1-10 characters')
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          settings_password_hash: newPassword,
+          settings_password_enabled: true
+        })
+        .eq('id', user.id)
+
+      if (error) throw error
+
+      setShowPasswordManagement(false)
+      setNewPassword('')
+      setConfirmPassword('')
+      setPasswordManagementError('')
+      
+      toast({
+        title: "Password Set",
+        description: "AI settings are now password protected",
+      })
+    } catch (error) {
+      setPasswordManagementError('Failed to set password')
+    }
+  }
+
+  const removePasswordProtection = async () => {
+    if (!currentPassword) {
+      setPasswordManagementError('Please enter current password')
+      return
+    }
+
+    try {
+      // Verify current password first
+      if (currentPassword !== user?.settings_password_hash) {
+        setPasswordManagementError('Incorrect current password')
+        return
+      }
+
+      const { error } = await supabase
+        .from('users')
+        .update({ 
+          settings_password_enabled: false,
+          settings_password_hash: null
+        })
+        .eq('id', user.id)
+
+      if (error) throw error
+
+      setShowPasswordManagement(false)
+      setCurrentPassword('')
+      setPasswordManagementError('')
+      
+      toast({
+        title: "Protection Removed",
+        description: "AI settings are no longer password protected",
+      })
+    } catch (error) {
+      setPasswordManagementError('Failed to remove protection')
+    }
+  }
 
   const handleApiKeyUpdate = async (service: string, apiKey: string) => {
     setIsLoading(true)
@@ -43,6 +125,8 @@ export default function SettingsPage() {
       setIsLoading(false)
     }
   }
+
+
 
   const handleLogout = async () => {
     try {
@@ -70,9 +154,14 @@ export default function SettingsPage() {
     )
   }
 
+
+
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
-      <div className="flex items-center justify-between mb-8">
+    <div className="min-h-screen bg-background">
+      <Header />
+      
+      <main className="container mx-auto px-4 py-8 max-w-4xl">
+        <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-3xl font-bold">Settings</h1>
           <p className="text-muted-foreground">Manage your account and preferences</p>
@@ -117,161 +206,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
 
-        {/* API Keys Section */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Key className="h-5 w-5" />
-              API Keys
-            </CardTitle>
-            <CardDescription>
-              Manage your API keys for various services
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="openai">OpenAI API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="openai"
-                    type="password"
-                    value={apiKeys.openai}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, openai: e.target.value }))}
-                    placeholder="sk-..."
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('openai', apiKeys.openai)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="anthropic">Anthropic API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="anthropic"
-                    type="password"
-                    value={apiKeys.anthropic}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, anthropic: e.target.value }))}
-                    placeholder="sk-ant-..."
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('anthropic', apiKeys.anthropic)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="openart">OpenArt API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="openart"
-                    type="password"
-                    value={apiKeys.openart}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, openart: e.target.value }))}
-                    placeholder="Enter your OpenArt API key"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('openart', apiKeys.openart)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="kling">Kling API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="kling"
-                    type="password"
-                    value={apiKeys.kling}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, kling: e.target.value }))}
-                    placeholder="Enter your Kling API key"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('kling', apiKeys.kling)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="runway">Runway API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="runway"
-                    type="password"
-                    value={apiKeys.runway}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, runway: e.target.value }))}
-                    placeholder="Enter your Runway API key"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('runway', apiKeys.runway)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="elevenlabs">ElevenLabs API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="elevenlabs"
-                    type="password"
-                    value={apiKeys.elevenlabs}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, elevenlabs: e.target.value }))}
-                    placeholder="Enter your ElevenLabs API key"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('elevenlabs', apiKeys.elevenlabs)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="suno">Suno API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="suno"
-                    type="password"
-                    value={apiKeys.suno}
-                    onChange={(e) => setApiKeys(prev => ({ ...prev, suno: e.target.value }))}
-                    placeholder="Enter your Suno API key"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => handleApiKeyUpdate('suno', apiKeys.suno)}
-                    disabled={isLoading}
-                  >
-                    <Save className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         {/* AI Settings Section */}
         <Card>
@@ -299,7 +234,168 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* AI Setup Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bot className="h-5 w-5" />
+              AI Setup & Configuration
+            </CardTitle>
+            <CardDescription>
+              Set up and configure your AI services and API keys
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Configure your AI services, set up API keys, and manage your AI Studio preferences.
+              </p>
+              <Button asChild className="w-full sm:w-auto">
+                <Link href="/setup-ai" className="flex items-center gap-2">
+                  <Bot className="h-4 w-4" />
+                  Go to AI Setup
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Password Protection Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shield className="h-5 w-5" />
+              AI Settings Password Protection
+            </CardTitle>
+            <CardDescription>
+              Secure your AI settings and setup pages with a password
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">AI Settings Protection</p>
+                  <p className="text-sm text-muted-foreground">
+                    {user?.settings_password_enabled 
+                      ? "AI settings are currently password protected" 
+                      : "AI settings are currently unprotected"
+                    }
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {!user?.settings_password_enabled ? (
+                    <Button 
+                      onClick={() => setShowPasswordManagement(true)}
+                      variant="outline"
+                      className="flex items-center gap-2"
+                    >
+                      <Lock className="h-4 w-4" />
+                      Enable Protection
+                    </Button>
+                  ) : (
+                    <Button 
+                      onClick={() => setShowPasswordManagement(true)}
+                      variant="outline"
+                      className="flex items-center gap-2"
+                    >
+                      <Unlock className="h-4 w-4" />
+                      Manage Protection
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Password Management Modal */}
+      <Dialog open={showPasswordManagement} onOpenChange={setShowPasswordManagement}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {user?.settings_password_enabled ? "Manage Password Protection" : "Set Password Protection"}
+            </DialogTitle>
+            <DialogDescription>
+              {user?.settings_password_enabled 
+                ? "Change your AI settings password or remove protection entirely"
+                : "Set a password to protect your AI settings and setup pages from unauthorized access"
+              }
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {user?.settings_password_enabled && (
+              <div>
+                <Label htmlFor="current-password">Current Password</Label>
+                <Input
+                  id="current-password"
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter current password"
+                />
+              </div>
+            )}
+            
+            {!user?.settings_password_enabled && (
+              <>
+                <div>
+                  <Label htmlFor="new-password">New Password</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter new password (1-10 characters)"
+                  />
+                </div>
+                
+                <div>
+                  <Label htmlFor="confirm-password">Confirm Password</Label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm new password"
+                  />
+                </div>
+              </>
+            )}
+            
+            {passwordManagementError && (
+              <p className="text-red-500 text-sm">{passwordManagementError}</p>
+            )}
+          </div>
+          
+          <DialogFooter className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowPasswordManagement(false)}>
+              Cancel
+            </Button>
+            
+            {user?.settings_password_enabled ? (
+              <Button 
+                onClick={removePasswordProtection}
+                variant="destructive"
+                disabled={!currentPassword.trim()}
+              >
+                Remove Protection
+              </Button>
+            ) : (
+              <Button 
+                onClick={setSettingsPassword}
+                disabled={!newPassword.trim() || !confirmPassword.trim()}
+              >
+                Set Password
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+        </main>
     </div>
   )
 }

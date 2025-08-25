@@ -17,6 +17,8 @@ interface User {
   elevenlabsApiKey?: string
   sunoApiKey?: string
   leonardoApiKey?: string
+  settings_password_hash?: string
+  settings_password_enabled?: boolean
   created_at: string
 }
 
@@ -121,6 +123,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             elevenlabsApiKey: data.elevenlabs_api_key,
             sunoApiKey: data.suno_api_key,
             leonardoApiKey: data.leonardo_api_key,
+            settings_password_hash: data.settings_password_hash,
+            settings_password_enabled: data.settings_password_enabled,
             created_at: data.created_at,
           }
           return userData
@@ -190,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Simplified session change handler
+  // Simplified session change handler with better error recovery
   const handleSessionChange = useCallback(async (session: Session | null) => {
     try {
       if (session?.user) {
@@ -219,6 +223,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsInitialized(true)
     }
   }, [fetchUserProfile, setUserDebounced])
+
+
 
   // Initialize auth state - only run once on mount
   useEffect(() => {
@@ -288,6 +294,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe()
     }
   }, []) // Empty dependency array - only run once on mount
+
+
 
   const signIn = async (email: string, password: string): Promise<{ error: any }> => {
     try {
@@ -495,7 +503,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resetLoadingState = () => {
+    console.log('Force resetting loading state')
     setLoading(false);
+    setIsInitialized(true);
   };
 
   return (

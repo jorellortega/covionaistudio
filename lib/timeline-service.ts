@@ -126,22 +126,33 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       console.log('Fetching scenes for timeline:', timelineId, 'user:', user.id)
       
+      // Get all scenes first
       const { data, error } = await supabase
         .from('scenes')
         .select('*')
         .eq('timeline_id', timelineId)
         .eq('user_id', user.id)
-        .order('order_index', { ascending: true })
 
       if (error) {
         console.error('Error fetching scenes:', error)
         throw error
       }
 
-      console.log('Scenes fetched successfully:', data.length, 'scenes')
+      // Sort scenes by scene number instead of order_index
+      const sortedScenes = data.sort((a, b) => {
+        const aNumber = this.parseSceneNumber(a.metadata?.sceneNumber || '')
+        const bNumber = this.parseSceneNumber(b.metadata?.sceneNumber || '')
+        return aNumber - bNumber
+      })
+
+      console.log('Scenes fetched successfully:', sortedScenes.length, 'scenes')
+      console.log('Scene order details (sorted by scene number):')
+      sortedScenes.forEach((scene, index) => {
+        console.log(`  ${index + 1}. Scene "${scene.name}" - Scene Number: "${scene.metadata?.sceneNumber || 'None'}" - Order Index: ${scene.order_index}`)
+      })
       
       // Fetch associated assets for all scenes to get latest image URLs
-      const sceneIds = data.map(scene => scene.id)
+      const sceneIds = sortedScenes.map(scene => scene.id)
       let assets: any[] = []
       
       if (sceneIds.length > 0) {
@@ -165,7 +176,7 @@ export class TimelineService {
       }
       
       // Parse metadata for each scene and ensure it's properly typed
-      return data.map(scene => {
+      return sortedScenes.map(scene => {
         // Find the most recent image asset for this scene
         const sceneAssets = assets.filter(asset => asset.scene_id === scene.id)
         const latestImageAsset = sceneAssets[0] // Already ordered by created_at desc
@@ -210,15 +221,16 @@ export class TimelineService {
   static async createScene(sceneData: CreateSceneData): Promise<Scene> {
     const user = await this.ensureAuthenticated()
     
-    // Get the next available order index for this timeline
-    const nextOrderIndex = await this.getNextSceneOrderIndex(sceneData.timeline_id)
+    // Get the appropriate order index based on scene number
+    const sceneNumber = sceneData.metadata?.sceneNumber || ''
+    const orderIndex = await this.getOrderIndexForSceneNumber(sceneData.timeline_id, sceneNumber)
     
     const { data, error } = await supabase
       .from('scenes')
       .insert({
         ...sceneData,
         user_id: user.id,
-        order_index: nextOrderIndex,
+        order_index: orderIndex,
       })
       .select()
       .single()
@@ -233,6 +245,34 @@ export class TimelineService {
 
   static async updateScene(sceneId: string, updates: Partial<CreateSceneData>): Promise<Scene> {
     const user = await this.ensureAuthenticated()
+    
+    // Check if scene number is being updated
+    const isSceneNumberChanging = updates.metadata?.sceneNumber !== undefined
+    
+    if (isSceneNumberChanging) {
+      // Get the current scene to compare scene numbers
+      const { data: currentScene, error: fetchError } = await supabase
+        .from('scenes')
+        .select('timeline_id, metadata')
+        .eq('id', sceneId)
+        .eq('user_id', user.id)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching current scene:', fetchError)
+        throw fetchError
+      }
+
+      const currentSceneNumber = currentScene.metadata?.sceneNumber || ''
+      const newSceneNumber = updates.metadata?.sceneNumber || ''
+      
+      if (currentSceneNumber !== newSceneNumber) {
+        // Scene number changed, we need to completely reorder all scenes
+        // This is more reliable than trying to insert at specific positions
+        await this.reorderScenesBySceneNumber(currentScene.timeline_id)
+      }
+    }
+    
     const { data, error } = await supabase
       .from('scenes')
       .update(updates)
@@ -763,6 +803,367 @@ export class TimelineService {
       return (data?.[0]?.order_index || 0) + 1
     } catch (error) {
       console.error('Error in getNextSceneOrderIndex:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Parse scene number and convert to a sortable order value
+   * Examples: "1A" -> 1.1, "2B" -> 2.2, "10" -> 10.0, "3C" -> 3.3
+   */
+  static parseSceneNumber(sceneNumber: string): number {
+    if (!sceneNumber || !sceneNumber.trim()) return 0
+    
+    const trimmed = sceneNumber.trim()
+    
+    // Extract the numeric part
+    const numericMatch = trimmed.match(/^(\d+)/)
+    if (!numericMatch) return 0
+    
+    const numericPart = parseInt(numericMatch[1], 10)
+    
+    // Extract the letter part (if any)
+    const letterMatch = trimmed.match(/^(\d+)([A-Za-z])/)
+    if (letterMatch) {
+      const letter = letterMatch[2].toUpperCase()
+      const letterValue = letter.charCodeAt(0) - 64 // A=1, B=2, C=3, etc.
+      return numericPart + (letterValue / 10)
+    }
+    
+    // If no letter, just return the number
+    return numericPart
+  }
+
+  /**
+   * Get the appropriate order_index for a scene based on its scene number
+   * This will insert the scene at the correct position and shift others as needed
+   */
+  static async getOrderIndexForSceneNumber(timelineId: string, sceneNumber: string): Promise<number> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      if (!sceneNumber || !sceneNumber.trim()) {
+        // If no scene number, just append to the end
+        return await this.getNextSceneOrderIndex(timelineId)
+      }
+      
+      const targetOrder = this.parseSceneNumber(sceneNumber)
+      
+      // Get all existing scenes ordered by their current order_index
+      const { data: existingScenes, error } = await supabase
+        .from('scenes')
+        .select('id, order_index, metadata')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .order('order_index', { ascending: true })
+
+      if (error) {
+        console.error('Error fetching existing scenes for ordering:', error)
+        throw error
+      }
+
+      if (!existingScenes || existingScenes.length === 0) {
+        // First scene, start at 1
+        return 1
+      }
+
+      // Find the correct position for this scene number
+      let insertPosition = 1
+      
+      for (let i = 0; i < existingScenes.length; i++) {
+        const existingScene = existingScenes[i]
+        const existingOrder = this.parseSceneNumber(existingScene.metadata?.sceneNumber || '')
+        
+        if (targetOrder < existingOrder) {
+          // Insert before this scene
+          insertPosition = existingScene.order_index
+          break
+        } else if (targetOrder === existingOrder) {
+          // Same scene number, insert after this one
+          insertPosition = existingScene.order_index + 1
+        } else {
+          // Continue to next scene
+          insertPosition = existingScene.order_index + 1
+        }
+      }
+
+      // If we're inserting in the middle, we need to shift existing scenes
+      // But only if this is a new scene, not an update
+      if (insertPosition <= existingScenes.length) {
+        // Check if this scene already exists to avoid unnecessary shifting
+        const sceneExists = existingScenes.some(scene => 
+          this.parseSceneNumber(scene.metadata?.sceneNumber || '') === targetOrder
+        )
+        
+        if (!sceneExists) {
+          await this.shiftScenesForInsert(timelineId, insertPosition)
+        }
+      }
+
+      return insertPosition
+    } catch (error) {
+      console.error('Error getting order index for scene number:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Shift scenes to make room for inserting a new scene at a specific position
+   */
+  static async shiftScenesForInsert(timelineId: string, insertPosition: number): Promise<void> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      // Get scenes that need to be shifted (those at or after insertPosition)
+      const { data: scenesToShift, error } = await supabase
+        .from('scenes')
+        .select('id, order_index')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .gte('order_index', insertPosition)
+        .order('order_index', { ascending: false }) // Start from highest to avoid conflicts
+
+      if (error) {
+        console.error('Error fetching scenes to shift:', error)
+        throw error
+      }
+
+      if (!scenesToShift || scenesToShift.length === 0) return
+
+      // Shift each scene up by 1
+      for (const scene of scenesToShift) {
+        const { error: updateError } = await supabase
+          .from('scenes')
+          .update({ order_index: scene.order_index + 1 })
+          .eq('id', scene.id)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error shifting scene:', updateError)
+          throw updateError
+        }
+      }
+    } catch (error) {
+      console.error('Error shifting scenes for insert:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Reorder scenes based on their scene numbers
+   * This ensures the timeline displays scenes in the correct order
+   */
+  static async reorderScenesBySceneNumber(timelineId: string): Promise<boolean> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      // Get all scenes with their metadata
+      const { data: scenes, error } = await supabase
+        .from('scenes')
+        .select('id, metadata')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+
+      if (error) {
+        console.error('Error fetching scenes for reordering:', error)
+        throw error
+      }
+
+      if (!scenes || scenes.length === 0) return true
+
+      // Sort scenes by their parsed scene number
+      const sortedScenes = scenes
+        .map(scene => ({
+          id: scene.id,
+          sceneNumber: scene.metadata?.sceneNumber || '',
+          parsedOrder: this.parseSceneNumber(scene.metadata?.sceneNumber || '')
+        }))
+        .sort((a, b) => a.parsedOrder - b.parsedOrder)
+
+      console.log('Scenes to be reordered:', sortedScenes)
+
+      // Use a temporary order_index to avoid constraint conflicts
+      // First, set all scenes to temporary high numbers
+      for (let i = 0; i < sortedScenes.length; i++) {
+        const { error: updateError } = await supabase
+          .from('scenes')
+          .update({ order_index: 10000 + i }) // Use high temporary numbers
+          .eq('id', sortedScenes[i].id)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error setting temporary order:', updateError)
+          throw updateError
+        }
+      }
+
+      // Now set the final order_index values
+      for (let i = 0; i < sortedScenes.length; i++) {
+        const { error: updateError } = await supabase
+          .from('scenes')
+          .update({ order_index: i + 1 })
+          .eq('id', sortedScenes[i].id)
+          .eq('user_id', user.id)
+
+        if (updateError) {
+          console.error('Error updating scene order:', updateError)
+          throw updateError
+        }
+      }
+
+      console.log('Scenes reordered by scene number successfully. New order:')
+      sortedScenes.forEach((scene, index) => {
+        console.log(`  ${index + 1}. Scene ${scene.sceneNumber} (parsed: ${scene.parsedOrder})`)
+      })
+      
+      return true
+    } catch (error) {
+      console.error('Error reordering scenes by scene number:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Get scenes with their current order information for debugging
+   */
+  static async getScenesWithOrderInfo(timelineId: string): Promise<Array<{
+    id: string
+    name: string
+    sceneNumber: string
+    order_index: number
+    parsedOrder: number
+  }>> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      const { data: scenes, error } = await supabase
+        .from('scenes')
+        .select('id, name, metadata, order_index')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+        .order('order_index', { ascending: true })
+
+      if (error) {
+        console.error('Error fetching scenes with order info:', error)
+        throw error
+      }
+
+      if (!scenes || scenes.length === 0) return []
+
+      return scenes.map(scene => ({
+        id: scene.id,
+        name: scene.name,
+        sceneNumber: scene.metadata?.sceneNumber || '',
+        order_index: scene.order_index,
+        parsedOrder: this.parseSceneNumber(scene.metadata?.sceneNumber || '')
+      }))
+    } catch (error) {
+      console.error('Error getting scenes with order info:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Validate scene ordering and return any issues found
+   */
+  static async validateSceneOrdering(timelineId: string): Promise<{
+    isValid: boolean
+    issues: string[]
+    suggestions: string[]
+  }> {
+    try {
+      const scenes = await this.getScenesWithOrderInfo(timelineId)
+      
+      if (scenes.length === 0) {
+        return { isValid: true, issues: [], suggestions: [] }
+      }
+
+      const issues: string[] = []
+      const suggestions: string[] = []
+
+      // Check for duplicate scene numbers
+      const sceneNumberCounts = new Map<string, number>()
+      scenes.forEach(scene => {
+        if (scene.sceneNumber) {
+          sceneNumberCounts.set(scene.sceneNumber, (sceneNumberCounts.get(scene.sceneNumber) || 0) + 1)
+        }
+      })
+
+      sceneNumberCounts.forEach((count, sceneNumber) => {
+        if (count > 1) {
+          issues.push(`Duplicate scene number: "${sceneNumber}" appears ${count} times`)
+          suggestions.push(`Ensure each scene has a unique scene number`)
+        }
+      })
+
+      // Check for missing scene numbers
+      const scenesWithoutNumbers = scenes.filter(scene => !scene.sceneNumber)
+      if (scenesWithoutNumbers.length > 0) {
+        issues.push(`${scenesWithoutNumbers.length} scenes are missing scene numbers`)
+        suggestions.push(`Add scene numbers to all scenes for proper ordering`)
+      }
+
+      // Check if order_index matches parsed scene number order
+      const expectedOrder = [...scenes].sort((a, b) => a.parsedOrder - b.parsedOrder)
+      const orderMismatch = expectedOrder.some((scene, index) => scene.order_index !== index + 1)
+      
+      if (orderMismatch) {
+        issues.push('Scene order_index does not match scene number order')
+        suggestions.push('Use the "Reorder Scenes" button to fix ordering')
+      }
+
+      return {
+        isValid: issues.length === 0,
+        issues,
+        suggestions
+      }
+    } catch (error) {
+      console.error('Error validating scene ordering:', error)
+      return {
+        isValid: false,
+        issues: ['Error validating scene ordering'],
+        suggestions: ['Check console for details']
+      }
+    }
+  }
+
+  /**
+   * Simple method to refresh timeline display by scene number
+   * This doesn't update the database, just returns scenes in the correct order
+   */
+  static async getTimelineDisplayOrder(timelineId: string): Promise<SceneWithMetadata[]> {
+    try {
+      const user = await this.ensureAuthenticated()
+      
+      // Get all scenes without ordering
+      const { data: scenes, error } = await supabase
+        .from('scenes')
+        .select('*')
+        .eq('timeline_id', timelineId)
+        .eq('user_id', user.id)
+
+      if (error) {
+        console.error('Error fetching scenes for display:', error)
+        throw error
+      }
+
+      if (!scenes || scenes.length === 0) return []
+
+      // Sort by scene number for display only
+      const displayOrder = scenes.sort((a, b) => {
+        const aNumber = this.parseSceneNumber(a.metadata?.sceneNumber || '')
+        const bNumber = this.parseSceneNumber(b.metadata?.sceneNumber || '')
+        return aNumber - bNumber
+      })
+
+      console.log('Timeline display order (by scene number):')
+      displayOrder.forEach((scene, index) => {
+        console.log(`  ${index + 1}. Scene "${scene.name}" - Scene Number: "${scene.metadata?.sceneNumber || 'None'}"`)
+      })
+
+      return displayOrder
+    } catch (error) {
+      console.error('Error getting timeline display order:', error)
       throw error
     }
   }

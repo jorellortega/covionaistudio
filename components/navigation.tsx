@@ -3,21 +3,21 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon } from "lucide-react"
+import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 const fullNavigation = [
-  { name: "Dashboard", href: "/dashboard", icon: Film },
+  { name: "Dashboard", href: "/dashboard", icon: Home },
   { name: "Movies", href: "/movies", icon: Film },
   { name: "Treatments", href: "/treatments", icon: FileText },
   { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
   { name: "Videos", href: "/videos", icon: Video },
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
-  { name: "AI Setup", href: "/setup-ai", icon: Settings },
 ]
 
 const mobileNavigation = [
+  { name: "Home", href: "/dashboard", icon: Home },
   { name: "Movies", href: "/movies", icon: Film },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
@@ -44,7 +44,12 @@ export function Navigation() {
             )}
           >
             <Icon className="h-4 w-4" />
-            <span className="hidden md:inline">{item.name}</span>
+            <span className={cn(
+              "hidden md:inline",
+              item.name === "Home" ? "hidden" : "hidden md:inline"
+            )}>
+              {item.name}
+            </span>
           </Link>
         )
       })}

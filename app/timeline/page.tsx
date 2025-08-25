@@ -268,7 +268,8 @@ export default function TimelinePage() {
       setCurrentTimeline(timeline)
 
       // Load scenes for the timeline (includes fetching associated assets for thumbnails)
-      const scenesData = await TimelineService.getScenesForTimeline(timeline.id)
+      // Use the new display order method that sorts by scene number
+      const scenesData = await TimelineService.getTimelineDisplayOrder(timeline.id)
       console.log('Loaded scenes with asset thumbnails:', scenesData)
       setScenes(scenesData)
     } catch (error) {
@@ -463,15 +464,29 @@ export default function TimelinePage() {
 
       await TimelineService.updateScene(editingScene.id, updates)
       
-      // Update the scene in the list
-      setScenes(scenes.map(s => 
-        s.id === editingScene.id 
-          ? { ...s, ...updates, metadata: updates.metadata! }
-          : s
-      ))
+      // If scene number changed, reorder scenes to ensure proper timeline order
+      if (editingScene.metadata.sceneNumber !== newScene.sceneNumber) {
+        try {
+          await TimelineService.reorderScenesBySceneNumber(editingScene.timeline_id)
+          // After reordering, reload scenes to get the new order
+          const reorderedScenes = await TimelineService.getScenesForTimeline(editingScene.timeline_id)
+          setScenes(reorderedScenes)
+        } catch (reorderError) {
+          console.warn('Failed to reorder scenes after scene number change:', reorderError)
+          // Fall back to regular refresh
+          await refreshScenes()
+        }
+      } else {
+        // Update the scene in the list
+        setScenes(scenes.map(s => 
+          s.id === editingScene.id 
+            ? { ...s, ...updates, metadata: updates.metadata! }
+            : s
+        ))
 
-      // Refresh scenes from the database to ensure consistency
-      await refreshScenes()
+        // Refresh scenes from the database to ensure consistency
+        await refreshScenes()
+      }
 
       setEditingScene(null)
       setIsAddSceneOpen(false)
@@ -516,9 +531,8 @@ export default function TimelinePage() {
 
     try {
       await TimelineService.deleteScene(sceneId)
-      setScenes(scenes.filter(s => s.id !== sceneId))
       
-      // Refresh scenes from the database to ensure consistency
+      // Refresh scenes from the database to ensure consistency and proper ordering
       await refreshScenes()
       
       toast({
@@ -534,6 +548,8 @@ export default function TimelinePage() {
       })
     }
   }
+
+
 
   const handleGenerateWithAI = (sceneId?: string) => {
     const scene = scenes.find((s) => s.id === sceneId)
@@ -1396,6 +1412,7 @@ export default function TimelinePage() {
                       placeholder="e.g., 1A, 2B..."
                       className="bg-input border-border"
                     />
+
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="duration">Duration</Label>
@@ -1688,8 +1705,13 @@ export default function TimelinePage() {
                             <div className="flex-1 p-4 md:p-6 min-w-0">
                               <div className="flex items-center gap-2 md:gap-3 mb-2">
                                 <div className="flex items-center gap-2">
-                                  <div className="h-6 w-6 rounded-full bg-cyan-500 glow flex items-center justify-center flex-shrink-0">
-                                    <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
+                                  <div className="flex items-center gap-2">
+                                    <div className="h-6 w-6 rounded-full bg-cyan-500 glow flex items-center justify-center flex-shrink-0">
+                                      <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
+                                    </div>
+                                    <div className="text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
+                                      Order: {scene.order_index}
+                                    </div>
                                   </div>
                                   <CardTitle className="text-base md:text-lg">{scene.name}</CardTitle>
                                 </div>
