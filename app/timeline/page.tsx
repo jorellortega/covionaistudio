@@ -549,16 +549,357 @@ export default function TimelinePage() {
     }
   }
 
+  // Helper function to create a comprehensive scene prompt for AI image generation
+  const createScenePrompt = async (scene: SceneWithMetadata): Promise<string> => {
+    try {
+      console.log('🎬 DEBUG - createScenePrompt called for scene:', {
+        sceneId: scene.id,
+        sceneName: scene.name,
+        sceneNumber: scene.metadata?.sceneNumber
+      })
+      
+      let scriptContent = ''
+      
+      if (user) {
+        try {
+          console.log('🎬 DEBUG - Fetching assets for scene:', scene.id)
+          const assets = await AssetService.getAssetsForScene(scene.id)
+          console.log('🎬 DEBUG - Assets returned from AssetService:', {
+            totalAssets: assets?.length || 0,
+            assets: assets?.map((a: any) => ({
+              id: a.id,
+              content_type: a.content_type,
+              content_length: a.content?.length || 0,
+              title: a.title,
+              created_at: a.created_at
+            }))
+          })
+          
+          if (assets && assets.length > 0) {
+            const scriptAssets = assets.filter((asset: any) => 
+              asset.content_type === 'script' || 
+              (asset.content && asset.content.length > 100)
+            )
+            
+            console.log('🎬 DEBUG - Script assets found:', {
+              totalScriptAssets: scriptAssets.length,
+              scriptAssets: scriptAssets.map((a: any) => ({
+                id: a.id,
+                content_type: a.content_type,
+                content_length: a.content?.length || 0,
+                content_preview: a.content?.substring(0, 100) + '...',
+                title: a.title,
+                created_at: a.created_at
+              }))
+            })
+            
+            if (scriptAssets.length > 0) {
+              const latestScript = scriptAssets.sort((a: any, b: any) => 
+                new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+              )[0]
+              
+              scriptContent = latestScript.content || ''
+              
+              console.log('🎬 DEBUG - Selected latest script asset:', {
+                scriptId: latestScript.id,
+                scriptTitle: latestScript.title,
+                scriptContentLength: scriptContent.length,
+                scriptContentPreview: scriptContent.substring(0, 300) + '...',
+                scriptContentFull: scriptContent
+              })
+            } else {
+              console.log('🎬 DEBUG - No script assets found, will use scene name fallback')
+            }
+          } else {
+            console.log('🎬 DEBUG - No assets returned for scene')
+          }
+        } catch (error) {
+          console.log('🎬 DEBUG - Error fetching assets for scene:', error)
+        }
+      } else {
+        console.log('🎬 DEBUG - No user found, cannot fetch assets')
+      }
+      
+      let finalPrompt = ''
+      if (scriptContent) {
+        // Sanitize the script content for DALL-E
+        const sanitizedContent = sanitizePromptForDALLE(scriptContent)
+        finalPrompt = `Create a cinematic movie scene image: ${sanitizedContent}`
+        console.log('🎬 DEBUG - Using sanitized script content in prompt:', {
+          promptLength: finalPrompt.length,
+          promptPreview: finalPrompt.substring(0, 200) + '...',
+          fullPrompt: finalPrompt,
+          originalLength: scriptContent.length,
+          sanitizedLength: sanitizedContent.length
+        })
+      } else {
+        finalPrompt = `Create a cinematic movie scene image: ${scene.name}`
+        console.log('🎬 DEBUG - Using scene name fallback in prompt:', {
+          promptLength: finalPrompt.length,
+          fullPrompt: finalPrompt
+        })
+      }
+      
+      return finalPrompt
+    } catch (error) {
+      console.error('🎬 DEBUG - Error in createScenePrompt:', error)
+      const fallbackPrompt = `Create a cinematic movie scene image: ${scene.name}`
+      console.log('🎬 DEBUG - Using error fallback prompt:', fallbackPrompt)
+      return fallbackPrompt
+    }
+  }
 
+  // Helper function to sanitize prompts for DALL-E
+  const sanitizePromptForDALLE = (scriptContent: string): string => {
+    try {
+      // Remove potentially problematic content
+      let sanitized = scriptContent
+        .replace(/Scene \d+[:\-–]/gi, '') // Remove scene numbers
+        .replace(/Written by.*?\n/gi, '') // Remove author credits
+        .replace(/INT\.|EXT\./gi, '') // Remove scene direction abbreviations
+        .replace(/DAY|NIGHT/gi, '') // Remove time indicators
+        .replace(/[^\w\s,\.!?\-–—]/g, ' ') // Remove special characters except basic punctuation
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim()
+      
+      // Focus on visual elements and action, remove dialogue
+      const lines = sanitized.split('\n')
+      const visualLines = lines.filter(line => {
+        const trimmed = line.trim()
+        // Keep lines that describe action, setting, or visual elements
+        // Remove lines that are mostly dialogue or character names
+        return trimmed.length > 0 && 
+               !trimmed.startsWith('(') && 
+               !trimmed.endsWith(')') &&
+               !trimmed.includes(':') &&
+               trimmed.length > 10
+      })
+      
+      // Take first 3-5 visual lines and combine them
+      const selectedLines = visualLines.slice(0, 5)
+      let result = selectedLines.join('. ')
+      
+      // Limit to reasonable length for DALL-E
+      if (result.length > 500) {
+        result = result.substring(0, 500).replace(/\.[^.]*$/, '') + '.'
+      }
+      
+      // Add cinematic context if it's too short
+      if (result.length < 50) {
+        result = `A cinematic movie scene showing ${result}`
+      }
+      
+      console.log('🎬 DEBUG - Prompt sanitization:', {
+        originalLength: scriptContent.length,
+        sanitizedLength: result.length,
+        originalPreview: scriptContent.substring(0, 200) + '...',
+        sanitizedPreview: result.substring(0, 200) + '...'
+      })
+      
+      return result
+    } catch (error) {
+      console.error('🎬 DEBUG - Error sanitizing prompt:', error)
+      // Fallback to a simple description
+      return `A cinematic movie scene from the story`
+    }
+  }
 
-  const handleGenerateWithAI = (sceneId?: string) => {
+  // Helper function to save generated image to scene
+  const saveGeneratedImageToScene = async (sceneId: string, imageUrl: string, prompt: string) => {
+    try {
+      // Update the scene's thumbnail in metadata
+      const scene = scenes.find(s => s.id === sceneId)
+      if (!scene) return
+      
+      const updatedMetadata = {
+        ...scene.metadata,
+        thumbnail: imageUrl,
+        ai_generated: true,
+        ai_prompt: prompt,
+        generated_at: new Date().toISOString()
+      }
+      
+      // Update the scene with new metadata
+      await TimelineService.updateScene(sceneId, {
+        metadata: updatedMetadata
+      })
+      
+      // Also save to assets table for better organization
+      if (movie?.id) {
+        const assetData = {
+          project_id: movie.id,
+          scene_id: sceneId,
+          title: `AI Generated Scene Image - ${scene.name}`,
+          content_type: 'image' as const,
+          content: prompt,
+          content_url: imageUrl,
+          prompt: prompt,
+          model: 'ai_generated',
+          generation_settings: {
+            scene_id: sceneId,
+            scene_name: scene.name,
+            generated_at: new Date().toISOString()
+          },
+          metadata: {
+            scene_name: scene.name,
+            scene_number: scene.metadata?.sceneNumber,
+            ai_generated: true,
+            source: 'timeline_ai_generation'
+          }
+        }
+        
+        await AssetService.createAsset(assetData)
+      }
+    } catch (error) {
+      console.error('Failed to save generated image to scene:', error)
+      throw error
+    }
+  }
+
+  const handleGenerateWithAI = async (sceneId?: string) => {
     const scene = scenes.find((s) => s.id === sceneId)
-    const aiPrompt = scene
-      ? `Generate content for scene "${scene.name}": ${scene.description}`
-      : "Generate new scene content"
+    if (!scene) return
 
-    // Navigate to AI Studio with context
-    window.open(`/ai-studio?project=${movieId}&prompt=${encodeURIComponent(aiPrompt)}`, "_blank")
+    console.log('🎬 DEBUG - handleGenerateWithAI called for scene:', {
+      sceneId: scene.id,
+      sceneName: scene.name,
+      sceneNumber: scene.metadata?.sceneNumber
+    })
+
+    // Check if user has AI settings and if images tab is locked
+    if (!user) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to use AI features",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingImage(true)
+      
+      // Create a comprehensive prompt from scene data
+      console.log('🎬 DEBUG - Creating scene prompt...')
+      const scenePrompt = await createScenePrompt(scene)
+      console.log('🎬 DEBUG - Final scene prompt created:', {
+        promptLength: scenePrompt.length,
+        promptPreview: scenePrompt.substring(0, 200) + '...',
+        fullPrompt: scenePrompt
+      })
+      
+      // Get the locked AI service for images
+      const aiSettings = await AISettingsService.getUserSettings(user.id)
+      const imagesSetting = aiSettings.find(s => s.tab_type === 'images')
+      
+      console.log('🎬 DEBUG - AI settings found:', {
+        totalSettings: aiSettings.length,
+        imagesSetting: imagesSetting ? {
+          id: imagesSetting.id,
+          tab_type: imagesSetting.tab_type,
+          locked_model: imagesSetting.locked_model,
+          is_locked: imagesSetting.is_locked
+        } : null
+      })
+      
+      if (!imagesSetting || !imagesSetting.is_locked) {
+        toast({
+          title: "AI not configured",
+          description: "Please configure your AI settings first",
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Get the appropriate API key based on the locked service
+      let apiKey = ''
+      switch (imagesSetting.locked_model) {
+        case 'DALL-E 3':
+          apiKey = user.openaiApiKey || ''
+          break
+        case 'Leonardo AI':
+          apiKey = user.leonardoApiKey || ''
+          break
+        case 'OpenArt':
+          apiKey = user.openartApiKey || ''
+          break
+        default:
+          throw new Error(`Unsupported AI service: ${imagesSetting.locked_model}`)
+      }
+
+      console.log('🎬 DEBUG - API key status:', {
+        service: imagesSetting.locked_model,
+        hasApiKey: !!apiKey,
+        apiKeyLength: apiKey.length
+      })
+
+      if (!apiKey) {
+        toast({
+          title: "API Key Required",
+          description: `Please configure your ${imagesSetting.locked_model} API key in settings`,
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Generate image using the locked service
+      console.log('🎬 DEBUG - Sending request to API with data:', {
+        prompt: scenePrompt,
+        service: imagesSetting.locked_model,
+        apiKeyExists: !!apiKey
+      })
+      
+      const response = await fetch('/api/ai/generate-scene-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: scenePrompt,
+          service: imagesSetting.locked_model,
+          apiKey: apiKey
+        })
+      })
+
+      console.log('🎬 DEBUG - API response received:', {
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.log('🎬 DEBUG - API error response:', errorText)
+        throw new Error('Failed to generate image')
+      }
+
+      const result = await response.json()
+      console.log('🎬 DEBUG - API result:', result)
+      
+      if (result.success && result.imageUrl) {
+        // Save the generated image to the scene
+        await saveGeneratedImageToScene(scene.id, result.imageUrl, scenePrompt)
+        
+        toast({
+          title: "Image generated successfully!",
+          description: "The scene image has been updated",
+        })
+        
+        // Refresh scenes to show the new image
+        await refreshScenes()
+      } else {
+        throw new Error(result.error || 'Failed to generate image')
+      }
+    } catch (error) {
+      console.error('🎬 DEBUG - AI image generation failed:', error)
+      toast({
+        title: "Image generation failed",
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingImage(false)
+    }
   }
 
   const handleViewAssets = (sceneId?: string) => {

@@ -56,6 +56,7 @@ import TextToSpeech from "@/components/text-to-speech"
 import AITextEditor from "@/components/ai-text-editor"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Navigation } from "@/components/navigation"
+import { AISettingsService } from "@/lib/ai-settings-service"
 
 export default function ScenePage() {
   const params = useParams()
@@ -87,6 +88,58 @@ function ScenePageClient({ id }: { id: string }) {
   const [compareVersions, setCompareVersions] = useState<Asset[]>([])
   const [showVersionEdit, setShowVersionEdit] = useState(false)
   const [editingVersion, setEditingVersion] = useState<Asset | null>(null)
+  const [showAIImageDialog, setShowAIImageDialog] = useState(false)
+  const [selectedScriptForAI, setSelectedScriptForAI] = useState<string>('')
+  const [aiImageLoading, setAiImageLoading] = useState(false)
+  
+  // Helper function to sanitize prompts for DALL-E
+  const sanitizePromptForDALLE = (scriptContent: string): string => {
+    try {
+      // Remove potentially problematic content
+      let sanitized = scriptContent
+        .replace(/Scene \d+[:\-–]/gi, '') // Remove scene numbers
+        .replace(/Written by.*?\n/gi, '') // Remove author credits
+        .replace(/INT\.|EXT\./gi, '') // Remove scene direction abbreviations
+        .replace(/DAY|NIGHT/gi, '') // Remove time indicators
+        .replace(/[^\w\s,\.!?\-–—]/g, ' ') // Remove special characters except basic punctuation
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim()
+      
+      // Focus on visual elements and action, remove dialogue
+      const lines = sanitized.split('\n')
+      const visualLines = lines.filter(line => {
+        const trimmed = line.trim()
+        // Keep lines that describe action, setting, or visual elements
+        // Remove lines that are mostly dialogue or character names
+        return trimmed.length > 0 && 
+               !trimmed.startsWith('(') && 
+               !trimmed.endsWith(')') &&
+               !trimmed.includes(':') &&
+               trimmed.length > 10
+      })
+      
+      // Take first 3-5 visual lines and combine them
+      const selectedLines = visualLines.slice(0, 5)
+      let result = selectedLines.join('. ')
+      
+      // Limit to reasonable length for DALL-E
+      if (result.length > 500) {
+        result = result.substring(0, 500).replace(/\.[^.]*$/, '') + '.'
+      }
+      
+      // Add cinematic context if it's too short
+      if (result.length < 50) {
+        result = `A cinematic movie scene showing ${result}`
+      }
+      
+      return result
+    } catch (error) {
+      console.error('Error sanitizing prompt:', error)
+      // Fallback to a simple description
+      return `A cinematic movie scene from the story`
+    }
+  }
+  
   const [versionEditForm, setVersionEditForm] = useState({
     title: '',
     version_name: '',
@@ -1003,6 +1056,19 @@ function ScenePageClient({ id }: { id: string }) {
             <Edit3 className="h-4 w-4 mr-2" />
             Edit Scene
           </Button>
+          
+          {/* AI Image Generation Button */}
+          {assets.filter(a => a.content_type === 'script').length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAIImageDialog(true)}
+              className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+            >
+              <Bot className="h-4 w-4 mr-2" />
+              Generate AI Image
+            </Button>
+          )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button
@@ -3732,8 +3798,225 @@ function ScenePageClient({ id }: { id: string }) {
           />
         )}
 
+        {/* AI Image Generation Dialog */}
+        <Dialog open={showAIImageDialog} onOpenChange={setShowAIImageDialog}>
+          <DialogContent className="bg-background border-green-500/20 max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="text-green-400 flex items-center gap-2">
+                <Bot className="h-5 w-5" />
+                Generate AI Image from Script
+              </DialogTitle>
+              <DialogDescription className="text-muted-foreground">
+                Select a script and generate an AI image for this scene. The image will be saved as an asset.
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              {/* Script Selection */}
+              <div>
+                <Label htmlFor="script-select" className="text-sm font-medium">
+                  Select Script to Use
+                </Label>
+                <Select 
+                  value={selectedScriptForAI} 
+                  onValueChange={setSelectedScriptForAI}
+                >
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Choose a script..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {assets
+                      .filter(a => a.content_type === 'script')
+                      .map((script) => (
+                        <SelectItem key={script.id} value={script.id}>
+                          {script.title} - {script.version_name || `v${script.version}`}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {selectedScriptForAI && (
+                  <div className="mt-2 p-3 bg-muted/30 rounded-lg border border-border">
+                    <p className="text-xs text-muted-foreground mb-2">Script Preview:</p>
+                    <p className="text-sm text-foreground">
+                      {assets.find(a => a.id === selectedScriptForAI)?.content?.substring(0, 200)}...
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* AI Service Selection */}
+              <div>
+                <Label className="text-sm font-medium">AI Service</Label>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                    onClick={async () => {
+                      if (!selectedScriptForAI) {
+                        toast({
+                          title: "No Script Selected",
+                          description: "Please select a script first.",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+                      
+                      try {
+                        setAiImageLoading(true)
+                        const selectedScript = assets.find(a => a.id === selectedScriptForAI)
+                        if (!selectedScript) return
+                        
+                        // Create sanitized prompt
+                        const sanitizedPrompt = sanitizePromptForDALLE(selectedScript.content || '')
+                        const finalPrompt = `Create a cinematic movie scene image: ${sanitizedPrompt}`
+                        
+                        // Get AI settings for images
+                        const aiSettings = await AISettingsService.getUserSettings(user?.id || '')
+                        const imagesSetting = aiSettings.find(s => s.tab_type === 'images')
+                        
+                        if (!imagesSetting?.locked_model) {
+                          toast({
+                            title: "No AI Model Selected",
+                            description: "Please set a locked AI model for images in your AI settings.",
+                            variant: "destructive",
+                          })
+                          return
+                        }
+                        
+                        // Get API key based on service
+                        let apiKey = ''
+                        let service = imagesSetting.locked_model
+                        
+                        switch (service) {
+                          case 'DALL-E 3':
+                            apiKey = user?.openaiApiKey || ''
+                            break
+                          case 'OpenArt':
+                            apiKey = user?.openartApiKey || ''
+                            break
+                          case 'Leonardo AI':
+                            apiKey = user?.leonardoApiKey || ''
+                            break
+                          default:
+                            apiKey = user?.openaiApiKey || ''
+                        }
+                        
+                        if (!apiKey) {
+                          toast({
+                            title: "API Key Missing",
+                            description: `Please add your ${service} API key in your profile settings.`,
+                            variant: "destructive",
+                          })
+                          return
+                        }
+                        
+                        // Generate image
+                        const response = await fetch('/api/ai/generate-scene-image', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            prompt: finalPrompt,
+                            service: service,
+                            apiKey: apiKey
+                          })
+                        })
+                        
+                        if (!response.ok) {
+                          throw new Error(`API error: ${response.status}`)
+                        }
+                        
+                        const result = await response.json()
+                        
+                        if (result.success) {
+                          // Save generated image as asset
+                          const newAssetData = {
+                            project_id: assets.find(a => a.id === selectedScriptForAI)?.project_id || '',
+                            scene_id: scene?.id || '',
+                            title: `AI Generated Image - ${selectedScript.title}`,
+                            content_type: 'image' as const,
+                            content: finalPrompt,
+                            content_url: result.imageUrl,
+                            prompt: finalPrompt,
+                            model: service,
+                            version_name: `AI Generated from ${selectedScript.title}`,
+                            metadata: {
+                              generatedFromScript: selectedScript.id,
+                              aiService: service,
+                              generatedAt: new Date().toISOString()
+                            }
+                          }
+                          
+                          await AssetService.createAsset(newAssetData)
+                          
+                          // Update scene thumbnail - check if this property exists in the service
+                          if (scene) {
+                            try {
+                              await TimelineService.updateScene(scene.id, {
+                                thumbnail_url: result.imageUrl
+                              } as any)
+                            } catch (error) {
+                              console.log('Scene thumbnail update not supported, continuing...')
+                            }
+                          }
+                          
+                          toast({
+                            title: "Image Generated!",
+                            description: `AI image has been created and saved to your scene.`,
+                          })
+                          
+                          // Refresh assets and close dialog
+                          refreshAssets()
+                          setShowAIImageDialog(false)
+                          setSelectedScriptForAI('')
+                          
+                        } else {
+                          throw new Error(result.error || 'Failed to generate image')
+                        }
+                        
+                      } catch (error) {
+                        console.error('AI image generation failed:', error)
+                        toast({
+                          title: "Generation Failed",
+                          description: error instanceof Error ? error.message : "Failed to generate image",
+                          variant: "destructive",
+                        })
+                      } finally {
+                        setAiImageLoading(false)
+                      }
+                    }}
+                    disabled={aiImageLoading || !selectedScriptForAI}
+                  >
+                    {aiImageLoading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Bot className="h-4 w-4 mr-2" />
+                    )}
+                    Generate Image
+                  </Button>
+                </div>
+              </div>
+            </div>
+            
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowAIImageDialog(false)
+                  setSelectedScriptForAI('')
+                }}
+                className="border-border"
+              >
+                Cancel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         </div>
       </div>
     </div>
+    
+
   )
 }
