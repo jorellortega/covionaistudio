@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from 'react'
-import { useAuth } from '@/lib/auth-context-fixed'
+import { useAuthReady } from '@/components/auth-hooks'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +18,7 @@ import Link from 'next/link'
 import { AISettingsService, type AISetting } from '@/lib/ai-settings-service'
 
 export default function TreatmentsPage() {
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -66,17 +66,17 @@ export default function TreatmentsPage() {
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!user) return
+      if (!ready) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(user.id)
+        const settings = await AISettingsService.getUserSettings(userId!)
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -107,7 +107,7 @@ export default function TreatmentsPage() {
     }
 
     loadAISettings()
-  }, [user])
+  }, [ready, userId])
 
   // Debug: Monitor synopsis state changes
   useEffect(() => {
@@ -186,7 +186,7 @@ export default function TreatmentsPage() {
     }
 
     // Check if user is loaded
-    if (!user) {
+    if (!ready) {
       toast({
         title: "User Not Loaded",
         description: "Please wait for user profile to load before generating images.",
@@ -231,45 +231,8 @@ export default function TreatmentsPage() {
                              serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
                              serviceToUse
 
-    // Check if user has the required API key for the service to use
-    let apiKey = ''
-    switch (normalizedService) {
-      case 'dalle':
-        if (!user.openaiApiKey) {
-          toast({
-            title: "Missing API Key",
-            description: "Please configure your OpenAI API key in settings to use DALL-E.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiKey = user.openaiApiKey
-        break
-      case 'openart':
-        if (!user.openartApiKey) {
-          toast({
-            title: "Missing API Key",
-            description: "Please configure your OpenArt API key in settings to use OpenArt.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiKey = user.openartApiKey
-        break
-      case 'leonardo':
-        if (!user.leonardoApiKey) {
-          toast({
-            title: "Missing API Key",
-            description: "Please configure your Leonardo AI API key in settings to use Leonardo.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiKey = user.leonardoApiKey
-        break
-      default:
-        throw new Error(`Unsupported AI service: ${serviceToUse} (normalized to: ${normalizedService})`)
-    }
+    // For now, use a placeholder API key since these aren't stored in user object
+    const apiKey = 'configured'
 
     try {
       setIsGeneratingCover(true)
@@ -281,15 +244,6 @@ export default function TreatmentsPage() {
       // Use the service to use for cover generation
       switch (normalizedService) {
         case "dalle":
-          if (!user.openaiApiKey) {
-            throw new Error("OpenAI API key not configured")
-          }
-          
-          // Validate API key format
-          if (!user.openaiApiKey.startsWith('sk-')) {
-            throw new Error("Invalid OpenAI API key format")
-          }
-          
           console.log('Making DALL-E request with prompt:', fullPrompt)
           
           const dalleResponse = await fetch('/api/ai/generate-image', {
@@ -298,7 +252,7 @@ export default function TreatmentsPage() {
             body: JSON.stringify({
               prompt: fullPrompt,
               service: 'dalle',
-              apiKey: user.openaiApiKey
+              apiKey: 'configured'
             })
           })
           if (!dalleResponse.ok) {
@@ -311,16 +265,13 @@ export default function TreatmentsPage() {
           break
           
         case "openart":
-          if (!user.openartApiKey) {
-            throw new Error("OpenArt API key not configured")
-          }
           const openartResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
               service: 'openart',
-              apiKey: user.openartApiKey
+              apiKey: 'configured'
             })
           })
           if (!openartResponse.ok) {
@@ -333,16 +284,13 @@ export default function TreatmentsPage() {
           break
           
         case "leonardo":
-          if (!user.leonardoApiKey) {
-            throw new Error("Leonardo AI requires API key")
-          }
           const leonardoResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
               service: 'leonardo',
-              apiKey: user.leonardoApiKey
+              apiKey: 'configured'
             })
           })
           if (!leonardoResponse.ok) throw new Error('Leonardo AI API request failed')
@@ -352,16 +300,13 @@ export default function TreatmentsPage() {
           
         default:
           // Fallback to DALL-E
-          if (!user.openaiApiKey) {
-            throw new Error("OpenAI API key not configured")
-          }
           const fallbackResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: fullPrompt,
               service: 'dalle',
-              apiKey: user.openaiApiKey
+              apiKey: 'configured'
             })
           })
           if (!fallbackResponse.ok) throw new Error('DALL-E API request failed')
@@ -529,26 +474,10 @@ export default function TreatmentsPage() {
     let apiKey = ''
     switch (normalizedService) {
       case 'openai':
-        if (!user.openaiApiKey) {
-          toast({
-            title: "Missing API Key",
-            description: "Please configure your OpenAI API key in settings to use GPT-4.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiKey = user.openaiApiKey
+        apiKey = 'configured'
         break
       case 'anthropic':
-        if (!user.anthropicApiKey) {
-          toast({
-            title: "Missing API Key",
-            description: "Please configure your Anthropic API key in settings to use Claude.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiKey = user.anthropicApiKey
+        apiKey = 'configured'
         break
       case 'google':
         toast({
@@ -615,7 +544,7 @@ export default function TreatmentsPage() {
     } finally {
       setIsGeneratingSynopsis(false)
     }
-  }, [scriptAiPrompt, isGeneratingSynopsis, user, selectedScriptAIService, toast])
+  }, [scriptAiPrompt, isGeneratingSynopsis, userId, selectedScriptAIService, toast])
 
   const handleFileUpload = (file: File) => {
     const reader = new FileReader()

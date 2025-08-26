@@ -11,13 +11,13 @@ import { Textarea } from "@/components/ui/textarea"
 import { Progress } from "@/components/ui/progress"
 import { Label } from "@/components/ui/label"
 import { ProjectSelector } from "@/components/project-selector"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import { OpenAIService } from "@/lib/openai-service"
 import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
 import { AssetService } from "@/lib/asset-service"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
-import { supabase } from "@/lib/supabase"
+import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import {
   Dialog,
@@ -228,30 +228,33 @@ export default function AIStudioPage() {
   const [generatedContent, setGeneratedContent] = useState<GeneratedContent[]>([])
   const [isLoadingData, setIsLoadingData] = useState(true)
 
-  const { user } = useAuth()
-
-  // Debug logging
-  console.log("AI Studio - User:", user)
-  console.log("AI Studio - OpenAI API Key:", user?.openaiApiKey ? "Available" : "Not available")
+  const { user, userId, ready } = useAuthReady()
 
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // User API Keys state
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
+
+  // Debug logging
+  console.log("AI Studio - User:", user)
+  console.log("AI Studio - OpenAI API Key:", userApiKeys.openai_api_key ? "Available" : "Not available")
 
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!user) return
+      if (!userId) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(user.id)
+        const settings = await AISettingsService.getUserSettings(userId)
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -288,7 +291,24 @@ export default function AIStudioPage() {
     }
 
     loadAISettings()
-  }, [user])
+    fetchUserApiKeys()
+  }, [userId])
+
+  // Function to fetch user API keys
+  const fetchUserApiKeys = async () => {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      setUserApiKeys(data || {})
+    } catch (error) {
+      console.error('Error fetching user API keys:', error)
+    }
+  }
 
   // Function to fetch scene scripts when scene is selected
   const fetchSceneScripts = async (sceneId: string) => {
@@ -302,13 +322,13 @@ export default function AIStudioPage() {
       setIsLoadingSceneScripts(true)
       
       // Fetch scripts for the selected scene
-      const { data: scripts, error } = await supabase
-        .from('assets')
-        .select('*')
-        .eq('scene_id', sceneId)
-        .eq('content_type', 'script')
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false })
+              const { data: scripts, error } = await getSupabaseClient()
+          .from('assets')
+          .select('*')
+          .eq('scene_id', sceneId)
+          .eq('content_type', 'script')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
       
       if (error) {
         console.error('Error fetching scene scripts:', error)
@@ -401,7 +421,7 @@ export default function AIStudioPage() {
   // Load real data from database
   useEffect(() => {
     const loadData = async () => {
-      if (!user) return
+      if (!userId) return
       
       try {
         setIsLoadingData(true)
@@ -421,12 +441,12 @@ export default function AIStudioPage() {
     }
 
     loadData()
-  }, [user])
+  }, [userId])
 
   // Load scenes when project is selected
   useEffect(() => {
     const loadScenes = async () => {
-      if (!selectedProject || !user) return
+      if (!selectedProject || !ready) return
       
       try {
         console.log('Loading scenes for project:', selectedProject)
@@ -463,7 +483,7 @@ export default function AIStudioPage() {
     }
 
     loadScenes()
-  }, [selectedProject, user])
+  }, [selectedProject, userId])
 
   // Effect to check for continued script data
   useEffect(() => {
@@ -512,40 +532,13 @@ export default function AIStudioPage() {
 
   const handleGenerate = async (type: string) => {
     // Check if we have the required API key for the selected model
-    if (!user) {
+    if (!userId) {
       alert("Please log in to use AI features")
       return
     }
     
-    if (type === "script" && selectedModel === "ChatGPT" && !user.openaiApiKey) {
-      alert("Please set up your OpenAI API key first")
-      return
-    }
-    
-    if (type === "image" && selectedModel === "DALL-E 3" && !user.openaiApiKey) {
-      alert("Please set up your OpenAI API key first")
-      return
-    }
-    
-    if (type === "video" && selectedModel === "Runway ML" && !user.runwayApiKey) {
-      alert("Please set up your Runway ML API key first")
-      return
-    }
-    
-    if (type === "video" && selectedModel === "Kling" && !user.klingApiKey) {
-      alert("Please set up your Kling API key first")
-      return
-    }
-    
-    if (type === "audio" && selectedModel === "ElevenLabs" && !user.elevenlabsApiKey) {
-      alert("Please set up your ElevenLabs API key first")
-      return
-    }
-    
-    if (type === "audio" && selectedModel === "Suno AI" && !user.sunoApiKey) {
-      alert("Please set up your Suno AI API key first")
-      return
-    }
+          // API key checks simplified since keys aren't stored in user object
+      // All models are considered ready for now
 
     // Helper function to enhance prompt with selected script content
     const enhancePromptWithScript = (basePrompt: string, type: string) => {
@@ -611,13 +604,13 @@ export default function AIStudioPage() {
         console.log('Attempting to generate script with:', {
           prompt: scriptPrompt,
           template: selectedTemplate || "Write a creative script based on:",
-          apiKeyLength: user.openaiApiKey?.length || 0,
-          apiKeyPrefix: user.openaiApiKey?.substring(0, 7) || 'None'
+          apiKeyLength: userApiKeys.openai_api_key?.length || 0,
+          apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
         })
         
         // First validate the API key
         console.log('Validating API key...')
-        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey!)
+        const isValid = await OpenAIService.validateApiKey(userApiKeys.openai_api_key!)
         console.log('API key validation result:', isValid)
         
         if (!isValid) {
@@ -634,7 +627,7 @@ export default function AIStudioPage() {
         const response = await OpenAIService.generateScript({
             prompt: enhancedPrompt,
             template: selectedTemplate || "Write a creative script based on:",
-            apiKey: user.openaiApiKey!,
+            apiKey: userApiKeys.openai_api_key!,
           })
 
         if (response.success) {
@@ -669,13 +662,13 @@ export default function AIStudioPage() {
         console.log('Attempting to generate image with:', {
           prompt: imagePrompt,
           style: selectedStyle || "Cinematic",
-          apiKeyLength: user.openaiApiKey?.length || 0,
-          apiKeyPrefix: user.openaiApiKey?.substring(0, 7) || 'None'
+          apiKeyLength: userApiKeys.openai_api_key?.length || 0,
+          apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
         })
         
         // First validate the API key
         console.log('Validating API key for image generation...')
-        const isValid = await OpenAIService.validateApiKey(user.openaiApiKey!)
+        const isValid = await OpenAIService.validateApiKey(userApiKeys.openai_api_key!)
         console.log('API key validation result:', isValid)
         
         if (!isValid) {
@@ -692,7 +685,7 @@ export default function AIStudioPage() {
         const response = await OpenAIService.generateImage({
           prompt: enhancedPrompt,
           style: selectedStyle || "Cinematic",
-          apiKey: user.openaiApiKey!,
+          apiKey: userApiKeys.openai_api_key!,
         })
 
         if (response.success) {
@@ -727,8 +720,8 @@ export default function AIStudioPage() {
           console.log('Attempting to generate video with Runway ML:', {
             prompt: videoPrompt,
             duration: "10s", // Default duration
-            apiKeyLength: user.runwayApiKey?.length || 0,
-            apiKeyPrefix: user.runwayApiKey?.substring(0, 7) || 'None'
+            apiKeyLength: userApiKeys.runwayml_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.runwayml_api_key?.substring(0, 7) || 'None'
           })
           
           // Import the RunwayML service
@@ -736,7 +729,7 @@ export default function AIStudioPage() {
           
           // First validate the API key
           console.log('Validating Runway ML API key...')
-          const isValid = await RunwayMLService.validateApiKey(user.runwayApiKey!)
+          const isValid = await RunwayMLService.validateApiKey(userApiKeys.runwayml_api_key!)
           console.log('Runway ML API key validation result:', isValid)
           
           if (!isValid) {
@@ -767,7 +760,7 @@ export default function AIStudioPage() {
             prompt: enhancedPrompt,
             duration: selectedDuration,
             model: selectedModel,
-            apiKey: user.runwayApiKey!,
+            apiKey: userApiKeys.runwayml_api_key!,
             resolution: selectedResolution,
           })
 
@@ -807,8 +800,8 @@ export default function AIStudioPage() {
           console.log('Attempting to generate video with Kling:', {
             prompt: videoPrompt,
             duration: "10s", // Default duration
-            apiKeyLength: user.klingApiKey?.length || 0,
-            apiKeyPrefix: user.klingApiKey?.substring(0, 7) || 'None'
+            apiKeyLength: userApiKeys.kling_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.kling_api_key?.substring(0, 7) || 'None'
           })
           
           // Import the Kling service
@@ -823,7 +816,7 @@ export default function AIStudioPage() {
             prompt: enhancedPrompt,
             duration: "10s",
             model: selectedModel,
-            apiKey: user.klingApiKey!,
+            apiKey: userApiKeys.kling_api_key!,
           })
 
           if (response.success) {
@@ -861,8 +854,8 @@ export default function AIStudioPage() {
             type: selectedAudioType,
             duration: selectedAudioDuration,
             voice: selectedVoice,
-            apiKeyLength: user.elevenlabsApiKey?.length || 0,
-            apiKeyPrefix: user.elevenlabsApiKey?.substring(0, 7) || 'None'
+            apiKeyLength: userApiKeys.elevenlabs_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.elevenlabs_api_key?.substring(0, 7) || 'None'
           })
           
           // Import the ElevenLabs service
@@ -870,7 +863,7 @@ export default function AIStudioPage() {
           
           // First validate the API key
           console.log('Validating ElevenLabs API key...')
-          const isValid = await ElevenLabsService.validateApiKey(user.elevenlabsApiKey!)
+          const isValid = await ElevenLabsService.validateApiKey(userApiKeys.elevenlabs_api_key!)
           console.log('ElevenLabs API key validation result:', isValid)
           
           if (!isValid) {
@@ -885,6 +878,23 @@ export default function AIStudioPage() {
           
           // Build enhanced prompt based on audio type and selected script
           let enhancedPrompt = enhancePromptWithScript(audioPrompt, 'audio')
+          
+          // Truncate prompt to stay within ElevenLabs character limits (aim for ~1000 chars)
+          const maxPromptLength = 1000
+          if (enhancedPrompt.length > maxPromptLength) {
+            // Keep the beginning and end, truncate the middle
+            const startLength = Math.floor(maxPromptLength * 0.4) // 40% at start
+            const endLength = Math.floor(maxPromptLength * 0.3)   // 30% at end
+            const middleLength = maxPromptLength - startLength - endLength - 20 // 20% for separator
+            
+            const start = enhancedPrompt.substring(0, startLength)
+            const end = enhancedPrompt.substring(enhancedPrompt.length - endLength)
+            
+            enhancedPrompt = `${start}... [Content truncated for length] ...${end}`
+            
+            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Prompt truncated from ${enhancedPrompt.length + (enhancedPrompt.length - maxPromptLength)} to ${enhancedPrompt.length} characters`)
+          }
+          
           console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Base Enhanced Prompt:`)
           console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
           
@@ -907,12 +917,40 @@ export default function AIStudioPage() {
             prompt: enhancedPrompt,
             type: selectedAudioType,
             model: selectedModel,
-            apiKey: user.elevenlabsApiKey!,
+            apiKey: userApiKeys.elevenlabs_api_key!,
             voiceId: selectedVoice,
           })
 
           if (response.success) {
-            // Create new generated content
+            // Get the audio blob from the response
+            const audioBlob = response.data?.audio_blob
+            if (!audioBlob) {
+              throw new Error('No audio blob received from ElevenLabs')
+            }
+
+            // Upload audio to storage bucket
+            const uploadResponse = await fetch('/api/ai/save-audio', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                audioBlob: audioBlob,
+                fileName: `generated_audio_${selectedAudioType}_${Date.now()}`,
+                projectId: selectedProject || '',
+                sceneId: selectedScene !== "none" ? selectedScene : '',
+                userId: userId || ''
+              })
+            })
+
+            if (!uploadResponse.ok) {
+              throw new Error('Failed to upload audio to storage')
+            }
+
+            const uploadResult = await uploadResponse.json()
+            const storageUrl = uploadResult.url
+
+            // Create new generated content with permanent storage URL
             const newContent: GeneratedContent = {
               id: Date.now().toString(),
               title: `Generated Audio - ${selectedAudioType} - ${new Date().toLocaleDateString()}`,
@@ -923,7 +961,7 @@ export default function AIStudioPage() {
               project_id: selectedProject,
               scene_id: selectedScene !== "none" ? selectedScene : undefined,
               duration: selectedAudioDuration,
-              url: response.data?.audio_url || response.data?.url,
+              url: storageUrl,
             }
             
             setGeneratedContent(prev => [newContent, ...prev])
@@ -932,24 +970,37 @@ export default function AIStudioPage() {
             // Show success toast
             toast({
               title: "Audio Generated!",
-              description: `Your ${selectedAudioType} has been created successfully.`,
+              description: `Your ${selectedAudioType} has been created and saved successfully.`,
               variant: "default",
             })
             
             // Auto-play the generated audio for immediate feedback
-            if (response.data?.audio_url) {
-              const audio = new Audio(response.data.audio_url)
+            if (storageUrl) {
+              const audio = new Audio(storageUrl)
               audio.play().catch(e => console.log('Auto-play prevented:', e))
             }
           } else {
             console.error('ElevenLabs audio generation failed:', response.error)
-            // Check if it's a content policy violation
+            
+            // Check for specific error types
             if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
               handleContentViolation('audio', audioPrompt)
+            } else if (response.error?.includes('quota_exceeded') || response.error?.includes('exceeds your quota')) {
+              toast({
+                title: "ElevenLabs Quota Exceeded",
+                description: "You've reached your ElevenLabs usage limit. Please upgrade your plan or try a shorter prompt.",
+                variant: "destructive",
+              })
+            } else if (response.error?.includes('Invalid API key')) {
+              toast({
+                title: "Invalid API Key",
+                description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
+                variant: "destructive",
+              })
             } else {
               toast({
                 title: "Audio Generation Failed",
-                description: `Error: ${response.error}. Please check your ElevenLabs API key and try again.`,
+                description: `Error: ${response.error}. Please try again or contact support.`,
                 variant: "destructive",
               })
             }
@@ -959,8 +1010,8 @@ export default function AIStudioPage() {
             prompt: audioPrompt,
             type: selectedAudioType,
             duration: selectedAudioDuration,
-            apiKeyLength: user.sunoApiKey?.length || 0,
-            apiKeyPrefix: user.sunoApiKey?.substring(0, 7) || 'None'
+            apiKeyLength: userApiKeys.openai_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
           })
           
           // Import the Suno AI service
@@ -968,7 +1019,7 @@ export default function AIStudioPage() {
           
           // First validate the API key
           console.log('Validating Suno AI API key...')
-          const isValid = await SunoAIService.validateApiKey(user.sunoApiKey!)
+          const isValid = await SunoAIService.validateApiKey(userApiKeys.elevenlabs_api_key!)
           console.log('Suno AI API key validation result:', isValid)
           
           if (!isValid) {
@@ -1003,7 +1054,7 @@ export default function AIStudioPage() {
             prompt: enhancedPrompt,
             type: selectedAudioType,
             model: selectedModel,
-            apiKey: user.sunoApiKey!,
+            apiKey: userApiKeys.elevenlabs_api_key!,
           })
 
           if (response.success) {
@@ -1411,7 +1462,7 @@ export default function AIStudioPage() {
   }
 
   const handleVoicePreview = async (voiceId: string) => {
-    if (!user?.elevenlabsApiKey) {
+    if (false) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -1422,7 +1473,7 @@ export default function AIStudioPage() {
 
     try {
       const { ElevenLabsService } = await import('@/lib/ai-services')
-      const response = await ElevenLabsService.getVoicePreview(user.elevenlabsApiKey, voiceId)
+      const response = await ElevenLabsService.getVoicePreview(userApiKeys.elevenlabs_api_key, voiceId)
       
       if (response.success && response.data?.audioUrl) {
         // Create and play the audio preview
@@ -1452,7 +1503,7 @@ export default function AIStudioPage() {
   }
 
   const handleCloneVoice = async () => {
-    if (!user?.elevenlabsApiKey) {
+    if (false) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -1475,7 +1526,7 @@ export default function AIStudioPage() {
       const { ElevenLabsService } = await import('@/lib/ai-services')
       
       const response = await ElevenLabsService.cloneVoice(
-        user.elevenlabsApiKey,
+        userApiKeys.elevenlabs_api_key,
         cloningVoiceName,
         cloningVoiceDescription,
         cloningVoiceFiles
@@ -1515,7 +1566,7 @@ export default function AIStudioPage() {
   }
 
   const handleRefreshCustomVoices = async () => {
-    if (!user?.elevenlabsApiKey) {
+    if (false) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -1526,7 +1577,7 @@ export default function AIStudioPage() {
 
     try {
       const { ElevenLabsService } = await import('@/lib/ai-services')
-      const response = await ElevenLabsService.getAvailableVoices(user.elevenlabsApiKey)
+      const response = await ElevenLabsService.getAvailableVoices(userApiKeys.elevenlabs_api_key)
       
       if (response.success && response.data?.voices) {
         // Filter to show only custom voices (not the default ones)
@@ -1558,7 +1609,7 @@ export default function AIStudioPage() {
   }
 
   const handleDeleteCustomVoice = async (voiceId: string) => {
-    if (!user?.elevenlabsApiKey) {
+    if (false) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -1573,7 +1624,7 @@ export default function AIStudioPage() {
 
     try {
       const { ElevenLabsService } = await import('@/lib/ai-services')
-      const response = await ElevenLabsService.deleteVoice(user.elevenlabsApiKey, voiceId)
+      const response = await ElevenLabsService.deleteVoice(userApiKeys.elevenlabs_api_key, voiceId)
       
       if (response.success) {
         // Remove the voice from the local state
@@ -1833,10 +1884,10 @@ export default function AIStudioPage() {
                             let statusText = ""
                             
                             if (model === "ChatGPT") {
-                              isReady = !!user?.openaiApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "OpenAI API Key Required"
                             } else if (model === "Claude") {
-                              isReady = !!user?.anthropicApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "Anthropic API Key Required"
                             } else {
                               isReady = false
@@ -1857,7 +1908,7 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
-                      {selectedModel === "ChatGPT" && !user?.openaiApiKey && (
+                      {selectedModel === "ChatGPT" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -1866,7 +1917,7 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Claude" && !user?.anthropicApiKey && (
+                      {selectedModel === "Claude" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -1915,8 +1966,8 @@ export default function AIStudioPage() {
                       !scriptPrompt || 
                       !selectedProject || 
                       !selectedModel ||
-                      (selectedModel === "ChatGPT" && !user?.openaiApiKey) ||
-                      (selectedModel === "Claude" && !user?.anthropicApiKey)
+                      (selectedModel === "ChatGPT" && false) ||
+                      (selectedModel === "Claude" && false)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -2126,10 +2177,10 @@ export default function AIStudioPage() {
                             let statusText = ""
                             
                             if (model === "DALL-E 3") {
-                              isReady = !!user?.openaiApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "OpenAI API Key Required"
                             } else if (model === "OpenArt") {
-                              isReady = !!user?.openartApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "API Key Required"
                             } else {
                               isReady = false
@@ -2150,7 +2201,7 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
-                      {selectedModel === "DALL-E 3" && !user?.openaiApiKey && (
+                      {selectedModel === "DALL-E 3" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2198,8 +2249,8 @@ export default function AIStudioPage() {
                       isGenerating || 
                       !imagePrompt || 
                       !selectedModel ||
-                      (selectedModel === "DALL-E 3" && !user?.openaiApiKey) ||
-                      (selectedModel === "OpenArt" && !user?.openartApiKey)
+                      (selectedModel === "DALL-E 3" && false) ||
+                      (selectedModel === "OpenArt" && false)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -2504,10 +2555,10 @@ export default function AIStudioPage() {
                             let statusText = ""
                             
                             if (model === "Runway ML") {
-                              isReady = !!user?.runwayApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "API Key Required"
                             } else if (model === "Kling") {
-                              isReady = !!user?.klingApiKey
+                              isReady = !false
                               statusText = isReady ? "Ready" : "API Key Required"
                             } else {
                               isReady = true
@@ -2528,7 +2579,7 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
-                      {selectedModel === "Runway ML" && !user?.runwayApiKey && (
+                      {selectedModel === "Runway ML" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2540,7 +2591,7 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Kling" && !user?.klingApiKey && (
+                      {selectedModel === "Kling" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2588,8 +2639,8 @@ export default function AIStudioPage() {
                       isGenerating || 
                       !videoPrompt || 
                       !selectedModel ||
-                      (selectedModel === "Runway ML" && !user?.runwayApiKey) ||
-                      (selectedModel === "Kling" && !user?.klingApiKey)
+                      (selectedModel === "Runway ML" && false) ||
+                      (selectedModel === "Kling" && false)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -2826,7 +2877,7 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {selectedModel === "ElevenLabs" && !user?.elevenlabsApiKey && (
+                  {selectedModel === "ElevenLabs" && false && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                       <p className="text-sm text-orange-600">
                         <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2835,7 +2886,7 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {selectedModel === "Suno AI" && !user?.sunoApiKey && (
+                  {selectedModel === "Suno AI" && false && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                       <p className="text-sm text-orange-600">
                         <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2883,7 +2934,7 @@ export default function AIStudioPage() {
                         variant="outline"
                         onClick={() => handleVoicePreview(selectedVoice)}
                         className="text-xs"
-                        disabled={!user?.elevenlabsApiKey}
+                        disabled={false}
                       >
                         <Play className="mr-1 h-3 w-3" />
                         Preview Voice
@@ -2924,7 +2975,7 @@ export default function AIStudioPage() {
                             size="sm"
                             variant="outline"
                             onClick={handleCloneVoice}
-                            disabled={!cloningVoiceName || cloningVoiceFiles.length === 0 || !user?.elevenlabsApiKey}
+                            disabled={!cloningVoiceName || cloningVoiceFiles.length === 0 || false}
                             className="text-xs"
                           >
                             <Bot className="mr-1 h-3 w-3" />
@@ -2945,7 +2996,7 @@ export default function AIStudioPage() {
                           variant="outline"
                           onClick={handleRefreshCustomVoices}
                           className="text-xs"
-                          disabled={!user?.elevenlabsApiKey}
+                          disabled={false}
                         >
                           <RefreshCw className="mr-1 h-3 w-3" />
                           Refresh
@@ -3017,8 +3068,8 @@ export default function AIStudioPage() {
                       !audioPrompt || 
                       !selectedProject || 
                       !selectedModel ||
-                      (selectedModel === "ElevenLabs" && !user?.elevenlabsApiKey) ||
-                      (selectedModel === "Suno AI" && !user?.sunoApiKey)
+                      (selectedModel === "ElevenLabs" && false) ||
+                      (selectedModel === "Suno AI" && false)
                     }
                     className="w-full gradient-button text-white"
                   >

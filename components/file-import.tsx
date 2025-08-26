@@ -30,7 +30,7 @@ import {
 import { AssetService, type CreateAssetData } from '@/lib/asset-service'
 import { StorageService, type StoredFile } from '@/lib/storage-service'
 import { useToast } from '@/hooks/use-toast'
-import { supabase } from '@/lib/supabase'
+import { getSupabaseClient } from '@/lib/supabase'
 
 interface FileImportProps {
   projectId: string
@@ -368,11 +368,11 @@ export default function FileImport({
       setIsLoading(true)
       
       // First, let's get all files from the user's project folder
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
       if (!user) return
       
       // List files from the user's project folder
-      const { data: projectFiles, error } = await supabase.storage
+      const { data: projectFiles, error } = await getSupabaseClient().storage
         .from('cinema_files')
         .list(`${user.id}/${projectId}`, {
           limit: 100,
@@ -394,7 +394,7 @@ export default function FileImport({
         if (folder.name && !folder.name.startsWith('.')) {
           try {
             // List files in this subfolder
-            const { data: subfolderFiles, error: subfolderError } = await supabase.storage
+            const { data: subfolderFiles, error: subfolderError } = await getSupabaseClient().storage
               .from('cinema_files')
               .list(`${user.id}/${projectId}/${folder.name}`, {
                 limit: 100,
@@ -411,7 +411,7 @@ export default function FileImport({
             const subfolderStoredFiles: StoredFile[] = subfolderFiles
               .filter((item: any) => !item.name.startsWith('.'))
               .map((item: any) => {
-                const { data: urlData } = supabase.storage
+                const { data: urlData } = getSupabaseClient().storage
                   .from('cinema_files')
                   .getPublicUrl(`${user.id}/${projectId}/${folder.name}/${item.name}`)
                 

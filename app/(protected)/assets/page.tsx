@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import {
   ArrowLeft,
   Play,
@@ -25,11 +25,12 @@ import {
   User,
   Loader2,
   RefreshCw,
+  Trash2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import TextToSpeech from "@/components/text-to-speech"
 import Link from "next/link"
 
@@ -43,7 +44,7 @@ export default function AssetsPage() {
 
 function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null, searchQuery: string }) {
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
 
   // State variables
   const [activeTab, setActiveTab] = useState("all")
@@ -55,9 +56,14 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   const [loading, setLoading] = useState(false)
   const [showAssetDetails, setShowAssetDetails] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [assetToDelete, setAssetToDelete] = useState<Asset | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   // Effect to fetch projects
   useEffect(() => {
+    if (!ready) return
+    
     const fetchProjects = async () => {
       try {
         const fetchedProjects = await MovieService.getMovies()
@@ -83,13 +89,13 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
     }
 
     fetchProjects()
-  }, [projectId, toast])
+  }, [ready, projectId, toast])
 
   // Effect to fetch assets when project changes
   useEffect(() => {
+    if (!ready || !selectedProject) return
+    
     const fetchAssets = async () => {
-      if (!selectedProject) return
-      
       try {
         setLoading(true)
         console.log('Fetching assets for project:', selectedProject)
@@ -136,7 +142,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
     }
 
     fetchAssets()
-  }, [selectedProject, toast, searchTerm])
+  }, [ready, selectedProject, toast, searchTerm])
 
   // Effect to handle search term changes and show helpful messages
   useEffect(() => {
@@ -209,6 +215,40 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
     setShowAssetDetails(true)
   }
 
+  const handleDeleteAsset = (asset: Asset) => {
+    setAssetToDelete(asset)
+    setShowDeleteDialog(true)
+  }
+
+  const confirmDeleteAsset = async () => {
+    if (!assetToDelete) return
+    
+    try {
+      setDeleting(true)
+      await AssetService.deleteAsset(assetToDelete.id)
+      
+      // Remove the asset from the local state
+      setAssets(prevAssets => prevAssets.filter(a => a.id !== assetToDelete.id))
+      
+      toast({
+        title: "Asset Deleted",
+        description: `${assetToDelete.title} has been successfully deleted.`,
+      })
+      
+      setShowDeleteDialog(false)
+      setAssetToDelete(null)
+    } catch (error) {
+      console.error('Error deleting asset:', error)
+      toast({
+        title: "Error Deleting Asset",
+        description: "Failed to delete the asset. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const getContentTypeIcon = (type: string) => {
     switch (type) {
       case 'script': return <FileText className="h-4 w-4" />
@@ -229,7 +269,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
     }
   }
 
-  if (!user) {
+  if (!ready || !user) {
     return (
       <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
         <div className="text-center">
@@ -424,6 +464,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                     asset={asset} 
                     onView={handleViewAsset}
                     onCopy={handleCopyScript}
+                    onDelete={handleDeleteAsset}
                   />
                 ))}
               </div>
@@ -466,6 +507,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                       asset={asset} 
                       onView={handleViewAsset}
                       onCopy={handleCopyScript}
+                      onDelete={handleDeleteAsset}
                     />
                   ))}
                 </div>
@@ -537,7 +579,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                         text={selectedAsset.content}
                         title={selectedAsset.title}
                         projectId={selectedAsset.project_id}
-                        sceneId={selectedAsset.scene_id}
+                        sceneId={selectedAsset.scene_id || undefined}
                         className="mt-6"
                       />
                     </div>
@@ -581,6 +623,48 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             )}
           </DialogContent>
         </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <DialogContent className="bg-background border-primary/20">
+            <DialogHeader>
+              <DialogTitle className="text-primary text-xl">Delete Asset</DialogTitle>
+              <DialogDescription className="text-muted-foreground">
+                Are you sure you want to delete "{assetToDelete?.title}"? This action cannot be undone.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex gap-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowDeleteDialog(false)
+                  setAssetToDelete(null)
+                }}
+                disabled={deleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteAsset}
+                disabled={deleting}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete Asset
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )
@@ -590,11 +674,13 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 function AssetCard({ 
   asset, 
   onView, 
-  onCopy 
+  onCopy,
+  onDelete
 }: { 
   asset: Asset, 
   onView: (asset: Asset) => void, 
-  onCopy: (content: string) => void 
+  onCopy: (content: string) => void,
+  onDelete: (asset: Asset) => void
 }) {
   const getContentTypeIcon = (type: string) => {
     switch (type) {
@@ -658,7 +744,7 @@ function AssetCard({
                 text={asset.content}
                 title={asset.title}
                 projectId={asset.project_id}
-                sceneId={asset.scene_id}
+                sceneId={asset.scene_id || undefined}
                 className="mt-2"
               />
               {/* Debug info for TTS */}
@@ -738,6 +824,16 @@ function AssetCard({
               </Button>
             </>
           )}
+          
+          <Button 
+            size="sm" 
+            variant="outline" 
+            className="border-red-500/30 text-red-500 bg-transparent hover:bg-red-500/10"
+            onClick={() => onDelete(asset)}
+          >
+            <Trash2 className="h-4 w-4 mr-2" />
+            Delete
+          </Button>
         </div>
       </CardContent>
     </Card>

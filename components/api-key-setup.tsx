@@ -8,10 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { CheckCircle, AlertCircle, Key, Eye, EyeOff } from "lucide-react"
 import { OpenAIService } from "@/lib/openai-service"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuth } from "@/components/AuthProvider"
 
 export function ApiKeySetup() {
-  const { user, updateApiKey } = useAuth()
+  const { user } = useAuth()
   const [apiKey, setApiKey] = useState(user?.openaiApiKey || "")
   const [showKey, setShowKey] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
@@ -36,10 +36,9 @@ export function ApiKeySetup() {
       const isValid = await OpenAIService.validateApiKey(apiKey)
       
       if (isValid) {
-        await updateApiKey(apiKey)
         setValidationResult({
           isValid: true,
-          message: "API key saved successfully! You can now use ChatGPT and DALL-E."
+          message: "API key validated successfully! Please save it in your settings."
         })
       } else {
         setValidationResult({
@@ -58,7 +57,6 @@ export function ApiKeySetup() {
   }
 
   const handleRemoveApiKey = async () => {
-    await updateApiKey("")
     setApiKey("")
     setValidationResult(null)
   }
@@ -79,7 +77,7 @@ export function ApiKeySetup() {
           <div className="flex items-center gap-2">
             <Key className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">
-              API Key: {showKey ? user.openaiApiKey : "••••••••••••••••"}
+              API Key: {showKey ? "••••••••••••••••" : "••••••••••••••••"}
             </span>
             <Button
               variant="ghost"

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getSupabaseClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,11 +12,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Create Supabase client with service role key for admin access
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
+    // Get Supabase client
+    const supabase = getSupabaseClient()
 
     // Check if storage bucket exists, create if it doesn't
     const { data: buckets, error: bucketError } = await supabase.storage.listBuckets()

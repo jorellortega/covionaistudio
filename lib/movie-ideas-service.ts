@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface MovieIdea {
   id: string
@@ -33,7 +33,7 @@ export interface UpdateMovieIdeaData {
 
 export class MovieIdeasService {
   static async getUserIdeas(userId: string): Promise<MovieIdea[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)
@@ -47,7 +47,7 @@ export class MovieIdeasService {
   }
 
   static async createIdea(userId: string, ideaData: CreateMovieIdeaData): Promise<MovieIdea> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .insert([{
         user_id: userId,
@@ -66,7 +66,7 @@ export class MovieIdeasService {
   }
 
   static async updateIdea(ideaId: string, ideaData: UpdateMovieIdeaData): Promise<MovieIdea> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .update({
         ...ideaData,
@@ -84,7 +84,7 @@ export class MovieIdeasService {
   }
 
   static async deleteIdea(ideaId: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabaseClient()
       .from('movie_ideas')
       .delete()
       .eq('id', ideaId)
@@ -95,7 +95,7 @@ export class MovieIdeasService {
   }
 
   static async searchIdeas(userId: string, searchTerm: string): Promise<MovieIdea[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)
@@ -110,7 +110,7 @@ export class MovieIdeasService {
   }
 
   static async getIdeasByGenre(userId: string, genre: string): Promise<MovieIdea[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)
@@ -125,7 +125,7 @@ export class MovieIdeasService {
   }
 
   static async getIdeasByStatus(userId: string, status: string): Promise<MovieIdea[]> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)

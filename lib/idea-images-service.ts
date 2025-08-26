@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface IdeaImage {
   id: string
@@ -20,7 +20,7 @@ export interface CreateIdeaImageData {
 export class IdeaImagesService {
   static async getIdeaImages(ideaId: string): Promise<IdeaImage[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('idea_images')
         .select('*')
         .eq('idea_id', ideaId)
@@ -39,7 +39,7 @@ export class IdeaImagesService {
 
   static async saveIdeaImage(userId: string, imageData: CreateIdeaImageData): Promise<IdeaImage> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('idea_images')
         .insert([{
           user_id: userId,
@@ -60,7 +60,7 @@ export class IdeaImagesService {
 
   static async deleteIdeaImage(imageId: string): Promise<void> {
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('idea_images')
         .delete()
         .eq('id', imageId)
@@ -75,7 +75,7 @@ export class IdeaImagesService {
 
   static async getUserIdeaImages(userId: string): Promise<IdeaImage[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('idea_images')
         .select('*')
         .eq('user_id', userId)

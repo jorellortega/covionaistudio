@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
 import { Navigation } from "@/components/navigation"
 import { ThemeToggle } from "@/components/theme-provider"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuth } from "@/components/AuthProvider"
 import { LogOut, User, Settings } from "lucide-react"
+import { getSupabaseClient } from "@/lib/supabase"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,11 +18,12 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function Header() {
-  const { user, signOut } = useAuth()
+  const { session } = useAuth()
 
   const handleLogout = async () => {
     try {
-      await signOut()
+      const supabase = getSupabaseClient()
+      await supabase.auth.signOut()
     } catch (error) {
       console.error('Error logging out:', error)
     }
@@ -31,7 +33,7 @@ export default function Header() {
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
         <div className="flex items-center gap-4">
-          <Link href="/dashboard" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center">
               <span className="text-white font-bold text-sm">AI</span>
             </div>
@@ -45,22 +47,22 @@ export default function Header() {
           <Navigation />
           <ThemeToggle />
           
-          {user ? (
+          {session?.user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                   <Avatar className="h-8 w-8">
-                    <AvatarImage src="/placeholder-user.jpg" alt={user.name} />
-                    <AvatarFallback>{user.name.charAt(0).toUpperCase()}</AvatarFallback>
+                                <AvatarImage src="/placeholder-user.jpg" alt={session?.user?.user_metadata?.name || session?.user?.email || 'User'} />
+            <AvatarFallback>{(session?.user?.user_metadata?.name || session?.user?.email || 'U').charAt(0).toUpperCase()}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
                 <div className="flex items-center justify-start gap-2 p-2">
                   <div className="flex flex-col space-y-1 leading-none">
-                    <p className="font-medium">{user.name}</p>
+                    <p className="font-medium">{session?.user?.user_metadata?.name || 'User'}</p>
                     <p className="w-[200px] truncate text-sm text-muted-foreground">
-                      {user.email}
+                      {session?.user?.email || 'No email'}
                     </p>
                   </div>
                 </div>
@@ -84,7 +86,7 @@ export default function Header() {
                 <Link href="/login">Sign In</Link>
               </Button>
               <Button asChild>
-                <Link href="/signup">Sign Up</Link>
+                <Link href="/login">Sign Up</Link>
               </Button>
             </div>
           )}

@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface FileUpload {
   file: File
@@ -24,7 +24,7 @@ export class StorageService {
    * Upload a file to the cinema_files bucket
    */
   static async uploadFile(upload: FileUpload): Promise<StoredFile> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
@@ -38,7 +38,7 @@ export class StorageService {
     console.log('User ID:', user.id)
     console.log('Project ID:', upload.projectId)
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .upload(filePath, upload.file, {
         cacheControl: '3600',
@@ -64,7 +64,7 @@ export class StorageService {
     }
 
     // Get the public URL
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .getPublicUrl(filePath)
 
@@ -86,12 +86,12 @@ export class StorageService {
    * Get all files for a specific project
    */
   static async getProjectFiles(projectId: string): Promise<StoredFile[]> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .list(`${user.id}/${projectId}`, {
         limit: 100,
@@ -108,7 +108,7 @@ export class StorageService {
     const files: StoredFile[] = data
       .filter(item => !item.name.startsWith('.')) // Filter out hidden files
       .map(item => {
-        const { data: urlData } = supabase.storage
+        const { data: urlData } = getSupabaseClient().storage
           .from(this.BUCKET_NAME)
           .getPublicUrl(`${user.id}/${projectId}/${item.name}`)
 
@@ -130,12 +130,12 @@ export class StorageService {
    * Get files by type for a project
    */
   static async getProjectFilesByType(projectId: string, fileType: string): Promise<StoredFile[]> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .list(`${user.id}/${projectId}/${fileType}`, {
         limit: 100,
@@ -152,7 +152,7 @@ export class StorageService {
     const files: StoredFile[] = data
       .filter(item => !item.name.startsWith('.'))
       .map(item => {
-        const { data: urlData } = supabase.storage
+        const { data: urlData } = getSupabaseClient().storage
           .from(this.BUCKET_NAME)
           .getPublicUrl(`${user.id}/${projectId}/${fileType}/${item.name}`)
 
@@ -174,7 +174,7 @@ export class StorageService {
    * Delete a file
    */
   static async deleteFile(filePath: string): Promise<void> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
@@ -184,7 +184,7 @@ export class StorageService {
       throw new Error('Access denied: File does not belong to user')
     }
 
-    const { error } = await supabase.storage
+    const { error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .remove([filePath])
 
@@ -200,7 +200,7 @@ export class StorageService {
    * Get file metadata
    */
   static async getFileMetadata(filePath: string): Promise<any> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
@@ -210,7 +210,7 @@ export class StorageService {
       throw new Error('Access denied: File does not belong to user')
     }
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .getPublicUrl(filePath)
 
@@ -226,7 +226,7 @@ export class StorageService {
    * Download a file
    */
   static async downloadFile(filePath: string): Promise<Blob> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
@@ -236,7 +236,7 @@ export class StorageService {
       throw new Error('Access denied: File does not belong to user')
     }
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .download(filePath)
 
@@ -256,12 +256,12 @@ export class StorageService {
     totalSize: number
     projects: Record<string, { files: number, size: number }>
   }> {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       throw new Error('User not authenticated')
     }
 
-    const { data, error } = await supabase.storage
+    const { data, error } = await getSupabaseClient().storage
       .from(this.BUCKET_NAME)
       .list(user.id, {
         limit: 1000,
@@ -283,7 +283,7 @@ export class StorageService {
         const projectId = projectFolder.name
         
         try {
-          const { data: projectFiles } = await supabase.storage
+          const { data: projectFiles } = await getSupabaseClient().storage
             .from(this.BUCKET_NAME)
             .list(`${user.id}/${projectId}`, {
               limit: 1000,

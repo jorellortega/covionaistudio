@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 import { Database } from './supabase'
 
 export type Movie = Database['public']['Tables']['projects']['Row'] & {
@@ -21,7 +21,7 @@ export class MovieService {
       console.log('🎬 MovieService.getMovies() - Making Supabase query...')
       
       // Make the Supabase query directly without race condition
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .eq('project_type', 'movie')
@@ -51,32 +51,37 @@ export class MovieService {
   }
 
   static async createMovie(movieData: CreateMovieData): Promise<Movie> {
-    const { data: { user } } = await supabase.auth.getUser()
-    
-    if (!user) {
-      throw new Error('User not authenticated')
-    }
+    try {
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
 
-    const { data, error } = await supabase
-      .from('projects')
-      .insert({
-        ...movieData,
-        user_id: user.id,
-        status: 'active'
-      })
-      .select()
-      .single()
+      const { data, error } = await getSupabaseClient()
+        .from('projects')
+        .insert({
+          ...movieData,
+          user_id: user.id,
+          status: 'active'
+        })
+        .select()
+        .single()
 
-    if (error) {
-      console.error('Error creating movie:', error)
+      if (error) {
+        console.error('Error creating movie:', error)
+        throw error
+      }
+
+      return data as Movie
+    } catch (error) {
+      console.error('Error in createMovie:', error)
       throw error
     }
-
-    return data as Movie
   }
 
   static async updateMovie(id: string, updates: Partial<CreateMovieData>): Promise<Movie> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('projects')
       .update(updates)
       .eq('id', id)
@@ -93,7 +98,7 @@ export class MovieService {
   }
 
   static async deleteMovie(id: string): Promise<void> {
-    const { error } = await supabase
+    const { error } = await getSupabaseClient()
       .from('projects')
       .delete()
       .eq('id', id)
@@ -106,7 +111,7 @@ export class MovieService {
   }
 
   static async getMovieById(id: string): Promise<Movie | null> {
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('projects')
       .select('*')
       .eq('id', id)

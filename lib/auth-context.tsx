@@ -1,7 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react"
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 import { User as SupabaseUser, Session } from '@supabase/supabase-js'
 
 interface User {
@@ -46,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       console.log('Fetching profile for user:', userId)
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('users')
         .select('*')
         .eq('id', userId)
@@ -103,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Creating profile for user:', userId)
       
       // Get user info from auth
-      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const { data: { user: authUser } } = await getSupabaseClient().auth.getUser()
       if (!authUser) return null
       
       const { error } = await supabase
@@ -146,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(userProfile)
         } else {
           console.error('Failed to fetch user profile, signing out')
-          await supabase.auth.signOut()
+          await getSupabaseClient().auth.signOut()
           setUser(null)
         }
       } else {
@@ -171,7 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const initializeAuth = async () => {
       try {
         // Get initial session
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session } } = await getSupabaseClient().auth.getSession()
         
         if (mounted) {
           await handleSessionChange(session)
@@ -188,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initializeAuth()
 
     // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+    const { data: { subscription } } = getSupabaseClient().auth.onAuthStateChange(
       async (event, session) => {
         console.log('Auth state changed:', event, session?.user?.id)
         
@@ -215,7 +215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       console.log('Attempting to sign in with email:', email)
       setIsLoading(true)
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await getSupabaseClient().auth.signInWithPassword({
         email,
         password,
       })
@@ -238,7 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signup = async (email: string, password: string, name: string): Promise<{ error: any }> => {
     try {
       setIsLoading(true)
-      const { error } = await supabase.auth.signUp({
+      const { error } = await getSupabaseClient().auth.signUp({
         email,
         password,
         options: {
@@ -261,7 +261,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     try {
       setIsLoading(true)
-      await supabase.auth.signOut()
+      await getSupabaseClient().auth.signOut()
       setUser(null)
     } catch (error) {
       console.error('Error signing out:', error)

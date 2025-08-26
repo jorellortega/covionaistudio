@@ -1,0 +1,13 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    "no-undef": "error",
+    "no-restricted-globals": [
+      "error", 
+      { 
+        "name": "user", 
+        "message": "Import user via useAuth() hook instead of using global user variable" 
+      }
+    ]
+  }
+}

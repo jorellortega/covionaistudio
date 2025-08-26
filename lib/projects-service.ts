@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface Project {
   id: string
@@ -31,7 +31,7 @@ export class ProjectsService {
   // Get all projects for the current user
   static async getProjects(): Promise<Project[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .order('updated_at', { ascending: false })
@@ -51,7 +51,7 @@ export class ProjectsService {
   // Get recent projects for dashboard (limited to 6)
   static async getRecentProjects(): Promise<DashboardProject[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .order('updated_at', { ascending: false })
@@ -82,7 +82,7 @@ export class ProjectsService {
   // Get project by ID
   static async getProject(id: string): Promise<Project | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .eq('id', id)
@@ -103,7 +103,7 @@ export class ProjectsService {
   // Create a new project
   static async createProject(projectData: Partial<Project>): Promise<Project> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .insert([projectData])
         .select()
@@ -124,7 +124,7 @@ export class ProjectsService {
   // Update an existing project
   static async updateProject(id: string, projectData: Partial<Project>): Promise<Project> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .update(projectData)
         .eq('id', id)
@@ -146,7 +146,7 @@ export class ProjectsService {
   // Delete a project
   static async deleteProject(id: string): Promise<void> {
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('projects')
         .delete()
         .eq('id', id)
@@ -164,7 +164,7 @@ export class ProjectsService {
   // Get projects by type
   static async getProjectsByType(type: string): Promise<Project[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .eq('project_type', type)
@@ -185,7 +185,7 @@ export class ProjectsService {
   // Get projects by status
   static async getProjectsByStatus(status: string): Promise<Project[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
         .eq('status', status)

@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface Treatment {
   id: string
@@ -45,7 +45,7 @@ export class TreatmentsService {
     try {
       console.log('Fetching treatments...')
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
         .order('updated_at', { ascending: false })
@@ -66,7 +66,7 @@ export class TreatmentsService {
   // Get a single treatment by ID
   static async getTreatment(id: string): Promise<Treatment | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
         .eq('id', id)
@@ -88,7 +88,7 @@ export class TreatmentsService {
   static async createTreatment(treatmentData: CreateTreatmentData): Promise<Treatment> {
     try {
       // Get the current user
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
       if (!user) {
         throw new Error('User not authenticated')
       }
@@ -112,7 +112,7 @@ export class TreatmentsService {
 
       console.log('Creating treatment with data:', treatmentWithUserId)
 
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .insert([treatmentWithUserId])
         .select()
@@ -139,7 +139,7 @@ export class TreatmentsService {
   // Update an existing treatment
   static async updateTreatment(id: string, treatmentData: UpdateTreatmentData): Promise<Treatment> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .update(treatmentData)
         .eq('id', id)
@@ -161,7 +161,7 @@ export class TreatmentsService {
   // Delete a treatment
   static async deleteTreatment(id: string): Promise<void> {
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('treatments')
         .delete()
         .eq('id', id)
@@ -179,7 +179,7 @@ export class TreatmentsService {
   // Search treatments by title, synopsis, or genre
   static async searchTreatments(searchTerm: string): Promise<Treatment[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
         .or(`title.ilike.%${searchTerm}%,synopsis.ilike.%${searchTerm}%,genre.ilike.%${searchTerm}%`)
@@ -200,7 +200,7 @@ export class TreatmentsService {
   // Get treatments by status
   static async getTreatmentsByStatus(status: string): Promise<Treatment[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
         .eq('status', status)
@@ -221,7 +221,7 @@ export class TreatmentsService {
   // Get treatments by genre
   static async getTreatmentsByGenre(genre: string): Promise<Treatment[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
         .eq('genre', genre)

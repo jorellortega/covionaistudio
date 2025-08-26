@@ -1,13 +1,13 @@
 "use client"
 
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuth } from "@/components/AuthProvider"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AlertTriangle, CheckCircle, Clock, RefreshCw } from "lucide-react"
 
 export function LoadingDebug() {
-  const { user, loading, loadingStep, resetAuthState, forceRefresh } = useAuth()
+  const { session, loading } = useAuth()
 
   const getLoadingStatus = () => {
     if (loading) {
@@ -15,9 +15,9 @@ export function LoadingDebug() {
         icon: <Clock className="h-4 w-4 text-yellow-500" />,
         status: "Loading",
         color: "bg-yellow-500",
-        description: loadingStep || "Authentication is currently in progress..."
+        description: "Authentication is currently in progress..."
       }
-    } else if (user) {
+    } else if (session?.user) {
       return {
         icon: <CheckCircle className="h-4 w-4 text-green-500" />,
         status: "Authenticated",
@@ -55,41 +55,31 @@ export function LoadingDebug() {
           {status.description}
         </p>
 
-        {user && (
+        {session?.user && (
           <div className="text-sm space-y-1">
-            <p><strong>User ID:</strong> {user.id}</p>
-            <p><strong>Email:</strong> {user.email}</p>
-            <p><strong>Name:</strong> {user.name}</p>
-            <p><strong>Role:</strong> {user.role}</p>
+            <p><strong>User ID:</strong> {session.user.id}</p>
+            <p><strong>Email:</strong> {session.user.email}</p>
+            <p><strong>Name:</strong> {session.user.user_metadata?.name || 'N/A'}</p>
+            <p><strong>Email:</strong> {session.user.email}</p>
           </div>
         )}
 
         <div className="flex gap-2">
           <Button 
-            onClick={resetAuthState} 
+            onClick={() => window.location.reload()} 
             variant="outline" 
             size="sm"
             className="flex-1"
           >
             <RefreshCw className="h-4 w-4 mr-2" />
-            Reset State
-          </Button>
-          <Button 
-            onClick={forceRefresh} 
-            variant="outline" 
-            size="sm"
-            className="flex-1"
-          >
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Force Refresh
+            Reload Page
           </Button>
         </div>
 
         <div className="text-xs text-muted-foreground">
           <p><strong>Current State:</strong></p>
           <p>Loading: {loading.toString()}</p>
-          <p>Loading Step: {loadingStep}</p>
-          <p>User: {user ? 'Yes' : 'No'}</p>
+          <p>User: {session?.user ? 'Yes' : 'No'}</p>
           <p>Timestamp: {new Date().toLocaleTimeString()}</p>
         </div>
       </CardContent>

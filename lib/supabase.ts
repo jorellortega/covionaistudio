@@ -1,23 +1,20 @@
-import { createClient } from '@supabase/supabase-js'
+import { createBrowserClient } from '@supabase/ssr'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+let _client: ReturnType<typeof createBrowserClient> | null = null;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: true,
-    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
-    storageKey: 'cinema-platform-auth',
-    flowType: 'pkce'
-  },
-  global: {
-    headers: {
-      'X-Client-Info': 'cinema-platform'
-    }
+export function getSupabaseClient() {
+  if (!_client) {
+    _client = createBrowserClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      { isSingleton: true } as any
+    );
   }
-})
+  return _client;
+}
+
+// Export the singleton instance for backward compatibility
+export const supabase = getSupabaseClient();
 
 export type Database = {
   public: {
@@ -160,7 +157,7 @@ export type Database = {
       scenes: {
         Row: {
           id: string
-          timeline_id: string
+          project_id: string
           user_id: string
           name: string
           description?: string

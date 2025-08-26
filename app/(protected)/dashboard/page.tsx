@@ -1,79 +1,80 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb } from "lucide-react"
 import Link from "next/link"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import { Skeleton } from "@/components/ui/skeleton"
 import { TreatmentsService } from "@/lib/treatments-service"
 import { ProjectsService, DashboardProject } from "@/lib/projects-service"
-import { StoryboardsService } from "@/lib/storyboards-service"
 import { MovieIdeasService } from "@/lib/movie-ideas-service"
 import { useRouter } from "next/navigation"
+import { getSupabaseClient } from "@/lib/supabase"
+import Header from "@/components/header"
 
 export default function DashboardPage() {
-  const { user, loading, signOut } = useAuth()
+  const { session, user, userId, ready } = useAuthReady()
   const router = useRouter()
   const [treatmentsCount, setTreatmentsCount] = useState(0)
   const [recentProjects, setRecentProjects] = useState<DashboardProject[]>([])
   const [isLoadingProjects, setIsLoadingProjects] = useState(true)
   const [totalProjects, setTotalProjects] = useState(0)
   const [totalScenes, setTotalScenes] = useState(0)
-  const [storyboardsCount, setStoryboardsCount] = useState(0)
+
   const [ideasCount, setIdeasCount] = useState(0)
   const [hasFetchedData, setHasFetchedData] = useState(false)
 
+  // Memoize the fetch data function to prevent unnecessary re-renders
+  const fetchData = useCallback(async () => {
+    if (!ready || hasFetchedData) return
+    
+    console.log('🏠 DASHBOARD - Starting data fetch')
+    setIsLoadingProjects(true)
+    
+    try {
+      // Fetch treatments count
+      const treatments = await TreatmentsService.getTreatments()
+      setTreatmentsCount(treatments.length)
+
+      // Fetch recent projects
+      const projects = await ProjectsService.getRecentProjects()
+      setRecentProjects(projects)
+      
+      // Fetch total counts
+      const allProjects = await ProjectsService.getProjects()
+      setTotalProjects(allProjects.length)
+      
+      // Calculate total scenes from all projects
+      const totalScenesCount = allProjects.reduce((sum, project) => sum + (project.scenes || 0), 0)
+      setTotalScenes(totalScenesCount)
+      
+      // Fetch ideas count
+      const ideas = await MovieIdeasService.getUserIdeas(userId!)
+      setIdeasCount(ideas.length)
+      
+      setHasFetchedData(true)
+    } catch (error) {
+      console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
+    } finally {
+      setIsLoadingProjects(false)
+    }
+  }, [ready, userId, hasFetchedData])
+
   // Fetch data only once when user is available
   useEffect(() => {
-    const fetchData = async () => {
-      if (!user || hasFetchedData) return
-      
-      console.log('🏠 DASHBOARD - Starting data fetch')
-      setIsLoadingProjects(true)
-      
-      try {
-        // Fetch treatments count
-        const treatments = await TreatmentsService.getTreatments()
-        setTreatmentsCount(treatments.length)
-
-        // Fetch recent projects
-        const projects = await ProjectsService.getRecentProjects()
-        setRecentProjects(projects)
-        
-        // Fetch total counts
-        const allProjects = await ProjectsService.getProjects()
-        setTotalProjects(allProjects.length)
-        
-        // Calculate total scenes from all projects
-        const totalScenesCount = allProjects.reduce((sum, project) => sum + (project.scenes || 0), 0)
-        setTotalScenes(totalScenesCount)
-        
-        // Fetch storyboards count
-        const storyboards = await StoryboardsService.getStoryboardsCount()
-        setStoryboardsCount(storyboards)
-        
-        // Fetch ideas count
-        const ideas = await MovieIdeasService.getUserIdeas(user.id)
-        setIdeasCount(ideas.length)
-        
-        setHasFetchedData(true)
-      } catch (error) {
-        console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
-      } finally {
-        setIsLoadingProjects(false)
-      }
-    }
-
     fetchData()
-  }, [user, hasFetchedData])
+  }, [fetchData])
 
-  const handleSignOut = async () => {
+  const handleSignOut = useCallback(async () => {
     console.log('🏠 DASHBOARD - Sign out initiated')
     try {
-      await signOut()
+      // Use Supabase auth directly for sign out
+      const supabase = getSupabaseClient()
+      const { error } = await getSupabaseClient().auth.signOut()
+      if (error) throw error
       console.log('🏠 DASHBOARD - Sign out completed')
       // Redirect to login page after successful sign out
       router.push('/login')
@@ -82,9 +83,12 @@ export default function DashboardPage() {
       // Still redirect even on error to ensure user is logged out
       router.push('/login')
     }
-  }
+  }, [router])
 
-  if (loading) {
+  // Memoize the user name to prevent unnecessary re-renders
+  const userName = useMemo(() => user?.user_metadata?.name || 'User', [user?.user_metadata?.name])
+
+  if (!ready) {
     return (
       <div className="container mx-auto px-4 sm:px-6 py-8">
         <div className="mb-8">
@@ -96,25 +100,12 @@ export default function DashboardPage() {
     )
   }
 
-  if (!user) {
-    return (
-      <div className="container mx-auto px-4 sm:px-6 py-8">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Please sign in to access your dashboard</h1>
-          <Button asChild>
-            <Link href="/login">Sign In</Link>
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
-  console.log('🏠 DASHBOARD - Rendering dashboard with user:', user.name)
-
   return (
-    <div className="container mx-auto px-4 sm:px-6 py-8">
-      {/* Header with User Info */}
-      <div className="mb-8">
+    <div className="min-h-screen bg-background">
+      <Header />
+      <div className="container mx-auto px-4 sm:px-6 py-8">
+        {/* Header with User Info */}
+        <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <div className="p-3 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400">
@@ -122,25 +113,37 @@ export default function DashboardPage() {
             </div>
             <div>
               <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                Welcome back, {user.name}! 🎬
+                Welcome back, {userName}! 🎬
               </h1>
               <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
             </div>
           </div>
-          <Button 
-            onClick={handleSignOut}
-            variant="outline" 
-            className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-colors"
-          >
-            <LogOut className="h-4 w-4" />
-            Sign Out
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button 
+              asChild
+              variant="outline" 
+              className="flex items-center gap-2 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-colors"
+            >
+              <Link href="/">
+                <Film className="h-4 w-4" />
+                Homepage
+              </Link>
+            </Button>
+            <Button 
+              onClick={handleSignOut}
+              variant="outline" 
+              className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-colors"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign Out
+            </Button>
+          </div>
         </div>
         <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
 
       {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
           <Link href="/movies">
             <CardHeader className="pb-4">
@@ -177,23 +180,7 @@ export default function DashboardPage() {
           </Link>
         </Card>
 
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/storyboards">
-            <CardHeader className="pb-4">
-              <div className="p-3 rounded-lg bg-green-500/10 w-fit group-hover:bg-green-500/20 transition-colors">
-                <ImageIcon className="h-6 w-6 text-green-500" />
-              </div>
-              <CardTitle className="text-lg group-hover:text-green-500 transition-colors">Storyboards</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">Visual scene planning</CardDescription>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-500">{storyboardsCount}</span>
-                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-green-500 transition-colors" />
-              </div>
-            </CardContent>
-          </Link>
-        </Card>
+
 
         <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
           <Link href="/ai-studio">
@@ -380,7 +367,7 @@ export default function DashboardPage() {
         <Card className="cinema-card">
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-blue-600/10">
+              <div className="p-4 rounded-lg bg-blue-600/10">
                 <Users className="h-5 w-5 text-blue-600" />
               </div>
               <div>
@@ -404,6 +391,7 @@ export default function DashboardPage() {
             </div>
           </CardContent>
         </Card>
+      </div>
       </div>
     </div>
   )

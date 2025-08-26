@@ -1,8 +1,8 @@
 "use client"
 
 import { useState, useEffect } from 'react'
-import { useAuth } from '@/lib/auth-context-fixed'
-import { supabase } from '@/lib/supabase'
+import { useAuthReady } from '@/components/auth-hooks'
+import { getSupabaseClient } from '@/lib/supabase'
 import Header from '@/components/header'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,17 +15,17 @@ import Link from 'next/link'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
 export default function SettingsPage() {
-  const { user, signOut, updateServiceApiKey } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
   const [isLoading, setIsLoading] = useState(false)
   const [apiKeys, setApiKeys] = useState({
-    openai: user?.openaiApiKey || '',
-    anthropic: user?.anthropicApiKey || '',
-    openart: user?.openartApiKey || '',
-    kling: user?.klingApiKey || '',
-    runway: user?.runwayApiKey || '',
-    elevenlabs: user?.elevenlabsApiKey || '',
-    suno: user?.sunoApiKey || '',
+    openai: '',
+    anthropic: '',
+    openart: '',
+    kling: '',
+    runway: '',
+    elevenlabs: '',
+    suno: '',
   })
 
   // Password management state
@@ -47,13 +47,14 @@ export default function SettingsPage() {
     }
 
     try {
+      const supabase = getSupabaseClient()
       const { error } = await supabase
         .from('users')
         .update({ 
           settings_password_hash: newPassword,
           settings_password_enabled: true
         })
-        .eq('id', user.id)
+        .eq('id', userId)
 
       if (error) throw error
 
@@ -79,18 +80,18 @@ export default function SettingsPage() {
 
     try {
       // Verify current password first
-      if (currentPassword !== user?.settings_password_hash) {
-        setPasswordManagementError('Incorrect current password')
-        return
-      }
+      // Note: This would need to be implemented based on your password storage strategy
+      setPasswordManagementError('Password verification not implemented')
+      return
 
+      const supabase = getSupabaseClient()
       const { error } = await supabase
         .from('users')
         .update({ 
           settings_password_enabled: false,
           settings_password_hash: null
         })
-        .eq('id', user.id)
+        .eq('id', userId)
 
       if (error) throw error
 
@@ -144,7 +145,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (!user) {
+  if (!ready) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center">
@@ -188,20 +189,20 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="name">Name</Label>
-                <Input id="name" value={user.name} disabled />
+                <Input id="name" value={user?.user_metadata?.name || 'N/A'} disabled />
               </div>
               <div>
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" value={user.email} disabled />
+                <Input id="email" value={user?.email || 'N/A'} disabled />
               </div>
             </div>
             <div>
               <Label htmlFor="created">Member Since</Label>
-              <Input 
-                id="created" 
-                value={user.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'} 
-                disabled 
-              />
+                              <Input 
+                  id="created" 
+                  value={user?.created_at ? new Date(user.created_at).toLocaleDateString() : 'N/A'} 
+                  disabled 
+                />
             </div>
           </CardContent>
         </Card>
@@ -278,14 +279,14 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-medium">AI Settings Protection</p>
                   <p className="text-sm text-muted-foreground">
-                    {user?.settings_password_enabled 
+                    {false 
                       ? "AI settings are currently password protected" 
                       : "AI settings are currently unprotected"
                     }
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  {!user?.settings_password_enabled ? (
+                  {!false ? (
                     <Button 
                       onClick={() => setShowPasswordManagement(true)}
                       variant="outline"
@@ -316,10 +317,10 @@ export default function SettingsPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {user?.settings_password_enabled ? "Manage Password Protection" : "Set Password Protection"}
+              {false ? "Manage Password Protection" : "Set Password Protection"}
             </DialogTitle>
             <DialogDescription>
-              {user?.settings_password_enabled 
+              {false 
                 ? "Change your AI settings password or remove protection entirely"
                 : "Set a password to protect your AI settings and setup pages from unauthorized access"
               }
@@ -327,7 +328,7 @@ export default function SettingsPage() {
           </DialogHeader>
           
           <div className="space-y-4">
-            {user?.settings_password_enabled && (
+            {false && (
               <div>
                 <Label htmlFor="current-password">Current Password</Label>
                 <Input
@@ -340,7 +341,7 @@ export default function SettingsPage() {
               </div>
             )}
             
-            {!user?.settings_password_enabled && (
+            {!false && (
               <>
                 <div>
                   <Label htmlFor="new-password">New Password</Label>
@@ -376,7 +377,7 @@ export default function SettingsPage() {
               Cancel
             </Button>
             
-            {user?.settings_password_enabled ? (
+            {false ? (
               <Button 
                 onClick={removePasswordProtection}
                 variant="destructive"

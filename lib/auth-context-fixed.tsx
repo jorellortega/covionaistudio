@@ -1,7 +1,7 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react"
-import { supabase } from './supabase'
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from "react"
+import { getSupabaseClient } from './supabase'
 import { User as SupabaseUser, Session } from '@supabase/supabase-js'
 import { sessionSync } from './session-sync'
 
@@ -42,23 +42,144 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+// Global singleton state that persists across route changes
+class AuthStateManager {
+  private static instance: AuthStateManager
+  private user: User | null = null
+  private loading: boolean = true
+  private loadingStep: string = 'Initializing...'
+  private isInitialized: boolean = false
+  private isInitializing: boolean = false
+  private authSubscription: any = null
+  private crossTabListener: (() => void) | null = null
+  private sessionPromise: Promise<void> | null = null
+
+  static getInstance(): AuthStateManager {
+    if (!AuthStateManager.instance) {
+      AuthStateManager.instance = new AuthStateManager()
+    }
+    return AuthStateManager.instance
+  }
+
+  getUser(): User | null {
+    return this.user
+  }
+
+  setUser(user: User | null) {
+    this.user = user
+  }
+
+  getLoading(): boolean {
+    return this.loading
+  }
+
+  setLoading(loading: boolean) {
+    this.loading = loading
+  }
+
+  getLoadingStep(): string {
+    return this.loadingStep
+  }
+
+  setLoadingStep(step: string) {
+    this.loadingStep = step
+  }
+
+  isAuthInitialized(): boolean {
+    return this.isInitialized
+  }
+
+  setInitialized(initialized: boolean) {
+    this.isInitialized = initialized
+  }
+
+  isCurrentlyInitializing(): boolean {
+    return this.isInitializing
+  }
+
+  setCurrentlyInitializing(initializing: boolean) {
+    this.isInitializing = initializing
+  }
+
+  getAuthSubscription(): any {
+    return this.authSubscription
+  }
+
+  setAuthSubscription(subscription: any) {
+    this.authSubscription = subscription
+  }
+
+  getCrossTabListener(): (() => void) | null {
+    return this.crossTabListener
+  }
+
+  setCrossTabListener(listener: (() => void) | null) {
+    this.crossTabListener = listener
+  }
+
+  getSessionPromise(): Promise<void> | null {
+    return this.sessionPromise
+  }
+
+  setSessionPromise(promise: Promise<void> | null) {
+    this.sessionPromise = promise
+  }
+
+  cleanup() {
+    if (this.authSubscription) {
+      this.authSubscription.unsubscribe()
+      this.authSubscription = null
+    }
+    if (this.crossTabListener) {
+      sessionSync.removeListener(this.crossTabListener)
+      this.crossTabListener = null
+    }
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [loadingStep, setLoadingStep] = useState<string>('Initializing...')
+  const stateManager = AuthStateManager.getInstance()
+  
+  // Initialize state from singleton
+  const [user, setUser] = useState<User | null>(stateManager.getUser())
+  const [loading, setLoading] = useState(stateManager.getLoading())
+  const [loadingStep, setLoadingStep] = useState<string>(stateManager.getLoadingStep())
+  
+  // Use refs to prevent race conditions
+  const mounted = useRef(true)
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const isProcessingAuthChange = useRef(false)
 
-  // Add timeout to prevent loading from getting stuck
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      if (loading) {
+  // Update both local and global state
+  const updateState = useCallback((newUser: User | null, newLoading: boolean, newStep: string) => {
+    setUser(newUser)
+    setLoading(newLoading)
+    setLoadingStep(newStep)
+    
+    // Update global state
+    stateManager.setUser(newUser)
+    stateManager.setLoading(newLoading)
+    stateManager.setLoadingStep(newStep)
+  }, [stateManager])
+
+  // Cleanup function
+  const clearLoadingTimeout = useCallback(() => {
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current)
+      loadingTimeoutRef.current = null
+    }
+  }, [])
+
+  // Set loading timeout with cleanup
+  const setLoadingTimeout = useCallback(() => {
+    clearLoadingTimeout()
+    loadingTimeoutRef.current = setTimeout(() => {
+      if (mounted.current && loading) {
         console.warn('Loading timeout reached, forcing loading to false')
-        setLoading(false)
-        setLoadingStep('Timeout reached')
+        updateState(user, false, 'Timeout reached')
       }
-    }, 10000) // 10 second timeout
-
-    return () => clearTimeout(timeout)
-  }, [loading])
+    }, 15000)
+  }, [loading, user, updateState, clearLoadingTimeout])
 
   // Simple function to fetch user profile
   const fetchUserProfile = useCallback(async (userId: string): Promise<User | null> => {
@@ -105,7 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Create user profile if it doesn't exist
   const createUserProfile = async (userId: string): Promise<User | null> => {
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser()
+      const { data: { user: authUser } } = await getSupabaseClient().auth.getUser()
       if (!authUser) return null
       
       const { error } = await supabase
@@ -130,149 +251,212 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Handle session changes
+  // Handle session changes with debouncing
   const handleSessionChange = useCallback(async (session: Session | null) => {
+    // Prevent multiple simultaneous calls
+    if (isProcessingAuthChange.current) {
+      console.log('🔄 handleSessionChange already in progress, skipping...')
+      return
+    }
+
+    isProcessingAuthChange.current = true
     console.log('🔄 handleSessionChange called with session:', session ? 'exists' : 'null')
+    
     try {
       if (session?.user) {
         console.log('Session found, fetching user profile...')
-        setLoadingStep('Fetching user profile...')
+        updateState(user, true, 'Fetching user profile...')
         
         let userProfile = await fetchUserProfile(session.user.id)
         
         if (!userProfile) {
           console.log('Profile not found, creating...')
-          setLoadingStep('Creating user profile...')
+          updateState(user, true, 'Creating user profile...')
           userProfile = await createUserProfile(session.user.id)
         }
         
         if (userProfile) {
           console.log('✅ User profile set successfully')
-          setLoadingStep('Setting user data...')
-          setUser(userProfile)
+          updateState(userProfile, false, 'Complete')
           // Broadcast auth change to other tabs
           sessionSync.broadcastAuthChange()
         } else {
           console.error('❌ Failed to fetch/create user profile')
-          setLoadingStep('Failed to get user profile')
-          setUser(null)
+          updateState(null, false, 'Failed to get user profile')
         }
       } else {
         console.log('No session, clearing user')
-        setLoadingStep('No session found')
-        setUser(null)
+        updateState(null, false, 'No session found')
         // Broadcast auth change to other tabs
         sessionSync.broadcastAuthChange()
       }
     } catch (error) {
       console.error('❌ Error in handleSessionChange:', error)
-      setLoadingStep('Error occurred')
-      setUser(null)
+      updateState(null, false, 'Error occurred')
     } finally {
       console.log('🔄 handleSessionChange completed, setting loading to false')
-      // Always ensure loading is false
-      setLoading(false)
-      setLoadingStep('Complete')
+      clearLoadingTimeout()
+      isProcessingAuthChange.current = false
     }
-  }, [fetchUserProfile])
+  }, [fetchUserProfile, clearLoadingTimeout, user, updateState])
 
-  // Initialize auth state
+  // Initialize auth state only once
   useEffect(() => {
-    let mounted = true
+    console.log('[AuthProvider] mount');
+    
+    // If already initialized globally, just restore the state
+    if (stateManager.isAuthInitialized() && stateManager.getUser()) {
+      console.log('🔄 Restoring global auth state')
+      updateState(stateManager.getUser(), false, 'Complete')
+      return
+    }
+
+    // If already initializing, wait for it to complete
+    if (stateManager.isCurrentlyInitializing() && stateManager.getSessionPromise()) {
+      console.log('🔄 Waiting for existing initialization to complete...')
+      stateManager.getSessionPromise()!.then(() => {
+        if (mounted.current) {
+          updateState(stateManager.getUser(), false, 'Complete')
+        }
+      }).catch(() => {
+        if (mounted.current) {
+          updateState(null, false, 'Initialization failed')
+        }
+      })
+      return
+    }
 
     const initializeAuth = async () => {
+      if (stateManager.isCurrentlyInitializing()) {
+        console.log('⚠️ Auth initialization already in progress')
+        return
+      }
+
+      stateManager.setCurrentlyInitializing(true)
+      
       try {
         console.log('🚀 Initializing auth...')
-        setLoading(true)
-        setLoadingStep('Initializing authentication...')
+        updateState(user, true, 'Initializing authentication...')
+        setLoadingTimeout()
         
         // Get initial session
         console.log('📡 Fetching initial session...')
-        setLoadingStep('Fetching initial session...')
-        const { data: { session } } = await supabase.auth.getSession()
+        updateState(user, true, 'Fetching initial session...')
+        const { data: { session } } = await getSupabaseClient().auth.getSession()
         console.log('📡 Initial session result:', session ? 'found' : 'none')
         
-        if (mounted) {
+        if (mounted.current) {
           console.log('🔄 Calling handleSessionChange...')
-          setLoadingStep('Processing session...')
+          updateState(user, true, 'Processing session...')
           await handleSessionChange(session)
+          stateManager.setInitialized(true)
         } else {
           console.log('⚠️ Component unmounted during initialization')
         }
       } catch (error) {
         console.error('❌ Error initializing auth:', error)
-        if (mounted) {
-          setLoading(false)
-          setUser(null)
-          setLoadingStep('Error occurred')
+        if (mounted.current) {
+          updateState(null, false, 'Error occurred')
+          clearLoadingTimeout()
         }
+      } finally {
+        stateManager.setCurrentlyInitializing(false)
       }
     }
 
-    initializeAuth()
+    // Create a promise for the initialization and store it
+    const initPromise = initializeAuth()
+    stateManager.setSessionPromise(initPromise)
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+    // Listen for auth changes with debouncing
+          const { data: { subscription } } = getSupabaseClient().auth.onAuthStateChange(
+      async (event: string, session: Session | null) => {
         console.log('🔄 Auth state changed:', event, session?.user?.id)
         
-        if (mounted) {
-          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-            console.log('🔐 User signed in or token refreshed, setting loading to true')
-            setLoading(true)
-            setLoadingStep('User signed in, processing...')
-            try {
-              console.log('🔄 Calling handleSessionChange from auth state change...')
-              await handleSessionChange(session)
-            } catch (error) {
-              console.error('❌ Error in auth state change handler:', error)
-              // Ensure loading is false even on error
-              setLoading(false)
-              setUser(null)
-              setLoadingStep('Error in sign in process')
-            }
-          } else if (event === 'SIGNED_OUT') {
-            console.log('🚪 User signed out, clearing state')
-            setLoadingStep('User signed out')
-            setUser(null)
-            setLoading(false)
-            // Broadcast auth change to other tabs
-            sessionSync.broadcastAuthChange()
-          }
-        } else {
+        if (!mounted.current) {
           console.log('⚠️ Component unmounted during auth state change')
+          return
+        }
+
+        // Skip INITIAL_SESSION events to prevent circular initialization
+        if (event === 'INITIAL_SESSION') {
+          console.log('📡 Skipping INITIAL_SESSION event to prevent circular initialization')
+          return
+        }
+
+        // Debounce rapid auth changes
+        if (isProcessingAuthChange.current) {
+          console.log('⚠️ Skipping auth change, already processing...')
+          return
+        }
+
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          console.log('🔐 User signed in or token refreshed, setting loading to true')
+          updateState(user, true, 'User signed in, processing...')
+          setLoadingTimeout()
+          
+          try {
+            console.log('🔄 Calling handleSessionChange from auth state change...')
+            await handleSessionChange(session)
+          } catch (error) {
+            console.error('❌ Error in auth state change handler:', error)
+            // Ensure loading is false even on error
+            updateState(null, false, 'Error in sign in process')
+            clearLoadingTimeout()
+          }
+        } else if (event === 'SIGNED_OUT') {
+          console.log('🚪 User signed out, clearing state')
+          updateState(null, false, 'User signed out')
+          clearLoadingTimeout()
+          // Broadcast auth change to other tabs
+          sessionSync.broadcastAuthChange()
         }
       }
     )
 
+    // Store subscription reference for cleanup
+    stateManager.setAuthSubscription(subscription)
+
     // Listen for cross-tab auth changes
     const handleCrossTabChange = () => {
-      if (mounted) {
-        console.log('Cross-tab auth change detected, refreshing session...')
-        setLoading(true)
-        // Refresh the session to sync with other tabs
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          if (mounted) {
-            handleSessionChange(session)
-          }
-        }).catch((error) => {
-          console.error('Error refreshing session from cross-tab change:', error)
-          if (mounted) {
-            setLoading(false)
-            setUser(null)
-          }
-        })
-      }
+      if (!mounted.current) return
+      
+      console.log('Cross-tab auth change detected, refreshing session...')
+      updateState(user, true, 'Cross-tab sync...')
+      setLoadingTimeout()
+      
+      // Refresh the session to sync with other tabs
+              getSupabaseClient().auth.getSession().then(({ data: { session } }: { data: { session: Session | null } }) => {
+        if (mounted.current) {
+          handleSessionChange(session)
+        }
+      }).catch((error: any) => {
+        console.error('Error refreshing session from cross-tab change:', error)
+        if (mounted.current) {
+          updateState(null, false, 'Cross-tab sync failed')
+          clearLoadingTimeout()
+        }
+      })
     }
 
+    stateManager.setCrossTabListener(handleCrossTabChange)
     sessionSync.addListener(handleCrossTabChange)
 
-    return () => {
-      mounted = false
-      subscription.unsubscribe()
-      sessionSync.removeListener(handleCrossTabChange)
+    // Add window unload listener for cleanup
+    const handleBeforeUnload = () => {
+      console.log('🔄 Window unloading, cleaning up auth state')
+      stateManager.cleanup()
     }
-  }, [handleSessionChange])
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      console.log('[AuthProvider] unmount');
+      mounted.current = false
+      clearLoadingTimeout()
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [handleSessionChange, setLoadingTimeout, clearLoadingTimeout, user, updateState, stateManager])
 
   const signIn = async (email: string, password: string): Promise<{ error: any }> => {
     try {
@@ -321,8 +505,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Starting sign out process...')
       
       // Clear user state immediately
-      setUser(null)
-      setLoading(false)
+      updateState(null, false, 'Signed out')
+      clearLoadingTimeout()
       
       // Sign out from Supabase
       await supabase.auth.signOut()
@@ -334,8 +518,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Error in signOut:', error)
       // Ensure state is cleared even on error
-      setUser(null)
-      setLoading(false)
+      updateState(null, false, 'Sign out error')
+      clearLoadingTimeout()
       // Broadcast auth change to other tabs even on error
       sessionSync.broadcastAuthChange()
     }
@@ -345,7 +529,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user?.id) {
       const userProfile = await fetchUserProfile(user.id)
       if (userProfile) {
-        setUser(userProfile)
+        updateState(userProfile, loading, loadingStep)
       }
     }
   }
@@ -364,7 +548,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const updatedUser = { ...user, openaiApiKey: apiKey }
-      setUser(updatedUser)
+      updateState(updatedUser, loading, loadingStep)
     } catch (error) {
       console.error('Error updating API key:', error)
       throw error
@@ -381,7 +565,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'kling': 'kling_api_key',
         'runway': 'runway_api_key',
         'elevenlabs': 'elevenlabs_api_key',
-        'suno': 'suno_api_key',
+        'suno': 'sunoApiKey',
         'leonardo': 'leonardo_api_key'
       }
       
@@ -415,7 +599,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const updatedUser = { ...user, [userProperty]: apiKey }
-      setUser(updatedUser)
+      updateState(updatedUser, loading, loadingStep)
     } catch (error) {
       console.error('Error updating service API key:', error)
       throw error
@@ -435,24 +619,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const resetAuthState = () => {
-    setUser(null);
-    setLoading(true);
-    setLoadingStep('Resetting...');
+    updateState(null, true, 'Resetting...');
+    setLoadingTimeout();
   };
 
   const forceRefresh = async () => {
     try {
-      setLoading(true);
-      setLoadingStep('Force refreshing...');
+      updateState(user, true, 'Force refreshing...');
+      setLoadingTimeout();
       
       // Force a fresh session check
       const { data: { session } } = await supabase.auth.getSession();
       await handleSessionChange(session);
     } catch (error) {
       console.error('Error in force refresh:', error);
-      setLoading(false);
-      setUser(null);
-      setLoadingStep('Force refresh failed');
+      updateState(null, false, 'Force refresh failed');
+      clearLoadingTimeout();
     }
   };
 

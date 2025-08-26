@@ -11,17 +11,17 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon } from "lucide-react"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { OpenAIService } from "@/lib/ai-services"
-import { supabase } from "@/lib/supabase"
+import { getSupabaseClient } from "@/lib/supabase"
 import { toast } from "@/hooks/use-toast"
 import { IdeaImagesService } from "@/lib/idea-images-service"
 import { Navigation } from "@/components/navigation"
 
 export default function IdeasPage() {
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const [ideas, setIdeas] = useState<MovieIdea[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -61,23 +61,23 @@ export default function IdeasPage() {
   ]
 
   useEffect(() => {
-    if (user) {
+    if (ready) {
       fetchIdeas()
       fetchAISettings()
       fetchUserApiKeys()
     }
-  }, [user])
+  }, [ready])
 
   useEffect(() => {
-    if (ideas.length > 0 && user) {
+    if (ideas.length > 0 && ready) {
       loadSavedImages()
     }
-  }, [ideas, user])
+  }, [ideas, ready])
 
   const fetchIdeas = async () => {
     try {
       setLoading(true)
-      const data = await MovieIdeasService.getUserIdeas(user!.id)
+      const data = await MovieIdeasService.getUserIdeas(userId!)
       setIdeas(data)
     } catch (error) {
       console.error('Error fetching ideas:', error)
@@ -92,7 +92,7 @@ export default function IdeasPage() {
   }
 
   const saveIdea = async () => {
-    if (!user || !title.trim() || !description.trim()) {
+    if (!ready || !title.trim() || !description.trim()) {
       toast({
         title: "Validation Error",
         description: "Please fill in all required fields",
@@ -103,7 +103,7 @@ export default function IdeasPage() {
 
     try {
       const ideaData = {
-        user_id: user.id,
+        user_id: userId,
         title: title.trim(),
         description: description.trim(),
         genre: genre || "Unspecified",
@@ -122,7 +122,7 @@ export default function IdeasPage() {
         })
       } else {
         // Create new idea
-        await MovieIdeasService.createIdea(user.id, ideaData)
+        await MovieIdeasService.createIdea(userId, ideaData)
         toast({
           title: "Success",
           description: "Idea saved successfully",
@@ -184,7 +184,7 @@ export default function IdeasPage() {
 
   const fetchAISettings = async () => {
     try {
-      const settings = await AISettingsService.getUserSettings(user!.id)
+      const settings = await AISettingsService.getUserSettings(userId!)
       const settingsMap = settings.reduce((acc, setting) => {
         acc[setting.tab_type] = setting
         return acc
@@ -197,10 +197,10 @@ export default function IdeasPage() {
 
   const fetchUserApiKeys = async () => {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('users')
         .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
-        .eq('id', user!.id)
+        .eq('id', userId)
         .single()
 
       if (error) throw error
@@ -338,7 +338,7 @@ export default function IdeasPage() {
           body: JSON.stringify({
             imageUrl: imageUrl,
             fileName: `ai_prompt_studio_${prompt.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
-            userId: user!.id
+            userId: userId
           })
         })
 
@@ -427,7 +427,7 @@ export default function IdeasPage() {
           body: JSON.stringify({
             imageUrl: imageUrl,
             fileName: `${idea.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${imagePrompt.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
-            userId: user!.id
+            userId: userId
           })
         })
 
@@ -443,7 +443,7 @@ export default function IdeasPage() {
           
           try {
             // Save the image record to the database
-            await IdeaImagesService.saveIdeaImage(user!.id, {
+            await IdeaImagesService.saveIdeaImage(userId, {
               idea_id: idea.id,
               image_url: bucketUrl,
               prompt: imagePrompt,
@@ -530,7 +530,7 @@ export default function IdeasPage() {
     }
   }
 
-  if (!user) {
+  if (!ready) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center">

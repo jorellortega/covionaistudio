@@ -3,7 +3,7 @@ import type { Metadata } from "next"
 import { Inter } from "next/font/google"
 import { JetBrains_Mono } from "next/font/google"
 import "./globals.css"
-import { AuthProvider } from "@/lib/auth-context-fixed"
+import AuthProvider from "@/components/AuthProvider"
 
 const inter = Inter({
   subsets: ["latin"],

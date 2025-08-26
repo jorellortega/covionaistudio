@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,7 +21,7 @@ import { useRouter } from "next/navigation"
 
 
 export default function StoryboardsPage() {
-  const { user } = useAuth()
+  const { session } = useAuth()
   const { toast } = useToast()
   const router = useRouter()
 
@@ -30,7 +30,7 @@ export default function StoryboardsPage() {
       // Redirect to movies page since storyboards now belong to scenes
       router.push('/movies')
     }
-  }, [user, router])
+  }, [session?.user, router])
 
   return (
     <div className="min-h-screen bg-background">

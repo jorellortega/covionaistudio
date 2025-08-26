@@ -71,7 +71,7 @@ const mockVideos = [
     project: "Neon Dreams",
     createdAt: "2024-01-18",
     updatedAt: "2024-01-19",
-    thumbnail: "/character-design.png",
+            thumbnail: "/placeholder.jpg",
     views: 892,
     likes: 156,
     type: "Character",

@@ -3,19 +3,17 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home, Bug, Lightbulb } from "lucide-react"
+import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home, Lightbulb } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 const fullNavigation = [
   { name: "Dashboard", href: "/dashboard", icon: Home },
   { name: "Movies", href: "/movies", icon: Film },
   { name: "Treatments", href: "/treatments", icon: FileText },
-  { name: "Storyboards", href: "/movies", icon: ImageIcon },
   { name: "Videos", href: "/videos", icon: Video },
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
-  { name: "Test Auth", href: "/test-auth", icon: Bug },
 ]
 
 const mobileNavigation = [
@@ -24,7 +22,6 @@ const mobileNavigation = [
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
-  { name: "Test Auth", href: "/test-auth", icon: Bug },
 ]
 
 export function Navigation() {

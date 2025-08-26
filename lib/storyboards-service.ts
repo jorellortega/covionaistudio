@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface Storyboard {
   id: string
@@ -45,7 +45,7 @@ export class StoryboardsService {
   // Get all storyboards for the current user
   static async getStoryboards(): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .order('scene_number', { ascending: true })
@@ -67,7 +67,7 @@ export class StoryboardsService {
   // Get storyboard by ID
   static async getStoryboard(id: string): Promise<Storyboard | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('id', id)
@@ -88,7 +88,7 @@ export class StoryboardsService {
   // Create a new storyboard
   static async createStoryboard(storyboardData: CreateStoryboardData): Promise<Storyboard> {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
       if (!user) {
         throw new Error('User not authenticated')
       }
@@ -117,7 +117,7 @@ export class StoryboardsService {
         ai_generated: false
       }
 
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .insert([storyboardWithUserId])
         .select()
@@ -154,7 +154,7 @@ export class StoryboardsService {
 
       console.log('Updating storyboard with data:', { id, updateData })
 
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .update(updateData)
         .eq('id', id)
@@ -177,7 +177,7 @@ export class StoryboardsService {
   // Delete a storyboard
   static async deleteStoryboard(id: string): Promise<void> {
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('storyboards')
         .delete()
         .eq('id', id)
@@ -195,7 +195,7 @@ export class StoryboardsService {
   // Get storyboards by project
   static async getStoryboardsByProject(projectId: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('project_id', projectId)
@@ -217,7 +217,7 @@ export class StoryboardsService {
   // Get storyboards by shot type
   static async getStoryboardsByShotType(shotType: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('shot_type', shotType)
@@ -239,7 +239,7 @@ export class StoryboardsService {
   // Get AI-generated storyboards
   static async getAIGeneratedStoryboards(): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('ai_generated', true)
@@ -260,7 +260,7 @@ export class StoryboardsService {
   // Search storyboards
   static async searchStoryboards(query: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .or(`title.ilike.%${query}%,description.ilike.%${query}%,dialogue.ilike.%${query}%,action.ilike.%${query}%`)
@@ -282,7 +282,7 @@ export class StoryboardsService {
   // Get storyboards count
   static async getStoryboardsCount(): Promise<number> {
     try {
-      const { count, error } = await supabase
+      const { count, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*', { count: 'exact', head: true })
 
@@ -301,7 +301,7 @@ export class StoryboardsService {
   // Mark storyboard as AI generated
   static async markAsAIGenerated(id: string): Promise<Storyboard> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .update({ ai_generated: true })
         .eq('id', id)
@@ -323,7 +323,7 @@ export class StoryboardsService {
   // Update storyboard image
   static async updateStoryboardImage(id: string, imageUrl: string): Promise<Storyboard> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .update({ image_url: imageUrl })
         .eq('id', id)
@@ -345,7 +345,7 @@ export class StoryboardsService {
   // Get storyboards by scene
   static async getStoryboardsByScene(sceneId: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('scene_id', sceneId)
@@ -367,7 +367,7 @@ export class StoryboardsService {
   // Get storyboards by timeline (movie)
   static async getStoryboardsByTimeline(timelineId: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select(`
           *,

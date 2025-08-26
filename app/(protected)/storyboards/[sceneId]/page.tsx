@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,7 +18,7 @@ import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
-import { supabase } from "@/lib/supabase"
+import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 
 interface SceneInfo {
@@ -39,7 +39,7 @@ export default function SceneStoryboardsPage() {
   const router = useRouter()
   const sceneId = params.sceneId as string
   
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
@@ -91,12 +91,12 @@ export default function SceneStoryboardsPage() {
   const [showSelectionActions, setShowSelectionActions] = useState(false)
 
   useEffect(() => {
-    if (user && sceneId) {
+    if (ready && userId && sceneId) {
       fetchSceneInfo()
       fetchStoryboards()
       fetchSceneScript()
     }
-  }, [user, sceneId])
+  }, [ready, userId, sceneId])
 
   // Hide selection actions when clicking outside and handle global selection changes
   useEffect(() => {
@@ -131,17 +131,17 @@ export default function SceneStoryboardsPage() {
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!user) return
+      if (!ready || !userId) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(user.id)
+        const settings = await AISettingsService.getUserSettings(userId)
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -165,7 +165,7 @@ export default function SceneStoryboardsPage() {
     }
 
     loadAISettings()
-  }, [user])
+  }, [ready, userId])
 
   const fetchSceneInfo = async () => {
     try {
@@ -198,11 +198,11 @@ export default function SceneStoryboardsPage() {
         
         // Query the timeline directly by ID
         console.log("🎬 Querying timelines table for ID:", scene.timeline_id)
-        const { data: timeline, error: timelineError } = await supabase
+        const { data: timeline, error: timelineError } = await getSupabaseClient()
           .from('timelines')
           .select('*')
           .eq('id', scene.timeline_id)
-          .eq('user_id', user?.id)
+          .eq('user_id', userId)
           .single()
         
         console.log("🎬 Timeline query result:", { timeline, error: timelineError })
@@ -364,7 +364,7 @@ export default function SceneStoryboardsPage() {
       console.log("🎬 Fetching script for scene:", sceneId)
       
       // Look for script assets for this scene
-      const { data: scriptAssets, error } = await supabase
+      const { data: scriptAssets, error } = await getSupabaseClient()
         .from('assets')
         .select('*')
         .eq('scene_id', sceneId)
@@ -397,10 +397,10 @@ export default function SceneStoryboardsPage() {
       console.log("🎬 Fetching storyboards for scene:", sceneId)
       
       // First, let's check if there are any storyboards at all
-      const { data: allStoryboards, error: allError } = await supabase
+      const { data: allStoryboards, error: allError } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('user_id', userId)
       
       console.log("🎬 All storyboards for user:", allStoryboards)
       console.log("🎬 All storyboards error:", allError)

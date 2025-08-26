@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { useAuth } from '@/lib/auth-context-fixed'
+import { useAuth } from '@/components/AuthProvider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +17,7 @@ import Link from 'next/link'
 export default function TreatmentDetailPage() {
   const { id } = useParams()
   const router = useRouter()
-  const { user } = useAuth()
+  const { session } = useAuth()
   const { toast } = useToast()
   const [treatment, setTreatment] = useState<Treatment | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -89,7 +89,7 @@ export default function TreatmentDetailPage() {
     }
   }
 
-  if (!user) {
+  if (!session?.user) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center">

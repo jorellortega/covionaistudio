@@ -1,11 +1,11 @@
 "use client"
 
-import { useAuth } from '@/lib/auth-context-fixed'
+import { useAuth } from '@/components/AuthProvider'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function AuthDebug() {
-  const { user, loading, signOut } = useAuth()
+  const { session, loading } = useAuth()
 
   const handleSignOut = async () => {
     try {
@@ -43,22 +43,22 @@ export function AuthDebug() {
           </div>
           <div className="flex justify-between">
             <span className="font-medium">User:</span>
-            <span className={user ? 'text-green-500' : 'text-gray-500'}>
-              {user ? user.email : 'None'}
+            <span className={session?.user ? 'text-green-500' : 'text-gray-500'}>
+              {session?.user ? session.user.email : 'None'}
             </span>
           </div>
         </div>
 
-        {user && (
+        {session?.user && (
           <div className="space-y-2 p-3 bg-gray-50 rounded">
             <div className="text-sm">
-              <strong>User ID:</strong> {user.id}
+              <strong>User ID:</strong> {session.user.id}
             </div>
             <div className="text-sm">
-              <strong>Name:</strong> {user.name}
+              <strong>Name:</strong> {session.user.user_metadata?.name || 'N/A'}
             </div>
             <div className="text-sm">
-              <strong>Role:</strong> {user.role}
+              <strong>Email:</strong> {session.user.email}
             </div>
           </div>
         )}
@@ -71,9 +71,9 @@ export function AuthDebug() {
           >
             Refresh Session
           </Button>
-          {user && (
+          {session?.user && (
             <Button 
-              onClick={handleSignOut}
+              onClick={() => window.location.href = '/login'}
               variant="destructive"
               size="sm"
             >

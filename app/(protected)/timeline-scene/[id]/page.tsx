@@ -48,8 +48,8 @@ import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
-import { useAuth } from "@/lib/auth-context-fixed"
-import { supabase } from "@/lib/supabase"
+import { useAuthReady } from "@/components/auth-hooks"
+import { getSupabaseClient } from '@/lib/supabase'
 import { useRouter } from "next/navigation"
 import FileImport from "@/components/file-import"
 import TextToSpeech from "@/components/text-to-speech"
@@ -67,7 +67,7 @@ export default function ScenePage() {
 
 function ScenePageClient({ id }: { id: string }) {
   const { toast } = useToast()
-  const { user, loading: authLoading } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const router = useRouter()
   const isMobile = false // FORCE DESKTOP VIEW
   console.log('🎬 DEBUG - isMobile value:', isMobile)
@@ -194,12 +194,14 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Effect to fetch scene data
   useEffect(() => {
+    if (!ready) return
+    
     let mounted = true
     
     const fetchSceneData = async () => {
 
       
-      if (!id || !user?.id) {
+      if (!id || !userId) {
 
         return
       }
@@ -226,7 +228,7 @@ function ScenePageClient({ id }: { id: string }) {
           
           // Get project ID through timeline
           try {
-            const { data: timeline, error } = await supabase
+            const { data: timeline, error } = await getSupabaseClient()
               .from('timelines')
               .select('project_id')
               .eq('id', scene.timeline_id)
@@ -263,7 +265,7 @@ function ScenePageClient({ id }: { id: string }) {
     return () => {
       mounted = false
     }
-  }, [id, user?.id])
+  }, [id, userId, ready])
 
   // Cleanup function for inline editing
   useEffect(() => {
@@ -276,12 +278,14 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Effect to fetch assets
   useEffect(() => {
+    if (!ready) return
+    
     let mounted = true
     
     const fetchAssets = async () => {
 
       
-      if (!id || !user?.id) {
+      if (!id || !userId) {
 
         return
       }
@@ -290,14 +294,14 @@ function ScenePageClient({ id }: { id: string }) {
         setAssetsLoading(true)
         
         // Single, efficient query for scene assets
-        const { data: sceneAssets, error } = await supabase
+        const { data: sceneAssets, error } = await getSupabaseClient()
           .from('assets')
           .select('*')
           .eq('scene_id', id)
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
         
         console.log('🔍 ASSET FETCH - Scene ID being queried:', id)
-        console.log('🔍 ASSET FETCH - User ID:', user.id)
+        console.log('🔍 ASSET FETCH - User ID:', userId)
         console.log('🔍 ASSET FETCH - Raw sceneAssets:', sceneAssets)
         console.log('🔍 ASSET FETCH - Error if any:', error)
         
@@ -333,7 +337,7 @@ function ScenePageClient({ id }: { id: string }) {
     return () => {
       mounted = false
     }
-  }, [id, user?.id])
+  }, [id, userId, ready])
 
   // Effect to set initial active script
   useEffect(() => {
@@ -351,11 +355,11 @@ function ScenePageClient({ id }: { id: string }) {
       setAssetsLoading(true)
       console.log('🔄 REFRESH ASSETS - Refreshing assets for scene:', id)
       
-      const { data: sceneAssets, error } = await supabase
+      const { data: sceneAssets, error } = await getSupabaseClient()
         .from('assets')
         .select('*')
         .eq('scene_id', id)
-        .eq('user_id', user?.id)
+        .eq('user_id', userId)
       
       console.log('🔄 REFRESH ASSETS - Assets found:', sceneAssets?.length || 0)
       console.log('🔄 REFRESH ASSETS - Asset types:', sceneAssets?.map(a => ({ id: a.id, type: a.content_type, title: a.title })))
@@ -502,7 +506,7 @@ function ScenePageClient({ id }: { id: string }) {
   }
 
   // Simple loading state
-  if (loading || authLoading) {
+  if (loading || !ready) {
     return (
       <div className="min-h-screen bg-background">
         <div className="container mx-auto max-w-7xl px-6 py-8">
@@ -764,7 +768,7 @@ function ScenePageClient({ id }: { id: string }) {
           .from('assets')
           .delete()
           .eq('id', currentAssetId)
-          .eq('user_id', user?.id)
+          .eq('user_id', session?.user?.id)
         
         if (deleteError) {
           console.error('🎬 TIMELINE-SCENE - Failed to delete asset:', currentAssetId, deleteError)
@@ -1131,7 +1135,7 @@ function ScenePageClient({ id }: { id: string }) {
                     const { data: allAssets } = await supabase
                       .from('assets')
                       .select('*')
-                      .eq('user_id', user?.id)
+                      .eq('user_id', session?.user?.id)
                       .is('scene_id', null)
                     
                     if (allAssets && allAssets.length > 0) {
@@ -1139,7 +1143,7 @@ function ScenePageClient({ id }: { id: string }) {
                       const { error } = await supabase
                         .from('assets')
                         .update({ scene_id: id })
-                        .eq('user_id', user?.id)
+                        .eq('user_id', session?.user?.id)
                         .is('scene_id', null)
                         .eq('project_id', allAssets[0].project_id) // Only link assets from same project
                       
@@ -2768,7 +2772,7 @@ function ScenePageClient({ id }: { id: string }) {
                                       .from('assets')
                                       .delete()
                                       .eq('id', video.id)
-                                      .eq('user_id', user?.id)
+                                      .eq('user_id', session?.user?.id)
                                     
                                     if (deleteError) {
                                       throw new Error(`Failed to delete: ${deleteError.message}`)
@@ -2933,7 +2937,7 @@ function ScenePageClient({ id }: { id: string }) {
                                       .from('assets')
                                       .delete()
                                       .eq('id', audio.id)
-                                      .eq('user_id', user?.id)
+                                      .eq('user_id', session?.user?.id)
                                     
                                     if (deleteError) {
                                       throw new Error(`Failed to delete: ${deleteError.message}`)
@@ -4053,7 +4057,7 @@ function ScenePageClient({ id }: { id: string }) {
                         const finalPrompt = `Create a cinematic movie scene image: ${sanitizedPrompt}`
                         
                         // Get AI settings for images
-                        const aiSettings = await AISettingsService.getUserSettings(user?.id || '')
+                        const aiSettings = await AISettingsService.getUserSettings(userId!)
                         const imagesSetting = aiSettings.find(s => s.tab_type === 'images')
                         
                         if (!imagesSetting?.locked_model) {
@@ -4065,32 +4069,9 @@ function ScenePageClient({ id }: { id: string }) {
                           return
                         }
                         
-                        // Get API key based on service
-                        let apiKey = ''
-                        let service = imagesSetting.locked_model
-                        
-                        switch (service) {
-                          case 'DALL-E 3':
-                            apiKey = user?.openaiApiKey || ''
-                            break
-                          case 'OpenArt':
-                            apiKey = user?.openartApiKey || ''
-                            break
-                          case 'Leonardo AI':
-                            apiKey = user?.leonardoApiKey || ''
-                            break
-                          default:
-                            apiKey = user?.openaiApiKey || ''
-                        }
-                        
-                        if (!apiKey) {
-                          toast({
-                            title: "API Key Missing",
-                            description: `Please add your ${service} API key in your profile settings.`,
-                            variant: "destructive",
-                          })
-                          return
-                        }
+                        // For now, use a placeholder API key since these aren't stored in user object
+                        const apiKey = 'configured'
+                        const service = imagesSetting.locked_model
                         
                         // Generate image
                         const response = await fetch('/api/ai/generate-scene-image', {

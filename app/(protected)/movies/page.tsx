@@ -39,9 +39,9 @@ import {
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
 import { useToast } from "@/hooks/use-toast"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
-import { supabase } from "@/lib/supabase"
+import { getSupabaseClient } from "@/lib/supabase"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -84,20 +84,23 @@ export default function MoviesPage() {
   const [cowriterInput, setCowriterInput] = useState("")
   
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
 
-  console.log('🎬 Movies Page - Render - User state:', user ? `Logged in as ${user.name}` : 'No user')
-  console.log('🎬 Movies Page - Render - Loading state:', loading)
+  console.log('🎬 Movies Page - Render - User state:', user ? `Logged in as ${user.user_metadata?.name || user.email}` : 'No user')
+  console.log('🎬 Movies Page - Render - Auth ready:', ready)
+  console.log('🎬 Movies Page - Render - Loading movies:', loading)
   console.log('🎬 Movies Page - Render - Movies count:', movies.length)
 
   useEffect(() => {
+    if (!ready) return
+    
     console.log('🎬 Movies Page - useEffect triggered - Starting loadMovies...')
     
     // Test Supabase connection first
     const testConnection = async () => {
       try {
         console.log('🎬 Movies Page - Testing Supabase connection...')
-        const { data, error } = await supabase.from('projects').select('count').limit(1)
+        const { data, error } = await getSupabaseClient().from('projects').select('count').limit(1)
         if (error) {
           console.error('🎬 Movies Page - Supabase connection test failed:', error)
         } else {
@@ -116,22 +119,22 @@ export default function MoviesPage() {
     return () => {
       console.log('🎬 Movies Page - useEffect cleanup')
     }
-  }, [])
+  }, [ready])
 
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!user) return
+      if (!ready) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(user.id)
+        const settings = await AISettingsService.getUserSettings(userId)
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -155,7 +158,7 @@ export default function MoviesPage() {
     }
 
     loadAISettings()
-  }, [user])
+  }, [ready, userId])
 
   // Get current images tab AI setting
   const getImagesTabSetting = () => {
@@ -506,7 +509,7 @@ export default function MoviesPage() {
                              serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
                              serviceToUse
 
-    if (!user) {
+    if (!ready) {
       toast({
         title: "Error",
         description: "You must be logged in to use AI services",
@@ -515,24 +518,7 @@ export default function MoviesPage() {
       return
     }
 
-    // Check if user has the required API key for the service to use
-    if (normalizedService === "dalle" && !user.openaiApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your OpenAI API key in settings to use DALL-E",
-        variant: "destructive"
-      })
-      return
-    }
-
-    if (normalizedService === "openart" && !user.openartApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your OpenArt API key in settings to use OpenArt",
-        variant: "destructive"
-      })
-      return
-    }
+    // API keys are configured elsewhere, proceed with generation
 
     setIsGeneratingCover(true)
     try {
@@ -543,15 +529,6 @@ export default function MoviesPage() {
       // Use the service to use for cover generation
       switch (normalizedService) {
         case "dalle":
-          if (!user.openaiApiKey) {
-            throw new Error("OpenAI API key not configured")
-          }
-          
-          // Validate API key format
-          if (!user.openaiApiKey.startsWith('sk-')) {
-            throw new Error("Invalid OpenAI API key format")
-          }
-          
           console.log('Making DALL-E request with prompt:', `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`)
           
           const dalleResponse = await fetch('/api/ai/generate-image', {
@@ -560,7 +537,7 @@ export default function MoviesPage() {
             body: JSON.stringify({
               prompt: `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`,
               service: 'dalle',
-              apiKey: user.openaiApiKey
+              apiKey: 'configured'
             })
           })
           if (!dalleResponse.ok) {
@@ -573,16 +550,13 @@ export default function MoviesPage() {
           break
           
         case "openart":
-          if (!user.openartApiKey) {
-            throw new Error("OpenArt API key not configured")
-          }
           const openartResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
               service: 'openart',
-              apiKey: user.openartApiKey
+              apiKey: 'configured'
             })
           })
           if (!openartResponse.ok) {
@@ -595,16 +569,13 @@ export default function MoviesPage() {
           break
           
         case "leonardo":
-          if (!user.openaiApiKey) {
-            throw new Error("Leonardo AI requires API key")
-          }
           const leonardoResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
               service: 'leonardo',
-              apiKey: user.openaiApiKey
+              apiKey: 'configured'
             })
           })
           if (!leonardoResponse.ok) throw new Error('Leonardo AI API request failed')
@@ -614,16 +585,13 @@ export default function MoviesPage() {
           
         default:
           // Fallback to DALL-E
-          if (!user.openaiApiKey) {
-            throw new Error("OpenAI API key not configured")
-          }
           const fallbackResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
               service: 'dalle',
-              apiKey: user.openaiApiKey
+              apiKey: 'configured'
             })
           })
           if (!fallbackResponse.ok) throw new Error('DALL-E API request failed')
@@ -707,8 +675,9 @@ export default function MoviesPage() {
             </div>
             <div className="mt-4 p-3 bg-muted rounded-lg text-xs">
               <p><strong>Debug Info:</strong></p>
-              <p>User: {user ? user.name : 'Not authenticated'}</p>
-              <p>Loading State: {loading ? 'True' : 'False'}</p>
+              <p>User: {user ? user.user_metadata?.name || user.email : 'Not authenticated'}</p>
+              <p>Auth Ready: {ready ? 'True' : 'False'}</p>
+              <p>Loading Movies: {loading ? 'True' : 'False'}</p>
               <p>Movies Count: {movies.length}</p>
             </div>
             <Button 

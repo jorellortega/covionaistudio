@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface AISetting {
   id: string
@@ -22,7 +22,7 @@ export class AISettingsService {
   // Check if the ai_settings table exists
   static async checkTableExists(): Promise<boolean> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('id')
         .limit(1)
@@ -78,7 +78,7 @@ export class AISettingsService {
     try {
       console.log('Fetching AI settings for user:', userId)
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('*')
         .eq('user_id', userId)
@@ -126,7 +126,7 @@ export class AISettingsService {
   // Get AI setting for a specific tab
   static async getTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<AISetting | null> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('*')
         .eq('user_id', userId)
@@ -194,7 +194,7 @@ export class AISettingsService {
     try {
       console.log('Upserting AI setting:', { userId, setting })
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .upsert({
           user_id: userId,
@@ -225,7 +225,7 @@ export class AISettingsService {
   // Delete AI setting for a tab
   static async deleteTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<void> {
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('ai_settings')
         .delete()
         .eq('user_id', userId)
@@ -246,7 +246,7 @@ export class AISettingsService {
     try {
       console.log('Updating quick suggestions:', { userId, tabType, suggestions })
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .update({
           quick_suggestions: suggestions,
@@ -273,7 +273,7 @@ export class AISettingsService {
   // Get quick suggestions for a specific tab
   static async getQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<string[]> {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('quick_suggestions')
         .eq('user_id', userId)

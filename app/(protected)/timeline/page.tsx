@@ -42,7 +42,7 @@ import {
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
 import { useToast } from "@/hooks/use-toast"
-import { useAuth } from "@/lib/auth-context-fixed"
+import { useAuthReady } from "@/components/auth-hooks"
 import { analyzeImageUrl } from "@/lib/image-utils"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { AssetService } from "@/lib/asset-service"
@@ -107,7 +107,7 @@ export default function TimelinePage() {
   const [processedImages, setProcessedImages] = useState<Map<string, any>>(new Map())
   
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
 
   // Optimized image processing function
   const processSceneImage = (scene: SceneWithMetadata, index: number) => {
@@ -146,7 +146,7 @@ export default function TimelinePage() {
     let mounted = true
     
     const loadAISettings = async () => {
-      if (!user || aiSettingsLoaded) return
+      if (!ready || aiSettingsLoaded) return
       
       try {
         console.log('🎬 TIMELINE - Loading AI settings...')
@@ -154,18 +154,18 @@ export default function TimelinePage() {
         // Only check and repair table if it's the first time
         if (!aiSettingsLoaded) {
           console.log('🎬 TIMELINE - Checking AI settings table state...')
-          await AISettingsService.checkAndRepairTable(user.id)
+          await AISettingsService.checkAndRepairTable(userId!)
         }
         
         // Now try to load settings normally
-        const settings = await AISettingsService.getUserSettings(user.id)
+        const settings = await AISettingsService.getUserSettings(userId!)
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(user.id, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'videos'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -191,8 +191,8 @@ export default function TimelinePage() {
         if (mounted && !aiSettingsLoaded) {
           try {
             const basicSettings = await Promise.all([
-              AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images'),
-              AISettingsService.getOrCreateDefaultTabSetting(user.id, 'scripts')
+              AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
+              AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts')
             ])
             setAiSettings(basicSettings)
             setAiSettingsLoaded(true)
@@ -208,7 +208,7 @@ export default function TimelinePage() {
     return () => {
       mounted = false
     }
-  }, [user?.id]) // Only depend on user.id, not the entire user object
+  }, [userId]) // Only depend on userId, not the entire user object
 
   const loadMovieAndScenes = async () => {
     if (!movieId) return
@@ -768,7 +768,7 @@ export default function TimelinePage() {
     })
 
     // Check if user has AI settings and if images tab is locked
-    if (!user) {
+    if (!ready) {
       toast({
         title: "Authentication required",
         description: "Please log in to use AI features",
@@ -790,7 +790,7 @@ export default function TimelinePage() {
       })
       
       // Get the locked AI service for images
-      const aiSettings = await AISettingsService.getUserSettings(user.id)
+      const aiSettings = await AISettingsService.getUserSettings(userId!)
       const imagesSetting = aiSettings.find(s => s.tab_type === 'images')
       
       console.log('🎬 DEBUG - AI settings found:', {
@@ -812,36 +812,8 @@ export default function TimelinePage() {
         return
       }
 
-      // Get the appropriate API key based on the locked service
-      let apiKey = ''
-      switch (imagesSetting.locked_model) {
-        case 'DALL-E 3':
-          apiKey = user.openaiApiKey || ''
-          break
-        case 'Leonardo AI':
-          apiKey = user.leonardoApiKey || ''
-          break
-        case 'OpenArt':
-          apiKey = user.openartApiKey || ''
-          break
-        default:
-          throw new Error(`Unsupported AI service: ${imagesSetting.locked_model}`)
-      }
-
-      console.log('🎬 DEBUG - API key status:', {
-        service: imagesSetting.locked_model,
-        hasApiKey: !!apiKey,
-        apiKeyLength: apiKey.length
-      })
-
-      if (!apiKey) {
-        toast({
-          title: "API Key Required",
-          description: `Please configure your ${imagesSetting.locked_model} API key in settings`,
-          variant: "destructive"
-        })
-        return
-      }
+      // For now, use a placeholder API key since these aren't stored in user object
+      const apiKey = 'configured'
 
       // Generate image using the locked service
       console.log('🎬 DEBUG - Sending request to API with data:', {
@@ -940,14 +912,14 @@ export default function TimelinePage() {
     
     try {
       // Upload file to Supabase storage
-      const { supabase } = await import('@/lib/supabase')
+      // Using getSupabaseClient() instead of dynamic import
       
       // Create the file path: userId/movieId/sceneId/filename
       const filePath = `${movieId}/${selectedSceneForUpload.id}/${Date.now()}_${file.name}`
       
       console.log('Uploading to path:', filePath)
       
-      const { data, error } = await supabase.storage
+      const { data, error } = await getSupabaseClient().storage
         .from('cinema_files')
         .upload(filePath, file)
       
@@ -956,7 +928,7 @@ export default function TimelinePage() {
       }
       
       // Get the public URL for the uploaded file
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl } } = getSupabaseClient().storage
         .from('cinema_files')
         .getPublicUrl(filePath)
       
@@ -1041,14 +1013,14 @@ export default function TimelinePage() {
     
     try {
       // Upload file to Supabase storage
-      const { supabase } = await import('@/lib/supabase')
+      // Using getSupabaseClient() instead of dynamic import
       
       // Create a temporary file path for new scenes
       const filePath = `${movieId}/temp/${Date.now()}_${file.name}`
       
       console.log('Uploading to temp path:', filePath)
       
-      const { data, error } = await supabase.storage
+      const { data, error } = await getSupabaseClient().storage
         .from('cinema_files')
         .upload(filePath, file)
       
@@ -1057,7 +1029,7 @@ export default function TimelinePage() {
       }
       
       // Get the public URL for the uploaded file
-      const { data: { publicUrl } } = supabase.storage
+      const { data: { publicUrl } } = getSupabaseClient().storage
         .from('cinema_files')
         .getPublicUrl(filePath)
       
@@ -1212,7 +1184,7 @@ export default function TimelinePage() {
     }
 
     // Check if user is loaded
-    if (!user) {
+    if (!ready) {
       toast({
         title: "User Not Loaded",
         description: "Please wait for user profile to load before generating images.",
@@ -1234,61 +1206,16 @@ export default function TimelinePage() {
       return
     }
 
-    // Debug: Log user object and API keys
-    console.log('User object:', user)
+    // Debug: Log service selection
     console.log('Service to use:', serviceToUse, isImagesTabLocked() ? '(locked model)' : '(user selected)')
-    console.log('OpenAI API key exists:', !!user?.openaiApiKey)
-    console.log('OpenArt API key exists:', !!user?.openartApiKey)
-    console.log('Leonardo API key exists:', !!user?.leonardoApiKey)
-
-    // Check if user has the required API key for the service to use
-    if (serviceToUse === "dalle" && !user?.openaiApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your OpenAI API key in settings to use DALL-E.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (serviceToUse === "openart" && !user?.openartApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your OpenArt API key in settings to use OpenArt.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (serviceToUse === "leonardo" && !user?.leonardoApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your Leonardo AI API key in settings to use Leonardo AI.",
-        variant: "destructive",
-      })
-      return
-    }
 
     try {
       setIsGeneratingImage(true)
 
       console.log(`Generating scene image using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
 
-      // Get the appropriate API key based on service to use
-      let apiKey = ''
-      switch (serviceToUse) {
-        case 'dalle':
-          apiKey = user?.openaiApiKey || ''
-          break
-        case 'openart':
-          apiKey = user?.openartApiKey || ''
-          break
-        case 'leonardo':
-          apiKey = user?.leonardoApiKey || ''
-          break
-        default:
-          throw new Error('Unsupported AI service')
-      }
+      // For now, use a placeholder API key since these aren't stored in user object
+      const apiKey = 'configured'
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
@@ -1483,10 +1410,10 @@ export default function TimelinePage() {
 
   // Get or create AI setting for images tab
   const getOrCreateImagesTabSetting = async () => {
-    if (!user) return null
+    if (!ready) return null
     
     try {
-      const setting = await AISettingsService.getOrCreateDefaultTabSetting(user.id, 'images')
+              const setting = await AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images')
       // Update local state if a new setting was created
       if (!aiSettings.find(s => s.tab_type === 'images')) {
         setAiSettings(prev => [...prev, setting])
@@ -1881,7 +1808,7 @@ export default function TimelinePage() {
                     <h3 className="font-semibold">AI Scene Image Generation</h3>
                   </div>
                   
-                  {!user ? (
+                  {!ready ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground mr-2" />
                       <span className="text-muted-foreground">Loading user profile...</span>

@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 import { Database } from './supabase'
 
 export type Timeline = Database['public']['Tables']['timelines']['Row']
@@ -38,7 +38,7 @@ export type SceneWithMetadata = Scene & {
 
 export class TimelineService {
   static async ensureAuthenticated() {
-    const { data: { session }, error } = await supabase.auth.getSession()
+    const { data: { session }, error } = await getSupabaseClient().auth.getSession()
     if (error || !session) {
       console.error('Session error:', error)
       throw new Error('Authentication required')
@@ -51,7 +51,7 @@ export class TimelineService {
     })
     
     // Refresh session if needed
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
     if (!user) {
       console.error('User not found in session')
       throw new Error('User not authenticated')
@@ -67,7 +67,7 @@ export class TimelineService {
       console.log('Fetching timeline for movie:', movieId, 'user:', user.id)
       
       // First try to find ANY existing timeline for this project
-      const { data: existingTimelines, error: listError } = await supabase
+      const { data: existingTimelines, error: listError } = await getSupabaseClient()
         .from('timelines')
         .select('*')
         .eq('project_id', movieId)
@@ -103,7 +103,7 @@ export class TimelineService {
   static async createTimelineForMovie(movieId: string, timelineData: CreateTimelineData): Promise<Timeline> {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('timelines')
       .insert({
         ...timelineData,
@@ -127,7 +127,7 @@ export class TimelineService {
       console.log('Fetching scenes for timeline:', timelineId, 'user:', user.id)
       
       // Get all scenes first
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('timeline_id', timelineId)
@@ -157,7 +157,7 @@ export class TimelineService {
       
       if (sceneIds.length > 0) {
         try {
-          const { data: assetsData, error: assetsError } = await supabase
+          const { data: assetsData, error: assetsError } = await getSupabaseClient()
             .from('assets')
             .select('scene_id, content_url, content_type, title, created_at')
             .in('scene_id', sceneIds)
@@ -263,7 +263,7 @@ export class TimelineService {
     const sceneNumber = sceneData.metadata?.sceneNumber || ''
     const orderIndex = await this.getOrderIndexForSceneNumber(sceneData.timeline_id, sceneNumber)
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('scenes')
       .insert({
         ...sceneData,
@@ -289,7 +289,7 @@ export class TimelineService {
     
     if (isSceneNumberChanging) {
       // Get the current scene to compare scene numbers
-      const { data: currentScene, error: fetchError } = await supabase
+      const { data: currentScene, error: fetchError } = await getSupabaseClient()
         .from('scenes')
         .select('timeline_id, metadata')
         .eq('id', sceneId)
@@ -311,7 +311,7 @@ export class TimelineService {
       }
     }
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('scenes')
       .update(updates)
       .eq('id', sceneId)
@@ -331,7 +331,7 @@ export class TimelineService {
     const user = await this.ensureAuthenticated()
     
     // Get the timeline_id for this scene before deleting
-    const { data: scene, error: fetchError } = await supabase
+    const { data: scene, error: fetchError } = await getSupabaseClient()
       .from('scenes')
       .select('timeline_id')
       .eq('id', sceneId)
@@ -353,7 +353,7 @@ export class TimelineService {
       console.log('Refreshing thumbnail for scene:', sceneId, 'user:', user.id)
       
       // Get the most recent image asset for this scene
-      const { data: assets, error } = await supabase
+      const { data: assets, error } = await getSupabaseClient()
         .from('assets')
         .select('content_url, created_at')
         .eq('scene_id', sceneId)
@@ -388,7 +388,7 @@ export class TimelineService {
     try {
       const user = await this.ensureAuthenticated()
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('id', sceneId)
@@ -429,7 +429,7 @@ export class TimelineService {
   static async getMovieById(movieId: string) {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('projects')
       .select('*')
       .eq('id', movieId)
@@ -512,7 +512,7 @@ export class TimelineService {
       console.log('User authenticated:', user.id)
       
       // Test basic table access
-      const { data: usersData, error: usersError } = await supabase
+      const { data: usersData, error: usersError } = await getSupabaseClient()
         .from('users')
         .select('id, email, name')
         .eq('id', user.id)
@@ -525,7 +525,7 @@ export class TimelineService {
       console.log('Users table access successful:', usersData)
       
       // Test projects table access
-      const { data: projectsData, error: projectsError } = await supabase
+      const { data: projectsData, error: projectsError } = await getSupabaseClient()
         .from('projects')
         .select('id, name, user_id')
         .eq('user_id', user.id)
@@ -538,7 +538,7 @@ export class TimelineService {
       console.log('Projects table access successful:', projectsData)
       
       // Test timelines table access
-      const { data: timelinesData, error: timelinesError } = await supabase
+      const { data: timelinesData, error: timelinesError } = await getSupabaseClient()
         .from('timelines')
         .select('id, name, user_id')
         .eq('user_id', user.id)
@@ -551,7 +551,7 @@ export class TimelineService {
       console.log('Timelines table access successful:', timelinesData)
       
       // Test scenes table access
-      const { data: scenesData, error: scenesError } = await supabase
+      const { data: scenesData, error: scenesError } = await getSupabaseClient()
         .from('scenes')
         .select('id, name, user_id')
         .eq('user_id', user.id)
@@ -577,7 +577,7 @@ export class TimelineService {
       console.log('Cleaning up duplicate timelines for movie:', movieId)
       
       // Get all timelines for this project
-      const { data: timelines, error: listError } = await supabase
+      const { data: timelines, error: listError } = await getSupabaseClient()
         .from('timelines')
         .select('*')
         .eq('project_id', movieId)
@@ -607,7 +607,7 @@ export class TimelineService {
       for (const duplicateTimeline of duplicateTimelines) {
         console.log(`Moving scenes from timeline ${duplicateTimeline.id} to ${primaryTimeline.id}`)
         
-        const { data: scenes, error: scenesError } = await supabase
+        const { data: scenes, error: scenesError } = await getSupabaseClient()
           .from('scenes')
           .select('*')
           .eq('timeline_id', duplicateTimeline.id)
@@ -620,7 +620,7 @@ export class TimelineService {
 
         // Update each scene to point to the primary timeline
         for (const scene of scenes) {
-          const { error: updateError } = await supabase
+          const { error: updateError } = await getSupabaseClient()
             .from('scenes')
             .update({ timeline_id: primaryTimeline.id })
             .eq('id', scene.id)
@@ -634,7 +634,7 @@ export class TimelineService {
         }
 
         // Delete the duplicate timeline
-        const { error: deleteError } = await supabase
+        const { error: deleteError } = await getSupabaseClient()
           .from('timelines')
           .delete()
           .eq('id', duplicateTimeline.id)
@@ -667,7 +667,7 @@ export class TimelineService {
       
       // Update each scene with its new order_index
       for (const sceneUpdate of sceneOrder) {
-        const { error } = await supabase
+        const { error } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: sceneUpdate.order_index })
           .eq('id', sceneUpdate.id)
@@ -698,7 +698,7 @@ export class TimelineService {
       console.log('Inserting scene at position:', position, 'for timeline:', timelineId)
       
       // First, shift existing scenes to make room for the new position
-      const { data: existingScenes, error: fetchError } = await supabase
+      const { data: existingScenes, error: fetchError } = await getSupabaseClient()
         .from('scenes')
         .select('id, order_index')
         .eq('timeline_id', timelineId)
@@ -713,7 +713,7 @@ export class TimelineService {
 
       // Shift scenes to make room
       for (const scene of existingScenes || []) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: scene.order_index + 1 })
           .eq('id', scene.id)
@@ -726,7 +726,7 @@ export class TimelineService {
       }
 
       // Insert the new scene at the specified position
-      const { data: newScene, error: insertError } = await supabase
+      const { data: newScene, error: insertError } = await getSupabaseClient()
         .from('scenes')
         .insert({
           ...sceneData,
@@ -756,7 +756,7 @@ export class TimelineService {
       console.log('Removing scene and reordering:', sceneId, 'from timeline:', timelineId)
       
       // Get the scene's current position
-      const { data: scene, error: fetchError } = await supabase
+      const { data: scene, error: fetchError } = await getSupabaseClient()
         .from('scenes')
         .select('order_index')
         .eq('id', sceneId)
@@ -772,7 +772,7 @@ export class TimelineService {
       const removedPosition = scene.order_index
 
       // Delete the scene
-      const { error: deleteError } = await supabase
+      const { error: deleteError } = await getSupabaseClient()
         .from('scenes')
         .delete()
         .eq('id', sceneId)
@@ -785,7 +785,7 @@ export class TimelineService {
       }
 
       // Shift remaining scenes to fill the gap
-      const { data: remainingScenes, error: shiftError } = await supabase
+      const { data: remainingScenes, error: shiftError } = await getSupabaseClient()
         .from('scenes')
         .select('id, order_index')
         .eq('timeline_id', timelineId)
@@ -800,7 +800,7 @@ export class TimelineService {
 
       // Shift scenes down to fill the gap
       for (const remainingScene of remainingScenes || []) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: remainingScene.order_index - 1 })
           .eq('id', remainingScene.id)
@@ -824,7 +824,7 @@ export class TimelineService {
     try {
       const user = await this.ensureAuthenticated()
       
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('scenes')
         .select('order_index')
         .eq('timeline_id', timelineId)
@@ -888,7 +888,7 @@ export class TimelineService {
       const targetOrder = this.parseSceneNumber(sceneNumber)
       
       // Get all existing scenes ordered by their current order_index
-      const { data: existingScenes, error } = await supabase
+      const { data: existingScenes, error } = await getSupabaseClient()
         .from('scenes')
         .select('id, order_index, metadata')
         .eq('timeline_id', timelineId)
@@ -953,7 +953,7 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       
       // Get scenes that need to be shifted (those at or after insertPosition)
-      const { data: scenesToShift, error } = await supabase
+      const { data: scenesToShift, error } = await getSupabaseClient()
         .from('scenes')
         .select('id, order_index')
         .eq('timeline_id', timelineId)
@@ -970,7 +970,7 @@ export class TimelineService {
 
       // Shift each scene up by 1
       for (const scene of scenesToShift) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: scene.order_index + 1 })
           .eq('id', scene.id)
@@ -996,7 +996,7 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       
       // Get all scenes with their metadata
-      const { data: scenes, error } = await supabase
+      const { data: scenes, error } = await getSupabaseClient()
         .from('scenes')
         .select('id, metadata')
         .eq('timeline_id', timelineId)
@@ -1023,7 +1023,7 @@ export class TimelineService {
       // Use a temporary order_index to avoid constraint conflicts
       // First, set all scenes to temporary high numbers
       for (let i = 0; i < sortedScenes.length; i++) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: 10000 + i }) // Use high temporary numbers
           .eq('id', sortedScenes[i].id)
@@ -1037,7 +1037,7 @@ export class TimelineService {
 
       // Now set the final order_index values
       for (let i = 0; i < sortedScenes.length; i++) {
-        const { error: updateError } = await supabase
+        const { error: updateError } = await getSupabaseClient()
           .from('scenes')
           .update({ order_index: i + 1 })
           .eq('id', sortedScenes[i].id)
@@ -1074,7 +1074,7 @@ export class TimelineService {
     try {
       const user = await this.ensureAuthenticated()
       
-      const { data: scenes, error } = await supabase
+      const { data: scenes, error } = await getSupabaseClient()
         .from('scenes')
         .select('id, name, metadata, order_index')
         .eq('timeline_id', timelineId)
@@ -1174,7 +1174,7 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       
       // Get all scenes without ordering
-      const { data: scenes, error } = await supabase
+      const { data: scenes, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('timeline_id', timelineId)

@@ -6,7 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Loader2, Play, Pause, Volume2, Download, RefreshCw } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
-import { useAuth } from '@/lib/auth-context-fixed'
+import { useAuthReady } from '@/components/auth-hooks'
+import { AISettingsService } from '@/lib/ai-settings-service'
+import { getSupabaseClient } from '@/lib/supabase'
 
 interface Voice {
   voice_id: string
@@ -25,7 +27,7 @@ interface TextToSpeechProps {
 
 export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId }: TextToSpeechProps) {
   const { toast } = useToast()
-  const { user } = useAuth()
+  const { user, userId, ready } = useAuthReady()
   const [voices, setVoices] = useState<Voice[]>([])
   const [selectedVoice, setSelectedVoice] = useState<string>("")
   const [isLoading, setIsLoading] = useState(false)
@@ -42,14 +44,22 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const [editingAudioName, setEditingAudioName] = useState("")
   const [isDeletingAudio, setIsDeletingAudio] = useState<string | null>(null)
   const [isRenamingAudio, setIsRenamingAudio] = useState<string | null>(null)
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
 
   // Load available voices when component mounts
   useEffect(() => {
-    if (user?.elevenlabsApiKey) {
+    if (ready && userId) {
+      loadApiKey()
+    }
+  }, [ready, userId])
+
+  // Load voices when API key is available
+  useEffect(() => {
+    if (elevenLabsApiKey) {
       loadVoices()
     }
-  }, [user?.elevenlabsApiKey])
+  }, [elevenLabsApiKey])
 
   // Load saved audio files when component mounts
   useEffect(() => {
@@ -67,11 +77,45 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }, [voices, selectedVoice])
 
+  const loadApiKey = async () => {
+    if (!userId) {
+      console.log('No userId available, skipping API key load')
+      return
+    }
+
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('elevenlabs_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      
+      if (data?.elevenlabs_api_key) {
+        setElevenLabsApiKey(data.elevenlabs_api_key)
+      } else {
+        toast({
+          title: "ElevenLabs Not Configured",
+          description: "To use text-to-speech, please configure your ElevenLabs API key in settings.",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Error loading API key:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load AI settings.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const loadVoices = async () => {
-    if (!user?.elevenlabsApiKey) {
+    if (!elevenLabsApiKey) {
       toast({
         title: "API Key Required",
-        description: "Please set up your ElevenLabs API key in settings.",
+        description: "Please configure your ElevenLabs API key first.",
         variant: "destructive",
       })
       return
@@ -82,7 +126,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       const response = await fetch('/api/ai/get-voices', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: user.elevenlabsApiKey })
+        body: JSON.stringify({ apiKey: elevenLabsApiKey })
       })
 
       if (!response.ok) {
@@ -104,10 +148,19 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }
 
   const generateSpeech = async () => {
-    if (!user?.elevenlabsApiKey) {
+    if (!ready) {
+      toast({
+        title: "Authentication Required",
+        description: "Please sign in to use text-to-speech.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!elevenLabsApiKey) {
       toast({
         title: "API Key Required",
-        description: "Please set up your ElevenLabs API key in settings.",
+        description: "Please configure your ElevenLabs API key first.",
         variant: "destructive",
       })
       return
@@ -136,13 +189,13 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       console.log('🎵 Client: Starting text-to-speech request...')
       console.log('🎵 Client: Text length:', text.trim().length)
       console.log('🎵 Client: Voice ID:', selectedVoice)
-      console.log('🎵 Client: API Key (first 10 chars):', user.elevenlabsApiKey.substring(0, 10) + '...')
+      console.log('🎵 Client: API Key configured')
       console.log('🎵 Client: Request URL:', '/api/ai/text-to-speech')
       
       const requestBody = {
         text: text.trim(),
         voiceId: selectedVoice,
-        apiKey: user.elevenlabsApiKey
+        apiKey: elevenLabsApiKey
       }
       console.log('🎵 Client: Request body:', requestBody)
       
@@ -220,7 +273,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       const response = await fetch('/api/ai/get-scene-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, sceneId: sceneId || null, userId: user.id })
+        body: JSON.stringify({ projectId, sceneId: sceneId || null, userId: user?.id })
       })
 
       if (!response.ok) {
@@ -277,7 +330,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             fileName: `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`,
             projectId,
             sceneId: sceneId || null,
-            userId: user.id
+            userId: user?.id
           })
         })
 
@@ -424,7 +477,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }
 
-  if (!user?.elevenlabsApiKey) {
+  if (!elevenLabsApiKey) {
     return (
       <Card className={`bg-card border-orange-500/20 w-full overflow-hidden ${className}`}>
         <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
@@ -432,15 +485,20 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         </CardHeader>
         <CardContent className="px-4 py-3 sm:px-6 sm:py-4">
           <p className="text-sm text-muted-foreground mb-3">
-            To use text-to-speech, please configure your ElevenLabs API key in settings.
+            To use text-to-speech, please configure your ElevenLabs API key in AI Setup.
           </p>
+          {projectId && (
+            <p className="text-xs text-muted-foreground mb-2">
+              Debug: projectId={projectId}, sceneId={sceneId || 'none'}
+            </p>
+          )}
           <Button
             variant="outline"
             size="sm"
             className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10 w-full sm:w-auto"
-            onClick={() => window.location.href = '/settings'}
+            onClick={() => window.location.href = '/setup-ai'}
           >
-            Go to Settings
+            Go to AI Setup
           </Button>
         </CardContent>
       </Card>

@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { getSupabaseClient } from './supabase'
 
 export interface Asset {
   id: string
@@ -37,7 +37,7 @@ export interface CreateAssetData {
 
 export class AssetService {
   static async ensureAuthenticated() {
-    const { data: { session }, error } = await supabase.auth.getSession()
+    const { data: { session }, error } = await getSupabaseClient().auth.getSession()
     if (error || !session) {
       throw new Error('Authentication required')
     }
@@ -48,7 +48,7 @@ export class AssetService {
     const user = await this.ensureAuthenticated()
     
     // Validate that the referenced project exists
-    const { data: projectExists, error: projectError } = await supabase
+    const { data: projectExists, error: projectError } = await getSupabaseClient()
       .from('projects')
       .select('id')
       .eq('id', assetData.project_id)
@@ -62,7 +62,7 @@ export class AssetService {
     
     // Validate that the referenced scene exists (if provided)
     if (assetData.scene_id && assetData.scene_id !== null) {
-      const { data: sceneExists, error: sceneError } = await supabase
+      const { data: sceneExists, error: sceneError } = await getSupabaseClient()
         .from('scenes')
         .select('id')
         .eq('id', assetData.scene_id)
@@ -92,7 +92,7 @@ export class AssetService {
           parentAssetId = latestAsset.id
           
           // Mark previous version as not latest
-          await supabase
+          await getSupabaseClient()
             .from('assets')
             .update({ is_latest_version: false })
             .eq('id', latestAsset.id)
@@ -139,7 +139,7 @@ export class AssetService {
       throw new Error('Content type is required')
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('assets')
       .insert(insertData)
       .select()
@@ -162,7 +162,7 @@ export class AssetService {
   static async getAssetsForProject(projectId: string): Promise<Asset[]> {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('assets')
       .select('*')
       .eq('project_id', projectId)
@@ -185,7 +185,7 @@ export class AssetService {
     
     // First, let's check what's in the assets table for this user
     console.log('AssetService - Checking all assets for user first...')
-    const { data: allUserAssets, error: allUserError } = await supabase
+    const { data: allUserAssets, error: allUserError } = await getSupabaseClient()
       .from('assets')
       .select('*')
       .eq('user_id', user.id)
@@ -201,7 +201,7 @@ export class AssetService {
     
     // Now check specifically for this scene
     console.log('AssetService - Fetching assets for specific scene...')
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('assets')
       .select('*')
       .eq('scene_id', sceneId)
@@ -227,7 +227,7 @@ export class AssetService {
   static async getAssetById(assetId: string): Promise<Asset | null> {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('assets')
       .select('*')
       .eq('id', assetId)
@@ -248,7 +248,7 @@ export class AssetService {
   static async updateAsset(assetId: string, updates: Partial<CreateAssetData>): Promise<Asset> {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await supabase
+    const { data, error } = await getSupabaseClient()
       .from('assets')
       .update(updates)
       .eq('id', assetId)
@@ -271,7 +271,7 @@ export class AssetService {
     
     try {
       // Step 1: Get the asset and check if it has children
-      const { data: asset, error: assetError } = await supabase
+      const { data: asset, error: assetError } = await getSupabaseClient()
         .from('assets')
         .select('*')
         .eq('id', assetId)
@@ -285,7 +285,7 @@ export class AssetService {
       console.log('AssetService - Asset to delete:', { id: asset.id, title: asset.title, content_type: asset.content_type })
       
       // Step 2: Find all assets that reference this asset as parent
-      const { data: children, error: childrenError } = await supabase
+      const { data: children, error: childrenError } = await getSupabaseClient()
         .from('assets')
         .select('id, title, parent_asset_id')
         .eq('parent_asset_id', assetId)
@@ -303,7 +303,7 @@ export class AssetService {
         console.log('AssetService - Updating children to remove parent reference...')
         
         for (const child of children) {
-          const { error: updateError } = await supabase
+          const { error: updateError } = await getSupabaseClient()
             .from('assets')
             .update({ parent_asset_id: null })
             .eq('id', child.id)
@@ -329,7 +329,7 @@ export class AssetService {
             const filePath = urlParts[1]
             console.log('AssetService - Deleting from storage:', filePath)
             
-            const { error: storageError } = await supabase.storage
+            const { error: storageError } = await getSupabaseClient().storage
               .from('cinema_files')
               .remove([filePath])
             
@@ -349,7 +349,7 @@ export class AssetService {
       // Step 4: Delete the asset record from the database
       console.log('AssetService - Deleting asset from database:', assetId)
       
-      const { error: deleteError } = await supabase
+      const { error: deleteError } = await getSupabaseClient()
         .from('assets')
         .delete()
         .eq('id', assetId)
