@@ -1643,7 +1643,8 @@ export default function IdeasPage() {
                                 original_prompt: prompt,
                                 prompt: "AI-generated image: " + prompt,
                                 genre: "",
-                                status: "concept" as const
+                                status: "concept" as const,
+                                main_creator: user?.id || "unknown"
                               }
                               
                               if (user) {

@@ -17,6 +17,9 @@ export interface Storyboard {
   ai_generated: boolean
   project_id?: string
   scene_id?: string
+  script_text_start?: number
+  script_text_end?: number
+  script_text_snippet?: string
   created_at: string
   updated_at: string
 }
@@ -35,6 +38,9 @@ export interface CreateStoryboardData {
   image_url?: string
   project_id?: string
   scene_id?: string
+  script_text_start?: number
+  script_text_end?: number
+  script_text_snippet?: string
 }
 
 export interface UpdateStoryboardData extends Partial<CreateStoryboardData> {
@@ -114,6 +120,9 @@ export class StoryboardsService {
         image_url: storyboardData.image_url || null,
         project_id: projectId,
         scene_id: storyboardData.scene_id,
+        script_text_start: storyboardData.script_text_start || null,
+        script_text_end: storyboardData.script_text_end || null,
+        script_text_snippet: storyboardData.script_text_snippet || null,
         ai_generated: false
       }
 
@@ -387,6 +396,29 @@ export class StoryboardsService {
       return data || []
     } catch (error) {
       console.error('Error in getStoryboardsByTimeline:', error)
+      throw error
+    }
+  }
+
+  // Get storyboards for a specific scene with text ranges
+  static async getStoryboardsForSceneWithTextRanges(sceneId: string): Promise<Storyboard[]> {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('storyboards')
+        .select('*')
+        .eq('scene_id', sceneId)
+        .not('script_text_start', 'is', null)
+        .not('script_text_end', 'is', null)
+        .order('shot_number', { ascending: true })
+
+      if (error) {
+        console.error('Error fetching storyboards with text ranges:', error)
+        throw error
+      }
+
+      return data || []
+    } catch (error) {
+      console.error('Error in getStoryboardsForSceneWithTextRanges:', error)
       throw error
     }
   }

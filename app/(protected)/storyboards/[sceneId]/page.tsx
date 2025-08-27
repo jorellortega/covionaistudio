@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useAuthReady } from "@/components/auth-hooks"
 import Header from "@/components/header"
@@ -21,39 +21,32 @@ import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 
-interface SceneInfo {
-  id: string
-  name: string
-  description?: string
-  start_time_seconds: number
-  duration_seconds: number
-  timeline_name: string
-  project_name: string
-  project_id: string
-  scene_number?: string
-  metadata?: any
+// Extended scene type with additional properties we need
+type SceneInfo = SceneWithMetadata & {
+  project_name?: string
+  timeline_name?: string
+  project_id?: string
+  scene_number?: number
+  start_time_seconds?: number
+  duration_seconds?: number
 }
 
 export default function SceneStoryboardsPage() {
+  console.log("🎬 StoryboardPage component rendering...")
+  
   const params = useParams()
   const router = useRouter()
   const sceneId = params.sceneId as string
   
   const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
+  // State variables
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
+  const [sceneScript, setSceneScript] = useState<string>("")
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
-  const [isLoadingStoryboards, setIsLoadingStoryboards] = useState(true)
-  const [isLoadingScene, setIsLoadingScene] = useState(true)
-  const [searchTerm, setSearchTerm] = useState("")
-  const [filterStatus, setFilterStatus] = useState("all")
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
-  const [showEditForm, setShowEditForm] = useState(false)
-  const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
-  const [isCreating, setIsCreating] = useState(false)
-  const [isUpdating, setIsUpdating] = useState(false)
-
-  // Form state
   const [formData, setFormData] = useState<CreateStoryboardData>({
     title: "",
     description: "",
@@ -61,27 +54,30 @@ export default function SceneStoryboardsPage() {
     shot_number: 1,
     shot_type: "wide",
     camera_angle: "eye-level",
-    movement: "static",
-    dialogue: "",
-    action: "",
-    visual_notes: "",
-    image_url: "",
-    project_id: "",
-    scene_id: sceneId
+    movement: "static"
   })
-
+  
+  // Loading states
+  const [isLoadingScene, setIsLoadingScene] = useState(true)
+  const [isLoadingStoryboards, setIsLoadingStoryboards] = useState(true)
+  
+  // Edit form state
+  const [showEditForm, setShowEditForm] = useState(false)
+  const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
+  const [isUpdating, setIsUpdating] = useState(false)
+  
+  // Search and filter state
+  const [searchTerm, setSearchTerm] = useState("")
+  const [filterStatus, setFilterStatus] = useState("all")
+  
   // AI generation state
   const [aiPrompt, setAiPrompt] = useState("")
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [selectedAIService, setSelectedAIService] = useState("dalle")
   
-  // AI Settings state
-  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
-  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
-  
   // Script state
-  const [sceneScript, setSceneScript] = useState<string>("")
   const [isLoadingScript, setIsLoadingScript] = useState(false)
   
   // Text selection state
@@ -89,18 +85,156 @@ export default function SceneStoryboardsPage() {
   const [selectionStart, setSelectionStart] = useState(0)
   const [selectionEnd, setSelectionEnd] = useState(0)
   const [showSelectionActions, setShowSelectionActions] = useState(false)
+  const [shotMode, setShotMode] = useState(false)
+  const [shotDetails, setShotDetails] = useState({
+    shotNumber: 1,
+    shotType: "wide",
+    cameraAngle: "eye-level",
+    movement: "static"
+  })
+  const [editingShotDetails, setEditingShotDetails] = useState(false)
+  const [tempShotDetails, setTempShotDetails] = useState({
+    shotNumber: 1,
+    shotType: "wide",
+    cameraAngle: "eye-level",
+    movement: "static"
+  })
+  
+  // Ref to track current selection
+  const currentSelectionRef = useRef<string>("")
+  
+  // Locked selection state - once set, cannot be cleared by browser interactions
+  const [lockedSelection, setLockedSelection] = useState<string>("")
+  const [isSelectionLocked, setIsSelectionLocked] = useState(false)
+  
+  // Store the DOM range for re-applying selection
+  const selectionRangeRef = useRef<Range | null>(null)
+  
+  // Track which text ranges have already been used for shots
+  const [usedTextRanges, setUsedTextRanges] = useState<Array<{
+    start: number
+    end: number
+    text: string
+    shotNumber: number
+  }>>([])
+  
+  console.log("🎬 All state variables initialized")
+
+  // Function to lock the current selection
+  const lockSelection = (text: string) => {
+    setLockedSelection(text)
+    setIsSelectionLocked(true)
+    
+    // Store the current DOM selection range
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0) {
+      selectionRangeRef.current = selection.getRangeAt(0).cloneRange()
+    }
+    
+    console.log("🎬 Selection locked:", text)
+  }
+  
+  // Function to unlock selection (only when creating shot)
+  const unlockSelection = () => {
+    setLockedSelection("")
+    setIsSelectionLocked(false)
+    setSelectedText("")
+    setShowSelectionActions(false)
+    selectionRangeRef.current = null
+    console.log("🎬 Selection unlocked")
+  }
+  
+  // Function to find text range in script
+  const findTextRange = (text: string) => {
+    if (!sceneScript) return null
+    
+    const scriptText = sceneScript
+    const startIndex = scriptText.indexOf(text)
+    if (startIndex === -1) return null
+    
+    return {
+      start: startIndex,
+      end: startIndex + text.length,
+      text: text
+    }
+  }
+  
+  // Function to add used text range
+  const addUsedTextRange = (text: string, shotNumber: number) => {
+    const range = findTextRange(text)
+    if (range) {
+      setUsedTextRanges(prev => [...prev, { ...range, shotNumber }])
+      console.log("🎬 Added used text range:", { ...range, shotNumber })
+    }
+  }
+  
+  // Function to re-apply the visual text selection
+  const reapplySelection = () => {
+    if (selectionRangeRef.current && isSelectionLocked) {
+      const selection = window.getSelection()
+      if (selection) {
+        selection.removeAllRanges()
+        selection.addRange(selectionRangeRef.current)
+        console.log("🎬 Visual selection re-applied")
+      }
+    }
+  }
+
+  // Load existing storyboards with text ranges for visual highlighting
+  const loadStoryboardsWithTextRanges = async () => {
+    if (!sceneId) return
+    
+    try {
+      const storyboardsWithRanges = await StoryboardsService.getStoryboardsForSceneWithTextRanges(sceneId)
+      console.log("🎬 Loaded storyboards with text ranges:", storyboardsWithRanges)
+      
+      // Convert to usedTextRanges format
+      const ranges = storyboardsWithRanges.map(sb => ({
+        start: sb.script_text_start!,
+        end: sb.script_text_end!,
+        text: sb.script_text_snippet!,
+        shotNumber: sb.shot_number
+      }))
+      
+      setUsedTextRanges(ranges)
+      console.log("🎬 Set used text ranges:", ranges)
+      
+    } catch (error) {
+      console.error("🎬 Error loading storyboards with text ranges:", error)
+    }
+  }
 
   useEffect(() => {
+    console.log("🎬 useEffect triggered - ready:", ready, "userId:", userId, "sceneId:", sceneId)
     if (ready && userId && sceneId) {
-      fetchSceneInfo()
+      console.log("🎬 Conditions met, starting data fetch...")
+      console.log("🎬 Fetching storyboards for scene:", sceneId)
       fetchStoryboards()
+      console.log("🎬 Fetching script for scene:", sceneId)
       fetchSceneScript()
+      console.log("🎬 Fetching scene info for scene:", sceneId)
+      fetchSceneInfo()
+      console.log("🎬 Loading storyboards with text ranges for visual highlighting")
+      loadStoryboardsWithTextRanges()
+    } else {
+      console.log("🎬 Conditions not met:", { ready, userId, sceneId })
     }
   }, [ready, userId, sceneId])
 
   // Hide selection actions when clicking outside and handle global selection changes
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
+      // Don't hide if clicking on the selection actions themselves
+      const target = event.target as Element
+      if (target.closest('.selection-actions')) {
+        return
+      }
+      
+      // Don't hide if clicking on the shot mode configuration panel
+      if (target.closest('.shot-mode-config')) {
+        return
+      }
+      
       if (showSelectionActions) {
         setShowSelectionActions(false)
         setSelectedText("")
@@ -112,10 +246,21 @@ export default function SceneStoryboardsPage() {
       if (selection && selection.toString().length > 0) {
         const text = selection.toString().trim()
         if (text.length > 0) {
-          console.log("🎬 Global selection change detected:", text)
           setSelectedText(text)
+          currentSelectionRef.current = text
           setShowSelectionActions(true)
+          
+          // LOCK THE SELECTION - this prevents it from being lost
+          lockSelection(text)
+          
+          console.log("🎬 Showing selection actions")
+          console.log("🎬 New state will be:", { selectedText: text, showSelectionActions: true, shotMode })
         }
+      } else {
+        console.log("🎬 No text selected, hiding actions")
+        setShowSelectionActions(false)
+        setSelectedText("")
+        currentSelectionRef.current = ""
       }
     }
 
@@ -156,7 +301,6 @@ export default function SceneStoryboardsPage() {
         // Auto-select locked model for images tab if available
         const imagesSetting = mergedSettings.find(setting => setting.tab_type === 'images')
         if (imagesSetting?.is_locked) {
-          console.log('Setting locked model for images:', imagesSetting.locked_model)
           setSelectedAIService(imagesSetting.locked_model)
         }
       } catch (error) {
@@ -183,7 +327,7 @@ export default function SceneStoryboardsPage() {
       }
 
       console.log("🎬 Scene found:", scene)
-      console.log("🎬 Scene timeline_id:", scene.timeline_id)
+      console.log("🎬 Scene project_id:", scene.project_id)
       console.log("🎬 Scene metadata:", scene.metadata)
       console.log("🎬 Scene order_index:", scene.order_index)
 
@@ -193,75 +337,78 @@ export default function SceneStoryboardsPage() {
       let projectId = ""
       
       try {
-        // First try to get timeline directly by ID
-        console.log("🎬 Looking for timeline with ID:", scene.timeline_id)
+        // Check if scene has project_id or timeline_id
+        const sceneProjectId = scene.project_id || (scene as any).timeline_id
+        console.log("🎬 Scene project_id:", scene.project_id)
+        console.log("🎬 Scene timeline_id:", (scene as any).timeline_id)
+        console.log("🎬 Using sceneProjectId:", sceneProjectId)
         
-        // Query the timeline directly by ID
-        console.log("🎬 Querying timelines table for ID:", scene.timeline_id)
-        const { data: timeline, error: timelineError } = await getSupabaseClient()
-          .from('timelines')
-          .select('*')
-          .eq('id', scene.timeline_id)
-          .eq('user_id', userId)
-          .single()
-        
-        console.log("🎬 Timeline query result:", { timeline, error: timelineError })
-        
-        if (timelineError) {
-          console.log("🎬 Timeline lookup error:", timelineError)
-        } else if (timeline) {
-          timelineName = timeline.name
-          projectId = timeline.project_id
-          console.log("🎬 Found timeline:", timelineName, "for project:", projectId)
+        if (sceneProjectId) {
+          // First try to get timeline directly by ID
+          console.log("🎬 Looking for timeline with ID:", sceneProjectId)
           
-          // Get project name from timeline
-          const project = await TimelineService.getMovieById(timeline.project_id)
-          if (project) {
-            projectName = project.name
-            console.log("🎬 Found project:", projectName)
+          // Query the timeline directly by ID
+          console.log("🎬 Querying timelines table for ID:", sceneProjectId)
+          const { data: timeline, error: timelineError } = await getSupabaseClient()
+            .from('timelines')
+            .select('*')
+            .eq('id', sceneProjectId)
+            .eq('user_id', userId)
+            .single()
+          
+          console.log("🎬 Timeline query result:", { timeline, error: timelineError })
+          
+          if (timelineError) {
+            console.log("🎬 Timeline lookup error:", timelineError)
+          } else if (timeline) {
+            timelineName = timeline.name
+            projectId = timeline.project_id
+            console.log("🎬 Found timeline:", timelineName, "for project:", projectId)
+            
+            // Get project name from timeline
+            const project = await TimelineService.getMovieById(timeline.project_id)
+            if (project) {
+              projectName = project.name
+              console.log("🎬 Found project:", projectName)
+            }
+          } else {
+            console.log("🎬 No timeline found, trying alternative approach...")
+            
+            // Alternative: try to get project directly from scene's project_id/timeline_id
+            try {
+              const directProject = await TimelineService.getMovieById(sceneProjectId)
+              if (directProject) {
+                projectName = directProject.name
+                projectId = directProject.id
+                timelineName = "Main Timeline"
+                console.log("🎬 Found direct project reference:", projectName)
+              }
+            } catch (directError) {
+              console.log("🎬 Direct project lookup also failed:", directError)
+            }
           }
         } else {
-          console.log("🎬 No timeline found, trying alternative approach...")
-          
-          // Alternative: try to get project directly from scene's timeline_id
-          // This might be a direct project reference
-          try {
-            const directProject = await TimelineService.getMovieById(scene.timeline_id)
-            if (directProject) {
-              projectName = directProject.name
-              projectId = directProject.id
-              timelineName = "Main Timeline"
-              console.log("🎬 Found direct project reference:", projectName)
-            }
-          } catch (directError) {
-            console.log("🎬 Direct project lookup also failed:", directError)
-          }
+          console.log("🎬 No project_id or timeline_id found in scene")
         }
       } catch (error) {
         console.warn("Could not fetch timeline/project info:", error)
       }
 
       setSceneInfo({
-        id: scene.id,
-        name: scene.name,
-        description: scene.description,
-        start_time_seconds: scene.start_time_seconds,
-        duration_seconds: scene.duration_seconds,
-        timeline_name: timelineName,
+        ...scene,
         project_name: projectName,
-        project_id: projectId,
-        scene_number: scene.metadata?.sceneNumber,
-        metadata: scene.metadata
+        timeline_name: timelineName,
+        project_id: projectId
       })
+      setIsLoadingScene(false)
     } catch (error) {
-      console.error("Error fetching scene info:", error)
+      console.error("🎬 Error fetching scene info:", error)
+      setIsLoadingScene(false)
       toast({
         title: "Error",
-        description: "Failed to fetch scene information.",
+        description: "Failed to fetch scene information",
         variant: "destructive"
       })
-    } finally {
-      setIsLoadingScene(false)
     }
   }
 
@@ -271,6 +418,8 @@ export default function SceneStoryboardsPage() {
       const selection = window.getSelection()
       console.log("🎬 Text selection event triggered")
       console.log("🎬 Selection:", selection?.toString())
+      console.log("🎬 Current shotMode:", shotMode)
+      console.log("🎬 Current showSelectionActions:", showSelectionActions)
       
       if (selection && selection.toString().length > 0) {
         const text = selection.toString().trim()
@@ -278,83 +427,105 @@ export default function SceneStoryboardsPage() {
         
         if (text.length > 0) {
           setSelectedText(text)
+          currentSelectionRef.current = text
           setShowSelectionActions(true)
+          
+          // LOCK THE SELECTION - this prevents it from being lost
+          lockSelection(text)
+          
           console.log("🎬 Showing selection actions")
+          console.log("🎬 New state will be:", { selectedText: text, showSelectionActions: true, shotMode })
         }
       } else {
         console.log("🎬 No text selected, hiding actions")
         setShowSelectionActions(false)
         setSelectedText("")
+        currentSelectionRef.current = ""
       }
     }, 100)
   }
 
-  const handleCreateShotFromSelection = () => {
+  const handleCreateShotFromSelection = async () => {
     console.log("🎬 handleCreateShotFromSelection called")
-    console.log("🎬 selectedText:", selectedText)
-    console.log("🎬 showCreateForm before:", showCreateForm)
     
-    if (selectedText) {
-      console.log("🎬 Setting form data with selected text")
+    // Use locked selection as primary source - this cannot be lost
+    const textToUse = lockedSelection || selectedText || currentSelectionRef.current
+    console.log("🎬 lockedSelection:", lockedSelection)
+    console.log("🎬 selectedText from state:", selectedText)
+    console.log("🎬 selectedText from ref:", currentSelectionRef.current)
+    console.log("🎬 Using text:", textToUse)
+    console.log("🎬 shotMode:", shotMode)
+    console.log("🎬 shotDetails:", shotDetails)
+    console.log("🎬 current formData:", formData)
+    
+    if (textToUse) {
+      console.log("🎬 Automatically creating storyboard with selected text")
       
-      // Pre-fill the storyboard form with the selected text
-      setFormData(prev => {
-        console.log("🎬 Previous form data:", prev)
-        const newData = {
-          ...prev,
-          title: `Shot from Script`,
-          description: selectedText,
-          shot_number: getNextShotNumber()
+      // Find the text range in the script
+      const textRange = findTextRange(textToUse)
+      console.log("🎬 Found text range:", textRange)
+      
+      // Prepare the storyboard data
+      const storyboardData = {
+        title: `Shot ${shotDetails.shotNumber}: ${textToUse.substring(0, 30)}${textToUse.length > 30 ? '...' : ''}`,
+        description: textToUse,
+        scene_number: 1, // Default scene number
+        shot_number: shotDetails.shotNumber,
+        shot_type: shotDetails.shotType,
+        camera_angle: shotDetails.cameraAngle,
+        movement: shotDetails.movement,
+        action: textToUse,
+        visual_notes: `Shot ${shotDetails.shotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
+        scene_id: sceneId,
+        project_id: sceneInfo?.project_id || "",
+        script_text_start: textRange?.start || undefined,
+        script_text_end: textRange?.end || undefined,
+        script_text_snippet: textToUse
+      }
+      
+      console.log("🎬 Creating storyboard with data:", storyboardData)
+      
+      try {
+        // Create the storyboard automatically
+        const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
+        console.log("🎬 Storyboard created successfully:", newStoryboard)
+        
+        // Add to local state
+        setStoryboards(prev => [newStoryboard, ...prev])
+        
+        // Add to used text ranges for visual highlighting
+        if (textRange) {
+          addUsedTextRange(textToUse, shotDetails.shotNumber)
         }
-        console.log("🎬 New form data:", newData)
-        return newData
-      })
-      
-      // Show the create form
-      setShowCreateForm(true)
-      console.log("🎬 showCreateForm set to true")
-      
-      // Clear selection
-      setShowSelectionActions(false)
-      setSelectedText("")
-      window.getSelection()?.removeAllRanges()
-      
-      // Force a re-render
-      setTimeout(() => {
-        console.log("🎬 showCreateForm after timeout:", showCreateForm)
-      }, 100)
+        
+        // Show success message
+        toast({
+          title: "Shot Created!",
+          description: `Shot ${shotDetails.shotNumber} created automatically from script selection`,
+        })
+        
+        // Clear selection and unlock
+        unlockSelection()
+        window.getSelection()?.removeAllRanges()
+        
+        // Increment shot number for next selection
+        setShotDetails(prev => ({
+          ...prev,
+          shotNumber: prev.shotNumber + 1
+        }))
+        
+        console.log("🎬 Shot creation completed automatically")
+        
+      } catch (error) {
+        console.error("🎬 Error creating storyboard:", error)
+        toast({
+          title: "Error",
+          description: "Failed to create storyboard automatically",
+          variant: "destructive"
+        })
+      }
     } else {
       console.log("🎬 No selected text found!")
-    }
-  }
-
-  const handleHighlightSelection = () => {
-    if (selectedText) {
-      // You could save highlights to a separate table or add them to the script
-      toast({
-        title: "Text Highlighted",
-        description: `Highlighted: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"`,
-      })
-      
-      // Clear selection
-      setShowSelectionActions(false)
-      setSelectedText("")
-      window.getSelection()?.removeAllRanges()
-    }
-  }
-
-  const handleAddNoteToSelection = () => {
-    if (selectedText) {
-      // You could open a note dialog or add to a notes table
-      toast({
-        title: "Add Note",
-        description: `Add note to: "${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}"`,
-      })
-      
-      // Clear selection
-      setShowSelectionActions(false)
-      setSelectedText("")
-      window.getSelection()?.removeAllRanges()
     }
   }
 
@@ -393,30 +564,16 @@ export default function SceneStoryboardsPage() {
   }
 
   const fetchStoryboards = async () => {
+    if (!sceneId) return
+    
     try {
       console.log("🎬 Fetching storyboards for scene:", sceneId)
-      
-      // First, let's check if there are any storyboards at all
-      const { data: allStoryboards, error: allError } = await getSupabaseClient()
-        .from('storyboards')
-        .select('*')
-        .eq('user_id', userId)
-      
-      console.log("🎬 All storyboards for user:", allStoryboards)
-      console.log("🎬 All storyboards error:", allError)
-      
-      // Now try to get storyboards for this specific scene
-      const data = await StoryboardsService.getStoryboardsByScene(sceneId)
-      console.log("🎬 Storyboards fetched for scene:", data)
-      setStoryboards(data)
+      const sceneStoryboards = await StoryboardsService.getStoryboardsByScene(sceneId)
+      console.log("🎬 Storyboards fetched for scene:", sceneStoryboards)
+      setStoryboards(sceneStoryboards)
+      setIsLoadingStoryboards(false)
     } catch (error) {
-      console.error("Error fetching storyboards:", error)
-      toast({
-        title: "Error",
-        description: "Failed to fetch storyboards",
-        variant: "destructive"
-      })
-    } finally {
+      console.error("🎬 Error fetching storyboards:", error)
       setIsLoadingStoryboards(false)
     }
   }
@@ -426,6 +583,23 @@ export default function SceneStoryboardsPage() {
     if (storyboards.length === 0) return 1
     return Math.max(...storyboards.map(sb => sb.shot_number || 1)) + 1
   }
+
+  // Reset shot mode and counter
+  const resetShotMode = () => {
+    setShotDetails({
+      shotNumber: getNextShotNumber(),
+      shotType: "wide",
+      cameraAngle: "eye-level",
+      movement: "static"
+    })
+  }
+
+  // Initialize shot details when storyboards load
+  useEffect(() => {
+    if (storyboards.length > 0 && shotMode) {
+      resetShotMode()
+    }
+  }, [storyboards, shotMode])
 
   const handleCreateStoryboard = async () => {
     if (!formData.title || !formData.description) {
@@ -519,11 +693,12 @@ export default function SceneStoryboardsPage() {
   }
 
   const resetForm = () => {
+    const nextShotNumber = getNextShotNumber()
     setFormData({
       title: "",
       description: "",
       scene_number: 1,
-      shot_number: getNextShotNumber(),
+      shot_number: nextShotNumber,
       shot_type: "wide",
       camera_angle: "eye-level",
       movement: "static",
@@ -539,6 +714,32 @@ export default function SceneStoryboardsPage() {
     setEditingStoryboard(null)
   }
 
+  // Debug: Log form state changes
+  useEffect(() => {
+    console.log("🎬 showCreateForm changed to:", showCreateForm)
+  }, [showCreateForm])
+
+  // Debug: Log shot mode changes
+  useEffect(() => {
+    console.log("🎬 shotMode changed to:", shotMode)
+  }, [shotMode])
+
+  // Debug: Log selection state changes
+  useEffect(() => {
+    console.log("🎬 Selection state changed:", { 
+      showSelectionActions, 
+      selectedText: selectedText?.length, 
+      shotMode 
+    })
+  }, [showSelectionActions, selectedText, shotMode])
+
+  // Reset form when form is closed
+  useEffect(() => {
+    if (!showCreateForm && !showEditForm) {
+      resetForm()
+    }
+  }, [showCreateForm, showEditForm])
+
   const filteredStoryboards = storyboards.filter(storyboard => {
     const matchesSearch = storyboard.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          storyboard.description.toLowerCase().includes(searchTerm.toLowerCase())
@@ -549,47 +750,128 @@ export default function SceneStoryboardsPage() {
     return matchesSearch && matchesFilter
   })
 
-  if (isLoadingScene || isLoadingStoryboards) {
+  // Debug render state
+  console.log("🎬 About to render component with state:", {
+    ready,
+    userId,
+    sceneId,
+    storyboardsCount: storyboards.length,
+    sceneScriptLength: sceneScript?.length || 0,
+    aiSettingsLoaded,
+    shotMode,
+    showSelectionActions
+  })
+  
+  console.log("🎬 sceneInfo object:", sceneInfo)
+  console.log("🎬 sceneInfo type:", typeof sceneInfo)
+  console.log("🎬 sceneInfo keys:", sceneInfo ? Object.keys(sceneInfo) : "null")
+  
+  if (!ready || !userId) {
+    console.log("🎬 Not ready or no user, showing loading...")
     return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <div className="container mx-auto px-4 py-8">
-          <Skeleton className="h-8 w-64 mb-4" />
-          <Skeleton className="h-4 w-96 mb-8" />
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Card key={i}>
-                <CardHeader>
-                  <Skeleton className="h-6 w-48 mb-2" />
-                  <Skeleton className="h-4 w-32" />
-                </CardHeader>
-                <CardContent>
-                  <Skeleton className="h-4 w-full mb-2" />
-                  <Skeleton className="h-4 w-3/4" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading...</p>
         </div>
       </div>
     )
   }
-
-  if (!sceneInfo) {
+  
+  if (!sceneId) {
+    console.log("🎬 No scene ID, showing error...")
     return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <div className="container mx-auto px-4 py-8">
-          <div className="text-center py-12">
-            <h1 className="text-2xl font-bold mb-4">Scene Not Found</h1>
-            <p className="text-muted-foreground mb-4">The scene you're looking for doesn't exist.</p>
-            <Button onClick={() => router.back()}>Go Back</Button>
-          </div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-destructive mb-4">Scene Not Found</h1>
+          <p className="text-muted-foreground">No scene ID provided</p>
         </div>
       </div>
     )
   }
-
+  
+  console.log("🎬 All conditions met, rendering main content...")
+  
+  // Temporarily bypass loading check to see main content
+  const isLoading = false // isLoadingScene || isLoadingStoryboards
+  
+  if (isLoading) {
+    console.log("🎬 Still loading, showing loading state...")
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading scene data...</p>
+        </div>
+      </div>
+    )
+  }
+  
+  console.log("🎬 Loading complete, rendering full page...")
+  
+  // Function to render script text with visual highlighting
+  const renderHighlightedScript = (script: string, usedRanges: Array<{start: number, end: number, text: string, shotNumber: number}>) => {
+    console.log("🎬 renderHighlightedScript called with:", { scriptLength: script?.length, usedRangesCount: usedRanges?.length })
+    console.log("🎬 Used ranges:", usedRanges)
+    
+    if (!script) return null
+    
+    // Sort ranges by start position
+    const sortedRanges = [...usedRanges].sort((a, b) => a.start - b.start)
+    console.log("🎬 Sorted ranges:", sortedRanges)
+    
+    // Create highlighted text segments
+    const segments: Array<{text: string, isUsed: boolean, shotNumber?: number}> = []
+    let currentPos = 0
+    
+    sortedRanges.forEach((range, index) => {
+      // Add unused text before this range
+      if (range.start > currentPos) {
+        const unusedText = script.substring(currentPos, range.start)
+        if (unusedText.trim()) {
+          segments.push({ text: unusedText, isUsed: false })
+        }
+      }
+      
+      // Add used text
+      const usedText = script.substring(range.start, range.end)
+      segments.push({ text: usedText, isUsed: true, shotNumber: range.shotNumber })
+      
+      currentPos = range.end
+    })
+    
+    // Add remaining unused text
+    if (currentPos < script.length) {
+      const remainingText = script.substring(currentPos)
+      if (remainingText.trim()) {
+        segments.push({ text: remainingText, isUsed: false })
+      }
+    }
+    
+    console.log("🎬 Created segments:", segments.length, "segments")
+    
+    return segments.map((segment, index) => (
+      <span
+        key={index}
+        className={`${segment.isUsed 
+          ? 'bg-green-500/10 text-green-100 border border-green-500/20 rounded px-1 py-0.5 cursor-pointer hover:bg-green-500/20 transition-colors' 
+          : 'text-foreground'
+        }`}
+        title={segment.isUsed ? `Shot ${segment.shotNumber}` : 'Available for new shot'}
+        onClick={() => {
+          if (segment.isUsed) {
+            toast({
+              title: `Shot ${segment.shotNumber}`,
+              description: "This text has already been used for a shot",
+            })
+          }
+        }}
+      >
+        {segment.text}
+      </span>
+    ))
+  }
+  
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -599,16 +881,16 @@ export default function SceneStoryboardsPage() {
           <nav className="flex items-center space-x-2 text-sm text-muted-foreground">
             <Link href="/movies" className="hover:text-foreground">Movies</Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo.project_id}`} className="hover:text-foreground">
-              {sceneInfo.project_name}
+            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground">
+              {sceneInfo?.project_name || "Unknown Project"}
             </Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo.project_id}`} className="hover:text-foreground">
-              {sceneInfo.timeline_name}
+            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground">
+              {sceneInfo?.timeline_name || "Unknown Timeline"}
             </Link>
             <span>/</span>
             <span className="text-foreground">
-              {sceneInfo.scene_number ? `Scene ${sceneInfo.scene_number}: ` : ''}{sceneInfo.name}
+              {sceneInfo?.scene_number ? `Scene ${sceneInfo.scene_number}: ` : ''}{sceneInfo?.name || "Unknown Scene"}
             </span>
           </nav>
         </div>
@@ -622,14 +904,14 @@ export default function SceneStoryboardsPage() {
             </Button>
             <div>
               <div className="flex items-center gap-3 mb-2">
-                {sceneInfo.scene_number && (
+                {sceneInfo?.scene_number && (
                   <Badge variant="secondary" className="text-lg px-3 py-1">
                     Scene {sceneInfo.scene_number}
                   </Badge>
                 )}
-                <h1 className="text-4xl font-bold">{sceneInfo.name}</h1>
+                <h1 className="text-4xl font-bold">{sceneInfo?.name || "Loading Scene..."}</h1>
               </div>
-              <p className="text-muted-foreground text-lg">{sceneInfo.description}</p>
+              <p className="text-muted-foreground text-lg">{sceneInfo?.description || "Loading description..."}</p>
             </div>
           </div>
           
@@ -637,11 +919,11 @@ export default function SceneStoryboardsPage() {
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
               <Film className="h-4 w-4 text-muted-foreground" />
               <div>
-                <div className="text-sm font-medium">{sceneInfo.project_name}</div>
+                <div className="text-sm font-medium">{sceneInfo?.project_name || "Loading Project..."}</div>
                 <div className="text-xs text-muted-foreground">Project</div>
               </div>
             </div>
-            {sceneInfo.scene_number && (
+            {sceneInfo?.scene_number && (
               <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
                 <FileText className="h-4 w-4 text-muted-foreground" />
                 <div>
@@ -653,14 +935,14 @@ export default function SceneStoryboardsPage() {
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
               <Clock className="h-4 w-4 text-muted-foreground" />
               <div>
-                <div className="text-sm font-medium">{sceneInfo.start_time_seconds}s</div>
+                <div className="text-sm font-medium">{sceneInfo?.start_time_seconds || "Loading Time..."}s</div>
                 <div className="text-xs text-muted-foreground">Start Time</div>
               </div>
             </div>
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
               <Clock className="h-4 w-4 text-muted-foreground" />
               <div>
-                <div className="text-sm font-medium">{sceneInfo.duration_seconds}s</div>
+                <div className="text-sm font-medium">{sceneInfo?.duration_seconds || "Loading Duration..."}s</div>
                 <div className="text-xs text-muted-foreground">Duration</div>
               </div>
             </div>
@@ -679,6 +961,25 @@ export default function SceneStoryboardsPage() {
                 </div>
               )}
               <Button
+                variant={shotMode ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  const newShotMode = !shotMode
+                  console.log("🎬 Shot mode toggle clicked!")
+                  console.log("🎬 Current shotMode:", shotMode)
+                  console.log("🎬 Setting shotMode to:", newShotMode)
+                  setShotMode(newShotMode)
+                  if (newShotMode) {
+                    console.log("🎬 Resetting shot mode...")
+                    resetShotMode()
+                  }
+                }}
+                className={`text-xs ${shotMode ? 'bg-primary text-primary-foreground' : ''}`}
+              >
+                <Film className="h-3 w-3 mr-1" />
+                {shotMode ? 'Shot Mode ON' : 'Shot Mode'}
+              </Button>
+              <Button
                 variant="outline"
                 size="sm"
                 onClick={fetchSceneScript}
@@ -691,10 +992,304 @@ export default function SceneStoryboardsPage() {
             </div>
           </div>
           
+          {/* Shot Mode Status Indicator */}
+          <div className={`mb-4 p-2 rounded-lg text-xs font-medium ${shotMode ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-gray-800 text-gray-300 border border-gray-600'}`}>
+            🎬 Shot Mode: {shotMode ? 'ENABLED' : 'DISABLED'} 
+            {shotMode && ` | Next Shot: ${shotDetails.shotNumber}`}
+          </div>
+          {/* Shot Mode Configuration Panel */}
+          {shotMode && (
+            <Card className="shot-mode-config mb-4" style={{ backgroundColor: '#141414', borderColor: '#333' }}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Film className="h-4 w-4 text-blue-400" />
+                  <h3 className="text-sm font-medium text-white">Shot Mode Configuration</h3>
+                  <Badge variant="secondary" className="text-xs bg-blue-600 text-white">
+                    Next Shot: {shotDetails.shotNumber}
+                  </Badge>
+                </div>
+                
+                {editingShotDetails ? (
+                  // Edit Mode
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div>
+                        <Label htmlFor="edit-shot-type" className="text-xs text-blue-300">Shot Type</Label>
+                        <Select 
+                          value={tempShotDetails.shotType} 
+                          onValueChange={(value) => {
+                            setTempShotDetails(prev => ({ ...prev, shotType: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="wide">Wide</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="close">Close</SelectItem>
+                            <SelectItem value="extreme-close">Extreme Close</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="edit-camera-angle" className="text-xs text-blue-300">Camera Angle</Label>
+                        <Select 
+                          value={tempShotDetails.cameraAngle} 
+                          onValueChange={(value) => {
+                            setTempShotDetails(prev => ({ ...prev, cameraAngle: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="eye-level">Eye Level</SelectItem>
+                            <SelectItem value="high-angle">High Angle</SelectItem>
+                            <SelectItem value="low-angle">Low Angle</SelectItem>
+                            <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="edit-movement" className="text-xs text-blue-300">Movement</Label>
+                        <Select 
+                          value={tempShotDetails.movement} 
+                          onValueChange={(value) => {
+                            setTempShotDetails(prev => ({ ...prev, movement: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="static">Static</SelectItem>
+                            <SelectItem value="panning">Panning</SelectItem>
+                            <SelectItem value="tilting">Tilting</SelectItem>
+                            <SelectItem value="tracking">Tracking</SelectItem>
+                            <SelectItem value="zooming">Zooming</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setTempShotDetails(prev => ({ ...prev, shotNumber: getNextShotNumber() }))
+                            // Re-apply visual selection after button click
+                            setTimeout(reapplySelection, 50)
+                          }}
+                          className="h-8 text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+                        >
+                          Reset Shot #
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setShotDetails(tempShotDetails)
+                          setEditingShotDetails(false)
+                          // Re-apply visual selection after button click
+                          setTimeout(reapplySelection, 50)
+                        }}
+                        className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                      >
+                        Save Changes
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setTempShotDetails(shotDetails)
+                          setEditingShotDetails(false)
+                          // Re-apply visual selection after button click
+                          setTimeout(reapplySelection, 50)
+                        }}
+                        className="text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  // View Mode
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      <div>
+                        <Label htmlFor="shot-type" className="text-xs text-blue-300">Shot Type</Label>
+                        <Select 
+                          value={shotDetails.shotType} 
+                          onValueChange={(value) => {
+                            setShotDetails(prev => ({ ...prev, shotType: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="wide">Wide</SelectItem>
+                            <SelectItem value="medium">Medium</SelectItem>
+                            <SelectItem value="close">Close</SelectItem>
+                            <SelectItem value="extreme-close">Extreme Close</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="camera-angle" className="text-xs text-blue-300">Camera Angle</Label>
+                        <Select 
+                          value={shotDetails.cameraAngle} 
+                          onValueChange={(value) => {
+                            setShotDetails(prev => ({ ...prev, cameraAngle: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="eye-level">Eye Level</SelectItem>
+                            <SelectItem value="high-angle">High Angle</SelectItem>
+                            <SelectItem value="low-angle">Low Angle</SelectItem>
+                            <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label htmlFor="movement" className="text-xs text-blue-300">Movement</Label>
+                        <Select 
+                          value={shotDetails.movement} 
+                          onValueChange={(value) => {
+                            setShotDetails(prev => ({ ...prev, movement: value }))
+                            // Re-apply visual selection after dropdown change
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="static">Static</SelectItem>
+                            <SelectItem value="panning">Panning</SelectItem>
+                            <SelectItem value="tilting">Tilting</SelectItem>
+                            <SelectItem value="tracking">Tracking</SelectItem>
+                            <SelectItem value="zooming">Zooming</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setShotDetails(prev => ({ ...prev, shotNumber: getNextShotNumber() }))
+                            // Re-apply visual selection after button click
+                            setTimeout(reapplySelection, 50)
+                          }}
+                          className="h-8 text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+                        >
+                          Reset Shot #
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs text-blue-300">
+                        💡 Select text in the script below and click "Create Shot" to automatically create storyboards with these settings
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setTempShotDetails(shotDetails)
+                          setEditingShotDetails(true)
+                          // Re-apply visual selection after button click
+                          setTimeout(reapplySelection, 50)
+                        }}
+                        className="text-xs bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+                      >
+                        Edit Details
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
           {sceneScript ? (
             <Card className="bg-muted/20 border-border/50">
               <CardContent className="p-6">
+                {shotMode && (
+                  <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-center gap-2 text-blue-700">
+                      <Film className="h-4 w-4" />
+                      <span className="text-sm font-medium">Shot Mode Active</span>
+                      <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-700">
+                        Next: Shot {shotDetails.shotNumber}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-blue-600 mt-1">
+                      Select text in the script below to create storyboard shots with your configured settings
+                    </p>
+                  </div>
+                )}
                 <div className="bg-background/50 rounded-lg p-4 border border-border/30 relative">
+                  {/* Text Highlighting Legend */}
+                  {usedTextRanges.length > 0 && (
+                    <div className="mb-4 p-3 bg-gray-800/50 border border-gray-600 rounded-lg">
+                      <div className="flex items-center gap-4 text-sm">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-green-500/20 border border-green-500/30 rounded"></div>
+                          <span className="text-green-300">Used Text (Already Shot)</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-blue-500/20 border border-blue-500/30 rounded"></div>
+                          <span className="text-blue-300">Current Selection</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-transparent border border-gray-500 rounded"></div>
+                          <span className="text-gray-300">Available for New Shots</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">
+                        Click on highlighted text to see shot details. Green text has already been used for shots.
+                      </p>
+                    </div>
+                  )}
+                  
                   <pre 
                     className="whitespace-pre-wrap text-sm font-mono text-foreground leading-relaxed select-text cursor-text"
                     onMouseUp={handleTextSelection}
@@ -702,87 +1297,38 @@ export default function SceneStoryboardsPage() {
                     onSelect={handleTextSelection}
                     onMouseDown={() => setShowSelectionActions(false)}
                   >
-                    {sceneScript}
+                    {renderHighlightedScript(sceneScript, usedTextRanges)}
                   </pre>
                   
                   {/* Selection Action Buttons */}
-                  {console.log("🎬 Rendering selection actions:", { showSelectionActions, selectedText: selectedText?.length, selectedTextValue: selectedText })}
-                  {showSelectionActions && selectedText && (
-                    <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-background border border-border rounded-lg shadow-lg p-2 z-50">
+                  {showSelectionActions && (selectedText || lockedSelection) && shotMode && (
+                    <div className="selection-actions fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-background border border-border rounded-lg shadow-lg p-2 z-50">
                       <div className="flex items-center gap-2">
                         <div className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
-                          {selectedText.length} chars selected
+                          {(selectedText || lockedSelection).length} chars selected
                         </div>
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() => {
+                          variant="default"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
                             console.log("🎬 Create Shot button clicked!")
-                            console.log("🎬 Selected text:", selectedText)
+                            console.log("🎬 Selected text:", selectedText || lockedSelection)
                             handleCreateShotFromSelection()
                           }}
-                          className="text-xs h-7 px-2"
+                          className="text-xs h-7 px-2 bg-primary text-primary-foreground"
                         >
                           <Film className="h-3 w-3 mr-1" />
-                          Create Shot
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            console.log("🎬 Test button clicked!")
-                            alert("Test button works! Selected text: " + selectedText)
-                          }}
-                          className="text-xs h-7 px-2"
-                        >
-                          Test
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            console.log("🎬 Highlight button clicked!")
-                            // Create a highlight by adding a note to the storyboard
-                            setFormData(prev => ({
-                              ...prev,
-                              title: `Highlight: ${selectedText.substring(0, 30)}...`,
-                              description: `HIGHLIGHTED TEXT:\n${selectedText}`,
-                              shot_number: getNextShotNumber()
-                            }))
-                            setShowCreateForm(true)
-                            setShowSelectionActions(false)
-                          }}
-                          className="text-xs h-7 px-2"
-                        >
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Highlight
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            console.log("🎬 Add Note button clicked!")
-                            // Add a note by creating a storyboard with the selected text
-                            setFormData(prev => ({
-                              ...prev,
-                              title: `Note: ${selectedText.substring(0, 30)}...`,
-                              description: `NOTE:\n${selectedText}`,
-                              shot_number: getNextShotNumber()
-                            }))
-                            setShowCreateForm(true)
-                            setShowSelectionActions(false)
-                          }}
-                          className="text-xs h-7 px-2"
-                        >
-                          <FileText className="h-3 w-3 mr-1" />
-                          Add Note
+                          Create Shot {shotDetails.shotNumber}
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() => {
-                            setShowSelectionActions(false)
-                            setSelectedText("")
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            unlockSelection()
                             window.getSelection()?.removeAllRanges()
                           }}
                           className="text-xs h-7 w-7 p-0"
@@ -849,7 +1395,7 @@ export default function SceneStoryboardsPage() {
             <div className="mb-6 p-4 bg-muted/50 rounded-lg border">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-sm font-medium">
-                  {sceneInfo.scene_number ? `Scene ${sceneInfo.scene_number} - ` : ''}Shot Sequence:
+                  {sceneInfo?.scene_number ? `Scene ${sceneInfo.scene_number} - ` : ''}Shot Sequence:
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {filteredStoryboards.length} total shots
@@ -868,17 +1414,21 @@ export default function SceneStoryboardsPage() {
 
         {/* Create Form */}
         {showCreateForm && (
-          <Card className="mb-8">
+          <Card key={`form-${formData.title}-${formData.shot_number}`} className="mb-8">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                Create New Storyboard for {sceneInfo.name}
+                Create New Storyboard for {sceneInfo?.name || "Loading Scene..."}
               </CardTitle>
               <CardDescription>
                 Fill in the details below. Use AI assistance for text and image generation.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Debug info */}
+              <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
+                <strong>Debug:</strong> Form is showing. Form data: {JSON.stringify(formData, null, 2)}
+              </div>
               {/* Basic Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1210,7 +1760,7 @@ export default function SceneStoryboardsPage() {
                   <span className="bg-muted px-2 py-1 rounded text-xs font-mono">
                     Shot {storyboard.shot_number || 1}
                   </span>
-                  {sceneInfo.scene_number && (
+                  {sceneInfo?.scene_number && (
                     <span className="bg-blue-500/20 text-blue-500 px-2 py-1 rounded text-xs font-mono border border-blue-500/30">
                       Scene {sceneInfo.scene_number}
                     </span>
@@ -1334,4 +1884,7 @@ export default function SceneStoryboardsPage() {
       </div>
     </div>
   )
+  
+  // Debug logging after render
+  console.log("🎬 Component render completed successfully!")
 }
