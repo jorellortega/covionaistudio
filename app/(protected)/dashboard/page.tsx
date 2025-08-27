@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb, Palette } from "lucide-react"
 import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -213,6 +213,24 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-yellow-500">{ideasCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-yellow-500 transition-colors" />
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
+          <Link href="/visdev">
+            <CardHeader className="pb-4">
+              <div className="p-3 rounded-lg bg-green-500/10 w-fit group-hover:bg-green-500/20 transition-colors">
+                <Palette className="h-6 w-6 text-green-500" />
+              </div>
+              <CardTitle className="text-lg group-hover:text-green-500 transition-colors">Visual Development</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CardDescription className="mb-4">Design characters, environments & style guides</CardDescription>
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-green-500">New</span>
+                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-green-500 transition-colors" />
               </div>
             </CardContent>
           </Link>

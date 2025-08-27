@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home, Lightbulb } from "lucide-react"
+import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home, Lightbulb, Palette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 const fullNavigation = [
@@ -13,6 +13,7 @@ const fullNavigation = [
   { name: "Videos", href: "/videos", icon: Video },
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
+  { name: "Visual Dev", href: "/visdev", icon: Palette },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
 ]
 
@@ -20,6 +21,7 @@ const mobileNavigation = [
   { name: "Home", href: "/dashboard", icon: Home },
   { name: "Movies", href: "/movies", icon: Film },
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
+  { name: "Visual Dev", href: "/visdev", icon: Palette },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
 ]
