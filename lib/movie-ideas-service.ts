@@ -6,6 +6,8 @@ export interface MovieIdea {
   title: string
   description: string
   genre: string
+  main_creator: string
+  co_creators?: string[]
   original_prompt?: string
   prompt: string
   status: "concept" | "development" | "completed"
@@ -17,6 +19,8 @@ export interface CreateMovieIdeaData {
   title: string
   description: string
   genre?: string
+  main_creator: string
+  co_creators?: string[]
   original_prompt?: string
   prompt?: string
   status?: "concept" | "development" | "completed"
@@ -26,6 +30,8 @@ export interface UpdateMovieIdeaData {
   title?: string
   description?: string
   genre?: string
+  main_creator?: string
+  co_creators?: string[]
   original_prompt?: string
   prompt?: string
   status?: "concept" | "development" | "completed"
@@ -99,7 +105,7 @@ export class MovieIdeasService {
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)
-      .or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%,prompt.ilike.%${searchTerm}%`)
+      .or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%,prompt.ilike.%${searchTerm}%,main_creator.ilike.%${searchTerm}%`)
       .order('created_at', { ascending: false })
 
     if (error) {

@@ -1,19 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabaseClient } from '@/lib/supabase'
-
-// Initialize Supabase client
-const supabase = getSupabaseClient()
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
 
 export async function POST(request: NextRequest) {
   try {
     const { imageUrl, fileName, userId } = await request.json()
     
     if (!imageUrl || !fileName || !userId) {
+      console.error('Missing required fields:', { imageUrl: !!imageUrl, fileName: !!fileName, userId: !!userId })
       return NextResponse.json(
         { error: 'Missing required fields: imageUrl, fileName, userId' },
         { status: 400 }
       )
     }
+
+    // Create server-side Supabase client with proper authentication
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch {
+              // The `setAll` method was called from a Server Component.
+              // This can be ignored if you have middleware refreshing
+              // user sessions.
+            }
+          },
+        },
+      }
+    )
 
     console.log('Downloading image from:', imageUrl)
     console.log('File name:', fileName)
@@ -22,7 +46,8 @@ export async function POST(request: NextRequest) {
     // Download the image from OpenAI (server-side, no CORS issues)
     const response = await fetch(imageUrl)
     if (!response.ok) {
-      throw new Error(`Failed to download image: ${response.status}`)
+      console.error('Failed to download image:', response.status, response.statusText)
+      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
     }
 
     const imageBuffer = await response.arrayBuffer()
@@ -39,6 +64,18 @@ export async function POST(request: NextRequest) {
     const filePath = `${userId}/images/${uniqueFileName}`
     console.log('Uploading to Supabase path:', filePath)
 
+    // Check if bucket exists
+    const { data: bucketData, error: bucketError } = await supabase.storage
+      .from('cinema_files')
+      .list('', { limit: 1 })
+
+    if (bucketError) {
+      console.error('Bucket access error:', bucketError)
+      throw new Error(`Bucket access error: ${bucketError.message}`)
+    }
+
+    console.log('Bucket access successful, proceeding with upload...')
+
     const { data, error } = await supabase.storage
       .from('cinema_files')
       .upload(filePath, imageBlob, {
@@ -49,8 +86,14 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('Supabase upload error:', error)
+      console.error('Error details:', {
+        message: error.message,
+        name: error.name
+      })
       throw new Error(`Failed to upload to Supabase: ${error.message}`)
     }
+
+    console.log('Upload successful, data:', data)
 
     // Get the public URL
     const { data: urlData } = supabase.storage
@@ -67,8 +110,19 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('Error in download-and-store-image API:', error)
+    
+    // More detailed error logging
+    if (error instanceof Error) {
+      console.error('Error name:', error.name)
+      console.error('Error message:', error.message)
+      console.error('Error stack:', error.stack)
+    }
+    
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Unknown error' },
+      { 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        details: error instanceof Error ? error.stack : undefined
+      },
       { status: 500 }
     )
   }

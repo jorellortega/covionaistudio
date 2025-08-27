@@ -7,6 +7,7 @@ interface GenerateScriptRequest {
 interface GenerateImageRequest {
   prompt: string
   style: string
+  model?: string
   apiKey: string
 }
 
@@ -91,15 +92,29 @@ export class OpenAIService {
   }
 
   static async generateImage(request: GenerateImageRequest): Promise<OpenAIResponse> {
-    const { prompt, style, apiKey } = request
+    const { prompt, style, model, apiKey } = request
     
-    const enhancedPrompt = `${style} style: ${prompt}`
+    // Clean and enhance the prompt to avoid API errors
+    const cleanPrompt = prompt.trim().replace(/\s+/g, ' ')
+    const enhancedPrompt = `${style} style: ${cleanPrompt}`
+    
+    // Validate prompt length (DALL-E 3 has a 1000 character limit)
+    if (enhancedPrompt.length > 1000) {
+      return {
+        success: false,
+        error: `Prompt too long. Maximum 1000 characters, got ${enhancedPrompt.length}. Please shorten your prompt.`
+      }
+    }
+    
+    console.log('Generating image with prompt:', enhancedPrompt)
+    console.log('Using model:', model)
     
     const data = {
       prompt: enhancedPrompt,
       n: 1,
       size: "1024x1792", // Portrait size for movie posters
-      model: "dall-e-3",
+      model: model || "dall-e-3", // Use the passed model or default to dall-e-3
+      quality: "standard", // Add quality parameter for better results
     }
 
     return this.makeRequest('https://api.openai.com/v1/images/generations', data, apiKey)
