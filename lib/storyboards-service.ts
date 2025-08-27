@@ -334,7 +334,10 @@ export class StoryboardsService {
     try {
       const { data, error } = await getSupabaseClient()
         .from('storyboards')
-        .update({ image_url: imageUrl })
+        .update({ 
+          image_url: imageUrl,
+          ai_generated: true // Mark as AI-generated when image is added
+        })
         .eq('id', id)
         .select()
         .single()

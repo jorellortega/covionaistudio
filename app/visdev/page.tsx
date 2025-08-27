@@ -19,6 +19,7 @@ import { MovieService, Movie } from '@/lib/movie-service'
 import { TimelineService, SceneWithMetadata } from '@/lib/timeline-service'
 import { AssetService, CreateAssetData } from '@/lib/asset-service'
 import Header from '@/components/header'
+import { Loader2 } from 'lucide-react'
 
 interface VisualDevelopmentItem {
   id: string
@@ -37,7 +38,7 @@ interface VisualDevelopmentItem {
 
 interface SavedPrompt {
   id: string
-  type: 'character' | 'environment' | 'prop' | 'color' | 'lighting' | 'style'
+  type: 'character' | 'environment' | 'prop' | 'color' | 'lighting' | 'style' | 'prompt'
   title: string
   prompt: string
   style: string
@@ -63,7 +64,8 @@ export default function VisualDevelopmentPage() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [prompt, setPrompt] = useState('')
-  const [selectedStyle, setSelectedStyle] = useState('cinematic')
+  const [promptTitle, setPromptTitle] = useState('')
+  const [selectedStyle, setSelectedStyle] = useState('none')
   const [selectedModel, setSelectedModel] = useState('openai')
   const [promptFilter, setPromptFilter] = useState('all')
   const [promptProjectFilter, setPromptProjectFilter] = useState('all')
@@ -72,6 +74,20 @@ export default function VisualDevelopmentPage() {
   const [customStyles, setCustomStyles] = useState<{[key: string]: string}>({})
   const [showCustomStyleInput, setShowCustomStyleInput] = useState(false)
   const [newCustomStyle, setNewCustomStyle] = useState({ name: '', description: '' })
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editingItem, setEditingItem] = useState<VisualDevelopmentItem | null>(null)
+  const [showImportDialog, setShowImportDialog] = useState(false)
+  const [importFiles, setImportFiles] = useState<File[]>([])
+  const [importData, setImportData] = useState({
+    title: '',
+    description: '',
+    prompt: '',
+    type: 'character' as 'character' | 'environment' | 'prop' | 'color' | 'lighting' | 'style',
+    style: 'cinematic'
+  })
+  const [isImporting, setIsImporting] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const [selectedPromptId, setSelectedPromptId] = useState('none')
 
   const styles = {
     cinematic: 'Cinematic movie poster style, dramatic lighting, professional photography',
@@ -298,6 +314,26 @@ export default function VisualDevelopmentPage() {
         return
       }
 
+      // If the image is still a DALL-E URL and we have a project, try to save it to bucket first
+      let finalImageUrl = item.generatedImage
+      if (item.generatedImage && item.generatedImage.includes('oaidalleapiprodscus.blob.core.windows.net') && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+        try {
+          const fileName = `${Date.now()}-${item.type}-${item.title.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.png`
+          const bucketUrl = await saveImageToBucket(item.generatedImage, fileName)
+          finalImageUrl = bucketUrl
+          console.log('✅ Image saved to bucket during database save:', bucketUrl)
+          
+          // Update the local item with the bucket URL
+          const updatedItem = { ...item, generatedImage: bucketUrl }
+          const updatedItems = items.map(i => i.id === item.id ? updatedItem : i)
+          setItems(updatedItems)
+          localStorage.setItem('visdev-items', JSON.stringify(updatedItems))
+        } catch (error) {
+          console.error('❌ Failed to save image to bucket during database save:', error)
+          // Continue with DALL-E URL if bucket save fails
+        }
+      }
+
       // Prepare asset data
       const assetData: CreateAssetData = {
         project_id: selectedProject,
@@ -305,7 +341,7 @@ export default function VisualDevelopmentPage() {
         title: item.title,
         content_type: 'image',
         content: item.generatedContent,
-        content_url: item.generatedImage,
+        content_url: finalImageUrl,
         prompt: item.prompt,
         model: selectedModel,
         generation_settings: {
@@ -357,12 +393,185 @@ export default function VisualDevelopmentPage() {
     })
   }
 
+  const saveEditedItem = async (editedItem: VisualDevelopmentItem) => {
+    try {
+      const updatedItems = items.map(item => 
+        item.id === editedItem.id ? editedItem : item
+      )
+      setItems(updatedItems)
+      localStorage.setItem('visdev-items', JSON.stringify(updatedItems))
+      
+      // If the item has a database ID, update it in the database too
+      if (editedItem.databaseId && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+        await saveToDatabase(editedItem)
+      }
+      
+      setShowEditDialog(false)
+      setEditingItem(null)
+      
+      toast({
+        title: "Item Updated",
+        description: "Content updated successfully!",
+      })
+    } catch (error) {
+      console.error('Error updating item:', error)
+      toast({
+        title: "Update Failed",
+        description: "Failed to update item. Check console for details.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleFileSelect = (files: FileList | File[]) => {
+    const fileArray = Array.from(files)
+    setImportFiles(fileArray)
+    
+    // Auto-generate title from first filename if multiple files
+    if (fileArray.length === 1) {
+      const fileName = fileArray[0].name.replace(/\.[^/.]+$/, '') // Remove file extension
+      setImportData(prev => ({
+        ...prev,
+        title: fileName,
+        description: `Imported ${fileName}`,
+        prompt: `Imported image: ${fileName}`
+      }))
+    } else if (fileArray.length > 1) {
+      setImportData(prev => ({
+        ...prev,
+        title: `${fileArray.length} Images`,
+        description: `Imported ${fileArray.length} images`,
+        prompt: `Imported ${fileArray.length} images`
+      }))
+    }
+  }
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true)
+    } else if (e.type === "dragleave") {
+      setDragActive(false)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const files = Array.from(e.dataTransfer.files).filter(file => 
+        file.type.startsWith('image/') && file.size <= 10 * 1024 * 1024
+      )
+      if (files.length > 0) {
+        handleFileSelect(files)
+      } else {
+        toast({
+          title: "Invalid Files",
+          description: "Please select valid image files under 10MB each.",
+          variant: "destructive"
+        })
+      }
+    }
+  }
+
+  const importImages = async () => {
+    if (!importFiles.length || !user) return
+    
+    setIsImporting(true)
+    try {
+      const supabase = getSupabaseClient()
+      const newItems: VisualDevelopmentItem[] = []
+      
+      // Process each file
+      for (let i = 0; i < importFiles.length; i++) {
+        const file = importFiles[i]
+        const fileExt = file.name.split('.').pop()
+        const fileName = `${Date.now()}-${i}-imported-${importData.type}-${file.name.replace(/[^a-zA-Z0-9]/g, '-')}.${fileExt}`
+        const filePath = `${user.id}/images/${fileName}`
+        
+        // Upload file to Supabase storage
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('cinema_files')
+          .upload(filePath, file)
+        
+        if (uploadError) throw uploadError
+        
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from('cinema_files')
+          .getPublicUrl(filePath)
+        
+        const imageUrl = urlData.publicUrl
+        
+        // Create new visual development item
+        const newItem: VisualDevelopmentItem = {
+          id: Date.now().toString(),
+          type: importData.type,
+          title: importFiles.length === 1 ? importData.title : `${importData.title} - ${file.name.replace(/\.[^/.]+$/, '')}`,
+          description: importFiles.length === 1 ? importData.description : `Imported ${file.name}`,
+          prompt: importFiles.length === 1 ? importData.prompt : `Imported image: ${file.name}`,
+          generatedImage: imageUrl,
+          tags: [importData.type, importData.style],
+          projectId: selectedProject === 'all' ? null : selectedProject,
+          sceneId: selectedScene === 'movie' ? null : selectedScene || null,
+          createdAt: new Date().toISOString()
+        }
+        
+        newItems.push(newItem)
+      }
+      
+      // Add all items to the list
+      const updatedItems = [...items, ...newItems]
+      setItems(updatedItems)
+      localStorage.setItem('visdev-items', JSON.stringify(updatedItems))
+      
+      // Save to database if project is selected
+      if (selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+        for (const item of newItems) {
+          await saveToDatabase(item)
+        }
+      }
+      
+      // Reset form and close dialog
+      setShowImportDialog(false)
+      setImportFiles([])
+      setImportData({
+        title: '',
+        description: '',
+        prompt: '',
+        type: 'character',
+        style: 'cinematic'
+      })
+      
+      toast({
+        title: "Images Imported!",
+        description: `${importFiles.length} image${importFiles.length === 1 ? '' : 's'} added to your visual development library.`,
+      })
+      
+    } catch (error) {
+      console.error('Error importing images:', error)
+      toast({
+        title: "Import Failed",
+        description: "Failed to import images. Check console for details.",
+        variant: "destructive"
+      })
+    } finally {
+      setIsImporting(false)
+    }
+  }
+
   const editItem = (item: VisualDevelopmentItem) => {
-    setPrompt(item.prompt)
-    setSelectedStyle(item.tags.find(tag => Object.values(allStyles).includes(tag)) || 'cinematic')
-    setActiveTab(item.type + 's')
-    // Scroll to top to show the generation form
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setEditingItem(item)
+    setShowEditDialog(true)
+    
+    console.log('Edit item:', {
+      type: item.type,
+      prompt: item.prompt,
+      style: item.tags.find(tag => Object.values(allStyles).includes(tag)) || 'cinematic'
+    })
   }
 
   const isModelAvailable = (modelKey: string) => {
@@ -417,9 +626,10 @@ export default function VisualDevelopmentPage() {
       }
 
       if (selectedModel === 'openai') {
+        const stylePrefix = selectedStyle !== 'none' ? `${styles[selectedStyle as keyof typeof styles]} style: ` : ''
         response = await OpenAIService.generateImage({
-          prompt: `${styles[selectedStyle as keyof typeof styles]} style: ${prompt}`,
-          style: styles[selectedStyle as keyof typeof styles],
+          prompt: `${stylePrefix}${prompt}`,
+          style: selectedStyle !== 'none' ? styles[selectedStyle as keyof typeof styles] : '',
           model: 'dall-e-3',
           apiKey
         })
@@ -431,15 +641,31 @@ export default function VisualDevelopmentPage() {
           apiKey
         })
       } else if (selectedModel === 'openart') {
+        const stylePrefix = selectedStyle !== 'none' ? `${styles[selectedStyle as keyof typeof styles]} style: ` : ''
         response = await OpenArtService.generateImage({
-          prompt: `${styles[selectedStyle as keyof typeof styles]} style: ${prompt}`,
-          style: styles[selectedStyle as keyof typeof styles],
+          prompt: `${stylePrefix}${prompt}`,
+          style: selectedStyle !== 'none' ? styles[selectedStyle as keyof typeof styles] : '',
           model: 'sdxl',
           apiKey
         })
       }
 
       if (response?.success) {
+        let imageUrl = response.data?.data?.[0]?.url
+        
+        // If we have an image URL and a project is selected, save it to the bucket
+        if (imageUrl && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+          try {
+            const fileName = `${Date.now()}-${type}-${prompt.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.png`
+            const bucketUrl = await saveImageToBucket(imageUrl, fileName)
+            imageUrl = bucketUrl // Use the bucket URL instead of DALL-E URL
+            console.log('✅ Image saved to bucket:', bucketUrl)
+          } catch (error) {
+            console.error('❌ Failed to save image to bucket:', error)
+            // Continue with DALL-E URL if bucket save fails
+          }
+        }
+
         const newItem: VisualDevelopmentItem = {
           id: Date.now().toString(),
           type: type as any,
@@ -447,8 +673,8 @@ export default function VisualDevelopmentPage() {
           description: prompt,
           prompt,
           generatedContent: response.data?.content || response.data?.choices?.[0]?.message?.content,
-          generatedImage: response.data?.data?.[0]?.url,
-          tags: [type, selectedStyle],
+          generatedImage: imageUrl,
+          tags: selectedStyle !== 'none' ? [type, selectedStyle] : [type],
           projectId: selectedProject === 'all' ? null : selectedProject,
           sceneId: selectedScene === 'movie' ? null : selectedScene || null,
           createdAt: new Date().toISOString()
@@ -460,11 +686,11 @@ export default function VisualDevelopmentPage() {
         const newSavedPrompt: SavedPrompt = {
           id: Date.now().toString() + '-prompt',
           type: type as any,
-          title: `Generated ${type}`,
+          title: promptTitle || `Prompt: ${prompt.substring(0, 50)}...`,
           prompt,
           style: selectedStyle,
           model: selectedModel,
-          tags: [type, selectedStyle, selectedModel],
+          tags: selectedStyle !== 'none' ? [type, selectedStyle, selectedModel] : [type, selectedModel],
           projectId: selectedProject === 'all' ? null : selectedProject,
           sceneId: selectedScene === 'movie' ? null : selectedScene || null,
           createdAt: new Date().toISOString(),
@@ -474,7 +700,7 @@ export default function VisualDevelopmentPage() {
         
         toast({
           title: "Success",
-          description: `${type} generated successfully!`,
+          description: `${type} generated successfully!${imageUrl !== response.data?.data?.[0]?.url ? ' (Saved to bucket)' : ''}`,
         })
       } else {
         throw new Error(response?.error || 'Generation failed')
@@ -488,6 +714,44 @@ export default function VisualDevelopmentPage() {
     } finally {
       setIsGenerating(false)
     }
+  }
+
+  const saveCurrentPrompt = async (type: string) => {
+    if (!prompt.trim() || !user) return
+
+    try {
+      const newSavedPrompt: SavedPrompt = {
+        id: Date.now().toString() + '-manual',
+        type: type as any,
+        title: promptTitle || `Prompt: ${prompt.substring(0, 30)}...`,
+        prompt,
+        style: selectedStyle,
+        model: selectedModel,
+        tags: [type, selectedStyle, selectedModel],
+        projectId: selectedProject === 'all' ? null : selectedProject,
+        sceneId: selectedScene === 'movie' ? null : selectedScene || null,
+        createdAt: new Date().toISOString(),
+        useCount: 0
+      }
+      savePrompt(newSavedPrompt)
+      toast({
+        title: "Prompt Saved",
+        description: "Prompt saved successfully!",
+      })
+      clearPromptForm() // Clear form after saving
+    } catch (error) {
+      console.error('Error saving prompt:', error)
+      toast({
+        title: "Save Prompt Failed",
+        description: "Failed to save prompt. Check console for details.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const clearPromptForm = () => {
+    setPrompt('')
+    setPromptTitle('')
   }
 
   const getTabContent = (type: string) => {
@@ -519,67 +783,259 @@ export default function VisualDevelopmentPage() {
           
           <div className="bg-card border rounded-lg p-6 shadow-sm">
             <h3 className="text-lg font-medium mb-4 text-center sm:text-left">Generate New {type.charAt(0).toUpperCase() + type.slice(1)}</h3>
-            <div className="flex flex-col sm:flex-row gap-4">
-              <Input
-                placeholder={`Describe your ${type}...`}
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                className="flex-1 min-w-0"
-              />
-              <Select value={selectedStyle} onValueChange={setSelectedStyle}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(allStyles).map(([key, value]) => (
-                    <SelectItem key={key} value={key}>
-                      <div className="flex items-center justify-between w-full">
-                        <span>{key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, ' ')}</span>
-                        {customStyles[key] && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              deleteCustomStyle(key)
-                            }}
-                            className="h-4 w-4 p-0 text-red-500 hover:text-red-700"
-                          >
-                            ×
-                          </Button>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="add-custom" onSelect={() => setShowCustomStyleInput(true)}>
-                    + Add Custom Style
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+            
+            {/* Use Saved Prompt Dropdown */}
+            <div className="mb-4">
+              <label className="text-sm font-medium mb-2 block">Use Saved Prompt (Optional)</label>
+              <div className="flex gap-2">
+                <Select 
+                  value={selectedPromptId} 
+                  onValueChange={(promptId) => {
+                    setSelectedPromptId(promptId)
+                    if (promptId && promptId !== 'none') {
+                      const selectedPrompt = savedPrompts.find(p => p.id === promptId)
+                      if (selectedPrompt) {
+                        setPrompt(selectedPrompt.prompt)
+                        setSelectedStyle(selectedPrompt.style)
+                        setSelectedModel(selectedPrompt.model)
+                        setPromptTitle(selectedPrompt.title)
+                        // Update use count
+                        updatePromptUseCount(promptId)
+                        toast({
+                          title: "Prompt Loaded",
+                          description: `Loaded: ${selectedPrompt.title}`,
+                        })
+                      }
+                    } else {
+                      // Clear form when "No saved prompt" is selected
+                      clearPromptForm()
+                    }
+                  }}
+                >
+                  <SelectTrigger className="flex-1">
+                    <SelectValue placeholder="Select a saved prompt to use..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No saved prompt</SelectItem>
+                    {savedPrompts
+                      .filter(p => p.type === type || p.type === 'prompt')
+                      .sort((a, b) => b.useCount - a.useCount)
+                      .map((savedPrompt) => (
+                        <SelectItem key={savedPrompt.id} value={savedPrompt.id}>
+                          <div className="flex flex-col w-full">
+                            <div className="flex items-center justify-between w-full mb-1">
+                              <span className="font-medium truncate">{savedPrompt.title}</span>
+                              <Badge variant="secondary" className="ml-2 text-xs">
+                                {savedPrompt.useCount} uses
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate max-w-[300px]">
+                              {savedPrompt.prompt}
+                            </div>
+                            {savedPrompt.type === 'prompt' && (
+                              <div className="text-xs text-blue-500 mt-1">
+                                Universal prompt
+                              </div>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {selectedPromptId && selectedPromptId !== 'none' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const selectedPrompt = savedPrompts.find(p => p.id === selectedPromptId)
+                      if (selectedPrompt) {
+                        setPromptTitle(`${selectedPrompt.title} (Modified)`)
+                        toast({
+                          title: "Ready to Modify",
+                          description: "You can now modify the loaded prompt before generating",
+                        })
+                      }
+                    }}
+                    className="px-3"
+                    title="Modify loaded prompt"
+                  >
+                    ✏️ Modify
+                  </Button>
+                )}
+              </div>
               
-              {/* Only show model selection when NOT locked */}
-              {!aiSettings?.is_locked ? (
-                <Select value={selectedModel} onValueChange={setSelectedModel}>
-                  <SelectTrigger className="w-48">
+              {/* Show loaded prompt details */}
+              {selectedPromptId && selectedPromptId !== 'none' && (
+                <div className="mt-3 p-3 bg-muted/20 rounded-lg border border-border/30">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-muted-foreground">
+                      Loaded from: {savedPrompts.find(p => p.id === selectedPromptId)?.title}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const selectedPrompt = savedPrompts.find(p => p.id === selectedPromptId)
+                        if (selectedPrompt) {
+                          const newPrompt: SavedPrompt = {
+                            ...selectedPrompt,
+                            id: Date.now().toString() + '-modified',
+                            title: `${selectedPrompt.title} (Modified)`,
+                            prompt: prompt, // Use current modified prompt
+                            style: selectedStyle,
+                            model: selectedModel,
+                            createdAt: new Date().toISOString(),
+                            useCount: 0
+                          }
+                          savePrompt(newPrompt)
+                          toast({
+                            title: "Modified Prompt Saved",
+                            description: "Your modified version has been saved as a new prompt",
+                          })
+                        }
+                      }}
+                      className="text-xs h-6 px-2"
+                    >
+                      Save as New
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Original: {savedPrompts.find(p => p.id === selectedPromptId)?.prompt}
+                  </p>
+                </div>
+              )}
+            </div>
+            
+            {/* Prompt Title Input */}
+            <div className="mb-4">
+              <label className="text-sm font-medium mb-2 block">Prompt Title (Optional, for saving)</label>
+              <Input
+                placeholder="Enter a title for this prompt..."
+                value={promptTitle}
+                onChange={(e) => setPromptTitle(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            
+            <div className="mb-4">
+              <label className="text-sm font-medium mb-2 block">Main Prompt</label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder={`Describe your ${type}...`}
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  className="flex-1 min-w-0"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const text = await navigator.clipboard.readText()
+                      setPrompt(text)
+                      toast({
+                        title: "Prompt Pasted",
+                        description: "Prompt pasted from clipboard successfully!",
+                      })
+                    } catch (error) {
+                      toast({
+                        title: "Paste Failed",
+                        description: "Failed to paste from clipboard. Please paste manually.",
+                        variant: "destructive"
+                      })
+                    }
+                  }}
+                  className="px-3"
+                  title="Paste from clipboard"
+                >
+                  📋
+                </Button>
+              </div>
+            </div>
+            
+            <div className="flex flex-col sm:flex-row gap-4 mb-4">
+              <div className="flex-1">
+                <label className="text-sm font-medium mb-2 block">Style</label>
+                <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(models).map(([key, value]) => (
+                    <SelectItem value="none">No specific style (Default)</SelectItem>
+                    {Object.entries(allStyles).map(([key, value]) => (
                       <SelectItem key={key} value={key}>
-                        {value}
+                        <div className="flex items-center justify-between w-full">
+                          <span>{key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, ' ')}</span>
+                          {customStyles[key] && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                deleteCustomStyle(key)
+                              }}
+                              className="h-4 w-4 p-0 text-red-500 hover:text-red-700"
+                            >
+                              ×
+                            </Button>
+                          )}
+                        </div>
                       </SelectItem>
                     ))}
+                    <SelectItem value="add-custom" onSelect={() => setShowCustomStyleInput(true)}>
+                      + Add Custom Style
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              
+              {/* Only show model selection when NOT locked */}
+              {!aiSettings?.is_locked ? (
+                <div className="flex-1">
+                  <label className="text-sm font-medium mb-2 block">AI Model</label>
+                  <Select value={selectedModel} onValueChange={setSelectedModel}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(models).map(([key, value]) => (
+                        <SelectItem key={key} value={key}>
+                          {value}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               ) : (
                 /* Show AI Online status when locked */
-                <div className="w-48 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-md flex items-center justify-center">
-                  <span className="text-sm text-green-600 font-medium">
-                    AI Online
-                  </span>
+                <div className="flex-1">
+                  <label className="text-sm font-medium mb-2 block">AI Status</label>
+                  <div className="px-3 py-2 bg-green-500/10 border border-green-500/20 rounded-md flex items-center justify-center">
+                    <span className="text-sm text-green-600 font-medium">
+                      AI Online
+                    </span>
+                  </div>
                 </div>
               )}
-              
+            </div>
+            
+            <div className="flex gap-2">
+              <Button 
+                variant="outline"
+                onClick={() => saveCurrentPrompt(type)}
+                disabled={!prompt.trim()}
+                className="px-4"
+              >
+                Save Prompt
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={clearPromptForm}
+                disabled={!prompt.trim() && !promptTitle.trim()}
+                className="px-4"
+              >
+                Clear
+              </Button>
               <Button 
                 onClick={() => generateContent(type, prompt)}
                 disabled={isGenerating || !prompt.trim() || !aiSettings?.is_locked}
@@ -768,7 +1224,7 @@ export default function VisualDevelopmentPage() {
             Create and manage visual elements for your project with AI assistance
           </p>
           
-          {/* Project Selection */}
+          {/* Project Selection and Import */}
           <div className="max-w-md mx-auto sm:mx-0">
             <label className="text-sm font-medium mb-2 block">Link to Movie Project (Optional)</label>
             <ProjectSelector
@@ -791,6 +1247,20 @@ export default function VisualDevelopmentPage() {
                 </span>
               )}
             </p>
+            
+            {/* Import Button */}
+            <div className="mt-4">
+              <Button
+                variant="outline"
+                onClick={() => setShowImportDialog(true)}
+                className="w-full"
+              >
+                📁 Import Image
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1">
+                Upload existing images, concept art, or reference materials
+              </p>
+            </div>
           </div>
 
           {/* Scene Selection - Only show when a movie is selected */}
@@ -914,59 +1384,87 @@ export default function VisualDevelopmentPage() {
             
             <div className="max-w-4xl mx-auto mb-8 p-6 border rounded-lg bg-card shadow-sm">
               <h3 className="text-lg font-medium mb-4 text-center">Save Current Prompt</h3>
-              <div className="flex flex-col sm:flex-row gap-4 items-end">
-                <div className="flex-1">
-                  <label className="text-sm font-medium mb-2 block">Prompt Title</label>
-                  <Input
-                    placeholder="Enter a title for this prompt..."
-                    value={prompt ? `Prompt: ${prompt.substring(0, 30)}...` : ''}
-                    disabled={!prompt}
-                  />
+              <div className="space-y-4">
+                {/* Prompt Input with Paste Functionality */}
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Prompt</label>
+                  <div className="flex gap-2">
+                    <Textarea
+                      placeholder="Paste or type your prompt here..."
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      className="flex-1 min-h-[80px]"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const text = await navigator.clipboard.readText()
+                          setPrompt(text)
+                          toast({
+                            title: "Prompt Pasted",
+                            description: "Prompt pasted from clipboard successfully!",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Paste Failed",
+                            description: "Failed to paste from clipboard. Please paste manually.",
+                            variant: "destructive"
+                          })
+                        }
+                      }}
+                      className="px-3 h-10"
+                      title="Paste from clipboard"
+                    >
+                      📋
+                    </Button>
+                  </div>
                 </div>
-                <div className="w-40">
-                  <label className="text-sm font-medium mb-2 block">Type</label>
-                  <Select value={activeTab.replace('s', '')} onValueChange={(value) => setActiveTab(value + 's')}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="character">Character</SelectItem>
-                      <SelectItem value="environment">Environment</SelectItem>
-                      <SelectItem value="prop">Prop</SelectItem>
-                      <SelectItem value="color">Color</SelectItem>
-                      <SelectItem value="lighting">Lighting</SelectItem>
-                      <SelectItem value="style">Style</SelectItem>
-                    </SelectContent>
-                  </Select>
+                
+                <div className="flex flex-col sm:flex-row gap-4 items-end">
+                  <div className="flex-1">
+                    <label className="text-sm font-medium mb-2 block">Prompt Title</label>
+                    <Input
+                      placeholder="Enter a title for this prompt..."
+                      value={promptTitle}
+                      onChange={(e) => setPromptTitle(e.target.value)}
+                    />
+                  </div>
+                  <div className="w-40">
+                    <label className="text-sm font-medium mb-2 block">Type</label>
+                    <Select value={activeTab.replace('s', '')} onValueChange={(value) => setActiveTab(value + 's')}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="character">Character</SelectItem>
+                        <SelectItem value="environment">Environment</SelectItem>
+                        <SelectItem value="prop">Prop</SelectItem>
+                        <SelectItem value="color">Color</SelectItem>
+                        <SelectItem value="lighting">Lighting</SelectItem>
+                        <SelectItem value="style">Style</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={clearPromptForm}
+                      disabled={!prompt.trim() && !promptTitle.trim()}
+                      className="px-4"
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      onClick={() => saveCurrentPrompt(activeTab.replace('s', ''))}
+                      disabled={!prompt.trim()}
+                      className="px-6"
+                    >
+                      Save Prompt
+                    </Button>
+                  </div>
                 </div>
-                <Button
-                  onClick={() => {
-                    if (prompt) {
-                      const newSavedPrompt: SavedPrompt = {
-                        id: Date.now().toString() + '-manual',
-                        type: activeTab.replace('s', '') as any,
-                        title: `Manual: ${prompt.substring(0, 30)}...`,
-                        prompt,
-                        style: selectedStyle,
-                        model: selectedModel,
-                        tags: [activeTab.replace('s', ''), selectedStyle, selectedModel],
-                        projectId: selectedProject === 'all' ? null : selectedProject,
-                        sceneId: selectedScene === 'movie' ? null : selectedScene || null,
-                        createdAt: new Date().toISOString(),
-                        useCount: 0
-                      }
-                      savePrompt(newSavedPrompt)
-                      toast({
-                        title: "Success",
-                        description: "Prompt saved successfully!",
-                      })
-                    }
-                  }}
-                  disabled={!prompt}
-                  className="px-6"
-                >
-                  Save Prompt
-                </Button>
               </div>
             </div>
             
@@ -1141,6 +1639,314 @@ export default function VisualDevelopmentPage() {
           </div>
         )}
       </div>
+
+      {/* Import Image Dialog */}
+      {showImportDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">Import Image</h3>
+            
+            <div className="space-y-4">
+              {/* File Upload */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Select Image Files</label>
+                <div 
+                  className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                    dragActive 
+                      ? 'border-primary bg-primary/10' 
+                      : 'border-muted-foreground/25'
+                  }`}
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={handleDrop}
+                >
+                  {importFiles.length > 0 ? (
+                    <div className="space-y-3">
+                      <div className="text-sm font-medium text-green-600">
+                        ✅ {importFiles.length} file{importFiles.length === 1 ? '' : 's'} selected
+                      </div>
+                      <div className="max-h-32 overflow-y-auto space-y-1">
+                        {importFiles.map((file, index) => (
+                          <div key={index} className="text-xs text-muted-foreground flex items-center justify-between bg-muted/50 p-2 rounded">
+                            <span className="truncate">{file.name}</span>
+                            <span>{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                          </div>
+                        ))}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setImportFiles([])}
+                      >
+                        Clear All
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="text-4xl">📁</div>
+                      <div className="text-sm font-medium">Click to select or drag & drop</div>
+                      <div className="text-xs text-muted-foreground">
+                        Supports: JPG, PNG, GIF, WebP (Max 10MB each)
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          const input = document.createElement('input')
+                          input.type = 'file'
+                          input.accept = 'image/*'
+                          input.multiple = true
+                          input.onchange = (e) => {
+                            const files = (e.target as HTMLInputElement).files
+                            if (files) {
+                              const validFiles = Array.from(files).filter(file => 
+                                file.size <= 10 * 1024 * 1024
+                              )
+                              if (validFiles.length > 0) {
+                                handleFileSelect(validFiles)
+                              } else {
+                                toast({
+                                  title: "No Valid Files",
+                                  description: "Please select files smaller than 10MB each.",
+                                  variant: "destructive"
+                                })
+                              }
+                            }
+                          }
+                          input.click()
+                        }}
+                      >
+                        Choose Files
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Image Type */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Image Type</label>
+                <Select 
+                  value={importData.type}
+                  onValueChange={(value) => setImportData(prev => ({ ...prev, type: value as any }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="character">Character</SelectItem>
+                    <SelectItem value="environment">Environment</SelectItem>
+                    <SelectItem value="prop">Prop</SelectItem>
+                    <SelectItem value="color">Color</SelectItem>
+                    <SelectItem value="lighting">Lighting</SelectItem>
+                    <SelectItem value="style">Style</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Style */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Visual Style</label>
+                <Select 
+                  value={importData.style}
+                  onValueChange={(value) => setImportData(prev => ({ ...prev, style: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(allStyles).map(([key, value]) => (
+                      <SelectItem key={key} value={key}>
+                        {key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Title */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Title</label>
+                <Input
+                  placeholder="Enter a title for this image..."
+                  value={importData.title}
+                  onChange={(e) => setImportData(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+              
+              {/* Description */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Description</label>
+                <Textarea
+                  placeholder="Describe what this image represents..."
+                  value={importData.description}
+                  onChange={(e) => setImportData(prev => ({ ...prev, description: e.target.value }))}
+                  rows={3}
+                />
+              </div>
+              
+              {/* Prompt */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Prompt/Notes</label>
+                <Textarea
+                  placeholder="Add any notes, inspiration, or description..."
+                  value={importData.prompt}
+                  onChange={(e) => setImportData(prev => ({ ...prev, prompt: e.target.value }))}
+                  rows={2}
+                />
+              </div>
+            </div>
+            
+            <div className="flex gap-2 mt-6">
+              <Button
+                onClick={importImages}
+                disabled={!importFiles.length || isImporting}
+                className="flex-1"
+              >
+                {isImporting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Importing {importFiles.length} Image{importFiles.length === 1 ? '' : 's'}...
+                  </>
+                ) : (
+                  `Import ${importFiles.length} Image${importFiles.length === 1 ? '' : 's'}`
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowImportDialog(false)
+                  setImportFiles([])
+                  setImportData({
+                    title: '',
+                    description: '',
+                    prompt: '',
+                    type: 'character',
+                    style: 'cinematic'
+                  })
+                }}
+                disabled={isImporting}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Item Dialog */}
+      {showEditDialog && editingItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">Edit {editingItem.type.charAt(0).toUpperCase() + editingItem.type.slice(1)}</h3>
+            
+            <div className="space-y-4">
+              {/* Title */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Title</label>
+                <Input
+                  placeholder="Enter title..."
+                  value={editingItem.title}
+                  onChange={(e) => setEditingItem(prev => prev ? { ...prev, title: e.target.value } : null)}
+                />
+              </div>
+              
+              {/* Description */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Description</label>
+                <Textarea
+                  placeholder="Enter description..."
+                  value={editingItem.description}
+                  onChange={(e) => setEditingItem(prev => prev ? { ...prev, description: e.target.value } : null)}
+                />
+              </div>
+              
+              {/* Prompt */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Prompt</label>
+                <Textarea
+                  placeholder="Enter prompt..."
+                  value={editingItem.title}
+                  onChange={(e) => setEditingItem(prev => prev ? { ...prev, prompt: e.target.value } : null)}
+                  rows={2}
+                />
+              </div>
+              
+              {/* Style */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Style</label>
+                <Select 
+                  value={editingItem.tags.find(tag => Object.values(allStyles).includes(tag)) || 'cinematic'}
+                  onValueChange={(value) => {
+                    setEditingItem(prev => {
+                      if (!prev) return null
+                      const newTags = prev.tags.filter(tag => !Object.values(allStyles).includes(tag))
+                      return { ...prev, tags: [...newTags, value] }
+                    })
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(allStyles).map(([key, value]) => (
+                      <SelectItem key={key} value={key}>
+                        {key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Generated Image Preview */}
+              {editingItem.generatedImage && (
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Generated Image</label>
+                  <div className="aspect-square overflow-hidden rounded-lg border max-w-xs">
+                    <img 
+                      src={editingItem.generatedImage} 
+                      alt={editingItem.title}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </div>
+              )}
+              
+              {/* Generated Content */}
+              {editingItem.generatedContent && (
+                <div>
+                  <label className="text-sm font-medium mb-2 block">Generated Content</label>
+                  <Textarea
+                    value={editingItem.generatedContent}
+                    onChange={(e) => setEditingItem(prev => prev ? { ...prev, generatedContent: e.target.value } : null)}
+                    rows={4}
+                    readOnly
+                    className="bg-muted"
+                  />
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-2 mt-6">
+              <Button
+                onClick={() => editingItem && saveEditedItem(editingItem)}
+                className="flex-1"
+              >
+                Save Changes
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowEditDialog(false)
+                  setEditingItem(null)
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Custom Style Input Modal */}
       {showCustomStyleInput && (

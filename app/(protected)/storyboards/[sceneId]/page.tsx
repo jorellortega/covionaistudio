@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -76,6 +76,10 @@ export default function SceneStoryboardsPage() {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [selectedAIService, setSelectedAIService] = useState("dalle")
+  const [aiImagePrompt, setAiImagePrompt] = useState("")
+  const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
+  const [userProfile, setUserProfile] = useState<any>(null)
+  const [useExactPrompt, setUseExactPrompt] = useState(true)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -736,7 +740,12 @@ export default function SceneStoryboardsPage() {
   // Reset form when form is closed
   useEffect(() => {
     if (!showCreateForm && !showEditForm) {
-      resetForm()
+      // Only reset if both forms are actually closed
+      setTimeout(() => {
+        if (!showCreateForm && !showEditForm) {
+          resetForm()
+        }
+      }, 100)
     }
   }, [showCreateForm, showEditForm])
 
@@ -871,6 +880,216 @@ export default function SceneStoryboardsPage() {
       </span>
     ))
   }
+  
+  // Function to get user profile with API keys
+  const getUserProfile = async () => {
+    if (!userId) return null
+    
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching user profile:', error)
+        return null
+      }
+      
+      return data
+    } catch (error) {
+      console.error('Error in getUserProfile:', error)
+      return null
+    }
+  }
+
+  // Function to get the appropriate API key for the selected service
+  const getApiKeyForService = (service: string) => {
+    if (!userProfile) return null
+    
+    switch (service) {
+      case 'dalle':
+      case 'DALL-E 3':
+        return userProfile.openai_api_key
+      case 'openart':
+      case 'OpenArt':
+        return userProfile.openart_api_key
+      case 'leonardo':
+      case 'Leonardo AI':
+        return userProfile.leonardo_api_key
+      default:
+        return userProfile.openai_api_key // fallback to OpenAI
+    }
+  }
+
+  // Function to map AI model names to service identifiers
+  const mapModelToService = (modelName: string): string => {
+    switch (modelName) {
+      case 'DALL-E 3':
+        return 'dalle'
+      case 'OpenArt':
+        return 'openart'
+      case 'Leonardo AI':
+        return 'leonardo'
+      default:
+        return 'dalle' // fallback
+    }
+  }
+
+  // Load user profile when component mounts
+  useEffect(() => {
+    if (ready && userId) {
+      getUserProfile().then(profile => {
+        setUserProfile(profile)
+      })
+    }
+  }, [ready, userId])
+
+  // Debug: Monitor selectedAIService changes
+  useEffect(() => {
+    console.log('🎬 selectedAIService changed to:', selectedAIService)
+  }, [selectedAIService])
+
+  // Ensure selectedAIService is always valid
+  useEffect(() => {
+    if (selectedAIService && !['dalle', 'openart', 'leonardo'].includes(selectedAIService)) {
+      console.warn('🎬 Invalid selectedAIService detected, resetting to dalle:', selectedAIService)
+      setSelectedAIService('dalle')
+    }
+  }, [selectedAIService])
+
+  // Function to generate AI image for a storyboard shot
+  const generateShotImage = async (storyboardId: string, prompt: string) => {
+    if (!prompt.trim() || !userId) {
+      toast({
+        title: "Missing Information",
+        description: "Please enter a prompt for the AI image generation.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingShotImage(true)
+      
+      // Get the AI settings for images tab
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      
+      // Determine which service to use - locked model takes precedence
+      let serviceToUse = selectedAIService
+      if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+        serviceToUse = mapModelToService(imagesSetting.locked_model)
+        console.log('🎬 Using locked model from AI settings:', imagesSetting.locked_model)
+        console.log('🎬 Mapped to service identifier:', serviceToUse)
+      } else {
+        // Safety check: ensure we have a valid service
+        if (!serviceToUse || !['dalle', 'openart', 'leonardo'].includes(serviceToUse)) {
+          console.warn('🎬 Invalid service selected, falling back to dalle:', serviceToUse)
+          serviceToUse = 'dalle'
+        }
+      }
+      
+      // Debug: Log the selected service
+      console.log('🎬 Selected AI service:', serviceToUse)
+      console.log('🎬 Service type:', typeof serviceToUse)
+      console.log('🎬 Using locked model:', imagesSetting?.is_locked)
+      console.log('🎬 Locked model value:', imagesSetting?.locked_model)
+      
+      // Get the API key for the selected service
+      const apiKey = getApiKeyForService(serviceToUse)
+      if (!apiKey) {
+        toast({
+          title: "API Key Required",
+          description: `Please configure your ${serviceToUse.toUpperCase()} API key in your profile settings.`,
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Prepare the enhanced prompt for storyboard shots - keep it minimal
+      let enhancedPrompt = prompt.trim()
+      
+      // Only add minimal enhancement if user hasn't chosen exact prompt
+      if (!useExactPrompt) {
+        enhancedPrompt = `${prompt.trim()}, storyboard style`
+      }
+
+      // Debug: Log the request body
+      const requestBody = {
+        prompt: enhancedPrompt,
+        service: serviceToUse,
+        apiKey: apiKey,
+        userId: userId,
+        autoSaveToBucket: true
+      }
+      console.log('🎬 Request body being sent:', requestBody)
+      console.log('🎬 Service value type:', typeof serviceToUse)
+      console.log('🎬 Service value:', JSON.stringify(serviceToUse))
+      console.log('🎬 Full request body JSON:', JSON.stringify(requestBody))
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.imageUrl) {
+        // Update the storyboard with the generated image
+        const updatedStoryboard = await StoryboardsService.updateStoryboardImage(storyboardId, result.imageUrl)
+        
+        // Update local state
+        setStoryboards(prev => prev.map(sb => 
+          sb.id === storyboardId ? updatedStoryboard : sb
+        ))
+
+        toast({
+          title: "Image Generated!",
+          description: `AI image has been generated and added to the storyboard shot.`,
+        })
+
+        // Clear the prompt
+        setAiImagePrompt("")
+        
+        // Close edit form if it's open
+        if (showEditForm) {
+          setShowEditForm(false)
+          setEditingStoryboard(null)
+        }
+      } else {
+        throw new Error('Failed to generate image')
+      }
+    } catch (error) {
+      console.error('Error generating shot image:', error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate AI image",
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingShotImage(false)
+    }
+  }
+  
+  // Auto-select locked model for images tab if available
+  useEffect(() => {
+    if (aiSettingsLoaded && aiSettings.length > 0) {
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+        console.log('🎬 Setting locked model for images:', imagesSetting.locked_model)
+        setSelectedAIService(imagesSetting.locked_model)
+      }
+    }
+  }, [aiSettingsLoaded, aiSettings])
   
   return (
     <div className="min-h-screen bg-background">
@@ -1591,7 +1810,7 @@ export default function SceneStoryboardsPage() {
                 Edit Storyboard: {editingStoryboard.title}
               </CardTitle>
               <CardDescription>
-                Update the storyboard details below.
+                Update the storyboard details below. Use AI assistance for image generation.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -1713,6 +1932,144 @@ export default function SceneStoryboardsPage() {
                 />
               </div>
 
+              {/* AI Image Generation Section */}
+              <div className="border border-border/30 rounded-lg p-4 bg-muted/20">
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="h-4 w-4 text-purple-500" />
+                  <h3 className="text-sm font-medium">AI Image Generation</h3>
+                </div>
+                
+                <div className="space-y-3">
+                  <div>
+                    <Label htmlFor="ai-image-prompt">Image Prompt</Label>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const shotInfo = `${formData.shot_type} shot, ${formData.camera_angle} angle`
+                            setAiImagePrompt(prev => {
+                              if (prev.trim()) {
+                                return `${prev}, ${shotInfo}`
+                              }
+                              return shotInfo
+                            })
+                          }}
+                          className="text-xs h-7 px-2 bg-blue-500/10 text-blue-500 border-blue-500/20 hover:bg-blue-500/20"
+                          title="Insert shot type and camera angle"
+                        >
+                          <Film className="h-3 w-3 mr-1" />
+                          Insert Shot Details
+                        </Button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label htmlFor="exact-prompt-toggle" className="text-xs text-muted-foreground">
+                          Use exact prompt
+                        </Label>
+                        <input
+                          id="exact-prompt-toggle"
+                          type="checkbox"
+                          checked={useExactPrompt}
+                          onChange={(e) => setUseExactPrompt(e.target.checked)}
+                          className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <Textarea
+                      id="ai-image-prompt"
+                      value={aiImagePrompt}
+                      onChange={(e) => setAiImagePrompt(e.target.value)}
+                      placeholder="Describe the visual style, composition, lighting, and mood for this shot..."
+                      rows={2}
+                      className="text-sm"
+                    />
+                  </div>
+                  
+                  {/* AI Service Selection - Only show if not locked */}
+                  {!aiSettings.find(setting => setting.tab_type === 'images')?.is_locked && (
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <Label htmlFor="ai-service-select">AI Service</Label>
+                        <select 
+                          id="ai-service-select"
+                          value={selectedAIService} 
+                          onChange={(e) => {
+                            const value = e.target.value
+                            console.log('🎬 Service selection changed from:', selectedAIService, 'to:', value)
+                            setSelectedAIService(value)
+                          }}
+                          className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm"
+                        >
+                          <option value="dalle">DALL-E 3</option>
+                          <option value="openart">OpenArt</option>
+                          <option value="leonardo">Leonardo AI</option>
+                        </select>
+                      </div>
+                      
+                      <div className="flex items-end">
+                        <Button
+                          onClick={() => generateShotImage(editingStoryboard.id, aiImagePrompt)}
+                          disabled={isGeneratingShotImage || !aiImagePrompt.trim()}
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                          size="sm"
+                        >
+                          {isGeneratingShotImage ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              Generate Image
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show locked model info if images tab is locked */}
+                  {aiSettings.find(setting => setting.tab_type === 'images')?.is_locked && (
+                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                      <p className="text-sm text-green-600 flex items-center gap-2">
+                        <CheckCircle className="h-4 w-4" />
+                        AI Online
+                      </p>
+                      <p className="text-xs text-green-500 mt-1">
+                        Using: {aiSettings.find(setting => setting.tab_type === 'images')?.locked_model}
+                      </p>
+                      <div className="flex items-end mt-3">
+                        <Button
+                          onClick={() => generateShotImage(editingStoryboard.id, aiImagePrompt)}
+                          disabled={isGeneratingShotImage || !aiImagePrompt.trim()}
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                          size="sm"
+                        >
+                          {isGeneratingShotImage ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              Generate Image
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <p className="text-xs text-muted-foreground">
+                    💡 Tip: Be specific about camera angle, lighting, mood, and visual style. The AI will create a cinematic storyboard image based on your description.
+                  </p>
+                </div>
+              </div>
+
               {/* Form Actions */}
               <div className="flex gap-2 justify-end">
                 <Button
@@ -1790,6 +2147,18 @@ export default function SceneStoryboardsPage() {
                     <Badge variant="outline" className="text-xs">
                       {storyboard.camera_angle}
                     </Badge>
+                    {storyboard.image_url && (
+                      <Badge className="text-xs bg-green-500/20 text-green-500 border-green-500/30">
+                        <ImageIcon className="h-3 w-3 mr-1" />
+                        Has Image
+                      </Badge>
+                    )}
+                    {storyboard.ai_generated && (
+                      <Badge className="text-xs bg-purple-500/20 text-purple-500 border-purple-500/30">
+                        <Sparkles className="h-3 w-3 mr-1" />
+                        AI Generated
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -1801,6 +2170,47 @@ export default function SceneStoryboardsPage() {
                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
                       <Eye className="h-4 w-4" />
                     </Button>
+                    
+                    {/* Quick AI Image Generation Button */}
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="h-8 w-8 p-0 hover:text-purple-600"
+                      title={`Generate AI Image${aiSettings.find(s => s.tab_type === 'images')?.is_locked ? ` using ${aiSettings.find(s => s.tab_type === 'images')?.locked_model}` : ''}`}
+                      onClick={() => {
+                        // Set the editing storyboard and show edit form with AI focus
+                        setEditingStoryboard(storyboard)
+                        setFormData({
+                          title: storyboard.title,
+                          description: storyboard.description,
+                          scene_number: storyboard.scene_number,
+                          shot_number: storyboard.shot_number || 1,
+                          shot_type: storyboard.shot_type,
+                          camera_angle: storyboard.camera_angle,
+                          movement: storyboard.movement,
+                          dialogue: storyboard.dialogue || "",
+                          action: storyboard.action || "",
+                          visual_notes: storyboard.visual_notes || "",
+                          image_url: storyboard.image_url || "",
+                          project_id: storyboard.project_id || "",
+                          scene_id: sceneId
+                        })
+                        // Pre-fill AI prompt with shot details
+                        const autoPrompt = `${storyboard.shot_type} shot, ${storyboard.camera_angle} angle, ${storyboard.movement} camera, ${storyboard.description}`
+                        setAiImagePrompt(autoPrompt)
+                        setShowEditForm(true)
+                        // Scroll to AI section after form opens
+                        setTimeout(() => {
+                          const aiSection = document.querySelector('[id="ai-image-prompt"]')
+                          if (aiSection) {
+                            aiSection.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          }
+                        }, 100)
+                      }}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                    </Button>
+                    
                     <Button 
                       variant="ghost" 
                       size="sm" 
@@ -1822,6 +2232,8 @@ export default function SceneStoryboardsPage() {
                           project_id: storyboard.project_id || "",
                           scene_id: sceneId
                         })
+                        // Preserve the current AI service selection
+                        // Don't reset selectedAIService here
                         setShowEditForm(true)
                       }}
                     >

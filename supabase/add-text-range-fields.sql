@@ -74,3 +74,4 @@ CREATE TRIGGER validate_text_range_trigger
 GRANT EXECUTE ON FUNCTION check_text_range_overlap(UUID, INTEGER, INTEGER, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION validate_text_range() TO authenticated;
 
+

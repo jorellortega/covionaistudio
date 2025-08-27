@@ -94,3 +94,4 @@ After running this migration:
 3. Existing shots won't have text ranges (they'll be null)
 4. New shots will include full text range data for visual highlighting
 
+

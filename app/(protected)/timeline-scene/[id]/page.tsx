@@ -4080,7 +4080,9 @@ function ScenePageClient({ id }: { id: string }) {
                           body: JSON.stringify({
                             prompt: finalPrompt,
                             service: service,
-                            apiKey: apiKey
+                            apiKey: apiKey,
+                            userId: user?.id, // Add userId for bucket storage
+                            autoSaveToBucket: true, // Enable automatic bucket storage
                           })
                         })
                         

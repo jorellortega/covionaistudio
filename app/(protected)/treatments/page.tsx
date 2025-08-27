@@ -252,7 +252,9 @@ export default function TreatmentsPage() {
             body: JSON.stringify({
               prompt: fullPrompt,
               service: 'dalle',
-              apiKey: 'configured'
+              apiKey: 'configured',
+              userId: user?.id, // Add userId for bucket storage
+              autoSaveToBucket: true, // Enable automatic bucket storage
             })
           })
           if (!dalleResponse.ok) {
@@ -271,7 +273,9 @@ export default function TreatmentsPage() {
             body: JSON.stringify({
               prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
               service: 'openart',
-              apiKey: 'configured'
+              apiKey: 'configured',
+              userId: user?.id, // Add userId for bucket storage
+              autoSaveToBucket: true, // Enable automatic bucket storage
             })
           })
           if (!openartResponse.ok) {
@@ -290,7 +294,9 @@ export default function TreatmentsPage() {
             body: JSON.stringify({
               prompt: `Treatment cover: ${sanitizedPrompt}. Cinematic, professional style, high quality, dramatic lighting.`,
               service: 'leonardo',
-              apiKey: 'configured'
+              apiKey: 'configured',
+              userId: user?.id, // Add userId for bucket storage
+              autoSaveToBucket: true, // Enable automatic bucket storage
             })
           })
           if (!leonardoResponse.ok) throw new Error('Leonardo AI API request failed')
@@ -306,7 +312,9 @@ export default function TreatmentsPage() {
             body: JSON.stringify({
               prompt: fullPrompt,
               service: 'dalle',
-              apiKey: 'configured'
+              apiKey: 'configured',
+              userId: user?.id, // Add userId for bucket storage
+              autoSaveToBucket: true, // Enable automatic bucket storage
             })
           })
           if (!fallbackResponse.ok) throw new Error('DALL-E API request failed')

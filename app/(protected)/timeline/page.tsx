@@ -830,7 +830,9 @@ export default function TimelinePage() {
         body: JSON.stringify({
           prompt: scenePrompt,
           service: imagesSetting.locked_model,
-          apiKey: apiKey
+          apiKey: apiKey,
+          userId: user?.id, // Add userId for bucket storage
+          autoSaveToBucket: true, // Enable automatic bucket storage
         })
       })
 
@@ -1226,6 +1228,8 @@ export default function TimelinePage() {
           prompt: aiPrompt,
           service: serviceToUse,
           apiKey: apiKey,
+          userId: user?.id, // Add userId for bucket storage
+          autoSaveToBucket: true, // Enable automatic bucket storage
         }),
       })
 

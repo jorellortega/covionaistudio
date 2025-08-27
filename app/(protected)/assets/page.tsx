@@ -33,6 +33,7 @@ import { MovieService, type Movie } from "@/lib/movie-service"
 import { useAuthReady } from "@/components/auth-hooks"
 import TextToSpeech from "@/components/text-to-speech"
 import Link from "next/link"
+import Header from "@/components/header"
 
 export default function AssetsPage() {
   const searchParams = useSearchParams()
@@ -284,8 +285,9 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-6">
-      <div className="max-w-7xl mx-auto">
+    <div className="min-h-screen bg-background text-foreground">
+      <Header />
+      <div className="max-w-7xl mx-auto p-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">

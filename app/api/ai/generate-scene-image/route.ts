@@ -1,12 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 
+// Function to download and store image in bucket
+async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
+  try {
+    const response = await fetch('/api/ai/download-and-store-image', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        imageUrl,
+        fileName,
+        userId
+      }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(`Failed to save image: ${errorData.error || response.statusText}`)
+    }
+
+    const result = await response.json()
+    if (result.success && result.supabaseUrl) {
+      return result.supabaseUrl
+    } else {
+      throw new Error('Failed to get bucket URL')
+    }
+  } catch (error) {
+    console.error('Error saving image to bucket:', error)
+    throw error
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     console.log('🎬 DEBUG - Timeline scene image generation request received')
     
     const body = await request.json()
-    const { prompt, service, apiKey } = body
+    const { prompt, service, apiKey, userId, autoSaveToBucket = true } = body
 
     console.log('🎬 DEBUG - Request body received:', {
       hasPrompt: !!prompt,
@@ -15,7 +47,9 @@ export async function POST(request: NextRequest) {
       fullPrompt: prompt,
       service: service,
       hasApiKey: !!apiKey,
-      apiKeyLength: apiKey?.length || 0
+      apiKeyLength: apiKey?.length || 0,
+      hasUserId: !!userId,
+      autoSaveToBucket
     })
 
     if (!prompt || !service || !apiKey) {
@@ -26,6 +60,15 @@ export async function POST(request: NextRequest) {
       })
       return NextResponse.json(
         { error: 'Missing required fields: prompt, service, apiKey' },
+        { status: 400 }
+      )
+    }
+
+    // If autoSaveToBucket is true, userId is required
+    if (autoSaveToBucket && !userId) {
+      console.error('🎬 DEBUG - Missing userId for bucket storage')
+      return NextResponse.json(
+        { error: 'Missing userId for bucket storage' },
         { status: 400 }
       )
     }
@@ -148,11 +191,30 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('🎬 DEBUG - Final image URL:', imageUrl)
+    
+    // If autoSaveToBucket is enabled, save the image to the bucket
+    let finalImageUrl = imageUrl
+    let bucketUrl = null
+    
+    if (autoSaveToBucket && userId) {
+      try {
+        const fileName = `${Date.now()}-${service}-${prompt.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.png`
+        bucketUrl = await downloadAndStoreImage(imageUrl, fileName, userId)
+        finalImageUrl = bucketUrl
+        console.log('🎬 DEBUG - ✅ Image automatically saved to bucket:', bucketUrl)
+      } catch (error) {
+        console.error('🎬 DEBUG - ❌ Failed to save image to bucket:', error)
+        // Continue with original URL if bucket save fails
+      }
+    }
 
     return NextResponse.json({
       success: true,
-      imageUrl: imageUrl,
-      service: service
+      imageUrl: finalImageUrl,
+      originalUrl: imageUrl, // Keep original URL for reference
+      bucketUrl: bucketUrl, // Include bucket URL if available
+      service: service,
+      savedToBucket: !!bucketUrl
     })
 
   } catch (error) {
