@@ -18,8 +18,10 @@ import { ProjectSelector } from '@/components/project-selector'
 import { MovieService, Movie } from '@/lib/movie-service'
 import { TimelineService, SceneWithMetadata } from '@/lib/timeline-service'
 import { AssetService, CreateAssetData } from '@/lib/asset-service'
+import { PreferencesService } from '@/lib/preferences-service'
+import { SavedPromptsService } from '@/lib/saved-prompts-service'
 import Header from '@/components/header'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Eye, EyeOff, Edit3, CheckCircle } from 'lucide-react'
 
 interface VisualDevelopmentItem {
   id: string
@@ -48,6 +50,13 @@ interface SavedPrompt {
   sceneId?: string | null
   createdAt: string
   useCount: number
+  // Database fields (will be populated when loading from DB)
+  user_id?: string
+  project_id?: string | null
+  scene_id?: string | null
+  use_count?: number
+  created_at?: string
+  updated_at?: string
 }
 
 export default function VisualDevelopmentPage() {
@@ -88,6 +97,18 @@ export default function VisualDevelopmentPage() {
   const [isImporting, setIsImporting] = useState(false)
   const [dragActive, setDragActive] = useState(false)
   const [selectedPromptId, setSelectedPromptId] = useState('none')
+  const [hidePromptText, setHidePromptText] = useState(false)
+  
+  // Edit prompt state
+  const [editingPrompt, setEditingPrompt] = useState<SavedPrompt | null>(null)
+  const [showEditPromptDialog, setShowEditPromptDialog] = useState(false)
+  const [editPromptForm, setEditPromptForm] = useState({
+    title: '',
+    prompt: '',
+    style: 'none',
+    model: 'openai',
+    type: 'character' as 'character' | 'environment' | 'prop' | 'color' | 'lighting' | 'style' | 'prompt'
+  })
 
   const styles = {
     cinematic: 'Cinematic movie poster style, dramatic lighting, professional photography',
@@ -124,6 +145,7 @@ export default function VisualDevelopmentPage() {
       loadUserApiKeys()
       loadMovies()
       loadExistingItems()
+      loadPreferences()
     }
   }, [user])
 
@@ -204,6 +226,15 @@ export default function VisualDevelopmentPage() {
     }
   }
 
+  const loadPreferences = async () => {
+    try {
+      const hidePrompt = await PreferencesService.getHidePromptText()
+      setHidePromptText(hidePrompt)
+    } catch (error) {
+      console.error('Error loading preferences:', error)
+    }
+  }
+
   const loadExistingItems = async () => {
     // In a real app, this would load from your database
     // For now, we'll use localStorage
@@ -212,10 +243,58 @@ export default function VisualDevelopmentPage() {
       setItems(JSON.parse(saved))
     }
     
+    // Load prompts from both localStorage and database
+    let allPrompts: SavedPrompt[] = []
+    
+    // First, try to load from database if user is logged in
+    if (user) {
+      try {
+        const dbPrompts = await SavedPromptsService.getSavedPrompts(user.id)
+        console.log('✅ Loaded prompts from database:', dbPrompts.length)
+        
+        // Convert database format to local format
+        const convertedDbPrompts: SavedPrompt[] = dbPrompts.map(dbPrompt => ({
+          id: dbPrompt.id,
+          type: dbPrompt.type,
+          title: dbPrompt.title,
+          prompt: dbPrompt.prompt,
+          style: dbPrompt.style || 'none',
+          model: dbPrompt.model || 'openai',
+          tags: dbPrompt.tags || [],
+          projectId: dbPrompt.project_id,
+          sceneId: dbPrompt.scene_id,
+          createdAt: dbPrompt.created_at,
+          useCount: dbPrompt.use_count || 0,
+          // Database fields
+          user_id: dbPrompt.user_id,
+          project_id: dbPrompt.project_id,
+          scene_id: dbPrompt.scene_id,
+          use_count: dbPrompt.use_count,
+          created_at: dbPrompt.created_at,
+          updated_at: dbPrompt.updated_at
+        }))
+        
+        allPrompts = [...convertedDbPrompts]
+      } catch (error) {
+        console.error('❌ Failed to load prompts from database:', error)
+      }
+    }
+    
+    // Then load from localStorage as backup/merge
     const savedPromptsData = localStorage.getItem('visdev-saved-prompts')
     if (savedPromptsData) {
-      setSavedPrompts(JSON.parse(savedPromptsData))
+      const localPrompts = JSON.parse(savedPromptsData)
+      console.log('✅ Loaded prompts from localStorage:', localPrompts.length)
+      
+      // Merge with database prompts, avoiding duplicates
+      const localPromptIds = new Set(allPrompts.map(p => p.id))
+      const uniqueLocalPrompts = localPrompts.filter((p: SavedPrompt) => !localPromptIds.has(p.id))
+      
+      allPrompts = [...allPrompts, ...uniqueLocalPrompts]
     }
+    
+    console.log('✅ Total prompts loaded:', allPrompts.length)
+    setSavedPrompts(allPrompts)
     
     const savedCustomStyles = localStorage.getItem('visdev-custom-styles')
     if (savedCustomStyles) {
@@ -228,24 +307,236 @@ export default function VisualDevelopmentPage() {
     localStorage.setItem('visdev-items', JSON.stringify(newItems))
   }
 
-  const savePrompt = (newPrompt: SavedPrompt) => {
-    const updatedPrompts = [...savedPrompts, newPrompt]
-    setSavedPrompts(updatedPrompts)
-    localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+  const savePrompt = async (newPrompt: SavedPrompt) => {
+    try {
+      // Save to database if user is logged in and project is selected
+      if (user && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+        try {
+          const dbPrompt = await SavedPromptsService.createSavedPrompt(user.id, {
+            project_id: selectedProject,
+            scene_id: selectedScene === 'movie' ? null : selectedScene,
+            title: newPrompt.title,
+            prompt: newPrompt.prompt,
+            type: newPrompt.type,
+            style: newPrompt.style,
+            model: newPrompt.model,
+            tags: newPrompt.tags
+          })
+          
+          // Update the prompt with database ID and fields
+          newPrompt = {
+            ...newPrompt,
+            id: dbPrompt.id,
+            user_id: dbPrompt.user_id,
+            project_id: dbPrompt.project_id,
+            scene_id: dbPrompt.scene_id,
+            use_count: dbPrompt.use_count,
+            created_at: dbPrompt.created_at,
+            updated_at: dbPrompt.updated_at
+          }
+          
+          console.log('✅ Prompt saved to database:', dbPrompt)
+        } catch (error) {
+          console.error('❌ Failed to save prompt to database:', error)
+          // Continue with localStorage save even if database save fails
+        }
+      }
+      
+      // Always save to localStorage as backup
+      const updatedPrompts = [...savedPrompts, newPrompt]
+      setSavedPrompts(updatedPrompts)
+      localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+    } catch (error) {
+      console.error('Error saving prompt:', error)
+      toast({
+        title: "Save Failed",
+        description: "Failed to save prompt. Check console for details.",
+        variant: "destructive"
+      })
+    }
   }
 
-  const updatePromptUseCount = (promptId: string) => {
-    const updatedPrompts = savedPrompts.map(p => 
-      p.id === promptId ? { ...p, useCount: p.useCount + 1 } : p
-    )
-    setSavedPrompts(updatedPrompts)
-    localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+  const updatePromptUseCount = async (promptId: string) => {
+    try {
+      // Update in database if prompt has database fields
+      const prompt = savedPrompts.find(p => p.id === promptId)
+      if (prompt && prompt.user_id) {
+        try {
+          await SavedPromptsService.incrementUseCount(promptId)
+          console.log('✅ Use count updated in database for prompt:', promptId)
+        } catch (error) {
+          console.error('❌ Failed to update use count in database:', error)
+        }
+      }
+      
+      // Update local state
+      const updatedPrompts = savedPrompts.map(p => 
+        p.id === promptId ? { ...p, useCount: p.useCount + 1 } : p
+      )
+      setSavedPrompts(updatedPrompts)
+      localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+    } catch (error) {
+      console.error('Error updating prompt use count:', error)
+    }
   }
 
-  const deletePrompt = (promptId: string) => {
-    const updatedPrompts = savedPrompts.filter(p => p.id !== promptId)
-    setSavedPrompts(updatedPrompts)
-    localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+  const deletePrompt = async (promptId: string) => {
+    try {
+      // Delete from database if prompt has database fields
+      const prompt = savedPrompts.find(p => p.id === promptId)
+      if (prompt && prompt.user_id) {
+        try {
+          await SavedPromptsService.deleteSavedPrompt(promptId)
+          console.log('✅ Prompt deleted from database:', promptId)
+        } catch (error) {
+          console.error('❌ Failed to delete prompt from database:', error)
+        }
+      }
+      
+      // Update local state
+      const updatedPrompts = savedPrompts.filter(p => p.id !== promptId)
+      setSavedPrompts(updatedPrompts)
+      localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+    } catch (error) {
+      console.error('Error deleting prompt:', error)
+    }
+  }
+
+  const editPrompt = (prompt: SavedPrompt) => {
+    setEditingPrompt(prompt)
+    setEditPromptForm({
+      title: prompt.title,
+      prompt: prompt.prompt,
+      style: prompt.style,
+      model: prompt.model,
+      type: prompt.type
+    })
+    setShowEditPromptDialog(true)
+  }
+
+  const saveEditedPrompt = async () => {
+    if (!editingPrompt) return
+
+    try {
+      // Update in database if prompt has database fields
+      if (editingPrompt.user_id) {
+        try {
+          await SavedPromptsService.updateSavedPrompt(editingPrompt.id, {
+            title: editPromptForm.title,
+            prompt: editPromptForm.prompt,
+            style: editPromptForm.style,
+            model: editPromptForm.model,
+            type: editPromptForm.type
+          })
+          console.log('✅ Prompt updated in database:', editingPrompt.id)
+        } catch (error) {
+          console.error('❌ Failed to update prompt in database:', error)
+        }
+      }
+
+      // Update local state
+      const updatedPrompts = savedPrompts.map(p => 
+        p.id === editingPrompt.id ? {
+          ...p,
+          title: editPromptForm.title,
+          prompt: editPromptForm.prompt,
+          style: editPromptForm.style,
+          model: editPromptForm.model,
+          type: editPromptForm.type
+        } : p
+      )
+      setSavedPrompts(updatedPrompts)
+      localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+
+      // Close dialog and reset
+      setShowEditPromptDialog(false)
+      setEditingPrompt(null)
+      setEditPromptForm({
+        title: '',
+        prompt: '',
+        style: 'none',
+        model: 'openai',
+        type: 'character'
+      })
+
+      toast({
+        title: "Prompt Updated",
+        description: "Prompt has been updated successfully!",
+      })
+    } catch (error) {
+      console.error('Error updating prompt:', error)
+      toast({
+        title: "Update Failed",
+        description: "Failed to update prompt. Check console for details.",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const savePromptToDatabase = async (prompt: SavedPrompt) => {
+    try {
+      // Only save if user is logged in and project is selected
+      if (!user || !selectedProject || selectedProject === 'all' || selectedProject === 'free') {
+        toast({
+          title: "Cannot Save",
+          description: "Please select a movie project first to save prompts to the database.",
+          variant: "destructive"
+        })
+        return
+      }
+
+      // Check if prompt is already in database
+      if (prompt.user_id) {
+        toast({
+          title: "Already Saved",
+          description: "This prompt is already saved to the database.",
+        })
+        return
+      }
+
+      // Save to database
+      const dbPrompt = await SavedPromptsService.createSavedPrompt(user.id, {
+        project_id: selectedProject,
+        scene_id: selectedScene === 'movie' ? null : selectedScene,
+        title: prompt.title,
+        prompt: prompt.prompt,
+        type: prompt.type,
+        style: prompt.style,
+        model: prompt.model,
+        tags: prompt.tags
+      })
+
+      // Update the prompt with database fields
+      const updatedPrompt = {
+        ...prompt,
+        id: dbPrompt.id,
+        user_id: dbPrompt.user_id,
+        project_id: dbPrompt.project_id,
+        scene_id: dbPrompt.scene_id,
+        use_count: dbPrompt.use_count,
+        created_at: dbPrompt.created_at,
+        updated_at: dbPrompt.updated_at
+      }
+
+      // Update local state
+      const updatedPrompts = savedPrompts.map(p => 
+        p.id === prompt.id ? updatedPrompt : p
+      )
+      setSavedPrompts(updatedPrompts)
+      localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+
+      toast({
+        title: "Prompt Saved!",
+        description: `Prompt "${prompt.title}" has been saved to the database.`,
+      })
+    } catch (error) {
+      console.error('Error saving prompt to database:', error)
+      toast({
+        title: "Save Failed",
+        description: "Failed to save prompt to database. Check console for details.",
+        variant: "destructive"
+      })
+    }
   }
 
   const addCustomStyle = () => {
@@ -830,7 +1121,7 @@ export default function VisualDevelopmentPage() {
                               </Badge>
                             </div>
                             <div className="text-xs text-muted-foreground truncate max-w-[300px]">
-                              {savedPrompt.prompt}
+                              {hidePromptText ? null : savedPrompt.prompt}
                             </div>
                             {savedPrompt.type === 'prompt' && (
                               <div className="text-xs text-blue-500 mt-1">
@@ -900,7 +1191,7 @@ export default function VisualDevelopmentPage() {
                     </Button>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Original: {savedPrompts.find(p => p.id === selectedPromptId)?.prompt}
+                    {hidePromptText ? null : `Original: ${savedPrompts.find(p => p.id === selectedPromptId)?.prompt}`}
                   </p>
                 </div>
               )}
@@ -1545,7 +1836,9 @@ export default function VisualDevelopmentPage() {
                               <div className="flex items-start justify-between">
                                 <div className="flex-1">
                                   <CardTitle className="text-lg">{savedPrompt.title}</CardTitle>
-                                  <CardDescription className="mt-2">{savedPrompt.prompt}</CardDescription>
+                                  <CardDescription className="mt-2">
+                                    {hidePromptText ? null : savedPrompt.prompt}
+                                  </CardDescription>
                                 </div>
                                 <Button
                                   variant="ghost"
@@ -1586,7 +1879,7 @@ export default function VisualDevelopmentPage() {
                               </div>
                             </CardHeader>
                             <CardContent>
-                              <div className="flex gap-2">
+                              <div className="flex flex-wrap gap-2">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -1596,7 +1889,7 @@ export default function VisualDevelopmentPage() {
                                     setSelectedModel(savedPrompt.model)
                                     setActiveTab(savedPrompt.type + 's')
                                   }}
-                                  className="flex-1"
+                                  className="flex-1 min-w-[100px]"
                                 >
                                   Use Prompt
                                 </Button>
@@ -1611,9 +1904,30 @@ export default function VisualDevelopmentPage() {
                                     generateContent(savedPrompt.type, savedPrompt.prompt)
                                     updatePromptUseCount(savedPrompt.id)
                                   }}
+                                  className="min-w-[100px]"
                                 >
                                   Regenerate
                                 </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => editPrompt(savedPrompt)}
+                                  className="min-w-[80px]"
+                                >
+                                  <Edit3 className="h-4 w-4 mr-1" />
+                                  Edit
+                                </Button>
+                                {!savedPrompt.user_id && (
+                                  <Button
+                                    variant="default"
+                                    size="sm"
+                                    onClick={() => savePromptToDatabase(savedPrompt)}
+                                    className="min-w-[80px] bg-green-600 hover:bg-green-700"
+                                  >
+                                    <CheckCircle className="h-4 w-4 mr-1" />
+                                    Save
+                                  </Button>
+                                )}
                               </div>
                             </CardContent>
                           </Card>
@@ -1994,6 +2308,123 @@ export default function VisualDevelopmentPage() {
         </div>
       )}
 
+      {/* Edit Prompt Dialog */}
+      {showEditPromptDialog && editingPrompt && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-card border rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-lg font-medium mb-4">Edit Prompt</h3>
+            
+            <div className="space-y-4">
+              {/* Title */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Title</label>
+                <Input
+                  placeholder="Enter prompt title..."
+                  value={editPromptForm.title}
+                  onChange={(e) => setEditPromptForm(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+              
+              {/* Prompt */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Prompt</label>
+                <Textarea
+                  placeholder="Enter your prompt..."
+                  value={editPromptForm.prompt}
+                  onChange={(e) => setEditPromptForm(prev => ({ ...prev, prompt: e.target.value }))}
+                  rows={4}
+                />
+              </div>
+              
+              {/* Type */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Type</label>
+                <Select 
+                  value={editPromptForm.type}
+                  onValueChange={(value) => setEditPromptForm(prev => ({ ...prev, type: value as any }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="character">Character</SelectItem>
+                    <SelectItem value="environment">Environment</SelectItem>
+                    <SelectItem value="prop">Prop</SelectItem>
+                    <SelectItem value="color">Color</SelectItem>
+                    <SelectItem value="lighting">Lighting</SelectItem>
+                    <SelectItem value="style">Style</SelectItem>
+                    <SelectItem value="prompt">Prompt</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Style */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Style</label>
+                <Select 
+                  value={editPromptForm.style}
+                  onValueChange={(value) => setEditPromptForm(prev => ({ ...prev, style: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No Style</SelectItem>
+                    {Object.entries(allStyles).map(([key, value]) => (
+                      <SelectItem key={key} value={key}>
+                        {key.charAt(0).toUpperCase() + key.slice(1).replace(/-/g, ' ')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Model */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Model</label>
+                <Select 
+                  value={editPromptForm.model}
+                  onValueChange={(value) => setEditPromptForm(prev => ({ ...prev, model: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">OpenAI DALL-E 3</SelectItem>
+                    <SelectItem value="anthropic">Anthropic Claude</SelectItem>
+                    <SelectItem value="openart">OpenArt SDXL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            
+            <div className="flex gap-2 mt-6">
+              <Button
+                onClick={saveEditedPrompt}
+                className="flex-1"
+              >
+                Save Changes
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowEditPromptDialog(false)
+                  setEditingPrompt(null)
+                  setEditPromptForm({
+                    title: '',
+                    prompt: '',
+                    style: 'none',
+                    model: 'openai',
+                    type: 'character'
+                  })
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

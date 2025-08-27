@@ -55,14 +55,7 @@ const statusColors = {
   "On Hold": "bg-red-500/20 text-red-400 border-red-500/30",
 }
 
-const moodColors = {
-  Mysterious: "bg-purple-500/20 text-purple-400",
-  Tense: "bg-red-500/20 text-red-400",
-  Suspenseful: "bg-orange-500/20 text-orange-400",
-  Energetic: "bg-green-500/20 text-green-400",
-  Dramatic: "bg-blue-500/20 text-blue-400",
-  Romantic: "bg-pink-500/20 text-pink-400",
-}
+
 
 export default function TimelinePage() {
   const searchParams = useSearchParams()
@@ -1976,71 +1969,30 @@ export default function TimelinePage() {
                           <div className="flex flex-col md:flex-row h-full min-h-[200px] md:min-h-[256px]">
                             {/* Content Section */}
                             <div className="flex-1 p-4 md:p-6 min-w-0">
-                              <div className="flex items-center gap-2 md:gap-3 mb-2">
-                                <div className="flex items-center gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <div className="h-6 w-6 rounded-full bg-cyan-500 glow flex items-center justify-center flex-shrink-0">
-                                      <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
-                                      Order: {scene.order_index}
-                                    </div>
+                              <div className="flex flex-col gap-2 mb-2 min-w-0">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <div className="h-6 w-6 rounded-full bg-cyan-500 glow flex items-center justify-center flex-shrink-0">
+                                    <span className="text-xs font-bold text-black">{scene.metadata.sceneNumber || index + 1}</span>
                                   </div>
-                                  <CardTitle className="text-base md:text-lg">{scene.name}</CardTitle>
+                                  <div className="text-xs text-muted-foreground bg-muted/50 px-2 py-1 rounded">
+                                    Order: {scene.order_index}
+                                  </div>
                                 </div>
-                                <div className="flex flex-wrap gap-1 ml-auto">
+                                <CardTitle className="text-lg md:text-xl min-w-0">{scene.name}</CardTitle>
+                                <div className="flex flex-wrap gap-1">
                                   <Badge
                                     className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
                                   >
                                     {scene.metadata.status || "Planning"}
                                   </Badge>
-                                  {scene.metadata.mood && (
-                                    <Badge
-                                      variant="outline"
-                                      className={`text-xs ${moodColors[scene.metadata.mood as keyof typeof moodColors]}`}
-                                    >
-                                      {scene.metadata.mood}
-                                    </Badge>
-                                  )}
+                                  
                                 </div>
                               </div>
                               <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
 
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs mb-3">
-                                <div className="flex items-center gap-1 text-muted-foreground">
-                                  <MapPin className="h-3 w-3" />
-                                  <span className="truncate">{scene.metadata.location || "No location"}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-muted-foreground">
-                                  <Clock className="h-3 w-3" />
-                                  <span>{formatDuration(scene.duration_seconds)}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-muted-foreground">
-                                  <Camera className="h-3 w-3" />
-                                  <span className="truncate">{scene.metadata.shotType || "No shot type"}</span>
-                                </div>
-                                <div className="flex items-center gap-1 text-muted-foreground">
-                                  <Users className="h-3 w-3" />
-                                  <span>{(scene.metadata.characters || []).length} chars</span>
-                                </div>
-                              </div>
 
-                              {(scene.metadata.characters || []).length > 0 && (
-                                <div className="mb-2">
-                                  <div className="flex flex-wrap gap-1">
-                                    {scene.metadata.characters!.slice(0, 3).map((character: string, i: number) => (
-                                      <Badge key={i} variant="secondary" className="text-xs">
-                                        {character}
-                                      </Badge>
-                                    ))}
-                                    {scene.metadata.characters!.length > 3 && (
-                                      <Badge variant="secondary" className="text-xs">
-                                        +{scene.metadata.characters!.length - 3}
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
+
+
 
                                 {scene.metadata.notes && (
                                   <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
@@ -2048,7 +2000,7 @@ export default function TimelinePage() {
                                   </div>
                                 )}
 
-                                <div className="flex items-center gap-1 pt-2 border-t border-border/50">
+                                <div className="flex flex-wrap items-center gap-1 pt-2 border-t border-border/50">
                                   <Button
                                     size="sm"
                                     variant="outline"
@@ -2138,15 +2090,11 @@ export default function TimelinePage() {
                                   {/* Image status indicator */}
                                   {(() => {
                                     const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                    return (
-                                      <div className={`absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate ${
-                                        urlInfo?.needsRefresh 
-                                          ? 'bg-orange-600/90' 
-                                          : 'bg-green-600/90'
-                                      }`}>
-                                        {urlInfo?.needsRefresh ? '⚠️ Expired' : '✓ Has Image'}
+                                    return urlInfo?.needsRefresh ? (
+                                      <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
+                                        ⚠️ Expired
                                       </div>
-                                    )
+                                    ) : null
                                   })()}
                                   
                                   {/* Action buttons */}
@@ -2180,7 +2128,7 @@ export default function TimelinePage() {
                                         e.stopPropagation()
                                         handleUploadImage(scene)
                                       }}
-                                      className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                      className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                                     >
                                       <ImageIcon className="h-3 w-3 mr-1" />
                                       UPLOAD
@@ -2216,66 +2164,29 @@ export default function TimelinePage() {
                       />
 
                       <div className={`relative w-full flex ${index % 2 === 0 ? "justify-start" : "justify-end"}`}>
-                        <div className={`${index % 2 === 0 ? "mr-8" : "ml-8"} w-[calc(40%-3rem)]`}>
+                        <div className={`${index % 2 === 0 ? "mr-8" : "ml-8"} w-[calc(45%-2rem)] lg:w-[calc(40%-2rem)] xl:w-[calc(35%-2rem)] min-w-[320px]`}>
                           <Link href={`/timeline-scene/${scene.id}`}>
-                            <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer overflow-hidden">
+                            <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer">
                               <CardHeader className="p-0">
                                 <div className="flex h-full min-h-[256px]">
                                   {/* Content Section - Left Side */}
-                                  <div className="flex-1 p-6 min-w-0">
-                                    <div className="flex items-center gap-3 mb-2">
-                                      <CardTitle className="text-lg">{scene.name}</CardTitle>
-                                      <Badge
-                                        className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
-                                      >
-                                        {scene.metadata.status || "Planning"}
-                                      </Badge>
-                                      {scene.metadata.mood && (
+                                  <div className="flex-1 p-4 lg:p-6 min-w-0">
+                                                                        <div className="flex flex-col gap-3 mb-2 min-w-0">
+                                      <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
+                                      <div className="flex flex-wrap gap-1">
                                         <Badge
-                                          variant="outline"
-                                          className={`text-xs ${moodColors[scene.metadata.mood as keyof typeof moodColors]}`}
+                                          className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
                                         >
-                                          {scene.metadata.mood}
+                                          {scene.metadata.status || "Planning"}
                                         </Badge>
-                                      )}
+
+                                      </div>
                                     </div>
                                     <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
 
-                                    <div className="grid grid-cols-2 gap-2 text-xs mb-3">
-                                      <div className="flex items-center gap-1 text-muted-foreground">
-                                        <MapPin className="h-3 w-3" />
-                                        <span>{scene.metadata.location || "No location"}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1 text-muted-foreground">
-                                        <Clock className="h-3 w-3" />
-                                        <span>{formatDuration(scene.duration_seconds)}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1 text-muted-foreground">
-                                        <Camera className="h-3 w-3" />
-                                        <span>{scene.metadata.shotType || "No shot type"}</span>
-                                      </div>
-                                      <div className="flex items-center gap-1 text-muted-foreground">
-                                        <Users className="h-3 w-3" />
-                                        <span>{(scene.metadata.characters || []).length} chars</span>
-                                      </div>
-                                    </div>
 
-                                    {(scene.metadata.characters || []).length > 0 && (
-                                      <div className="mb-2">
-                                        <div className="flex flex-wrap gap-1">
-                                          {scene.metadata.characters!.slice(0, 3).map((character: string, i: number) => (
-                                            <Badge key={i} variant="secondary" className="text-xs">
-                                              {character}
-                                            </Badge>
-                                          ))}
-                                          {scene.metadata.characters!.length > 3 && (
-                                            <Badge variant="secondary" className="text-xs">
-                                              +{scene.metadata.characters!.length - 3}
-                                            </Badge>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
+
+
 
                                     {scene.metadata.notes && (
                                       <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
@@ -2283,7 +2194,7 @@ export default function TimelinePage() {
                                       </div>
                                     )}
 
-                                    <div className="flex items-center gap-1 pt-2 border-t border-border/50">
+                                    <div className="flex flex-wrap items-center gap-1 pt-2 border-t border-border/50">
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -2373,15 +2284,11 @@ export default function TimelinePage() {
                                       {/* Image status indicator */}
                                       {(() => {
                                         const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                        return (
-                                          <div className={`absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate ${
-                                            urlInfo?.needsRefresh 
-                                              ? 'bg-orange-600/90' 
-                                              : 'bg-green-600/90'
-                                          }`}>
-                                            {urlInfo?.needsRefresh ? '⚠️ Expired' : '✓ Has Image'}
+                                        return urlInfo?.needsRefresh ? (
+                                          <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
+                                            ⚠️ Expired
                                           </div>
-                                        )
+                                        ) : null
                                       })()}
                                       
                                       {/* Action buttons */}
@@ -2415,7 +2322,7 @@ export default function TimelinePage() {
                                             e.stopPropagation()
                                             handleUploadImage(scene)
                                           }}
-                                          className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                          className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                                         >
                                           <ImageIcon className="h-3 w-3 mr-1" />
                                           UPLOAD
@@ -2460,33 +2367,12 @@ export default function TimelinePage() {
                               <Badge className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}>
                                 {scene.metadata.status || "Planning"}
                               </Badge>
-                              {scene.metadata.mood && (
-                                <Badge variant="outline" className={`text-xs ${moodColors[scene.metadata.mood as keyof typeof moodColors]}`}>
-                                  {scene.metadata.mood}
-                                </Badge>
-                              )}
+
                             </div>
                           </div>
                         </CardHeader>
                         <CardContent>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                            <div className="flex items-center gap-2">
-                              <MapPin className="h-4 w-4" />
-                              <span>{scene.metadata.location || "No location"}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Clock className="h-4 w-4" />
-                              <span>{formatDuration(scene.duration_seconds)}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Camera className="h-4 w-4" />
-                              <span>{scene.metadata.shotType || "No shot type"}</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <Users className="h-4 w-4" />
-                              <span>{(scene.metadata.characters || []).length} chars</span>
-                            </div>
-                          </div>
+
                           
                           {/* Scene Thumbnail with Upload */}
                           <div className="mt-4 flex items-center gap-4">
@@ -2523,7 +2409,7 @@ export default function TimelinePage() {
                                   size="sm"
                                   variant="secondary"
                                   onClick={() => handleUploadImage(scene)}
-                                  className="absolute inset-0 h-full w-full bg-blue-600/80 hover:bg-blue-700/90 text-white flex items-center justify-center text-xs font-medium"
+                                  className="absolute inset-0 h-full w-full bg-blue-600/80 hover:bg-blue-700/90 text-white flex items-center justify-center text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
                                 >
                                   <ImageIcon className="h-3 w-3 mr-1" />
                                   UPLOAD

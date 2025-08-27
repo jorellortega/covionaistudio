@@ -310,6 +310,32 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* User Preferences Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              User Preferences
+            </CardTitle>
+            <CardDescription>
+              Customize your experience and control what information is visible
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Manage your privacy settings, control prompt text visibility, and customize your workspace experience.
+              </p>
+              <Button asChild className="w-full sm:w-auto">
+                <Link href="/preferences" className="flex items-center gap-2">
+                  <Settings className="h-4 w-4" />
+                  Manage Preferences
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Password Management Modal */}

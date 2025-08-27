@@ -95,3 +95,5 @@ After running this migration:
 4. New shots will include full text range data for visual highlighting
 
 
+
+

@@ -18,6 +18,8 @@ import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
+import { SavedPromptsService } from "@/lib/saved-prompts-service"
+import { PreferencesService } from "@/lib/preferences-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 
@@ -77,9 +79,13 @@ export default function SceneStoryboardsPage() {
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [selectedAIService, setSelectedAIService] = useState("dalle")
   const [aiImagePrompt, setAiImagePrompt] = useState("")
+  const [aiImagePromptFull, setAiImagePromptFull] = useState("") // Store the actual full prompt text
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
   const [userProfile, setUserProfile] = useState<any>(null)
   const [useExactPrompt, setUseExactPrompt] = useState(true)
+  const [savedPrompts, setSavedPrompts] = useState<any[]>([])
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
+  const [hidePromptText, setHidePromptText] = useState(false)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -208,6 +214,71 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+
+
+  // Load user preferences
+  const loadUserPreferences = async () => {
+    if (!userId) return
+    
+    try {
+      const hidePromptTextPref = await PreferencesService.getHidePromptText()
+      setHidePromptText(hidePromptTextPref)
+      console.log("🎬 Loaded hidePromptText preference:", hidePromptTextPref)
+    } catch (error) {
+      console.error("🎬 Error loading user preferences:", error)
+    }
+  }
+
+  // Load saved prompts from database for AI image generation  
+  const loadSavedPrompts = async () => {
+    if (!userId) return
+    
+    try {
+      setIsLoadingPrompts(true)
+      console.log("🎬 Loading saved prompts for user:", userId)
+      
+      // Get the current project ID from scene info - we need to wait for it
+      const currentProjectId = sceneInfo?.project_id
+      console.log("🎬 Current project ID:", currentProjectId)
+      
+      // If no project ID yet, don't load prompts
+      if (!currentProjectId) {
+        console.log("🎬 No project ID yet, skipping prompt load")
+        setIsLoadingPrompts(false)
+        return
+      }
+      
+      // Load prompts from database with project filtering
+      const dbPrompts = await SavedPromptsService.getSavedPrompts(userId, currentProjectId)
+      console.log("🎬 Loaded prompts from database:", dbPrompts.length)
+      console.log("🎬 All database prompts:", dbPrompts)
+      
+      // Filter to show only image-related prompts for this specific movie/project
+      const imagePrompts = dbPrompts.filter((p: any) => {
+        const isImageType = p.type === 'character' || p.type === 'environment' || p.type === 'prop' ||
+                           p.type === 'color' || p.type === 'lighting' || p.type === 'style' || p.type === 'prompt'
+        
+        // Show prompts that are either:
+        // 1. For this specific movie (project_id matches)
+        // 2. Universal prompts (project_id is null - "Free Play" mode)
+        const isForThisProject = p.project_id === currentProjectId || p.project_id === null
+        
+        console.log(`🎬 Prompt "${p.title}": type=${p.type}, project_id=${p.project_id}, isImageType=${isImageType}, isForThisProject=${isForThisProject}`)
+        
+        return isImageType && isForThisProject
+      })
+      
+      console.log("🎬 Filtered image prompts for this project:", imagePrompts.length)
+      console.log("🎬 Final filtered prompts:", imagePrompts)
+      setSavedPrompts(imagePrompts)
+      
+    } catch (error) {
+      console.error("🎬 Error loading saved prompts:", error)
+    } finally {
+      setIsLoadingPrompts(false)
+    }
+  }
+
   useEffect(() => {
     console.log("🎬 useEffect triggered - ready:", ready, "userId:", userId, "sceneId:", sceneId)
     if (ready && userId && sceneId) {
@@ -220,6 +291,10 @@ export default function SceneStoryboardsPage() {
       fetchSceneInfo()
       console.log("🎬 Loading storyboards with text ranges for visual highlighting")
       loadStoryboardsWithTextRanges()
+      // Note: loadSavedPrompts() will be called when sceneInfo loads with project_id
+      
+      // Load user preferences
+      loadUserPreferences()
     } else {
       console.log("🎬 Conditions not met:", { ready, userId, sceneId })
     }
@@ -314,6 +389,14 @@ export default function SceneStoryboardsPage() {
 
     loadAISettings()
   }, [ready, userId])
+
+  // Reload prompts when sceneInfo changes (after project_id is available)
+  useEffect(() => {
+    if (sceneInfo?.project_id && userId) {
+      console.log("🎬 SceneInfo loaded with project_id, reloading prompts...")
+      loadSavedPrompts()
+    }
+  }, [sceneInfo?.project_id, userId])
 
   const fetchSceneInfo = async () => {
     try {
@@ -581,6 +664,8 @@ export default function SceneStoryboardsPage() {
       setIsLoadingStoryboards(false)
     }
   }
+
+
 
   // Function to get next shot number for this scene
   const getNextShotNumber = () => {
@@ -1044,8 +1129,19 @@ export default function SceneStoryboardsPage() {
       const result = await response.json()
       
       if (result.success && result.imageUrl) {
+        // Use bucket URL if available, otherwise fall back to original URL
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
+        
+        console.log('🎬 Image generation result:', {
+          success: result.success,
+          originalUrl: result.imageUrl,
+          bucketUrl: result.bucketUrl,
+          savedToBucket: result.savedToBucket,
+          usingUrl: imageUrlToUse
+        })
+        
         // Update the storyboard with the generated image
-        const updatedStoryboard = await StoryboardsService.updateStoryboardImage(storyboardId, result.imageUrl)
+        const updatedStoryboard = await StoryboardsService.updateStoryboardImage(storyboardId, imageUrlToUse)
         
         // Update local state
         setStoryboards(prev => prev.map(sb => 
@@ -1054,7 +1150,9 @@ export default function SceneStoryboardsPage() {
 
         toast({
           title: "Image Generated!",
-          description: `AI image has been generated and added to the storyboard shot.`,
+          description: result.savedToBucket 
+            ? "AI image has been generated and saved to your bucket!" 
+            : "AI image has been generated and added to the storyboard shot.",
         })
 
         // Clear the prompt
@@ -1942,6 +2040,64 @@ export default function SceneStoryboardsPage() {
                 <div className="space-y-3">
                   <div>
                     <Label htmlFor="ai-image-prompt">Image Prompt</Label>
+                    
+                    {/* Saved Prompts Dropdown */}
+                    <div className="mb-3">
+                      <div className="text-xs text-muted-foreground mb-2">
+                        Saved Prompts: {savedPrompts.length} found for this movie
+                        {sceneInfo?.project_id && (
+                          <span className="ml-2 text-blue-400">
+                            (Project: {sceneInfo.project_id})
+                          </span>
+                        )}
+                      </div>
+                      {savedPrompts.length > 0 ? (
+                        <>
+                          <Label htmlFor="saved-prompt-select" className="text-xs text-muted-foreground mb-2 block">
+                            Use Saved Prompt
+                          </Label>
+                        <Select onValueChange={(promptId) => {
+                          const selectedPrompt = savedPrompts.find(p => p.id === promptId)
+                          if (selectedPrompt) {
+                            if (hidePromptText) {
+                              // Insert just the prompt name when hiding text
+                              setAiImagePrompt(selectedPrompt.title)
+                            } else {
+                              // Insert the full prompt when showing text
+                              setAiImagePrompt(selectedPrompt.prompt)
+                            }
+                            // Always store the full prompt text for AI generation
+                            setAiImagePromptFull(selectedPrompt.prompt)
+                            toast({
+                              title: "Prompt Loaded",
+                              description: `Loaded: ${selectedPrompt.title}`,
+                            })
+                          }
+                        }}>
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue placeholder="Select a saved prompt..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {savedPrompts.map((prompt) => (
+                              <SelectItem key={prompt.id} value={prompt.id}>
+                                <div className="flex items-center justify-between w-full">
+                                  <span className="truncate">{prompt.title}</span>
+                                  <Badge variant="secondary" className="ml-2 text-xs">
+                                    {prompt.useCount || 0} uses
+                                  </Badge>
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        </>
+                      ) : (
+                        <div className="text-xs text-muted-foreground">
+                          No saved prompts found. Create some in the Visual Dev page first.
+                        </div>
+                      )}
+                    </div>
+                    
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex gap-2">
                         <Button
@@ -1977,14 +2133,30 @@ export default function SceneStoryboardsPage() {
                         />
                       </div>
                     </div>
-                    <Textarea
-                      id="ai-image-prompt"
-                      value={aiImagePrompt}
-                      onChange={(e) => setAiImagePrompt(e.target.value)}
-                      placeholder="Describe the visual style, composition, lighting, and mood for this shot..."
-                      rows={2}
-                      className="text-sm"
-                    />
+                    {hidePromptText && aiImagePromptFull ? (
+                      <div className="space-y-2">
+                        <div className="text-sm text-blue-500 font-medium">
+                          {savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title}
+                        </div>
+                        <Textarea
+                          id="ai-image-prompt"
+                          value={aiImagePrompt.replace(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title || '', '')}
+                          onChange={(e) => setAiImagePrompt(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title + ' ' + e.target.value)}
+                          placeholder="Type additional text here..."
+                          rows={2}
+                          className="text-sm"
+                        />
+                      </div>
+                    ) : (
+                      <Textarea
+                        id="ai-image-prompt"
+                        value={aiImagePrompt}
+                        onChange={(e) => setAiImagePrompt(e.target.value)}
+                        placeholder="Describe the visual style, composition, lighting, and mood for this shot..."
+                        rows={2}
+                        className="text-sm"
+                      />
+                    )}
                   </div>
                   
                   {/* AI Service Selection - Only show if not locked */}

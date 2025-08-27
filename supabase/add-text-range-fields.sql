@@ -75,3 +75,5 @@ GRANT EXECUTE ON FUNCTION check_text_range_overlap(UUID, INTEGER, INTEGER, UUID)
 GRANT EXECUTE ON FUNCTION validate_text_range() TO authenticated;
 
 
+
+

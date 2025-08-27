@@ -15,6 +15,7 @@ const fullNavigation = [
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
   { name: "Visual Dev", href: "/visdev", icon: Palette },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
+  { name: "Preferences", href: "/preferences", icon: Settings },
 ]
 
 const mobileNavigation = [
@@ -24,6 +25,7 @@ const mobileNavigation = [
   { name: "Visual Dev", href: "/visdev", icon: Palette },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
   { name: "Settings", href: "/settings", icon: Settings },
+  { name: "Preferences", href: "/preferences", icon: Settings },
 ]
 
 export function Navigation() {

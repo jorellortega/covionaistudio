@@ -20,6 +20,7 @@ export interface Storyboard {
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string
+  sequence_order?: number
   created_at: string
   updated_at: string
 }
@@ -41,6 +42,7 @@ export interface CreateStoryboardData {
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string
+  sequence_order?: number
 }
 
 export interface UpdateStoryboardData extends Partial<CreateStoryboardData> {
@@ -412,6 +414,7 @@ export class StoryboardsService {
         .eq('scene_id', sceneId)
         .not('script_text_start', 'is', null)
         .not('script_text_end', 'is', null)
+        .order('sequence_order', { ascending: true })
         .order('shot_number', { ascending: true })
 
       if (error) {
@@ -422,6 +425,115 @@ export class StoryboardsService {
       return data || []
     } catch (error) {
       console.error('Error in getStoryboardsForSceneWithTextRanges:', error)
+      throw error
+    }
+  }
+
+  // Get storyboards ordered by sequence_order for proper display
+  static async getStoryboardsBySceneOrdered(sceneId: string): Promise<Storyboard[]> {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('storyboards')
+        .select('*')
+        .eq('scene_id', sceneId)
+        .order('sequence_order', { ascending: true })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching storyboards by scene ordered:', error)
+        throw error
+      }
+
+      return data || []
+    } catch (error) {
+      console.error('Error in getStoryboardsBySceneOrdered:', error)
+      throw error
+    }
+  }
+
+  // Insert a shot between two existing shots
+  static async insertShotBetween(
+    sceneId: string, 
+    beforeShotId: string, 
+    afterShotId: string, 
+    newShotData: CreateStoryboardData
+  ): Promise<Storyboard> {
+    try {
+      // Get the two shots to calculate the new sequence_order
+      const { data: shots, error: fetchError } = await getSupabaseClient()
+        .from('storyboards')
+        .select('sequence_order')
+        .in('id', [beforeShotId, afterShotId])
+        .eq('scene_id', sceneId)
+        .order('sequence_order', { ascending: true })
+
+      if (fetchError || !shots || shots.length !== 2) {
+        throw new Error('Could not fetch shots for sequence calculation')
+      }
+
+      const beforeSequence = shots[0].sequence_order || 0
+      const afterSequence = shots[1].sequence_order || 0
+      
+      // Calculate new sequence_order between the two shots
+      const newSequenceOrder = beforeSequence + (afterSequence - beforeSequence) / 2
+
+      // Create the new shot with the calculated sequence_order
+      const shotWithSequence = {
+        ...newShotData,
+        sequence_order: newSequenceOrder
+      }
+
+      const newShot = await this.createStoryboard(shotWithSequence)
+
+      // Update shot_number to be sequential (1, 2, 3, 4...)
+      await this.renumberShotsInScene(sceneId)
+
+      return newShot
+    } catch (error) {
+      console.error('Error inserting shot between:', error)
+      throw error
+    }
+  }
+
+  // Renumber shots in a scene to maintain sequential shot numbers
+  static async renumberShotsInScene(sceneId: string): Promise<void> {
+    try {
+      // Get all shots for the scene ordered by sequence_order
+      const shots = await this.getStoryboardsBySceneOrdered(sceneId)
+      
+      // Update shot numbers to be sequential
+      for (let i = 0; i < shots.length; i++) {
+        const newShotNumber = i + 1
+        if (shots[i].shot_number !== newShotNumber) {
+          await getSupabaseClient()
+            .from('storyboards')
+            .update({ shot_number: newShotNumber })
+            .eq('id', shots[i].id)
+        }
+      }
+    } catch (error) {
+      console.error('Error renumbering shots in scene:', error)
+      throw error
+    }
+  }
+
+  // Move a shot to a new position in the sequence
+  static async moveShotToPosition(
+    shotId: string, 
+    newSequenceOrder: number
+  ): Promise<void> {
+    try {
+      const { error } = await getSupabaseClient()
+        .from('storyboards')
+        .update({ sequence_order: newSequenceOrder })
+        .eq('id', shotId)
+
+      if (error) {
+        console.error('Error moving shot to new position:', error)
+        throw error
+      }
+    } catch (error) {
+      console.error('Error in moveShotToPosition:', error)
       throw error
     }
   }

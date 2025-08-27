@@ -55,6 +55,7 @@ export default function MoviesPage() {
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
+  const [selectedProjectStatus, setSelectedProjectStatus] = useState("active")
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingMovie, setEditingMovie] = useState<Movie | null>(null)
@@ -66,6 +67,7 @@ export default function MoviesPage() {
     genre: "",
     project_type: "movie",
     movie_status: "Pre-Production",
+    project_status: "active",
     writer: "",
     cowriters: [],
   })
@@ -243,7 +245,8 @@ export default function MoviesPage() {
       movie.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (movie.description && movie.description.toLowerCase().includes(searchQuery.toLowerCase()))
     const matchesStatus = selectedStatus === "All" || movie.movie_status === selectedStatus
-    return matchesSearch && matchesStatus
+    const matchesProjectStatus = selectedProjectStatus === "All" || movie.project_status === selectedProjectStatus
+    return matchesSearch && matchesStatus && matchesProjectStatus
   })
 
   const handleCreateMovie = async () => {
@@ -279,11 +282,12 @@ export default function MoviesPage() {
   }
 
   const resetMovieForm = () => {
-    setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production", writer: "", cowriters: [] })
+    setNewMovie({ name: "", description: "", genre: "", project_type: "movie", movie_status: "Pre-Production", project_status: "active", writer: "", cowriters: [] })
     setAiPrompt("")
     setSelectedAIService("dalle")
     setGeneratedCoverUrl("")
     setCowriterInput("")
+    setSelectedProjectStatus("active")
   }
 
   const handleEditMovie = (movie: Movie) => {
@@ -294,6 +298,7 @@ export default function MoviesPage() {
       genre: movie.genre || "",
       project_type: "movie",
       movie_status: movie.movie_status,
+      project_status: movie.project_status || "active",
       thumbnail: movie.thumbnail || "",
       writer: movie.writer || "",
       cowriters: movie.cowriters || []
@@ -823,16 +828,32 @@ export default function MoviesPage() {
                   <p className="text-xs text-muted-foreground">Type a name and press Enter, or click the + button to add co-writers.</p>
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="movie_status">Status</Label>
+                  <Label htmlFor="movie_status">Phase</Label>
                   <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
                     <SelectTrigger className="bg-input border-border">
-                      <SelectValue placeholder="Select status" />
+                      <SelectValue placeholder="Select phase" />
                     </SelectTrigger>
                     <SelectContent className="cinema-card border-border">
                       <SelectItem value="Pre-Production">Pre-Production</SelectItem>
                       <SelectItem value="Production">Production</SelectItem>
                       <SelectItem value="Post-Production">Post-Production</SelectItem>
                       <SelectItem value="Distribution">Distribution</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="project_status">Status</Label>
+                  <Select value={newMovie.project_status} onValueChange={(value) => setNewMovie({ ...newMovie, project_status: value as any })}>
+                    <SelectTrigger className="bg-input border-border">
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent className="cinema-card border-border">
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="paused">Paused</SelectItem>
+                      <SelectItem value="canceled">Canceled</SelectItem>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -878,9 +899,6 @@ export default function MoviesPage() {
                       <p className="text-sm text-green-600 flex items-center gap-2">
                         <CheckCircle className="h-4 w-4" />
                         AI Online
-                        <Link href="/settings-ai" className="ml-auto text-xs underline hover:text-green-500">
-                          Change Settings
-                        </Link>
                       </p>
                     </div>
                   )}
@@ -1087,16 +1105,32 @@ export default function MoviesPage() {
                 <p className="text-xs text-muted-foreground">Type a name and press Enter, or click the + button to add co-writers.</p>
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="edit-movie_status">Status</Label>
+                <Label htmlFor="edit-movie_status">Phase</Label>
                 <Select value={newMovie.movie_status} onValueChange={(value) => setNewMovie({ ...newMovie, movie_status: value as any })}>
                   <SelectTrigger className="bg-input border-border">
-                    <SelectValue placeholder="Select status" />
+                    <SelectValue placeholder="Select phase" />
                   </SelectTrigger>
                   <SelectContent className="cinema-card border-border">
                     <SelectItem value="Pre-Production">Pre-Production</SelectItem>
                     <SelectItem value="Production">Production</SelectItem>
                     <SelectItem value="Post-Production">Post-Production</SelectItem>
                     <SelectItem value="Distribution">Distribution</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-project_status">Status</Label>
+                <Select value={newMovie.project_status} onValueChange={(value) => setNewMovie({ ...newMovie, project_status: value as any })}>
+                  <SelectTrigger className="bg-input border-border">
+                    <SelectValue placeholder="Select status" />
+                  </SelectTrigger>
+                  <SelectContent className="cinema-card border-border">
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="paused">Paused</SelectItem>
+                    <SelectItem value="canceled">Canceled</SelectItem>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="archived">Archived</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1139,12 +1173,9 @@ export default function MoviesPage() {
                   {/* Show locked model info if images tab is locked */}
                   {isImagesTabLocked() && (
                     <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
-                      <p className="text-sm text-green-600 flex items-center gap-2">
+                      <p className="text-sm text-green-500 flex items-center gap-2">
                         <CheckCircle className="h-4 w-4" />
                         AI Online
-                        <Link href="/settings-ai" className="ml-auto text-xs underline hover:text-green-500">
-                          Change Settings
-                        </Link>
                       </p>
                     </div>
                   )}
@@ -1272,13 +1303,50 @@ export default function MoviesPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="cinema-card border-border">
-              <DropdownMenuItem onClick={() => setSelectedStatus("All")}>All Status</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedStatus("All")}>All Phases</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setSelectedStatus("Pre-Production")}>Pre-Production</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setSelectedStatus("Production")}>Production</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setSelectedStatus("Post-Production")}>Post-Production</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setSelectedStatus("Distribution")}>Distribution</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        </div>
+
+        {/* Status Tabs */}
+        <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-2">
+          <div className="flex gap-1 bg-muted rounded-lg p-1">
+            {[
+              { value: "active", label: "Active", count: movies.filter(m => m.project_status === "active").length, default: true },
+              { value: "paused", label: "Paused", count: movies.filter(m => m.project_status === "paused").length },
+              { value: "draft", label: "Draft", count: movies.filter(m => m.project_status === "draft").length },
+              { value: "completed", label: "Completed", count: movies.filter(m => m.project_status === "completed").length },
+              { value: "canceled", label: "Canceled", count: movies.filter(m => m.project_status === "canceled").length },
+              { value: "archived", label: "Archived", count: movies.filter(m => m.project_status === "archived").length },
+              { value: "All", label: "All", count: movies.length }
+            ].map((status) => (
+              <button
+                key={status.value}
+                onClick={() => setSelectedProjectStatus(status.value)}
+                className={`px-3 py-2 text-sm font-medium rounded-md transition-all duration-200 relative ${
+                  selectedProjectStatus === status.value
+                    ? "bg-background text-foreground shadow-sm border border-border"
+                    : "text-muted-foreground hover:text-foreground hover:bg-background/50"
+                }`}
+              >
+                {status.label}
+                {status.default && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-green-500 rounded-full"></span>
+                )}
+                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
+                  selectedProjectStatus === status.value
+                    ? "bg-primary/20 text-primary"
+                    : "bg-muted-foreground/20 text-muted-foreground"
+                }`}>
+                  {status.count}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Movies Grid */}
@@ -1300,9 +1368,14 @@ export default function MoviesPage() {
                     <CardTitle className="text-lg mb-1 group-hover:text-primary transition-colors">
                       {movie.name}
                     </CardTitle>
-                    <Badge className={`text-xs ${statusColors[movie.movie_status as keyof typeof statusColors]}`}>
-                      {movie.movie_status}
-                    </Badge>
+                    <div className="flex gap-2 mb-2">
+                      <Badge className={`text-xs ${statusColors[movie.movie_status as keyof typeof statusColors]}`}>
+                        {movie.movie_status}
+                      </Badge>
+                      <Badge className="text-xs bg-blue-500/20 text-blue-400 border-blue-500/30">
+                        {movie.project_status || 'active'}
+                      </Badge>
+                    </div>
                   </div>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -1412,11 +1485,11 @@ export default function MoviesPage() {
             <Film className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No movies found</h3>
             <p className="text-muted-foreground mb-4">
-              {searchQuery || selectedStatus !== "All"
+              {searchQuery || selectedStatus !== "All" || selectedProjectStatus !== "All"
                 ? "Try adjusting your search or filter criteria"
                 : "Create your first movie project to get started"}
             </p>
-            {!searchQuery && selectedStatus === "All" && (
+            {!searchQuery && selectedStatus === "All" && selectedProjectStatus === "All" && (
               <Button onClick={() => setIsCreateDialogOpen(true)} className="gradient-button text-white">
                 <Plus className="mr-2 h-5 w-5" />
                 Create Movie

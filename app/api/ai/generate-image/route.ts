@@ -4,31 +4,101 @@ import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
   try {
-    const response = await fetch('/api/ai/download-and-store-image', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        imageUrl,
-        fileName,
-        userId
-      }),
-    })
+    const { createServerClient } = await import('@supabase/ssr')
+    const { cookies } = await import('next/headers')
+    
+    // Create server-side Supabase client with proper authentication
+    const cookieStore = await cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch {
+              // The `setAll` method was called from a Server Component.
+              // This can be ignored if you have middleware refreshing
+              // user sessions.
+            }
+          },
+        },
+      }
+    )
 
+    console.log('Downloading image from:', imageUrl)
+    console.log('File name:', fileName)
+    console.log('User ID:', userId)
+
+    // Download the image from the AI service (server-side, no CORS issues)
+    const response = await fetch(imageUrl)
     if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(`Failed to save image: ${errorData.error || response.statusText}`)
+      console.error('Failed to download image:', response.status, response.statusText)
+      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
     }
 
-    const result = await response.json()
-    if (result.success && result.supabaseUrl) {
-      return result.supabaseUrl
-    } else {
-      throw new Error('Failed to get bucket URL')
+    const imageBuffer = await response.arrayBuffer()
+    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    
+    console.log('Image downloaded, size:', imageBlob.size)
+
+    // Create a unique filename
+    const timestamp = Date.now()
+    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
+    const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
+
+    // Upload to Supabase storage
+    const filePath = `${userId}/images/${uniqueFileName}`
+    console.log('Uploading to Supabase path:', filePath)
+
+    // Check if bucket exists
+    const { data: bucketData, error: bucketError } = await supabase.storage
+      .from('cinema_files')
+      .list('', { limit: 1 })
+
+    if (bucketError) {
+      console.error('Bucket access error:', bucketError)
+      throw new Error(`Bucket access error: ${bucketError.message}`)
     }
+
+    console.log('Bucket access successful, proceeding with upload...')
+
+    const { data, error } = await supabase.storage
+      .from('cinema_files')
+      .upload(filePath, imageBlob, {
+        contentType: 'image/png',
+        cacheControl: '3600',
+        upsert: false
+      })
+
+    if (error) {
+      console.error('Supabase upload error:', error)
+      console.error('Error details:', {
+        message: error.message,
+        name: error.name
+      })
+      throw new Error(`Failed to upload to Supabase: ${error.message}`)
+    }
+
+    console.log('Upload successful, data:', data)
+
+    // Get the public URL
+    const { data: urlData } = supabase.storage
+      .from('cinema_files')
+      .getPublicUrl(filePath)
+
+    console.log('Image uploaded successfully to Supabase:', urlData.publicUrl)
+
+    return urlData.publicUrl
+
   } catch (error) {
-    console.error('Error saving image to bucket:', error)
+    console.error('Error in downloadAndStoreImage:', error)
     throw error
   }
 }
