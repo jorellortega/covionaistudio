@@ -140,8 +140,6 @@ export default function SceneStoryboardsPage() {
     if (selection && selection.rangeCount > 0) {
       selectionRangeRef.current = selection.getRangeAt(0).cloneRange()
     }
-    
-    console.log("🎬 Selection locked:", text)
   }
   
   // Function to unlock selection (only when creating shot)
@@ -151,7 +149,6 @@ export default function SceneStoryboardsPage() {
     setSelectedText("")
     setShowSelectionActions(false)
     selectionRangeRef.current = null
-    console.log("🎬 Selection unlocked")
   }
   
   // Function to find text range in script
@@ -921,24 +918,7 @@ export default function SceneStoryboardsPage() {
     setEditingStoryboard(null)
   }
 
-  // Debug: Log form state changes
-  useEffect(() => {
-    console.log("🎬 showCreateForm changed to:", showCreateForm)
-  }, [showCreateForm])
 
-  // Debug: Log shot mode changes
-  useEffect(() => {
-    console.log("🎬 shotMode changed to:", shotMode)
-  }, [shotMode])
-
-  // Debug: Log selection state changes
-  useEffect(() => {
-    console.log("🎬 Selection state changed:", { 
-      showSelectionActions, 
-      selectedText: selectedText?.length, 
-      shotMode 
-    })
-  }, [showSelectionActions, selectedText, shotMode])
 
   // Reset form when form is closed
   useEffect(() => {
@@ -962,24 +942,9 @@ export default function SceneStoryboardsPage() {
     return matchesSearch && matchesFilter
   })
 
-  // Debug render state
-  console.log("🎬 About to render component with state:", {
-    ready,
-    userId,
-    sceneId,
-    storyboardsCount: storyboards.length,
-    sceneScriptLength: sceneScript?.length || 0,
-    aiSettingsLoaded,
-    shotMode,
-    showSelectionActions
-  })
-  
-  console.log("🎬 sceneInfo object:", sceneInfo)
-  console.log("🎬 sceneInfo type:", typeof sceneInfo)
-  console.log("🎬 sceneInfo keys:", sceneInfo ? Object.keys(sceneInfo) : "null")
+
   
   if (!ready || !userId) {
-    console.log("🎬 Not ready or no user, showing loading...")
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -991,7 +956,6 @@ export default function SceneStoryboardsPage() {
   }
   
   if (!sceneId) {
-    console.log("🎬 No scene ID, showing error...")
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -1002,13 +966,10 @@ export default function SceneStoryboardsPage() {
     )
   }
   
-  console.log("🎬 All conditions met, rendering main content...")
-  
   // Temporarily bypass loading check to see main content
   const isLoading = false // isLoadingScene || isLoadingStoryboards
   
   if (isLoading) {
-    console.log("🎬 Still loading, showing loading state...")
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -1019,18 +980,12 @@ export default function SceneStoryboardsPage() {
     )
   }
   
-  console.log("🎬 Loading complete, rendering full page...")
-  
   // Function to render script text with visual highlighting
   const renderHighlightedScript = (script: string, usedRanges: Array<{start: number, end: number, text: string, shotNumber: number}>) => {
-    console.log("🎬 renderHighlightedScript called with:", { scriptLength: script?.length, usedRangesCount: usedRanges?.length })
-    console.log("🎬 Used ranges:", usedRanges)
-    
     if (!script) return null
     
     // Sort ranges by start position
     const sortedRanges = [...usedRanges].sort((a, b) => a.start - b.start)
-    console.log("🎬 Sorted ranges:", sortedRanges)
     
     // Create highlighted text segments
     const segments: Array<{text: string, isUsed: boolean, shotNumber?: number}> = []
@@ -1059,8 +1014,6 @@ export default function SceneStoryboardsPage() {
         segments.push({ text: remainingText, isUsed: false })
       }
     }
-    
-    console.log("🎬 Created segments:", segments.length, "segments")
     
     return segments.map((segment, index) => (
       <span
