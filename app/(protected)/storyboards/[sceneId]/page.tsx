@@ -34,7 +34,6 @@ type SceneInfo = SceneWithMetadata & {
 }
 
 export default function SceneStoryboardsPage() {
-  console.log("🎬 StoryboardPage component rendering...")
   
   const params = useParams()
   const router = useRouter()
@@ -53,10 +52,11 @@ export default function SceneStoryboardsPage() {
     title: "",
     description: "",
     scene_number: 1,
-    shot_number: 1,
+    shot_number: 0, // Start blank for new shots
     shot_type: "wide",
     camera_angle: "eye-level",
-    movement: "static"
+    movement: "static",
+    sequence_order: 0 // Start blank for new shots
   })
   
   // Loading states
@@ -128,7 +128,7 @@ export default function SceneStoryboardsPage() {
     shotNumber: number
   }>>([])
   
-  console.log("🎬 All state variables initialized")
+
 
   // Function to lock the current selection
   const lockSelection = (text: string) => {
@@ -313,23 +313,15 @@ export default function SceneStoryboardsPage() {
   }
 
   useEffect(() => {
-    console.log("🎬 useEffect triggered - ready:", ready, "userId:", userId, "sceneId:", sceneId)
     if (ready && userId && sceneId) {
-      console.log("🎬 Conditions met, starting data fetch...")
-      console.log("🎬 Fetching storyboards for scene:", sceneId)
       fetchStoryboards()
-      console.log("🎬 Fetching script for scene:", sceneId)
       fetchSceneScript()
-      console.log("🎬 Fetching scene info for scene:", sceneId)
       fetchSceneInfo()
-      console.log("🎬 Loading storyboards with text ranges for visual highlighting")
       loadStoryboardsWithTextRanges()
       // Note: loadSavedPrompts() will be called when sceneInfo loads with project_id
       
       // Load user preferences
       loadUserPreferences()
-    } else {
-      console.log("🎬 Conditions not met:", { ready, userId, sceneId })
     }
   }, [ready, userId, sceneId])
 
@@ -347,10 +339,14 @@ export default function SceneStoryboardsPage() {
         return
       }
       
-      if (showSelectionActions) {
-        setShowSelectionActions(false)
-        setSelectedText("")
-      }
+      // Use functional update to avoid dependency on showSelectionActions
+      setShowSelectionActions(prev => {
+        if (prev) {
+          setSelectedText("")
+          return false
+        }
+        return prev
+      })
     }
 
     const handleSelectionChange = () => {
@@ -360,19 +356,27 @@ export default function SceneStoryboardsPage() {
         if (text.length > 0) {
           setSelectedText(text)
           currentSelectionRef.current = text
-          setShowSelectionActions(true)
           
-          // LOCK THE SELECTION - this prevents it from being lost
-          lockSelection(text)
-          
-          console.log("🎬 Showing selection actions")
-          console.log("🎬 New state will be:", { selectedText: text, showSelectionActions: true, shotMode })
+          // Use functional update to avoid dependency on showSelectionActions
+          setShowSelectionActions(prev => {
+            if (!prev) {
+              // LOCK THE SELECTION - this prevents it from being lost
+              lockSelection(text)
+              return true
+            }
+            return prev
+          })
         }
       } else {
-        console.log("🎬 No text selected, hiding actions")
-        setShowSelectionActions(false)
-        setSelectedText("")
-        currentSelectionRef.current = ""
+        // Use functional update to avoid dependency on showSelectionActions
+        setShowSelectionActions(prev => {
+          if (prev) {
+            setSelectedText("")
+            currentSelectionRef.current = ""
+            return false
+          }
+          return prev
+        })
       }
     }
 
@@ -383,7 +387,7 @@ export default function SceneStoryboardsPage() {
       document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('selectionchange', handleSelectionChange)
     }
-  }, [showSelectionActions])
+  }, []) // Remove showSelectionActions from dependencies
 
   // Load AI settings
   useEffect(() => {
@@ -767,11 +771,7 @@ export default function SceneStoryboardsPage() {
 
 
 
-  // Function to get next shot number for this scene
-  const getNextShotNumber = () => {
-    if (storyboards.length === 0) return 1
-    return Math.max(...storyboards.map(sb => sb.shot_number || 1)) + 1
-  }
+
 
   // Reset shot mode and counter
   const resetShotMode = () => {
@@ -803,9 +803,14 @@ export default function SceneStoryboardsPage() {
     try {
       setIsCreating(true)
 
+      // Get unique shot number and sequence order
+      const nextShotNumber = getNextShotNumber()
+      
       // Clean up form data - convert empty strings to undefined for optional fields
       const cleanFormData = {
         ...formData,
+        shot_number: nextShotNumber,
+        sequence_order: formData.sequence_order || nextShotNumber,
         dialogue: formData.dialogue?.trim() || undefined,
         action: formData.action?.trim() || undefined,
         visual_notes: formData.visual_notes?.trim() || undefined,
@@ -881,16 +886,29 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  // Function to get the next available shot number and sequence order
+  const getNextShotNumber = () => {
+    if (storyboards.length === 0) return 1
+    
+    // Find the highest shot_number
+    const maxShotNumber = Math.max(...storyboards.map(sb => sb.shot_number))
+    
+    // Find the highest sequence_order
+    const maxSequenceOrder = Math.max(...storyboards.map(sb => sb.sequence_order || sb.shot_number))
+    
+    return Math.max(maxShotNumber, maxSequenceOrder) + 1
+  }
+
   const resetForm = () => {
-    const nextShotNumber = getNextShotNumber()
     setFormData({
       title: "",
       description: "",
       scene_number: 1,
-      shot_number: nextShotNumber,
+      shot_number: 0, // Start blank for new shots
       shot_type: "wide",
       camera_angle: "eye-level",
       movement: "static",
+      sequence_order: 0, // Start blank for new shots
       dialogue: "",
       action: "",
       visual_notes: "",
@@ -1842,10 +1860,7 @@ export default function SceneStoryboardsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {/* Debug info */}
-              <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
-                <strong>Debug:</strong> Form is showing. Form data: {JSON.stringify(formData, null, 2)}
-              </div>
+
               {/* Basic Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1863,9 +1878,11 @@ export default function SceneStoryboardsPage() {
                     <Input
                       id="shot_number"
                       type="number"
-                      value={formData.shot_number}
-                      onChange={(e) => setFormData(prev => ({ ...prev, shot_number: parseInt(e.target.value) || 1 }))}
+                      value={formData.shot_number || ""}
+                      onChange={(e) => setFormData(prev => ({ ...prev, shot_number: parseInt(e.target.value) || 0 }))}
                       min="1"
+                      step="1"
+                      placeholder="Auto-assigned"
                     />
                     <Button
                       type="button"
@@ -1880,6 +1897,21 @@ export default function SceneStoryboardsPage() {
                       Next
                     </Button>
                   </div>
+                </div>
+                <div>
+                  <Label htmlFor="sequence_order">Sequence Order (for positioning)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Use decimals to insert between shots: 2.5 goes between shots 2 and 3
+                  </p>
+                  <Input
+                    id="sequence_order"
+                    type="number"
+                    value={formData.sequence_order || ""}
+                    onChange={(e) => setFormData(prev => ({ ...prev, sequence_order: parseFloat(e.target.value) || 0 }))}
+                    min="0.1"
+                    step="0.1"
+                    placeholder="1.5 for between shots 1 and 2"
+                  />
                 </div>
               </div>
 
@@ -2460,6 +2492,7 @@ export default function SceneStoryboardsPage() {
                           shot_type: storyboard.shot_type,
                           camera_angle: storyboard.camera_angle,
                           movement: storyboard.movement,
+                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",
@@ -2497,6 +2530,7 @@ export default function SceneStoryboardsPage() {
                           shot_type: storyboard.shot_type,
                           camera_angle: storyboard.camera_angle,
                           movement: storyboard.movement,
+                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",
