@@ -365,7 +365,6 @@ export class StoryboardsService {
         .select('*')
         .eq('scene_id', sceneId)
         .order('shot_number', { ascending: true })
-        .order('created_at', { ascending: false })
 
       if (error) {
         console.error('Error fetching storyboards by scene:', error)

@@ -661,8 +661,8 @@ export default function SceneStoryboardsPage() {
         const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
         console.log("🎬 Storyboard created successfully:", newStoryboard)
         
-        // Add to local state
-        setStoryboards(prev => [newStoryboard, ...prev])
+        // Add to local state - add to the end to maintain chronological order
+        setStoryboards(prev => [...prev, newStoryboard])
         
         // Add to used text ranges for visual highlighting
         if (textRange) {
@@ -755,7 +755,7 @@ export default function SceneStoryboardsPage() {
     
     try {
       console.log("🎬 Fetching storyboards for scene:", sceneId)
-      const sceneStoryboards = await StoryboardsService.getStoryboardsByScene(sceneId)
+      const sceneStoryboards = await StoryboardsService.getStoryboardsBySceneOrdered(sceneId)
       console.log("🎬 Storyboards fetched for scene:", sceneStoryboards)
       setStoryboards(sceneStoryboards)
       setIsLoadingStoryboards(false)
@@ -815,7 +815,7 @@ export default function SceneStoryboardsPage() {
       }
 
       const newStoryboard = await StoryboardsService.createStoryboard(cleanFormData)
-      setStoryboards(prev => [newStoryboard, ...prev])
+      setStoryboards(prev => [...prev, newStoryboard])
       setShowCreateForm(false)
       resetForm()
       
