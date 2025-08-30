@@ -125,6 +125,7 @@ export class StoryboardsService {
         script_text_start: storyboardData.script_text_start || null,
         script_text_end: storyboardData.script_text_end || null,
         script_text_snippet: storyboardData.script_text_snippet || null,
+        sequence_order: storyboardData.sequence_order || shotNumber, // Use shot_number as sequence_order if not provided
         ai_generated: false
       }
 

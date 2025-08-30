@@ -159,13 +159,46 @@ export default function SceneStoryboardsPage() {
     if (!sceneScript) return null
     
     const scriptText = sceneScript
-    const startIndex = scriptText.indexOf(text)
-    if (startIndex === -1) return null
+    const cleanText = text.trim()
+    
+    // Try exact match first
+    let startIndex = scriptText.indexOf(cleanText)
+    
+    // If exact match fails, try with normalized whitespace
+    if (startIndex === -1) {
+      const normalizedScript = scriptText.replace(/\s+/g, ' ')
+      const normalizedText = cleanText.replace(/\s+/g, ' ')
+      startIndex = normalizedScript.indexOf(normalizedText)
+      
+      if (startIndex !== -1) {
+        // Find the actual position in the original script
+        let normalizedCount = 0
+        for (let i = 0; i < scriptText.length; i++) {
+          if (normalizedCount === startIndex) {
+            startIndex = i
+            break
+          }
+          if (scriptText[i] === ' ' || scriptText[i] === '\n' || scriptText[i] === '\t') {
+            if (i === 0 || !(scriptText[i-1] === ' ' || scriptText[i-1] === '\n' || scriptText[i-1] === '\t')) {
+              normalizedCount++
+            }
+          } else {
+            normalizedCount++
+          }
+        }
+      }
+    }
+    
+    if (startIndex === -1) {
+      console.warn("🎬 Could not find text in script:", cleanText)
+      console.warn("🎬 Script preview:", scriptText.substring(0, 200))
+      return null
+    }
     
     return {
       start: startIndex,
-      end: startIndex + text.length,
-      text: text
+      end: startIndex + cleanText.length,
+      text: cleanText
     }
   }
   
@@ -549,31 +582,82 @@ export default function SceneStoryboardsPage() {
       console.log("🎬 Automatically creating storyboard with selected text")
       
       // Find the text range in the script
-      const textRange = findTextRange(textToUse)
+      let textRange = findTextRange(textToUse)
       console.log("🎬 Found text range:", textRange)
+      console.log("🎬 Script length:", sceneScript?.length || 0)
+      console.log("🎬 Text to use length:", textToUse.length)
+      console.log("🎬 Text to use (first 100 chars):", textToUse.substring(0, 100))
+      console.log("🎬 Script preview (first 200 chars):", sceneScript?.substring(0, 200))
+      
+      // Validate text range before creating storyboard
+      if (textRange && (textRange.start < 0 || textRange.end > (sceneScript?.length || 0))) {
+        console.error("🎬 Invalid text range:", textRange)
+        toast({
+          title: "Error",
+          description: "Invalid text selection - please try selecting the text again",
+          variant: "destructive"
+        })
+        return
+      }
+      
+      // Check for overlapping text ranges with existing shots
+      if (textRange) {
+        const hasOverlap = storyboards.some(sb => {
+          const start = sb.script_text_start
+          const end = sb.script_text_end
+          if (start !== null && start !== undefined && end !== null && end !== undefined) {
+            return (
+              (start <= textRange.start && end > textRange.start) ||
+              (start < textRange.end && end >= textRange.end) ||
+              (start >= textRange.start && end <= textRange.end)
+            )
+          }
+          return false
+        })
+        
+        if (hasOverlap) {
+          console.error("🎬 Text range overlaps with existing shot:", textRange)
+          toast({
+            title: "Warning",
+            description: "This text selection overlaps with an existing shot. Creating shot without text range data.",
+            variant: "default"
+          })
+          // Clear text range to avoid database constraint issues
+          textRange = null
+        }
+      }
+      
+      // Get the next available shot number to avoid conflicts
+      const nextShotNumber = getNextShotNumber()
+      console.log("🎬 Next available shot number:", nextShotNumber)
+      console.log("🎬 Current storyboards in scene:", storyboards.map(sb => ({ id: sb.id, shot_number: sb.shot_number, title: sb.title })))
       
       // Prepare the storyboard data
       const storyboardData = {
-        title: `Shot ${shotDetails.shotNumber}: ${textToUse.substring(0, 30)}${textToUse.length > 30 ? '...' : ''}`,
+        title: `Shot ${nextShotNumber}: ${textToUse.substring(0, 30)}${textToUse.length > 30 ? '...' : ''}`,
         description: textToUse,
-        scene_number: 1, // Default scene number
-        shot_number: shotDetails.shotNumber,
+        scene_number: 1, // Default scene number (legacy field, now using scene_id)
+        shot_number: nextShotNumber,
         shot_type: shotDetails.shotType,
         camera_angle: shotDetails.cameraAngle,
         movement: shotDetails.movement,
         action: textToUse,
-        visual_notes: `Shot ${shotDetails.shotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
+        visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
         project_id: sceneInfo?.project_id || "",
-        script_text_start: textRange?.start || undefined,
-        script_text_end: textRange?.end || undefined,
-        script_text_snippet: textToUse
+        script_text_start: textRange && textRange.start !== null ? textRange.start : undefined,
+        script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
+        script_text_snippet: textRange ? textToUse : undefined,
+        sequence_order: nextShotNumber
       }
       
       console.log("🎬 Creating storyboard with data:", storyboardData)
       
       try {
         // Create the storyboard automatically
+        console.log("🎬 About to create storyboard with data:", storyboardData)
+        console.log("🎬 Storyboard data keys:", Object.keys(storyboardData))
+        console.log("🎬 Storyboard data values:", Object.values(storyboardData))
         const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
         console.log("🎬 Storyboard created successfully:", newStoryboard)
         
@@ -582,32 +666,48 @@ export default function SceneStoryboardsPage() {
         
         // Add to used text ranges for visual highlighting
         if (textRange) {
-          addUsedTextRange(textToUse, shotDetails.shotNumber)
+          addUsedTextRange(textToUse, nextShotNumber)
         }
         
         // Show success message
         toast({
           title: "Shot Created!",
-          description: `Shot ${shotDetails.shotNumber} created automatically from script selection`,
+          description: `Shot ${nextShotNumber} created automatically from script selection`,
         })
         
         // Clear selection and unlock
         unlockSelection()
         window.getSelection()?.removeAllRanges()
         
-        // Increment shot number for next selection
+        // Update shot details to use the next available number
         setShotDetails(prev => ({
           ...prev,
-          shotNumber: prev.shotNumber + 1
+          shotNumber: getNextShotNumber()
         }))
         
         console.log("🎬 Shot creation completed automatically")
         
-      } catch (error) {
+      } catch (error: any) {
         console.error("🎬 Error creating storyboard:", error)
+        console.error("🎬 Error details:", {
+          message: error?.message,
+          code: error?.code,
+          details: error?.details,
+          hint: error?.hint
+        })
+        console.error("🎬 Full error object:", error)
+        
+        // Try to extract more specific error information
+        if (error?.details) {
+          console.error("🎬 Error details:", error.details)
+        }
+        if (error?.hint) {
+          console.error("🎬 Error hint:", error.hint)
+        }
+        
         toast({
           title: "Error",
-          description: "Failed to create storyboard automatically",
+          description: `Failed to create storyboard: ${error?.message || 'Unknown error'}`,
           variant: "destructive"
         })
       }

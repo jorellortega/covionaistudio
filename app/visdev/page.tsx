@@ -158,7 +158,12 @@ export default function VisualDevelopmentPage() {
       setScenes([])
       setSelectedScene("movie")
     }
-  }, [selectedProject])
+    
+    // Reload prompts when project changes to show appropriate prompts
+    if (user) {
+      loadExistingItems()
+    }
+  }, [selectedProject, user])
 
   // Auto-select locked model when AI settings change
   useEffect(() => {
@@ -175,6 +180,101 @@ export default function VisualDevelopmentPage() {
       }
     }
   }, [aiSettings])
+
+  // Log prompts whenever they change for debugging
+  useEffect(() => {
+    console.log('🔄 Prompts updated:', savedPrompts.length, 'total prompts')
+    console.log('📊 Prompt breakdown:', savedPrompts.reduce((acc, p) => {
+      const key = p.projectId ? `Project: ${p.projectId}` : 'Universal (no project)'
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {} as Record<string, number>))
+  }, [savedPrompts])
+
+  // Function to migrate localStorage prompts to database
+  const migratePromptsToDatabase = async () => {
+    if (!user) {
+      toast({
+        title: "Cannot Migrate",
+        description: "Please log in to migrate prompts to the database.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const localPrompts = savedPrompts.filter(p => !p.user_id) // Only prompts not in database
+      if (localPrompts.length === 0) {
+        toast({
+          title: "No Prompts to Migrate",
+          description: "All prompts are already in the database.",
+        })
+        return
+      }
+
+      let migratedCount = 0
+      for (const prompt of localPrompts) {
+        try {
+          // Determine project_id based on prompt's current projectId or current selection
+          let project_id = prompt.projectId
+          if (!project_id && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+            project_id = selectedProject
+          }
+          // If still no project_id, it becomes a universal prompt (null)
+
+          const dbPrompt = await SavedPromptsService.createSavedPrompt(user.id, {
+            project_id: project_id,
+            scene_id: prompt.sceneId,
+            title: prompt.title,
+            prompt: prompt.prompt,
+            type: prompt.type,
+            style: prompt.style,
+            model: prompt.model,
+            tags: prompt.tags
+          })
+
+          // Update the prompt with database fields
+          const updatedPrompt = {
+            ...prompt,
+            id: dbPrompt.id,
+            user_id: dbPrompt.user_id,
+            project_id: dbPrompt.project_id,
+            scene_id: dbPrompt.scene_id,
+            use_count: dbPrompt.use_count,
+            created_at: dbPrompt.created_at,
+            updated_at: dbPrompt.updated_at
+          }
+
+          // Update local state
+          const updatedPrompts = savedPrompts.map(p => 
+            p.id === prompt.id ? updatedPrompt : p
+          )
+          setSavedPrompts(updatedPrompts)
+          localStorage.setItem('visdev-saved-prompts', JSON.stringify(updatedPrompts))
+
+          migratedCount++
+          console.log('✅ Migrated prompt to database:', prompt.title)
+        } catch (error) {
+          console.error('❌ Failed to migrate prompt:', prompt.title, error)
+        }
+      }
+
+      toast({
+        title: "Migration Complete",
+        description: `Successfully migrated ${migratedCount} prompts to the database.`,
+      })
+
+      // Reload prompts to show updated state
+      loadExistingItems()
+    } catch (error) {
+      console.error('Error migrating prompts:', error)
+      toast({
+        title: "Migration Failed",
+        description: "Failed to migrate prompts. Check console for details.",
+        variant: "destructive"
+      })
+    }
+  }
 
   const loadAISettings = async () => {
     try {
@@ -249,8 +349,30 @@ export default function VisualDevelopmentPage() {
     // First, try to load from database if user is logged in
     if (user) {
       try {
-        const dbPrompts = await SavedPromptsService.getSavedPrompts(user.id)
-        console.log('✅ Loaded prompts from database:', dbPrompts.length)
+        // When no project is selected, only load universal prompts (no project_id)
+        // When a project is selected, load both project-specific and universal prompts
+        let dbPrompts
+        if (selectedProject === 'all' || selectedProject === 'free') {
+          // In free play mode, only show universal prompts (no project_id)
+          dbPrompts = await SavedPromptsService.getSavedPrompts(user.id, null)
+        } else {
+          // When a specific project is selected, show both project-specific and universal prompts
+          dbPrompts = await SavedPromptsService.getSavedPrompts(user.id, selectedProject)
+        }
+        
+        console.log('✅ Loaded prompts from database:', dbPrompts.length, 'for project:', selectedProject)
+        console.log('📋 Prompt details:', dbPrompts.map(p => ({ id: p.id, title: p.title, project_id: p.project_id, type: p.type })))
+        
+        // Debug: Check if we're getting the right prompts for the current mode
+        if (selectedProject === 'all' || selectedProject === 'free') {
+          const universalPrompts = dbPrompts.filter(p => p.project_id === null)
+          const projectPrompts = dbPrompts.filter(p => p.project_id !== null)
+          console.log('🔍 Free Play Mode - Universal prompts:', universalPrompts.length, 'Project prompts:', projectPrompts.length)
+        } else {
+          const projectPrompts = dbPrompts.filter(p => p.project_id === selectedProject)
+          const universalPrompts = dbPrompts.filter(p => p.project_id === null)
+          console.log('🔍 Project Mode - Project prompts:', projectPrompts.length, 'Universal prompts:', universalPrompts.length)
+        }
         
         // Convert database format to local format
         const convertedDbPrompts: SavedPrompt[] = dbPrompts.map(dbPrompt => ({
@@ -280,15 +402,29 @@ export default function VisualDevelopmentPage() {
       }
     }
     
-    // Then load from localStorage as backup/merge
+    // Then load from localStorage as backup/merge, but filter by current project selection
     const savedPromptsData = localStorage.getItem('visdev-saved-prompts')
     if (savedPromptsData) {
       const localPrompts = JSON.parse(savedPromptsData)
       console.log('✅ Loaded prompts from localStorage:', localPrompts.length)
       
+      // Filter localStorage prompts based on current project selection
+      let filteredLocalPrompts = localPrompts
+      if (selectedProject === 'all' || selectedProject === 'free') {
+        // In Free Play Mode, only show prompts without project association
+        filteredLocalPrompts = localPrompts.filter((p: SavedPrompt) => !p.projectId)
+        console.log('🔍 Free Play Mode - Filtered localStorage prompts:', filteredLocalPrompts.length, 'of', localPrompts.length)
+      } else {
+        // In Project Mode, show both project-specific and universal prompts
+        filteredLocalPrompts = localPrompts.filter((p: SavedPrompt) => 
+          !p.projectId || p.projectId === selectedProject
+        )
+        console.log('🔍 Project Mode - Filtered localStorage prompts:', filteredLocalPrompts.length, 'of', localPrompts.length)
+      }
+      
       // Merge with database prompts, avoiding duplicates
       const localPromptIds = new Set(allPrompts.map(p => p.id))
-      const uniqueLocalPrompts = localPrompts.filter((p: SavedPrompt) => !localPromptIds.has(p.id))
+      const uniqueLocalPrompts = filteredLocalPrompts.filter((p: SavedPrompt) => !localPromptIds.has(p.id))
       
       allPrompts = [...allPrompts, ...uniqueLocalPrompts]
     }
@@ -309,11 +445,18 @@ export default function VisualDevelopmentPage() {
 
   const savePrompt = async (newPrompt: SavedPrompt) => {
     try {
-      // Save to database if user is logged in and project is selected
-      if (user && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+      // Always save to database if user is logged in
+      if (user) {
         try {
+          // Determine project_id based on current selection
+          let project_id = null
+          if (selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+            project_id = selectedProject
+          }
+          // If no project selected, project_id remains null (universal prompt)
+          
           const dbPrompt = await SavedPromptsService.createSavedPrompt(user.id, {
-            project_id: selectedProject,
+            project_id: project_id,
             scene_id: selectedScene === 'movie' ? null : selectedScene,
             title: newPrompt.title,
             prompt: newPrompt.prompt,
@@ -475,11 +618,11 @@ export default function VisualDevelopmentPage() {
 
   const savePromptToDatabase = async (prompt: SavedPrompt) => {
     try {
-      // Only save if user is logged in and project is selected
-      if (!user || !selectedProject || selectedProject === 'all' || selectedProject === 'free') {
+      // Only save if user is logged in
+      if (!user) {
         toast({
           title: "Cannot Save",
-          description: "Please select a movie project first to save prompts to the database.",
+          description: "Please log in to save prompts to the database.",
           variant: "destructive"
         })
         return
@@ -494,9 +637,16 @@ export default function VisualDevelopmentPage() {
         return
       }
 
+      // Determine project_id based on current selection
+      let project_id = null
+      if (selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
+        project_id = selectedProject
+      }
+      // If no project selected, project_id remains null (universal prompt)
+
       // Save to database
       const dbPrompt = await SavedPromptsService.createSavedPrompt(user.id, {
-        project_id: selectedProject,
+        project_id: project_id,
         scene_id: selectedScene === 'movie' ? null : selectedScene,
         title: prompt.title,
         prompt: prompt.prompt,
@@ -1674,7 +1824,22 @@ export default function VisualDevelopmentPage() {
             </div>
             
             <div className="max-w-4xl mx-auto mb-8 p-6 border rounded-lg bg-card shadow-sm">
-              <h3 className="text-lg font-medium mb-4 text-center">Save Current Prompt</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-medium">Save Current Prompt</h3>
+                <div className="flex items-center gap-4">
+                  <div className="text-sm text-muted-foreground">
+                    {savedPrompts.filter(p => p.user_id).length} in database • {savedPrompts.filter(p => !p.user_id).length} in localStorage
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={migratePromptsToDatabase}
+                    className="text-sm"
+                    disabled={savedPrompts.filter(p => !p.user_id).length === 0}
+                  >
+                    🚀 Migrate localStorage → Database
+                  </Button>
+                </div>
+              </div>
               <div className="space-y-4">
                 {/* Prompt Input with Paste Functionality */}
                 <div>

@@ -39,8 +39,14 @@ export class SavedPromptsService {
         .order('created_at', { ascending: false })
 
       // If projectId is specified, filter by it or show universal prompts (null)
+      // If projectId is null, only show universal prompts (project_id IS NULL)
       if (projectId) {
         query = query.or(`project_id.eq.${projectId},project_id.is.null`)
+        console.log('🔍 SavedPromptsService: Loading prompts for project', projectId, 'or universal')
+      } else {
+        // When no project is selected, only show universal prompts
+        query = query.is('project_id', null)
+        console.log('🔍 SavedPromptsService: Loading only universal prompts (no project)')
       }
 
       const { data, error } = await query
