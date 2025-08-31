@@ -121,12 +121,44 @@ export default function SetupAIPage() {
 
   // Check if settings are password protected
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !userId) return;
     
-    // For now, assume no password protection since these fields don't exist
-    setIsPasswordProtected(false)
-    setHasAccess(true)
-  }, [ready])
+    const checkPasswordProtection = async () => {
+      try {
+        console.log('🔒 Checking password protection for user:', userId)
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('settings_password_enabled')
+          .eq('id', userId)
+          .single()
+
+        if (error) throw error
+        
+        const isProtected = data?.settings_password_enabled || false
+        console.log('🔒 Password protection status:', isProtected)
+        setIsPasswordProtected(isProtected)
+        
+        // If no password protection, grant access
+        if (!isProtected) {
+          console.log('🔒 No password protection - granting access')
+          setHasAccess(true)
+        } else {
+          // Check if user already has access from session storage
+          const hasAccess = sessionStorage.getItem('ai-setup-access') === 'true'
+          console.log('🔒 Password protected - checking session storage access:', hasAccess)
+          setHasAccess(hasAccess)
+        }
+      } catch (error) {
+        console.error('Error checking password protection:', error)
+        // Default to no protection on error
+        setIsPasswordProtected(false)
+        setHasAccess(true)
+      }
+    }
+    
+    checkPasswordProtection()
+  }, [ready, userId])
 
   // Load API keys when component mounts
   useEffect(() => {
@@ -135,24 +167,74 @@ export default function SetupAIPage() {
     }
   }, [ready, userId])
 
-  // Password verification - simplified since password hash not stored in user
+  // Password verification - check against stored password
   const verifyPassword = async (password: string) => {
     try {
-      // For now, accept any password since password hash not stored
-      setHasAccess(true)
-      sessionStorage.setItem('ai-setup-access', 'true')
-      setShowPasswordModal(false)
-      setPasswordInput('')
-      setPasswordError('')
+      console.log('🔐 Verifying password for user:', userId)
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('settings_password_hash')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      
+      console.log('🔐 Stored password hash:', data?.settings_password_hash ? 'exists' : 'none')
+      console.log('🔐 Entered password:', password)
+      
+      // Check if password matches
+      if (data?.settings_password_hash === password) {
+        console.log('🔐 Password correct - granting access')
+        setHasAccess(true)
+        sessionStorage.setItem('ai-setup-access', 'true')
+        setShowPasswordModal(false)
+        setPasswordInput('')
+        setPasswordError('')
+      } else {
+        console.log('🔐 Password incorrect')
+        setPasswordError('Incorrect password')
+      }
     } catch (error) {
+      console.error('Error verifying password:', error)
       setPasswordError('Error verifying password')
     }
   }
 
 
 
+  // Debug current state
+  console.log('🔍 Setup-ai page state:', {
+    isPasswordProtected,
+    hasAccess,
+    ready,
+    userId
+  })
+
+  // Show loading state while checking password protection
+  if (!ready || (isPasswordProtected === undefined)) {
+    console.log('🔍 Still loading - showing loading state')
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-7xl px-6 py-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-blue-500" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">Loading...</h1>
+            <p className="text-muted-foreground mb-6">
+              Checking password protection status
+            </p>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   // Show password prompt if protected and no access
   if (isPasswordProtected && !hasAccess) {
+    console.log('🔒 Showing password prompt - page is protected and user has no access')
     return (
       <div className="min-h-screen bg-background">
         <Header />
@@ -581,12 +663,42 @@ export default function SetupAIPage() {
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
+                      type={showKeys.anthropic ? "text" : "password"}
                       placeholder="sk-ant-..."
                       value={apiKeys.anthropic}
                       onChange={(e) => setApiKeys(prev => ({ ...prev, anthropic: e.target.value }))}
                       className="flex-1"
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, anthropic: !prev.anthropic }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.anthropic ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('anthropic', apiKeys.anthropic)
+                          toast({
+                            title: "Success",
+                            description: "Anthropic API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save Anthropic API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -626,12 +738,42 @@ export default function SetupAIPage() {
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
+                      type={showKeys.openart ? "text" : "password"}
                       placeholder="OpenArt API Key"
                       value={apiKeys.openart}
                       onChange={(e) => setApiKeys(prev => ({ ...prev, openart: e.target.value }))}
                       className="flex-1"
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, openart: !prev.openart }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.openart ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('openart', apiKeys.openart)
+                          toast({
+                            title: "Success",
+                            description: "OpenArt API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save OpenArt API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -671,12 +813,42 @@ export default function SetupAIPage() {
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
+                      type={showKeys.kling ? "text" : "password"}
                       placeholder="Kling API Key"
                       value={apiKeys.kling}
                       onChange={(e) => setApiKeys(prev => ({ ...prev, kling: e.target.value }))}
                       className="flex-1"
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, kling: !prev.kling }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.kling ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('kling', apiKeys.kling)
+                          toast({
+                            title: "Success",
+                            description: "Kling API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save Kling API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -716,12 +888,42 @@ export default function SetupAIPage() {
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
+                      type={showKeys.runway ? "text" : "password"}
                       placeholder="Runway ML API Key"
                       value={apiKeys.runway}
                       onChange={(e) => setApiKeys(prev => ({ ...prev, runway: e.target.value }))}
                       className="flex-1"
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, runway: !prev.runway }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.runway ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('runway', apiKeys.runway)
+                          toast({
+                            title: "Success",
+                            description: "Runway ML API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save Runway ML API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -836,12 +1038,42 @@ export default function SetupAIPage() {
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      type="password"
+                      type={showKeys.suno ? "text" : "password"}
                       placeholder="Suno AI API Key"
                       value={apiKeys.suno}
                       onChange={(e) => setApiKeys(prev => ({ ...prev, suno: e.target.value }))}
                       className="flex-1"
                     />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, suno: !prev.suno }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.suno ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('suno', apiKeys.suno)
+                          toast({
+                            title: "Success",
+                            description: "Suno AI API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save Suno AI API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"

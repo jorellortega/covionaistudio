@@ -720,8 +720,8 @@ export default function AIStudioPage() {
           console.log('Attempting to generate video with Runway ML:', {
             prompt: videoPrompt,
             duration: "10s", // Default duration
-            apiKeyLength: userApiKeys.runwayml_api_key?.length || 0,
-            apiKeyPrefix: userApiKeys.runwayml_api_key?.substring(0, 7) || 'None'
+            apiKeyLength: userApiKeys.runway_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.runway_api_key?.substring(0, 7) || 'None'
           })
           
           // Import the RunwayML service
@@ -729,7 +729,7 @@ export default function AIStudioPage() {
           
           // First validate the API key
           console.log('Validating Runway ML API key...')
-          const isValid = await RunwayMLService.validateApiKey(userApiKeys.runwayml_api_key!)
+          const isValid = await RunwayMLService.validateApiKey(userApiKeys.runway_api_key!)
           console.log('Runway ML API key validation result:', isValid)
           
           if (!isValid) {
@@ -760,7 +760,7 @@ export default function AIStudioPage() {
             prompt: enhancedPrompt,
             duration: selectedDuration,
             model: selectedModel,
-            apiKey: userApiKeys.runwayml_api_key!,
+            apiKey: userApiKeys.runway_api_key!,
             resolution: selectedResolution,
           })
 
@@ -2555,13 +2555,13 @@ export default function AIStudioPage() {
                             let statusText = ""
                             
                             if (model === "Runway ML") {
-                              isReady = !false
-                              statusText = isReady ? "Ready" : "API Key Required"
+                              isReady = !!userApiKeys.runway_api_key
+                              statusText = isReady ? "Ready" : "Runway ML API Key Required"
                             } else if (model === "Kling") {
-                              isReady = !false
-                              statusText = isReady ? "Ready" : "API Key Required"
+                              isReady = !!userApiKeys.kling_api_key
+                              statusText = isReady ? "Ready" : "Kling API Key Required"
                             } else {
-                              isReady = true
+                              isReady = false
                               statusText = "Coming Soon"
                             }
                             
@@ -2579,7 +2579,7 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
-                      {selectedModel === "Runway ML" && false && (
+                      {selectedModel === "Runway ML" && !userApiKeys.runway_api_key && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2591,12 +2591,100 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Kling" && false && (
+                      {selectedModel === "Runway ML" && userApiKeys.runway_api_key && (
+                        <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                          <p className="text-sm text-blue-600">
+                            <CheckCircle className="h-4 w-4 inline mr-2" />
+                            Runway ML API key configured
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              try {
+                                console.log('🧪 Testing Runway ML API connection...')
+                                const { RunwayMLService } = await import('@/lib/ai-services')
+                                const result = await RunwayMLService.testApiConnection(userApiKeys.runway_api_key!)
+                                
+                                if (result.success) {
+                                  toast({
+                                    title: "API Connection Test",
+                                    description: "✅ Runway ML API connection successful!",
+                                    variant: "default",
+                                  })
+                                } else {
+                                  toast({
+                                    title: "API Connection Test",
+                                    description: `❌ Connection failed: ${result.error}`,
+                                    variant: "destructive",
+                                  })
+                                }
+                              } catch (error) {
+                                console.error('🧪 Runway ML API test error:', error)
+                                toast({
+                                  title: "API Connection Test",
+                                  description: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                                  variant: "destructive",
+                                })
+                              }
+                            }}
+                            className="mt-2 text-xs"
+                          >
+                            Test API Connection
+                          </Button>
+                        </div>
+                      )}
+                      
+                      {selectedModel === "Kling" && !userApiKeys.kling_api_key && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
                             Kling API key required. <Link href="/setup-ai" className="underline">Configure now</Link>
                           </p>
+                        </div>
+                      )}
+                      
+                      {selectedModel === "Kling" && userApiKeys.kling_api_key && (
+                        <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                          <p className="text-sm text-blue-600">
+                            <CheckCircle className="h-4 w-4 inline mr-2" />
+                            Kling API key configured
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              try {
+                                console.log('🧪 Testing Kling API connection...')
+                                const { KlingService } = await import('@/lib/ai-services')
+                                const result = await KlingService.testApiConnection(userApiKeys.kling_api_key!)
+                                
+                                if (result.success) {
+                                  toast({
+                                    title: "API Connection Test",
+                                    description: "✅ Kling API connection successful!",
+                                    variant: "default",
+                                  })
+                                } else {
+                                  toast({
+                                    title: "API Connection Test",
+                                    description: `❌ Connection failed: ${result.error}`,
+                                    variant: "destructive",
+                                  })
+                                }
+                              } catch (error) {
+                                console.error('🧪 Kling API test error:', error)
+                                toast({
+                                  title: "API Connection Test",
+                                  description: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                                  variant: "destructive",
+                                })
+                              }
+                            }}
+                            className="mt-2 text-xs"
+                          >
+                            Test API Connection
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -2611,6 +2699,22 @@ export default function AIStudioPage() {
                       </p>
                     </div>
                   )}
+
+                  {/* Troubleshooting Info */}
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                      <div className="text-xs text-blue-800">
+                        <p className="font-medium mb-1">💡 Video Generation Tips:</p>
+                        <ul className="space-y-1">
+                          <li>• <strong>Runway ML:</strong> Best for cinematic videos, requires valid API key</li>
+                          <li>• <strong>Kling:</strong> Great for creative videos, requires valid API key</li>
+                          <li>• <strong>API Key Issues?</strong> Use the "Test API Connection" button above</li>
+                          <li>• <strong>Prompt Tips:</strong> Be specific about style, mood, and visual elements</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
@@ -2634,13 +2738,65 @@ export default function AIStudioPage() {
                   )}
 
                   <Button
-                    onClick={() => handleGenerate("video")}
+                    onClick={() => {
+                      console.log('🎬 Video generation button clicked')
+                      console.log('🎬 Current state:', {
+                        isGenerating,
+                        videoPrompt: videoPrompt?.length || 0,
+                        selectedModel,
+                        hasRunwayKey: !!userApiKeys.runway_api_key,
+                        hasKlingKey: !!userApiKeys.kling_api_key,
+                        runwayKeyLength: userApiKeys.runway_api_key?.length || 0,
+                        klingKeyLength: userApiKeys.kling_api_key?.length || 0,
+                        runwayKeyPrefix: userApiKeys.runway_api_key?.substring(0, 10) + '...',
+                        klingKeyPrefix: userApiKeys.kling_api_key?.substring(0, 10) + '...'
+                      })
+                      
+                      // Validate form before submission
+                      if (!videoPrompt) {
+                        toast({
+                          title: "Missing Prompt",
+                          description: "Please enter a video prompt",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+                      
+                      if (!selectedModel) {
+                        toast({
+                          title: "Missing Model",
+                          description: "Please select an AI model",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+                      
+                      if (selectedModel === "Runway ML" && !userApiKeys.runway_api_key) {
+                        toast({
+                          title: "Missing API Key",
+                          description: "Please configure your Runway ML API key",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+                      
+                      if (selectedModel === "Kling" && !userApiKeys.kling_api_key) {
+                        toast({
+                          title: "Missing API Key",
+                          description: "Please configure your Kling API key",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+                      
+                      handleGenerate("video")
+                    }}
                     disabled={
                       isGenerating || 
                       !videoPrompt || 
                       !selectedModel ||
-                      (selectedModel === "Runway ML" && false) ||
-                      (selectedModel === "Kling" && false)
+                      (selectedModel === "Runway ML" && !userApiKeys.runway_api_key) ||
+                      (selectedModel === "Kling" && !userApiKeys.kling_api_key)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -2877,7 +3033,7 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {selectedModel === "ElevenLabs" && false && (
+                  {selectedModel === "ElevenLabs" && !userApiKeys.elevenlabs_api_key && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                       <p className="text-sm text-orange-600">
                         <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2885,13 +3041,101 @@ export default function AIStudioPage() {
                       </p>
                     </div>
                   )}
+                  
+                  {selectedModel === "ElevenLabs" && userApiKeys.elevenlabs_api_key && (
+                    <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                      <p className="text-sm text-blue-600">
+                        <CheckCircle className="h-4 w-4 inline mr-2" />
+                        ElevenLabs API key configured
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            console.log('🧪 Testing ElevenLabs API connection...')
+                            const { ElevenLabsService } = await import('@/lib/ai-services')
+                            const result = await ElevenLabsService.testApiConnection(userApiKeys.elevenlabs_api_key!)
+                            
+                            if (result.success) {
+                              toast({
+                                title: "API Connection Test",
+                                description: "✅ ElevenLabs API connection successful!",
+                                variant: "default",
+                              })
+                            } else {
+                              toast({
+                                title: "API Connection Test",
+                                description: `❌ Connection failed: ${result.error}`,
+                                variant: "destructive",
+                              })
+                            }
+                          } catch (error) {
+                            console.error('🧪 ElevenLabs API test error:', error)
+                            toast({
+                              title: "API Connection Test",
+                              description: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                              variant: "destructive",
+                            })
+                          }
+                        }}
+                        className="mt-2 text-xs"
+                      >
+                        Test API Connection
+                          </Button>
+                        </div>
+                      )}
 
-                  {selectedModel === "Suno AI" && false && (
+                  {selectedModel === "Suno AI" && !userApiKeys.openai_api_key && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                       <p className="text-sm text-orange-600">
                         <AlertCircle className="h-4 w-4 inline mr-2" />
                         Suno AI API key required. <Link href="/setup-ai" className="underline">Configure now</Link> or <Link href="https://suno.ai/" target="_blank" className="underline">get your API key</Link>
                       </p>
+                    </div>
+                  )}
+                  
+                  {selectedModel === "Suno AI" && userApiKeys.openai_api_key && (
+                    <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                      <p className="text-sm text-blue-600">
+                        <CheckCircle className="h-4 w-4 inline mr-2" />
+                        Suno AI API key configured (using OpenAI key)
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={async () => {
+                          try {
+                            console.log('🧪 Testing Suno AI API connection...')
+                            const { SunoAIService } = await import('@/lib/ai-services')
+                            const result = await SunoAIService.testApiConnection(userApiKeys.openai_api_key!)
+                            
+                            if (result.success) {
+                              toast({
+                                title: "API Connection Test",
+                                description: "✅ Suno AI API connection successful!",
+                                variant: "default",
+                              })
+                            } else {
+                              toast({
+                                title: "API Connection Test",
+                                description: `❌ Connection failed: ${result.error}`,
+                                variant: "destructive",
+                              })
+                            }
+                          } catch (error) {
+                            console.error('🧪 Suno AI API test error:', error)
+                            toast({
+                              title: "API Connection Test",
+                              description: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                              variant: "destructive",
+                            })
+                          }
+                        }}
+                        className="mt-2 text-xs"
+                      >
+                        Test API Connection
+                      </Button>
                     </div>
                   )}
 

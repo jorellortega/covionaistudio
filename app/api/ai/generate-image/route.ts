@@ -239,7 +239,7 @@ export async function POST(request: NextRequest) {
 
       case 'runway':
         // Runway ML is primarily for video, but can generate images
-        const runwayResponse = await fetch('https://api.runwayml.com/v1/inference', {
+        const runwayResponse = await fetch('https://api.dev.runwayml.com/v1/inference', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

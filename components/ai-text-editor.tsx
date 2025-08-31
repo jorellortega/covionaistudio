@@ -20,6 +20,7 @@ interface AITextEditorProps {
   sceneContext?: string
   onTextReplace: (newText: string) => void
   contentType?: 'script' | 'description' | 'dialogue' | 'action'
+  customGenerateFunction?: (prompt: string, selectedText: string, service: 'openai' | 'anthropic') => Promise<string | null>
 }
 
 interface AIGenerationRequest {
@@ -39,7 +40,8 @@ export default function AITextEditor({
   fullContent,
   sceneContext,
   onTextReplace,
-  contentType = 'script'
+  contentType = 'script',
+  customGenerateFunction
 }: AITextEditorProps) {
   const { toast } = useToast()
   const { user, userId, loading } = useAuth()
@@ -130,20 +132,16 @@ export default function AITextEditor({
 
   // Check if user has required API key
   const hasRequiredApiKey = () => {
-    // For now, assume API keys are configured elsewhere
-    // This would need to be implemented based on your API key storage strategy
+    // For now, we'll let the server handle API key validation
+    // The server will check environment variables
     return true
   }
 
-      // Get the API key for the selected service
-    const getApiKey = () => {
-        if (selectedService === 'openai') {
-          return "configured" // API key would be configured elsewhere
-        } else if (selectedService === 'anthropic') {
-          return "configured" // API key would be configured elsewhere
-        }
-      return null
-    }
+  // Get the API key for the selected service
+  const getApiKey = () => {
+    // Send a special value that tells the server to use environment variables
+    return "use_env_vars"
+  }
 
   // Get quick suggestions from AI settings or use defaults
   const getQuickSuggestions = () => {
@@ -235,6 +233,39 @@ export default function AITextEditor({
       return
     }
 
+    // If custom function is provided, use it instead of API endpoint
+    if (customGenerateFunction) {
+      setIsGenerating(true)
+      setError(null)
+
+      try {
+        const result = await customGenerateFunction(prompt.trim(), selectedText, selectedService)
+        
+        if (result) {
+          setGeneratedText(result)
+          setShowPreview(true)
+          toast({
+            title: "Text Generated!",
+            description: `AI has generated new text using ${selectedService === 'openai' ? 'ChatGPT' : 'Claude'}.`,
+          })
+        } else {
+          throw new Error('No text was generated')
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to generate text'
+        setError(errorMessage)
+        toast({
+          title: "Generation Failed",
+          description: errorMessage,
+          variant: "destructive",
+        })
+      } finally {
+        setIsGenerating(false)
+      }
+      return
+    }
+
+    // Fallback to API endpoint if no custom function
     if (!hasRequiredApiKey()) {
       toast({
         title: "API Key Required",
@@ -260,6 +291,15 @@ export default function AITextEditor({
         service: selectedService,
         apiKey
       }
+
+      console.log('Sending AI request:', {
+        prompt: request.prompt,
+        selectedText: request.selectedText?.substring(0, 100),
+        fullContent: request.fullContent?.substring(0, 100),
+        contentType: request.contentType,
+        service: request.service,
+        hasApiKey: !!request.apiKey
+      })
 
       const response = await fetch('/api/ai/generate-text', {
         method: 'POST',

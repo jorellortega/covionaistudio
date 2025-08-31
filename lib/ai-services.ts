@@ -46,7 +46,7 @@ export class OpenAIService {
           'Authorization': `Bearer ${request.apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-3.5-turbo",
+          model: request.model,
           messages: [
             { role: "system", content: `You are a professional screenwriter. ${request.template}` },
             { role: "user", content: request.prompt }
@@ -223,13 +223,57 @@ export class KlingService {
       return false
     }
   }
+
+  static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
+    try {
+      console.log('🧪 Testing Kling API connection...')
+      
+      const response = await fetch('https://api.kling.ai/v1/user', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      })
+      
+      console.log('🧪 Kling API test response status:', response.status)
+      
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, status: response.status, error: 'Invalid API key' }
+      }
+      
+      if (response.ok) {
+        return { success: true, status: response.status }
+      }
+      
+      return { success: false, status: response.status, error: `HTTP ${response.status}` }
+      
+    } catch (error) {
+      console.error('🧪 Kling API test error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Network error' }
+    }
+  }
 }
 
 // Runway ML Service
 export class RunwayMLService {
   static async generateVideo(request: GenerateVideoRequest): Promise<AIResponse> {
     try {
-      // Runway ML uses a different API structure
+      console.log('🎬 Runway ML generateVideo called with:', {
+        prompt: request.prompt,
+        duration: request.duration,
+        resolution: request.resolution,
+        hasApiKey: !!request.apiKey
+      })
+      
+      // Debug API key details
+      console.log('🔑 API Key Debug Info:', {
+        length: request.apiKey?.length || 0,
+        startsWithKey: request.apiKey?.startsWith('key_') || false,
+        first10Chars: request.apiKey?.substring(0, 10) || 'None',
+        last10Chars: request.apiKey?.substring(-10) || 'None',
+        containsSpaces: request.apiKey?.includes(' ') || false,
+        containsNewlines: request.apiKey?.includes('\n') || false,
+        containsTabs: request.apiKey?.includes('\t') || false,
+        charCodes: request.apiKey?.split('').map(c => c.charCodeAt(0)).slice(0, 20) || []
+      })
+      
       // Parse resolution if provided
       let width = 1024
       let height = 576
@@ -242,31 +286,105 @@ export class RunwayMLService {
         }
       }
       
-      const response = await fetch('https://api.runwayml.com/v1/inference', {
+      // Parse duration (remove 's' and convert to number)
+      const durationSeconds = parseInt(request.duration.replace('s', '')) || 10
+      
+      console.log('🎬 Runway ML request parameters:', {
+        width,
+        height,
+        durationSeconds,
+        model: 'gen-2'
+      })
+      
+      const requestBody = {
+        model: "gen-2",
+        input: {
+          prompt: request.prompt,
+          duration: durationSeconds,
+          width: width,
+          height: height,
+        },
+      }
+      
+      console.log('🎬 Runway ML request body:', JSON.stringify(requestBody, null, 2))
+      
+      console.log('🎬 Making request to Runway ML API...')
+      console.log('🎬 Request URL:', 'https://api.dev.runwayml.com/v1/inference')
+      console.log('🎬 Request method:', 'POST')
+      console.log('🎬 Request headers:', {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${request.apiKey.substring(0, 20)}...`,
+      })
+      console.log('🎬 Request body:', JSON.stringify(requestBody, null, 2))
+      
+      const response = await fetch('https://api.dev.runwayml.com/v1/inference', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${request.apiKey}`,
         },
-        body: JSON.stringify({
-          model: "gen-2",
-          input: {
-            prompt: request.prompt,
-            duration: parseInt(request.duration.replace('s', '')),
-            width: width,
-            height: height,
-          },
-        }),
+        body: JSON.stringify(requestBody),
       })
 
+      console.log('🎬 Runway ML API response status:', response.status)
+      console.log('🎬 Runway ML API response headers:', Object.fromEntries(response.headers.entries()))
+      
       if (!response.ok) {
-        const errorText = await response.text()
-        console.error('Runway ML API error:', response.status, errorText)
-        throw new Error(`Runway ML API error: ${response.status} - ${errorText}`)
+        let errorText = 'No error details available'
+        try {
+          errorText = await response.text()
+          console.error('🎬 Runway ML API error response body:', errorText)
+          
+          // Try to parse as JSON for more details
+          try {
+            const errorJson = JSON.parse(errorText)
+            console.error('🎬 Runway ML API error JSON:', errorJson)
+          } catch (parseError) {
+            console.log('🎬 Error response is not valid JSON')
+          }
+        } catch (readError) {
+          console.error('🎬 Could not read error response body:', readError)
+        }
+        
+        console.error('🎬 Runway ML API error:', response.status, errorText)
+        
+        // Provide more specific error messages
+        if (response.status === 401 || response.status === 403) {
+          throw new Error(`Invalid Runway ML API key (${response.status}). Please check your API key in settings. Response: ${errorText}`)
+        } else if (response.status === 400) {
+          throw new Error(`Invalid request format (${response.status}): ${errorText}`)
+        } else if (response.status === 429) {
+          throw new Error(`Rate limit exceeded (${response.status}): ${errorText}`)
+        } else {
+          throw new Error(`Runway ML API error (${response.status}): ${errorText}`)
+        }
       }
       
       const result = await response.json()
-      return { success: true, data: result }
+      console.log('🎬 Runway ML API success response:', result)
+      
+      // Check if the response contains the expected video URL
+      let videoUrl = null
+      if (result.output && result.output.url) {
+        videoUrl = result.output.url
+      } else if (result.url) {
+        videoUrl = result.url
+      } else if (result.data && result.data.url) {
+        videoUrl = result.data.url
+      }
+      
+      if (!videoUrl) {
+        console.warn('🎬 Runway ML response does not contain expected video URL structure:', result)
+        // Return the full result anyway, the UI can handle it
+      }
+      
+      return { 
+        success: true, 
+        data: {
+          ...result,
+          url: videoUrl // Add the extracted URL for easier access
+        }
+      }
     } catch (error) {
       console.error('Runway ML generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
@@ -275,14 +393,147 @@ export class RunwayMLService {
 
   static async validateApiKey(apiKey: string): Promise<boolean> {
     try {
-      // Test the API key by making a simple request
-      const response = await fetch('https://api.runwayml.com/v1/models', {
-        headers: { 'Authorization': `Bearer ${apiKey}` },
+      console.log('🔑 Runway ML API key validation starting...')
+      console.log('🔑 API key prefix:', apiKey.substring(0, 10) + '...')
+      console.log('🔑 API key length:', apiKey.length)
+      console.log('🔑 API key format check:', apiKey.startsWith('key_') ? '✅ Starts with key_' : '❌ Does not start with key_')
+      
+      // First, try to get available models to check if the API key is valid
+      console.log('🔑 Testing models endpoint...')
+      const modelsResponse = await fetch('https://api.dev.runwayml.com/v1/models', {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+        },
       })
-      return response.ok
+      
+      console.log('🔑 Models endpoint response status:', modelsResponse.status)
+      console.log('🔑 Models endpoint response headers:', Object.fromEntries(modelsResponse.headers.entries()))
+      
+      if (modelsResponse.ok) {
+        const models = await modelsResponse.json()
+        console.log('🔑 Available models:', models)
+        return true
+      }
+      
+      // If models endpoint fails, try a minimal inference request
+      console.log('🔑 Models endpoint failed, trying inference endpoint...')
+      
+      const testRequestBody = {
+        model: "gen-2",
+        input: {
+          prompt: "test",
+          duration: 1,
+          width: 512,
+          height: 288,
+        },
+      }
+      
+      console.log('🔑 Test request body:', JSON.stringify(testRequestBody, null, 2))
+      console.log('🔑 Test request headers:', {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey.substring(0, 20)}...`,
+      })
+      
+      const response = await fetch('https://api.dev.runwayml.com/v1/inference', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(testRequestBody),
+      })
+      
+      console.log('🔑 Inference endpoint response status:', response.status)
+      console.log('🔑 Inference endpoint response headers:', Object.fromEntries(response.headers.entries()))
+      
+      // Try to get response body for more details
+      try {
+        const responseText = await response.text()
+        console.log('🔑 Inference endpoint response body:', responseText)
+        
+        // Try to parse as JSON if possible
+        try {
+          const responseJson = JSON.parse(responseText)
+          console.log('🔑 Inference endpoint response JSON:', responseJson)
+        } catch (parseError) {
+          console.log('🔑 Response is not valid JSON')
+        }
+      } catch (readError) {
+        console.log('🔑 Could not read response body:', readError)
+      }
+      
+      // If we get a 401/403, the API key is invalid
+      if (response.status === 401 || response.status === 403) {
+        console.log('🔑 Runway ML API key validation: Invalid API key (401/403)')
+        return false
+      }
+      
+      // For other status codes, consider the key potentially valid
+      // The actual validation will happen during generation
+      console.log('🔑 Runway ML API key validation: Key appears valid (status:', response.status, ')')
+      return true
     } catch (error) {
-      console.error('Runway ML API key validation error:', error)
-      return false
+      console.error('🔑 Runway ML API key validation error:', error)
+      if (error instanceof Error) {
+        console.error('🔑 Error details:', {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        })
+      } else {
+        console.error('🔑 Unknown error type:', typeof error)
+      }
+      // If there's a network error, we can't determine if the key is valid
+      // Return true to allow the user to try generation
+      return true
+    }
+  }
+
+  static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
+    try {
+      console.log('🧪 Testing Runway ML API connection...')
+      
+      const response = await fetch('https://api.dev.runwayml.com/v1/inference', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gen-2",
+          input: {
+            prompt: "test",
+            duration: 1,
+            width: 512,
+            height: 288,
+          },
+        }),
+      })
+      
+      console.log('🧪 Runway ML API test response status:', response.status)
+      
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, status: response.status, error: 'Invalid API key' }
+      }
+      
+      if (response.status === 400) {
+        const errorText = await response.text()
+        return { success: false, status: response.status, error: `Bad request: ${errorText}` }
+      }
+      
+      if (response.status === 404) {
+        return { success: false, status: response.status, error: 'API endpoint not found' }
+      }
+      
+      if (response.ok) {
+        return { success: true, status: response.status }
+      }
+      
+      return { success: false, status: response.status, error: `HTTP ${response.status}` }
+      
+    } catch (error) {
+      console.error('🧪 Runway ML API test error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Network error' }
     }
   }
 }
@@ -403,6 +654,32 @@ export class ElevenLabsService {
     } catch (error) {
       console.error('❌ ElevenLabs validation error:', error)
       return false
+    }
+  }
+
+  static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
+    try {
+      console.log('🧪 Testing ElevenLabs API connection...')
+      
+      const response = await fetch('https://api.elevenlabs.io/v1/user', {
+        headers: { 'xi-api-key': apiKey },
+      })
+      
+      console.log('🧪 ElevenLabs API test response status:', response.status)
+      
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, status: response.status, error: 'Invalid API key' }
+      }
+      
+      if (response.ok) {
+        return { success: true, status: response.status }
+      }
+      
+      return { success: false, status: response.status, error: `HTTP ${response.status}` }
+      
+    } catch (error) {
+      console.error('🧪 ElevenLabs API test error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Network error' }
     }
   }
 
@@ -600,6 +877,32 @@ export class SunoAIService {
       return response.ok
     } catch {
       return false
+    }
+  }
+
+  static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
+    try {
+      console.log('🧪 Testing Suno AI API connection...')
+      
+      const response = await fetch('https://api.suno.ai/v1/user', {
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+      })
+      
+      console.log('🧪 Suno AI API test response status:', response.status)
+      
+      if (response.status === 401 || response.status === 403) {
+        return { success: false, status: response.status, error: 'Invalid API key' }
+      }
+      
+      if (response.ok) {
+        return { success: true, status: response.status }
+      }
+      
+      return { success: false, status: response.status, error: `HTTP ${response.status}` }
+      
+    } catch (error) {
+      console.error('🧪 Suno AI API test error:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Network error' }
     }
   }
 }

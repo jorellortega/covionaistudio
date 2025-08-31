@@ -67,27 +67,79 @@ export default function AISettingsPage() {
 
   // Check if settings are password protected
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !userId) return;
     
-    // For now, assume no password protection since these fields don't exist
-    setIsPasswordProtected(false)
-    setHasAccess(true)
-  }, [ready])
+    const checkPasswordProtection = async () => {
+      try {
+        console.log('🔒 Checking password protection for user:', userId)
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('settings_password_enabled')
+          .eq('id', userId)
+          .single()
 
-  // Password verification
+        if (error) throw error
+        
+        const isProtected = data?.settings_password_enabled || false
+        console.log('🔒 Password protection status:', isProtected)
+        setIsPasswordProtected(isProtected)
+        
+        // If no password protection, grant access
+        if (!isProtected) {
+          console.log('🔒 No password protection - granting access')
+          setHasAccess(true)
+        } else {
+          // Check if user already has access from session storage
+          const hasAccess = sessionStorage.getItem('ai-settings-access') === 'true'
+          console.log('🔒 Password protected - checking session storage access:', hasAccess)
+          setHasAccess(hasAccess)
+        }
+      } catch (error) {
+        console.error('Error checking password protection:', error)
+        // Default to no protection on error
+        setIsPasswordProtected(false)
+        setHasAccess(true)
+      }
+    }
+    
+    checkPasswordProtection()
+  }, [ready, userId])
+
+  // Password verification - check against stored password
   const verifyPassword = async (password: string) => {
     try {
-      // For now, accept any password since password hash not stored
-      setHasAccess(true)
-      sessionStorage.setItem('ai-settings-access', 'true')
-      setShowPasswordModal(false)
-      setPasswordInput('')
-      setPasswordError('')
-      toast({
-        title: "Access Granted",
-        description: "You can now access the AI settings page",
-      })
+      console.log('🔐 Verifying password for user:', userId)
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('settings_password_hash')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      
+      console.log('🔐 Stored password hash:', data?.settings_password_hash ? 'exists' : 'none')
+      console.log('🔐 Entered password:', password)
+      
+      // Check if password matches
+      if (data?.settings_password_hash === password) {
+        console.log('🔐 Password correct - granting access')
+        setHasAccess(true)
+        sessionStorage.setItem('ai-settings-access', 'true')
+        setShowPasswordModal(false)
+        setPasswordInput('')
+        setPasswordError('')
+        toast({
+          title: "Access Granted",
+          description: "You can now access the AI settings page",
+        })
+      } else {
+        console.log('🔐 Password incorrect')
+        setPasswordError('Incorrect password')
+      }
     } catch (error) {
+      console.error('Error verifying password:', error)
       setPasswordError('Error verifying password')
     }
   }
@@ -322,8 +374,38 @@ export default function AISettingsPage() {
     }
   }
 
+  // Debug current state
+  console.log('🔍 Settings-ai page state:', {
+    isPasswordProtected,
+    hasAccess,
+    ready,
+    userId
+  })
+
+  // Show loading state while checking password protection
+  if (!ready || (isPasswordProtected === undefined)) {
+    console.log('🔍 Still loading - showing loading state')
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-4xl px-6 py-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-blue-500" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">Loading...</h1>
+            <p className="text-muted-foreground mb-6">
+              Checking password protection status
+            </p>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   // Show password prompt if protected and no access
   if (isPasswordProtected && !hasAccess) {
+    console.log('🔒 Showing password prompt - page is protected and user has no access')
     return (
       <div className="min-h-screen bg-background">
         <Header />
@@ -617,6 +699,62 @@ export default function AISettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Password Modal */}
+        {showPasswordModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-background p-6 rounded-lg shadow-lg max-w-md w-full mx-4">
+              <div className="text-center mb-6">
+                <div className="mx-auto w-12 h-12 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
+                  <Shield className="h-6 w-6 text-blue-500" />
+                </div>
+                <h2 className="text-xl font-bold mb-2">Enter Password</h2>
+                <p className="text-muted-foreground">
+                  Enter your settings password to continue
+                </p>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="modal-password">Password</Label>
+                  <Input
+                    id="modal-password"
+                    type="password"
+                    value={passwordInput}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPasswordInput(e.target.value)}
+                    placeholder="Enter password"
+                    onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
+                      if (e.key === 'Enter') {
+                        verifyPassword(passwordInput)
+                      }
+                    }}
+                  />
+                  {passwordError && (
+                    <p className="text-red-500 text-sm mt-1">{passwordError}</p>
+                  )}
+                </div>
+                
+                <div className="flex gap-3">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => setShowPasswordModal(false)}
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button 
+                    onClick={() => verifyPassword(passwordInput)}
+                    disabled={!passwordInput.trim()}
+                    className="flex-1"
+                  >
+                    <Unlock className="h-4 w-4 mr-2" />
+                    Continue
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

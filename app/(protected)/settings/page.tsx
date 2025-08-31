@@ -34,6 +34,7 @@ export default function SettingsPage() {
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordManagementError, setPasswordManagementError] = useState('')
+  const [isPasswordProtected, setIsPasswordProtected] = useState(false)
   
   // Password management functions
   const setSettingsPassword = async () => {
@@ -80,9 +81,10 @@ export default function SettingsPage() {
 
     try {
       // Verify current password first
-      // Note: This would need to be implemented based on your password storage strategy
-      setPasswordManagementError('Password verification not implemented')
-      return
+      if (currentPassword !== apiKeys.settings_password) {
+        setPasswordManagementError('Incorrect password')
+        return
+      }
 
       const supabase = getSupabaseClient()
       const { error } = await supabase
@@ -95,6 +97,7 @@ export default function SettingsPage() {
 
       if (error) throw error
 
+      setIsPasswordProtected(false)
       setShowPasswordManagement(false)
       setCurrentPassword('')
       setPasswordManagementError('')
@@ -105,6 +108,26 @@ export default function SettingsPage() {
       })
     } catch (error) {
       setPasswordManagementError('Failed to remove protection')
+    }
+  }
+
+  // Check password protection status
+  const checkPasswordProtection = async () => {
+    if (!userId) return
+    
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('settings_password_enabled, settings_password_hash')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      
+      setIsPasswordProtected(data?.settings_password_enabled || false)
+    } catch (error) {
+      console.error('Error checking password protection:', error)
     }
   }
 
@@ -144,6 +167,13 @@ export default function SettingsPage() {
       })
     }
   }
+
+  // Check password protection status when component mounts
+  useEffect(() => {
+    if (ready && userId) {
+      checkPasswordProtection()
+    }
+  }, [ready, userId])
 
   if (!ready) {
     return (
@@ -279,14 +309,14 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-medium">AI Settings Protection</p>
                   <p className="text-sm text-muted-foreground">
-                    {false 
+                    {isPasswordProtected 
                       ? "AI settings are currently password protected" 
                       : "AI settings are currently unprotected"
                     }
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  {!false ? (
+                  {!isPasswordProtected ? (
                     <Button 
                       onClick={() => setShowPasswordManagement(true)}
                       variant="outline"
@@ -343,10 +373,10 @@ export default function SettingsPage() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
-              {false ? "Manage Password Protection" : "Set Password Protection"}
+              {isPasswordProtected ? "Manage Password Protection" : "Set Password Protection"}
             </DialogTitle>
             <DialogDescription>
-              {false 
+              {isPasswordProtected 
                 ? "Change your AI settings password or remove protection entirely"
                 : "Set a password to protect your AI settings and setup pages from unauthorized access"
               }
@@ -354,7 +384,7 @@ export default function SettingsPage() {
           </DialogHeader>
           
           <div className="space-y-4">
-            {false && (
+            {isPasswordProtected && (
               <div>
                 <Label htmlFor="current-password">Current Password</Label>
                 <Input
@@ -367,7 +397,7 @@ export default function SettingsPage() {
               </div>
             )}
             
-            {!false && (
+            {!isPasswordProtected && (
               <>
                 <div>
                   <Label htmlFor="new-password">New Password</Label>
@@ -381,7 +411,7 @@ export default function SettingsPage() {
                 </div>
                 
                 <div>
-                  <Label htmlFor="confirm-password">Confirm Password</Label>
+                  <Label htmlFor="new-password">Confirm Password</Label>
                   <Input
                     id="confirm-password"
                     type="password"
@@ -403,7 +433,7 @@ export default function SettingsPage() {
               Cancel
             </Button>
             
-            {false ? (
+            {isPasswordProtected ? (
               <Button 
                 onClick={removePasswordProtection}
                 variant="destructive"

@@ -3,10 +3,10 @@ import { getSupabaseClient } from './supabase'
 export interface Asset {
   id: string
   user_id: string
-  project_id: string
+  project_id?: string | null // Optional for standalone content
   scene_id?: string | null
   title: string
-  content_type: 'script' | 'image' | 'video' | 'audio'
+  content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
   content_url?: string
   version: number
@@ -22,10 +22,10 @@ export interface Asset {
 }
 
 export interface CreateAssetData {
-  project_id: string
+  project_id?: string | null // Optional for standalone content
   scene_id?: string | null
   title: string
-  content_type: 'script' | 'image' | 'video' | 'audio'
+  content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
   content_url?: string
   prompt?: string
@@ -47,17 +47,26 @@ export class AssetService {
   static async createAsset(assetData: CreateAssetData): Promise<Asset> {
     const user = await this.ensureAuthenticated()
     
-    // Validate that the referenced project exists
-    const { data: projectExists, error: projectError } = await getSupabaseClient()
-      .from('projects')
-      .select('id')
-      .eq('id', assetData.project_id)
-      .eq('user_id', user.id)
-      .single()
+    // For standalone content (like writing), we might not have a strict project requirement
+    // Check if this is standalone content that should bypass strict project validation
+    const isStandaloneContent = assetData.content_type === 'lyrics' || 
+                               assetData.content_type === 'poetry' || 
+                               assetData.content_type === 'prose' ||
+                               assetData.metadata?.created_in_writers_page === true
     
-    if (projectError || !projectExists) {
-      console.error('Project validation failed:', { project_id: assetData.project_id, error: projectError })
-      throw new Error(`Project with ID ${assetData.project_id} not found or access denied`)
+    // Validate that the referenced project exists (unless it's standalone content)
+    if (assetData.project_id && !isStandaloneContent) {
+      const { data: projectExists, error: projectError } = await getSupabaseClient()
+        .from('projects')
+        .select('id')
+        .eq('id', assetData.project_id)
+        .eq('user_id', user.id)
+        .single()
+      
+      if (projectError || !projectExists) {
+        console.error('Project validation failed:', { project_id: assetData.project_id, error: projectError })
+        throw new Error(`Project with ID ${assetData.project_id} not found or access denied`)
+      }
     }
     
     // Validate that the referenced scene exists (if provided)
@@ -128,9 +137,9 @@ export class AssetService {
     console.log('Scene ID type:', typeof assetData.scene_id)
     console.log('Scene ID value:', assetData.scene_id)
 
-    // Validate required fields
-    if (!insertData.project_id) {
-      throw new Error('Project ID is required')
+    // Validate required fields (project_id is optional for standalone content)
+    if (!insertData.project_id && !isStandaloneContent) {
+      throw new Error('Project ID is required for non-standalone content')
     }
     if (!insertData.title) {
       throw new Error('Title is required')
