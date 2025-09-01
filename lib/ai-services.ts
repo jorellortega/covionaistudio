@@ -395,6 +395,37 @@ export class ElevenLabsService {
     }
   }
 
+  static async getAvailableVoices(apiKey: string): Promise<AIResponse> {
+    try {
+      console.log('🎤 Fetching available voices from ElevenLabs...')
+      
+      const response = await fetch('https://api.elevenlabs.io/v1/voices', {
+        method: 'GET',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+      
+      const result = await response.json()
+      console.log('🎤 Voices fetched successfully:', result.voices?.length || 0, 'voices')
+      
+      return { 
+        success: true, 
+        data: {
+          voices: result.voices || []
+        }
+      }
+    } catch (error) {
+      console.error('🎤 Error fetching voices:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch voices' }
+    }
+  }
+
   static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
     try {
       console.log('🧪 Testing ElevenLabs API connection...')

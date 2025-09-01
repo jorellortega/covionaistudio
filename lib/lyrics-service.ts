@@ -16,6 +16,12 @@ export interface Lyrics {
   language: string
   tags: string[]
   description?: string
+  locked_sections?: Array<{
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+  }> | null
   created_at: string
   updated_at: string
 }
@@ -31,6 +37,12 @@ export interface CreateLyricsData {
   language?: string
   tags?: string[]
   description?: string
+  locked_sections?: Array<{
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+  }> | null
 }
 
 export interface UpdateLyricsData {
@@ -94,7 +106,8 @@ export class LyricsService {
       mood: data.mood || null,
       language: data.language || 'English',
       tags: data.tags || [],
-      description: data.description || null
+      description: data.description || null,
+      locked_sections: data.locked_sections || null
     }
 
     const { data: newLyrics, error: insertError } = await getSupabaseClient()

@@ -17,6 +17,12 @@ export interface Asset {
   model?: string
   generation_settings?: Record<string, any>
   metadata?: Record<string, any>
+  locked_sections?: Array<{
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+  }> | null
   created_at: string
   updated_at: string
 }
@@ -33,6 +39,12 @@ export interface CreateAssetData {
   generation_settings?: Record<string, any>
   metadata?: Record<string, any>
   version_name?: string // Add version name field
+  locked_sections?: Array<{
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+  }> | null
 }
 
 export class AssetService {
@@ -70,7 +82,7 @@ export class AssetService {
     }
     
     // Validate that the referenced scene exists (if provided)
-    if (assetData.scene_id && assetData.scene_id !== null) {
+    if (assetData.scene_id && assetData.scene_id !== null && typeof assetData.scene_id === 'string') {
       const { data: sceneExists, error: sceneError } = await getSupabaseClient()
         .from('scenes')
         .select('id')
@@ -88,7 +100,7 @@ export class AssetService {
     let version = assetData.version || 1  // Use provided version or default to 1
     let parentAssetId: string | undefined = undefined
     
-    if (assetData.scene_id) {
+    if (assetData.scene_id && typeof assetData.scene_id === 'string') {
       const existingAssets = await this.getAssetsForScene(assetData.scene_id)
       if (existingAssets.length > 0) {
         // Find the latest version
@@ -114,7 +126,7 @@ export class AssetService {
     const insertData = {
       user_id: user.id,
       project_id: assetData.project_id,
-      scene_id: assetData.scene_id,
+      scene_id: (assetData.scene_id && typeof assetData.scene_id === 'string') ? assetData.scene_id : null,
       title: assetData.title,
       content_type: assetData.content_type,
       content: assetData.content,
@@ -127,6 +139,7 @@ export class AssetService {
       model: assetData.model,
       generation_settings: assetData.generation_settings || {},
       metadata: assetData.metadata || {},
+      locked_sections: assetData.locked_sections || null,
     }
 
     console.log('Attempting to insert asset with data:', JSON.stringify(insertData, null, 2))

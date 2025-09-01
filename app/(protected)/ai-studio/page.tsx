@@ -2852,21 +2852,7 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {/* Troubleshooting Info */}
-                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                      <div className="text-xs text-blue-800">
-                        <p className="font-medium mb-1">💡 Video Generation Tips:</p>
-                        <ul className="space-y-1">
-                          <li>• <strong>Runway ML:</strong> Best for cinematic videos, requires valid API key</li>
-                          <li>• <strong>Kling:</strong> Great for creative videos, requires valid API key</li>
-                          <li>• <strong>API Key Issues?</strong> Use the "Test API Connection" button above</li>
-                          <li>• <strong>Prompt Tips:</strong> Be specific about style, mood, and visual elements</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
+
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>

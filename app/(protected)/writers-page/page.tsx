@@ -71,7 +71,7 @@ function WritersPageClient() {
 
   // State variables
   const [activeTab, setActiveTab] = useState("scripts")
-  const [activeContentType, setActiveContentType] = useState<'script' | 'lyrics' | 'poetry' | 'prose'>('script')
+  const [activeContentType, setActiveContentType] = useState<'script' | 'lyrics' | 'poetry' | 'prose'>('lyrics')
   const [isCreatingNew, setIsCreatingNew] = useState(false)
   const [showMediaUpload, setShowMediaUpload] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -92,6 +92,15 @@ function WritersPageClient() {
     value: string;
     selection?: string;
   } | null>(null)
+  
+  // Text locking states
+  const [lockedSections, setLockedSections] = useState<Array<{
+    id: string;
+    text: string;
+    start: number;
+    end: number;
+  }>>([])
+  const [isLockingMode, setIsLockingMode] = useState(false)
   const [savingStatus, setSavingStatus] = useState<{
     assetId: string;
     status: 'idle' | 'saving' | 'saved' | 'error';
@@ -100,12 +109,15 @@ function WritersPageClient() {
 
   // AI text editing states
   const [showAITextEditor, setShowAITextEditor] = useState(false)
+  const [aiTextLoading, setAiTextLoading] = useState(false)
   const [aiEditData, setAiEditData] = useState<{
     selectedText: string;
     fullContent: string;
     assetId: string;
     field: 'content';
   } | null>(null)
+
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
 
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
@@ -121,7 +133,7 @@ function WritersPageClient() {
   const [newContentForm, setNewContentForm] = useState({
     title: '',
     content: '',
-    contentType: 'script' as 'script' | 'lyrics' | 'poetry' | 'prose',
+    contentType: 'lyrics' as 'script' | 'lyrics' | 'poetry' | 'prose',
     versionName: 'Draft',
     tags: '',
     description: '',
@@ -179,6 +191,7 @@ function WritersPageClient() {
           prompt: lyric.description,
           model: 'manual',
           generation_settings: {},
+          locked_sections: lyric.locked_sections,
           metadata: {
             genre: lyric.genre,
             mood: lyric.mood,
@@ -313,11 +326,22 @@ function WritersPageClient() {
       field,
       value: currentValue
     })
+    
+    // Restore locked sections if this is a content field and the asset has locked sections
+    if (field === 'content') {
+      const asset = assets.find(a => a.id === assetId)
+      if (asset?.locked_sections && asset.locked_sections.length > 0) {
+        setLockedSections(asset.locked_sections)
+      } else {
+        setLockedSections([])
+      }
+    }
   }
 
   const cancelInlineEditing = () => {
     setInlineEditing(null)
     setSavingStatus(null)
+    setLockedSections([]) // Clear locked sections when canceling
   }
 
   const handleInlineEditChange = (value: string) => {
@@ -343,6 +367,154 @@ function WritersPageClient() {
     } else {
       // Clear selection
       setInlineEditing(prev => prev ? { ...prev, selection: undefined } : null)
+    }
+  }
+
+  // Lock selected text
+  const lockSelectedText = () => {
+    if (!inlineEditing?.selection || !inlineEditing.selection.trim()) {
+      toast({
+        title: "No Text Selected",
+        description: "Please select some text to lock.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const target = document.querySelector('textarea') as HTMLTextAreaElement
+    if (!target) return
+
+    const selectionStart = target.selectionStart
+    const selectionEnd = target.selectionEnd
+    const selectedText = target.value.substring(selectionStart, selectionEnd)
+
+    const newLockedSection = {
+      id: `lock-${Date.now()}`,
+      text: selectedText,
+      start: selectionStart,
+      end: selectionEnd
+    }
+
+    setLockedSections(prev => [...prev, newLockedSection])
+    
+    toast({
+      title: "Text Locked",
+      description: `"${selectedText.substring(0, 50)}${selectedText.length > 50 ? '...' : ''}" has been locked.`,
+    })
+  }
+
+  // Unlock a section
+  const unlockSection = (lockId: string) => {
+    setLockedSections(prev => prev.filter(lock => lock.id !== lockId))
+  }
+
+  // Clear all non-locked text
+  const clearNonLockedText = () => {
+    if (lockedSections.length === 0) {
+      toast({
+        title: "No Locked Text",
+        description: "Please lock some text first before clearing.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const target = document.querySelector('textarea') as HTMLTextAreaElement
+    if (!target) return
+
+    // Sort locked sections by start position
+    const sortedSections = [...lockedSections].sort((a, b) => a.start - b.start)
+    
+    // Build new text from locked sections only
+    let newText = ''
+    sortedSections.forEach((section, index) => {
+      if (index > 0) {
+        newText += '\n\n' // Add spacing between locked sections
+      }
+      newText += section.text
+    })
+
+    // Update the textarea value
+    if (inlineEditing) {
+      setInlineEditing(prev => prev ? { ...prev, value: newText } : null)
+    }
+
+    toast({
+      title: "Text Cleared",
+      description: `Kept ${lockedSections.length} locked section(s), cleared the rest.`,
+    })
+  }
+
+  // Generate AI content around locked sections
+  const generateAroundLocked = async () => {
+    if (lockedSections.length === 0) {
+      toast({
+        title: "No Locked Text",
+        description: "Please lock some text first before generating around it.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const target = document.querySelector('textarea') as HTMLTextAreaElement
+    if (!target) return
+
+    try {
+      setAiTextLoading(true)
+      
+      // Sort locked sections by position
+      const sortedSections = [...lockedSections].sort((a, b) => a.start - b.start)
+      const currentText = inlineEditing?.value || target.value
+      
+      // Create a structured prompt that explains the replacement approach
+      const lockedText = sortedSections.map(section => section.text).join('\n\n')
+      const contentType = activeContentType
+      
+      const prompt = `I need to rewrite content while keeping specific sections exactly as they are. Here's what I want:
+
+CONTENT TYPE: ${contentType}
+
+LOCKED SECTIONS TO KEEP (leave these exactly as they are):
+${lockedText}
+
+CRITICAL INSTRUCTIONS:
+1. Keep the locked sections exactly as they are - don't change a single word
+2. Keep locked sections ONLY in their original place - DO NOT repeat them anywhere else
+3. Replace all other parts with new material that flows naturally
+4. Create ONE clean version - no duplicates, no repeats, no leftovers
+5. Think of this as swapping out old parts for new ones
+6. The goal is ONE smooth, continuous piece that flows naturally
+7. Match the style and tone of the locked sections
+8. MAINTAIN THE OVERALL STRUCTURE - don't cut out entire parts unless specifically requested
+9. Preserve the structural flow (verses, choruses, sections, etc.) while replacing content within those structures
+
+IMPORTANT: Do not duplicate any locked sections. Each locked section should appear exactly once in its original position. The final result should be one clean, non-repetitive version of the piece that maintains the original structural framework.`
+
+      const generatedText = await generateAIText(prompt, '', 'openai')
+      
+      if (generatedText) {
+        // Replace the current text with the generated content
+        if (inlineEditing) {
+          setInlineEditing(prev => prev ? { ...prev, value: generatedText } : null)
+        }
+        
+        // Clear locked sections since we've replaced the content
+        setLockedSections([])
+        
+        toast({
+          title: "Content Regenerated",
+          description: "AI has replaced non-locked sections while keeping your selected text intact.",
+        })
+      }
+    } catch (error) {
+      console.error('Error generating content:', error)
+      toast({
+        title: "Generation Failed",
+        description: "Failed to generate content around locked sections.",
+        variant: "destructive",
+      })
+    } finally {
+      setAiTextLoading(false)
     }
   }
 
@@ -433,31 +605,46 @@ function WritersPageClient() {
     try {
       setSavingStatus({ assetId, status: 'saving' })
       
-      // Create a new version with the edited content
-      const newAssetData = {
-        project_id: asset.project_id || null,
-        scene_id: asset.scene_id || null,
-        title: field === 'title' ? value : asset.title,
-        content_type: asset.content_type,
-        content: field === 'content' ? value : asset.content,
-        content_url: asset.content_url,
-        prompt: asset.prompt,
-        model: asset.model,
-        version_name: field === 'version_name' ? value : `${asset.version_name || `Version ${asset.version}`} (Edited)`,
-        generation_settings: asset.generation_settings,
-        metadata: {
-          ...asset.metadata,
-          edited_from_version: asset.version,
-          edited_at: new Date().toISOString(),
-          edited_field: field,
-          original_value: field === 'title' ? asset.title : 
-                         field === 'version_name' ? asset.version_name : 
-                         asset.content
+      if (asset.content_type === 'lyrics') {
+        // Use LyricsService for lyrics
+        const lyricsData = {
+          title: field === 'title' ? value : asset.title,
+          content: field === 'content' ? value : asset.content,
+          version_name: field === 'version_name' ? value : `${asset.version_name || `Version ${asset.version}`} (Edited)`,
+          genre: asset.metadata?.genre || undefined,
+          mood: asset.metadata?.mood || undefined,
+          tags: asset.metadata?.tags || [],
+          description: asset.prompt || asset.metadata?.description,
+          locked_sections: lockedSections.length > 0 ? lockedSections : null
         }
+        
+        await LyricsService.createLyrics(lyricsData)
+      } else {
+        // Use AssetService for other content types
+        const newAssetData = {
+          project_id: asset.project_id || null,
+          scene_id: asset.scene_id || null,
+          title: field === 'title' ? value : asset.title,
+          content_type: asset.content_type,
+          content: field === 'content' ? value : asset.content,
+          content_url: asset.content_url,
+          prompt: asset.prompt,
+          model: asset.model,
+          version_name: field === 'version_name' ? value : `${asset.version_name || `Version ${asset.version}`} (Edited)`,
+          generation_settings: asset.generation_settings,
+          metadata: {
+            ...asset.metadata,
+            edited_from_version: asset.version,
+            edited_at: new Date().toISOString(),
+            edited_field: field,
+            original_value: field === 'title' ? asset.title : 
+                           field === 'version_name' ? asset.version_name : 
+                           asset.content
+          }
+        }
+        
+        await AssetService.createAsset(newAssetData)
       }
-      
-      // Save as new version
-      await AssetService.createAsset(newAssetData)
       
       // Refresh assets
       refreshAssets()
@@ -498,6 +685,52 @@ function WritersPageClient() {
     saveInlineEdit()
   }
 
+  // Delete content function
+  const deleteContent = async (assetId: string) => {
+    const asset = assets.find(a => a.id === assetId)
+    if (!asset) return
+
+    try {
+      setLoading(true)
+      
+      if (asset.content_type === 'lyrics') {
+        // Use LyricsService for lyrics
+        await LyricsService.deleteLyrics(assetId, userId!)
+      } else {
+        // Use AssetService for other content types
+        await AssetService.deleteAsset(assetId)
+      }
+      
+      // Refresh assets
+      refreshAssets()
+      
+      // If the deleted asset was the active one, set a new active asset
+      if (activeScriptId === assetId) {
+        const remainingAssets = assets.filter(a => a.id !== assetId)
+        if (remainingAssets.length > 0) {
+          setActiveScriptId(remainingAssets[0].id)
+        } else {
+          setActiveScriptId(null)
+        }
+      }
+      
+      toast({
+        title: "Content Deleted",
+        description: `Your ${asset.content_type} has been deleted.`,
+      })
+      
+    } catch (error) {
+      console.error('Error deleting content:', error)
+      toast({
+        title: "Delete Failed",
+        description: "Failed to delete your content. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Create new content
   const createNewContent = async () => {
     if (!newContentForm.title.trim() || !newContentForm.content.trim()) {
@@ -521,7 +754,8 @@ function WritersPageClient() {
           genre: newContentForm.genre || undefined,
           mood: newContentForm.mood || undefined,
           tags: newContentForm.tags.split(',').map(t => t.trim()).filter(Boolean),
-          description: newContentForm.description
+          description: newContentForm.description,
+          locked_sections: lockedSections.length > 0 ? lockedSections : null
         }
         
         await LyricsService.createLyrics(lyricsData)
@@ -594,6 +828,12 @@ function WritersPageClient() {
     }
     
     return 'Version 1'
+  }
+
+  // Helper function to properly pluralize content type names
+  const getPluralContentType = (type: string) => {
+    if (type === 'lyrics') return 'Lyrics' // lyrics is already plural
+    return type.charAt(0).toUpperCase() + type.slice(1) + 's'
   }
 
   // Simple loading state
@@ -691,7 +931,7 @@ function WritersPageClient() {
                   {type === 'lyrics' && <Music className="h-4 w-4 mr-2" />}
                   {type === 'poetry' && <PenTool className="h-4 w-4 mr-2" />}
                   {type === 'prose' && <BookOpen className="h-4 w-4 mr-2" />}
-                  {type.charAt(0).toUpperCase() + type.slice(1)}s ({assetsByType[type].length})
+                  {getPluralContentType(type)} ({assetsByType[type].length})
                 </Button>
               ))}
             </div>
@@ -721,7 +961,7 @@ function WritersPageClient() {
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
                 <div>
                   <h3 className="text-lg sm:text-xl font-semibold text-primary">
-                    {activeContentType.charAt(0).toUpperCase() + activeContentType.slice(1)}s
+                    {getPluralContentType(activeContentType)}
                   </h3>
                   <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                     Read content aloud • Toggle between versions • Generate new content with AI
@@ -787,17 +1027,31 @@ function WritersPageClient() {
                                 {script.is_latest_version && (
                                   <span className="text-xs text-green-300">★</span>
                                 )}
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    startInlineEditing(script.id, 'version_name', getCleanVersionName(script))
-                                  }}
-                                  className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity p-0 hover:bg-green-500/10"
-                                >
-                                  <Edit className="h-3 w-3" />
-                                </Button>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      startInlineEditing(script.id, 'version_name', getCleanVersionName(script))
+                                    }}
+                                    className="h-4 w-4 p-0 hover:bg-green-500/10"
+                                  >
+                                    <Edit className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setShowDeleteConfirm(script.id)
+                                    }}
+                                    className="h-4 w-4 p-0 hover:bg-red-500/10 text-red-400"
+                                    disabled={loading}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -930,8 +1184,11 @@ function WritersPageClient() {
                                   }
                                 }
                                 
-                                // Save as new version
-                                await AssetService.createAsset(newAssetData)
+                                      // Save as new version with locked sections
+      await AssetService.createAsset({
+        ...newAssetData,
+        locked_sections: lockedSections.length > 0 ? lockedSections : null
+      })
                                 
                                 // Refresh assets
                                 refreshAssets()
@@ -973,7 +1230,7 @@ function WritersPageClient() {
                                     Editing Content
                                   </Label>
                                   <div className="text-xs text-blue-400">
-                                    💡 Select text for copy/clear/paste actions • Click Save when ready
+                                    💡 Select text to lock, then use AI to generate around locked sections
                                   </div>
                                   <div className="flex gap-2">
                                     <Button
@@ -995,14 +1252,155 @@ function WritersPageClient() {
                                     </Button>
                                   </div>
                                 </div>
-                                <Textarea
-                                  value={inlineEditing.value}
-                                  onChange={(e) => handleInlineEditChange(e.target.value)}
-                                  placeholder="Edit your content here..."
-                                  className="w-full h-96 p-4 border border-primary/30 focus:border-primary bg-background text-foreground resize-none font-mono text-sm leading-relaxed"
-                                  autoFocus
-                                  onSelect={handleTextSelection}
-                                />
+                                
+                                {/* Locking Controls */}
+                                {lockedSections.length > 0 && (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center gap-2 p-2 bg-yellow-500/10 rounded-lg border border-yellow-500/30">
+                                      <span className="text-xs text-yellow-400 font-medium">
+                                        🔒 {lockedSections.length} section(s) locked
+                                      </span>
+                                      <div className="flex gap-1">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={clearNonLockedText}
+                                          className="h-6 px-2 text-xs border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                                        >
+                                          Clear Rest
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={generateAroundLocked}
+                                          disabled={aiTextLoading}
+                                          className="h-6 px-2 text-xs border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                                        >
+                                          {aiTextLoading ? (
+                                            <Loader2 className="h-3 w-3 animate-spin" />
+                                          ) : (
+                                            <Bot className="h-3 w-3" />
+                                          )}
+                                          Generate Around
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    
+                                    {/* Locked Sections List */}
+                                    <div className="space-y-1">
+                                      {lockedSections.map((section) => (
+                                        <div key={section.id} className="flex items-center gap-2 p-2 bg-yellow-500/5 rounded border border-yellow-500/20">
+                                          <span className="text-xs text-yellow-600 flex-1">
+                                            "{section.text.substring(0, 60)}{section.text.length > 60 ? '...' : ''}"
+                                          </span>
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            onClick={() => unlockSection(section.id)}
+                                            className="h-4 w-4 p-0 text-red-400 hover:bg-red-500/10"
+                                          >
+                                            ×
+                                          </Button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="relative">
+                                  <div className="w-full h-96 border border-primary/30 bg-background rounded-md overflow-hidden">
+                                    {/* Highlighted text display */}
+                                    {lockedSections.length > 0 ? (
+                                      <div 
+                                        ref={(el) => {
+                                          if (el) {
+                                            // Sync scroll with textarea
+                                            const textarea = el.parentElement?.querySelector('textarea') as HTMLTextAreaElement
+                                            if (textarea) {
+                                              el.scrollTop = textarea.scrollTop
+                                            }
+                                          }
+                                        }}
+                                        className="w-full h-full p-4 font-mono text-sm leading-relaxed overflow-auto pointer-events-none"
+                                        style={{
+                                          background: 'transparent',
+                                          whiteSpace: 'pre-wrap',
+                                          wordWrap: 'break-word'
+                                        }}
+                                      >
+                                        {(() => {
+                                          const text = inlineEditing.value
+                                          const sortedSections = [...lockedSections].sort((a, b) => a.start - b.start)
+                                          
+                                          let result = []
+                                          let lastEnd = 0
+                                          
+                                          sortedSections.forEach((section, index) => {
+                                            // Add text before this locked section
+                                            if (section.start > lastEnd) {
+                                              result.push(
+                                                <span key={`text-${index}`} className="text-foreground">
+                                                  {text.substring(lastEnd, section.start)}
+                                                </span>
+                                              )
+                                            }
+                                            
+                                            // Add highlighted locked section
+                                            result.push(
+                                              <span 
+                                                key={`locked-${index}`} 
+                                                className="bg-yellow-300/50 text-yellow-900 font-medium border border-yellow-400/50 rounded px-1"
+                                              >
+                                                {section.text}
+                                              </span>
+                                            )
+                                            
+                                            lastEnd = section.end
+                                          })
+                                          
+                                          // Add remaining text after last locked section
+                                          if (lastEnd < text.length) {
+                                            result.push(
+                                              <span key="text-end" className="text-foreground">
+                                                {text.substring(lastEnd)}
+                                              </span>
+                                            )
+                                          }
+                                          
+                                          return result
+                                        })()}
+                                      </div>
+                                    ) : null}
+                                    
+                                    {/* Always show textarea for editing */}
+                                    <Textarea
+                                        value={inlineEditing.value}
+                                        onChange={(e) => handleInlineEditChange(e.target.value)}
+                                        placeholder="Edit your content here..."
+                                        className={`w-full h-full p-4 border-0 resize-none font-mono text-sm leading-relaxed focus:outline-none ${
+                                          lockedSections.length > 0 
+                                            ? 'bg-transparent text-transparent caret-foreground absolute inset-0 z-10' 
+                                            : 'bg-transparent text-foreground'
+                                        }`}
+                                        autoFocus={lockedSections.length === 0}
+                                        onSelect={handleTextSelection}
+                                        onScroll={(e) => {
+                                          // Sync scroll with background display
+                                          const target = e.target as HTMLTextAreaElement
+                                          const backgroundDiv = target.parentElement?.querySelector('div') as HTMLElement
+                                          if (backgroundDiv) {
+                                            backgroundDiv.scrollTop = target.scrollTop
+                                          }
+                                        }}
+                                      />
+                                  </div>
+                                  
+                                  {/* Locked sections indicator */}
+                                  {lockedSections.length > 0 && (
+                                    <div className="absolute top-2 right-2 bg-yellow-400/80 text-yellow-900 px-2 py-1 rounded text-xs font-medium z-20">
+                                      🔒 {lockedSections.length} locked
+                                    </div>
+                                  )}
+                                </div>
                                 
                                 {/* Text Selection Actions */}
                                 {inlineEditing?.selection && (
@@ -1034,6 +1432,18 @@ function WritersPageClient() {
                                       >
                                         <Copy className="h-3 w-3 mr-1" />
                                         Copy
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          lockSelectedText()
+                                        }}
+                                        className="h-6 px-2 text-xs border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+                                      >
+                                        🔒 Lock
                                       </Button>
                                       <Button
                                         size="sm"
@@ -1302,6 +1712,35 @@ function WritersPageClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!showDeleteConfirm} onOpenChange={() => setShowDeleteConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Content</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{(() => {
+                const asset = assets.find(a => a.id === showDeleteConfirm)
+                return asset ? getCleanVersionName(asset) : 'this content'
+              })()}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (showDeleteConfirm) {
+                  deleteContent(showDeleteConfirm)
+                  setShowDeleteConfirm(null)
+                }
+              }}
+              className="bg-red-500 hover:bg-red-600"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* AI Text Editor */}
       <AITextEditor
