@@ -43,6 +43,7 @@ import {
   Bot,
   Upload,
   Volume2,
+  Download,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -2692,9 +2693,18 @@ function ScenePageClient({ id }: { id: string }) {
                             className="w-full h-full object-cover"
                             controls
                             preload="metadata"
+                            onError={(e) => {
+                              console.error('🎬 Video playback error:', e)
+                              console.error('🎬 Video URL:', video.content_url)
+                            }}
+                            onLoadStart={() => console.log('🎬 Video loading started:', video.title)}
+                            onCanPlay={() => console.log('🎬 Video can play:', video.title)}
                           />
                         ) : (
-                          <Play className="h-8 w-8 text-muted-foreground" />
+                          <div className="text-center">
+                            <Play className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                            <p className="text-xs text-muted-foreground">Video Preview</p>
+                          </div>
                         )}
                       </div>
                       <h4 className="font-medium text-foreground mb-1">{video.title}</h4>
@@ -2709,6 +2719,23 @@ function ScenePageClient({ id }: { id: string }) {
                           onClick={() => window.open(video.content_url, '_blank')}
                         >
                           View
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                          onClick={() => {
+                            const link = document.createElement('a')
+                            link.href = video.content_url
+                            link.download = `${video.title}.mp4`
+                            link.target = '_blank'
+                            document.body.appendChild(link)
+                            link.click()
+                            document.body.removeChild(link)
+                          }}
+                        >
+                          <Download className="h-3 w-3 mr-1" />
+                          Download
                         </Button>
                         <Button
                           size="sm"

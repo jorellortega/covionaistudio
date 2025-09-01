@@ -78,6 +78,8 @@ interface GeneratedContent {
   duration?: string
   saved?: boolean
   asset_id?: string
+  jobId?: string
+  status?: 'processing' | 'completed' | 'failed'
 }
 
 const aiModels = {
@@ -168,6 +170,83 @@ export default function AIStudioPage() {
   const handleContentViolation = (type: 'script' | 'image' | 'video' | 'audio', prompt: string) => {
     setContentViolationData({ type, prompt })
     setShowContentViolationDialog(true)
+  }
+
+  const pollVideoJobStatus = async (jobId: string, contentId: string) => {
+    let attempts = 0
+    const maxAttempts = 60 // 60 seconds max
+    
+    const poll = async () => {
+      attempts++
+      console.log(`🎬 Polling video job status (attempt ${attempts}/${maxAttempts})...`)
+      
+      try {
+        const response = await fetch('/api/ai/check-video-status', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jobId }),
+        })
+        
+        if (response.ok) {
+          const result = await response.json()
+          
+          if (result.success && (result.data?.status === 'completed' || result.data?.status === 'SUCCEEDED') && result.data?.url) {
+            console.log('🎬 Video generation completed! URL:', result.data.url)
+            
+            // Update the content with the video URL
+            setGeneratedContent(prev => prev.map(content => 
+              content.id === contentId 
+                ? { ...content, url: result.data.url, status: 'completed' }
+                : content
+            ))
+            
+            // Show success toast
+            toast({
+              title: "Video Generated!",
+              description: "Your video has been created successfully.",
+              variant: "default",
+            })
+            
+            return // Stop polling
+          } else if (result.data?.status === 'failed' || result.data?.status === 'FAILED') {
+            console.error('🎬 Video generation failed:', result.data)
+            toast({
+              title: "Video Generation Failed",
+              description: "Video generation failed. Please try again.",
+              variant: "destructive",
+            })
+            return // Stop polling
+          }
+          
+          // Still processing, continue polling
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 2000) // Poll every 2 seconds
+          } else {
+            console.log('🎬 Video generation timed out')
+            toast({
+              title: "Video Generation Timeout",
+              description: "Video generation is taking longer than expected. Check back later.",
+              variant: "destructive",
+            })
+          }
+        } else {
+          console.error('🎬 Failed to check video status:', response.status)
+          if (attempts < maxAttempts) {
+            setTimeout(poll, 2000)
+          }
+        }
+      } catch (error) {
+        console.error('🎬 Error polling video status:', error)
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 2000)
+        }
+      }
+    }
+    
+    // Start polling
+    poll()
   }
 
   const handleTryDifferentPrompt = () => {
@@ -756,43 +835,86 @@ export default function AIStudioPage() {
           
           console.log('Enhanced prompt for Runway ML:', enhancedPrompt)
           
-          const response = await RunwayMLService.generateVideo({
-            prompt: enhancedPrompt,
-            duration: selectedDuration,
-            model: selectedModel,
-            apiKey: userApiKeys.runway_api_key!,
-            resolution: selectedResolution,
+          // Use server-side API route instead of direct Runway ML calls
+          const response = await fetch('/api/ai/generate-video', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              prompt: enhancedPrompt,
+              duration: selectedDuration,
+              width: selectedResolution === '1024x576' ? 1024 : 512,
+              height: selectedResolution === '1024x576' ? 576 : 288,
+              model: selectedModel,
+            }),
           })
 
-          if (response.success) {
-            // Create new generated content
-            const newContent: GeneratedContent = {
-              id: Date.now().toString(),
-              title: `Generated Video - ${new Date().toLocaleDateString()}`,
-              prompt: videoPrompt,
-              type: 'video',
-              model: selectedModel,
-              created_at: new Date().toISOString(),
-              project_id: selectedProject,
-              scene_id: selectedScene !== "none" ? selectedScene : undefined,
-              duration: "10s",
-              url: response.data?.url || response.data?.output?.url,
+          const result = await response.json()
+
+          if (response.ok && result.success) {
+            // Check if we have a job ID (async processing) or direct URL
+            if (result.data?.jobId) {
+              console.log('🎬 Video generation started, job ID:', result.data.jobId)
+              
+              // Show processing toast
+              toast({
+                title: "Video Generation Started",
+                description: "Your video is being generated. This may take a few minutes...",
+                variant: "default",
+              })
+              
+              // Create placeholder content with job ID
+              const newContent: GeneratedContent = {
+                id: result.data.jobId,
+                title: `Generated Video - ${new Date().toLocaleDateString()}`,
+                prompt: videoPrompt,
+                type: 'video',
+                model: selectedModel,
+                created_at: new Date().toISOString(),
+                project_id: selectedProject,
+                scene_id: selectedScene !== "none" ? selectedScene : undefined,
+                duration: "10s",
+                url: undefined, // Will be updated when job completes
+                jobId: result.data.jobId,
+                status: 'processing'
+              }
+              
+              setGeneratedContent(prev => [newContent, ...prev])
+              setVideoPrompt("") // Clear the prompt after successful generation
+              
+              // Start polling for completion
+              pollVideoJobStatus(result.data.jobId, newContent.id)
+            } else {
+              // Direct URL available (synchronous completion)
+              const newContent: GeneratedContent = {
+                id: Date.now().toString(),
+                title: `Generated Video - ${new Date().toLocaleDateString()}`,
+                prompt: videoPrompt,
+                type: 'video',
+                model: selectedModel,
+                created_at: new Date().toISOString(),
+                project_id: selectedProject,
+                scene_id: selectedScene !== "none" ? selectedScene : undefined,
+                duration: "10s",
+                url: result.data?.url || result.data?.output?.url,
+              }
+              
+              setGeneratedContent(prev => [newContent, ...prev])
+              setVideoPrompt("") // Clear the prompt after successful generation
+              
+              // Show success toast
+              toast({
+                title: "Video Generated!",
+                description: "Your video has been created successfully.",
+                variant: "default",
+              })
             }
-            
-            setGeneratedContent(prev => [newContent, ...prev])
-            setVideoPrompt("") // Clear the prompt after successful generation
-            
-            // Show success toast
-            toast({
-              title: "Video Generated!",
-              description: "Your video has been created successfully.",
-              variant: "default",
-            })
           } else {
-            console.error('Runway ML video generation failed:', response.error)
+            console.error('Runway ML video generation failed:', result.error || 'Unknown error')
             toast({
               title: "Video Generation Failed",
-              description: `Error: ${response.error}. Please check your Runway ML API key and try again.`,
+              description: `Error: ${result.error || 'Unknown error'}. Please check your Runway ML API key and try again.`,
               variant: "destructive",
             })
           }
@@ -1297,6 +1419,36 @@ export default function AIStudioPage() {
       toast({
         title: "Download Failed",
         description: "Failed to download image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Download video function
+  const handleDownloadVideo = async (videoUrl: string, fileName: string) => {
+    try {
+      console.log('Downloading video...')
+      
+      // Create download link
+      const link = document.createElement('a')
+      link.href = videoUrl
+      link.download = `${fileName}.mp4`
+      link.target = '_blank'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      toast({
+        title: "Download Started",
+        description: "Video download has begun.",
+        variant: "default",
+      })
+      
+    } catch (error) {
+      console.error('Video download error:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download video. Please try again.",
         variant: "destructive",
       })
     }
@@ -2836,10 +2988,24 @@ export default function AIStudioPage() {
                       <Card key={video.id} className="bg-muted/50 border-border">
                         <CardContent className="p-4">
                           <div className="aspect-video rounded-lg overflow-hidden mb-3 bg-muted flex items-center justify-center">
-                            <div className="text-center">
-                              <Play className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
-                              <p className="text-sm text-muted-foreground">Video Preview</p>
-                            </div>
+                            {video.url ? (
+                              <video 
+                                src={video.url} 
+                                className="w-full h-full object-cover"
+                                controls
+                                preload="metadata"
+                              />
+                            ) : video.status === 'processing' ? (
+                              <div className="text-center">
+                                <RefreshCw className="h-8 w-8 text-blue-500 mx-auto mb-2 animate-spin" />
+                                <p className="text-sm text-blue-500">Generating Video...</p>
+                              </div>
+                            ) : (
+                              <div className="text-center">
+                                <Play className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                                <p className="text-sm text-muted-foreground">Video Preview</p>
+                              </div>
+                            )}
                           </div>
                           <h4 className="text-sm font-medium mb-1">{video.title}</h4>
                           <p className="text-xs text-muted-foreground mb-2">{video.prompt}</p>
@@ -2877,11 +3043,23 @@ export default function AIStudioPage() {
                           )}
 
                           <div className="flex items-center gap-2">
-                            <Button size="sm" variant="outline" className="text-xs bg-transparent">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="text-xs bg-transparent"
+                              onClick={() => video.url && window.open(video.url, '_blank')}
+                              disabled={!video.url}
+                            >
                               <Play className="mr-1 h-3 w-3" />
                               Play
                             </Button>
-                            <Button size="sm" variant="outline" className="text-xs bg-transparent">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="text-xs bg-transparent"
+                              onClick={() => video.url && handleDownloadVideo(video.url, video.title)}
+                              disabled={!video.url}
+                            >
                               <Download className="mr-1 h-3 w-3" />
                               Download
                             </Button>

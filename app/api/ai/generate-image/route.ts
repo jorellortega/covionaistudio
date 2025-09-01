@@ -246,7 +246,7 @@ export async function POST(request: NextRequest) {
             'Authorization': `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: "gen-2",
+            model: "gen4_turbo",
             input: {
               prompt: prompt, // Send only the user's exact prompt
               image_dimensions: "1024x1024"
