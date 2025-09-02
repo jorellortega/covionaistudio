@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
+import { sanitizeFilename } from '@/lib/utils'
 
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
@@ -198,7 +199,8 @@ export async function POST(request: NextRequest) {
     
     if (autoSaveToBucket && userId) {
       try {
-        const fileName = `${Date.now()}-${service}-${prompt.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.png`
+        const sanitizedPrompt = sanitizeFilename(prompt.substring(0, 30))
+        const fileName = `${Date.now()}-${service}-${sanitizedPrompt}.png`
         bucketUrl = await downloadAndStoreImage(imageUrl, fileName, userId)
         finalImageUrl = bucketUrl
         console.log('🎬 DEBUG - ✅ Image automatically saved to bucket:', bucketUrl)

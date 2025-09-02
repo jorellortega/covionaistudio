@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { sanitizeFilename } from '@/lib/utils'
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,7 +43,11 @@ export async function POST(request: NextRequest) {
     // Generate unique filename
     const timestamp = Date.now()
     const fileExtension = imageFile.name.split('.').pop()
-    const fileName = `${timestamp}-${imageFile.name.replace(/\.[^/.]+$/, '')}.${fileExtension}`
+    
+    // Sanitize filename for safe storage
+    const sanitizedName = sanitizeFilename(imageFile.name)
+    
+    const fileName = `${timestamp}-${sanitizedName}.${fileExtension}`
     const filePath = `${user.id}/images/${fileName}`
 
     // Upload to Supabase storage
@@ -64,7 +69,7 @@ export async function POST(request: NextRequest) {
       .getPublicUrl(filePath)
 
     // Save to idea_images table
-    const imageData = {
+    const imageData: any = {
       user_id: user.id,
       image_url: publicUrl,
       bucket_path: filePath,

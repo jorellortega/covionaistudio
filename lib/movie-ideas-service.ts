@@ -52,40 +52,74 @@ export class MovieIdeasService {
     return data || []
   }
 
-  static async createIdea(userId: string, ideaData: CreateMovieIdeaData): Promise<MovieIdea> {
+  static async getMovieIdea(ideaId: string): Promise<MovieIdea | null> {
     const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
-      .insert([{
-        user_id: userId,
-        ...ideaData,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }])
-      .select()
+      .select('*')
+      .eq('id', ideaId)
       .single()
 
     if (error) {
-      throw new Error(`Failed to create idea: ${error.message}`)
+      if (error.code === 'PGRST116') {
+        // No rows returned
+        return null
+      }
+      throw new Error(`Failed to fetch idea: ${error.message}`)
     }
 
     return data
   }
 
-  static async updateIdea(ideaId: string, ideaData: UpdateMovieIdeaData): Promise<MovieIdea> {
+  static async createIdea(userId: string, ideaData: CreateMovieIdeaData): Promise<MovieIdea> {
+    console.log('🎬 DEBUG - MovieIdeasService.createIdea called with:', { userId, ideaData })
+    
+    const insertData = {
+      user_id: userId,
+      ...ideaData,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+    
+    console.log('🎬 DEBUG - Inserting data:', insertData)
+    
     const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
-      .update({
-        ...ideaData,
-        updated_at: new Date().toISOString()
-      })
+      .insert([insertData])
+      .select()
+      .single()
+
+    if (error) {
+      console.error('🎬 DEBUG - Database insert error:', error)
+      throw new Error(`Failed to create idea: ${error.message}`)
+    }
+
+    console.log('🎬 DEBUG - Successfully created idea:', data)
+    return data
+  }
+
+  static async updateIdea(ideaId: string, ideaData: UpdateMovieIdeaData): Promise<MovieIdea> {
+    console.log('🎬 DEBUG - MovieIdeasService.updateIdea called with:', { ideaId, ideaData })
+    
+    const updateData = {
+      ...ideaData,
+      updated_at: new Date().toISOString()
+    }
+    
+    console.log('🎬 DEBUG - Updating data:', updateData)
+    
+    const { data, error } = await getSupabaseClient()
+      .from('movie_ideas')
+      .update(updateData)
       .eq('id', ideaId)
       .select()
       .single()
 
     if (error) {
+      console.error('🎬 DEBUG - Database update error:', error)
       throw new Error(`Failed to update idea: ${error.message}`)
     }
 
+    console.log('🎬 DEBUG - Successfully updated idea:', data)
     return data
   }
 

@@ -1,4 +1,5 @@
 import { getSupabaseClient } from './supabase'
+import { sanitizeFilename } from './utils'
 
 export interface FileUpload {
   file: File
@@ -31,7 +32,7 @@ export class StorageService {
 
     // Generate file path: userId/projectId/fileType/timestamp_filename
     const timestamp = Date.now()
-    const safeFileName = upload.file.name.replace(/[^a-zA-Z0-9.-]/g, '_')
+    const safeFileName = sanitizeFilename(upload.file.name)
     const filePath = `${user.id}/${upload.projectId}/${upload.fileType}/${timestamp}_${safeFileName}`
 
     console.log('Uploading file to path:', filePath)

@@ -1,16 +1,25 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText } from "lucide-react"
+import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List } from "lucide-react"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
@@ -19,8 +28,11 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { toast } from "@/hooks/use-toast"
 import { IdeaImagesService } from "@/lib/idea-images-service"
 import { Navigation } from "@/components/navigation"
+import { sanitizeFilename } from '@/lib/utils'
+import { MovieService, type CreateMovieData } from "@/lib/movie-service"
 
 export default function IdeasPage() {
+  const router = useRouter()
   const { user, userId, ready } = useAuthReady()
   const [ideas, setIdeas] = useState<MovieIdea[]>([])
   const [loading, setLoading] = useState(true)
@@ -89,6 +101,22 @@ export default function IdeasPage() {
   const [prompt, setPrompt] = useState("")
   const [status, setStatus] = useState<"concept" | "development" | "completed">("concept")
 
+  // Movie conversion state
+  const [showMovieDialog, setShowMovieDialog] = useState(false)
+  const [convertingIdea, setConvertingIdea] = useState<MovieIdea | null>(null)
+  const [isConverting, setIsConverting] = useState(false)
+  const [cowriterInput, setCowriterInput] = useState("")
+  const [movieData, setMovieData] = useState<CreateMovieData>({
+    name: "",
+    description: "",
+    genre: "",
+    project_type: "movie",
+    movie_status: "Pre-Production",
+    project_status: "active",
+    writer: "",
+    cowriters: []
+  })
+
   const genres = [
     "Action", "Adventure", "Comedy", "Crime", "Drama", "Fantasy", 
     "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "Western",
@@ -150,16 +178,24 @@ export default function IdeasPage() {
         updated_at: new Date().toISOString()
       }
 
+      console.log('🎬 DEBUG - Saving idea with data:', ideaData)
+      console.log('🎬 DEBUG - mainCreator value:', mainCreator)
+      console.log('🎬 DEBUG - main_creator in ideaData:', ideaData.main_creator)
+
       if (editingIdea) {
         // Update existing idea
-        await MovieIdeasService.updateIdea(editingIdea.id, ideaData)
+        console.log('🎬 DEBUG - Updating existing idea:', editingIdea.id)
+        const updatedIdea = await MovieIdeasService.updateIdea(editingIdea.id, ideaData)
+        console.log('🎬 DEBUG - Updated idea result:', updatedIdea)
         toast({
           title: "Success",
           description: "Idea updated successfully",
         })
       } else {
         // Create new idea
+        console.log('🎬 DEBUG - Creating new idea')
         const savedIdea = await MovieIdeasService.createIdea(user!.id, ideaData)
+        console.log('🎬 DEBUG - Created idea result:', savedIdea)
         
         // If there's pending image data, save the image to this new idea
         if (pendingImageData && savedIdea) {
@@ -270,6 +306,63 @@ export default function IdeasPage() {
     setImportIdeaSearch("")
   }
 
+  const convertIdeaToMovie = async (idea: MovieIdea) => {
+    setConvertingIdea(idea)
+    // Pre-populate movie data from idea
+    setMovieData({
+      name: idea.title,
+      description: idea.description,
+      genre: idea.genre || "Unspecified",
+      project_type: "movie",
+      movie_status: "Pre-Production",
+      project_status: "active",
+      writer: idea.main_creator || "Unknown",
+      cowriters: idea.co_creators || []
+    })
+    setShowMovieDialog(true)
+  }
+
+  const handleCreateMovie = async () => {
+    setIsConverting(true)
+    try {
+      console.log('🎬 DEBUG - Converting idea to movie:', movieData)
+      
+      const newMovie = await MovieService.createMovie(movieData)
+      
+      toast({
+        title: "Success!",
+        description: `Idea "${movieData.name}" converted to movie successfully!`,
+      })
+
+      // Close dialog and reset
+      setShowMovieDialog(false)
+      setConvertingIdea(null)
+      setMovieData({
+        name: "",
+        description: "",
+        genre: "",
+        project_type: "movie",
+        movie_status: "Pre-Production",
+        project_status: "active",
+        writer: "",
+        cowriters: []
+      })
+      
+      // Optionally redirect to movies page or refresh
+      // You could add navigation here if needed
+      
+    } catch (error) {
+      console.error('Error converting idea to movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to convert idea to movie",
+        variant: "destructive",
+      })
+    } finally {
+      setIsConverting(false)
+    }
+  }
+
   // Drag and drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -375,17 +468,24 @@ export default function IdeasPage() {
 
       // Create a new movie idea
       try {
+        const ideaData = {
+          title: importIdeaTitle,
+          description: importIdeaDescription || `Imported idea: ${importIdeaTitle}`,
+          genre: importIdeaGenre || "Unspecified",
+          main_creator: importIdeaMainCreator.trim() || "Unknown",
+          co_creators: importIdeaCoCreators,
+          status: importIdeaStatus || "concept"
+        }
+        
+        console.log('🎬 DEBUG - Creating idea with data:', ideaData)
+        console.log('🎬 DEBUG - importIdeaMainCreator raw value:', importIdeaMainCreator)
+        console.log('🎬 DEBUG - importIdeaMainCreator trimmed:', importIdeaMainCreator.trim())
+        console.log('🎬 DEBUG - Final main_creator value:', ideaData.main_creator)
+        
         const ideaResponse = await fetch('/api/import/idea', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: importIdeaTitle,
-            description: importIdeaDescription || `Imported idea: ${importIdeaTitle}`,
-            genre: importIdeaGenre || "Unspecified",
-            main_creator: importIdeaMainCreator || "Unknown",
-            co_creators: importIdeaCoCreators,
-            status: importIdeaStatus || "concept"
-          })
+          body: JSON.stringify(ideaData)
         })
 
         if (ideaResponse.ok) {
@@ -439,7 +539,11 @@ export default function IdeasPage() {
             // Upload file to Supabase storage
             const timestamp = Date.now()
             const fileExtension = fileName.split('.').pop()
-            const storageFileName = `${timestamp}-${fileName.replace(/\.[^/.]+$/, '')}.${fileExtension}`
+            
+            // Sanitize filename for safe storage
+            const sanitizedName = sanitizeFilename(fileName)
+            
+            const storageFileName = `${timestamp}-${sanitizedName}.${fileExtension}`
             const filePath = `${user!.id}/ideas/${ideaId}/${storageFileName}`
 
             // Upload to storage
@@ -968,18 +1072,25 @@ export default function IdeasPage() {
           return
         }
 
+        const importData = {
+          title: importIdeaTitle,
+          description: importIdeaDescription,
+          genre: importIdeaGenre,
+          main_creator: importIdeaMainCreator.trim() || "Unknown",
+          co_creators: importIdeaCoCreators,
+          status: importIdeaStatus,
+          userId: user!.id
+        }
+        
+        console.log('🎬 DEBUG - Importing idea with data:', importData)
+        console.log('🎬 DEBUG - importIdeaMainCreator raw value:', importIdeaMainCreator)
+        console.log('🎬 DEBUG - importIdeaMainCreator trimmed:', importIdeaMainCreator.trim())
+        console.log('🎬 DEBUG - Final main_creator value:', importData.main_creator)
+        
         const response = await fetch('/api/import/idea', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: importIdeaTitle,
-            description: importIdeaDescription,
-            genre: importIdeaGenre,
-            main_creator: importIdeaMainCreator || "Unknown",
-            co_creators: importIdeaCoCreators,
-            status: importIdeaStatus,
-            userId: user!.id
-          })
+          body: JSON.stringify(importData)
         })
 
         if (!response.ok) {
@@ -1286,59 +1397,86 @@ export default function IdeasPage() {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
                 {filteredIdeas.map((idea) => (
-                  <Card key={idea.id} className="hover:shadow-lg transition-shadow">
-                    <CardHeader className="pb-3">
-                      <div className="flex justify-between items-start">
-                        <div className="flex-1">
-                          <CardTitle className="text-lg line-clamp-2">{idea.title}</CardTitle>
-                          <div className="flex items-center gap-2 mt-2">
-                            <Badge variant="secondary" className="text-xs">
-                              {idea.genre}
-                            </Badge>
-                            <Badge className={`text-xs ${getStatusColor(idea.status)}`}>
-                              {idea.status}
-                            </Badge>
-                            {idea.main_creator && (
-                              <Badge variant="outline" className="text-xs">
-                                👤 {idea.main_creator}
-                              </Badge>
-                            )}
-                          </div>
+                  <Card key={idea.id} className="hover:shadow-lg transition-shadow overflow-hidden">
+                    <CardHeader className="pb-4">
+                      <div className="flex flex-col gap-4">
+                        {/* Title Section - Full Width */}
+                        <div className="w-full">
+                          <CardTitle className="text-lg line-clamp-2 break-words">{idea.title}</CardTitle>
                         </div>
-                        <div className="flex gap-1">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.preventDefault()
-                              e.stopPropagation()
-                              console.log('Image button clicked for:', idea.title)
-                              openImageGeneration(idea)
-                            }}
-                            className="h-8 px-2 text-xs"
-                            title="Generate Images"
-                          >
-                            <ImageIcon className="h-3 w-3 mr-1" />
-                            Image
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => editIdea(idea)}
-                            className="h-8 w-8 p-0"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => deleteIdea(idea.id)}
-                            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                        
+                        {/* Bottom Row - Badges and Buttons */}
+                        <div className="flex justify-between items-start gap-4 min-w-0">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant="secondary" className="text-xs flex-shrink-0">
+                                {idea.genre}
+                              </Badge>
+                              <Badge className={`text-xs flex-shrink-0 ${getStatusColor(idea.status)}`}>
+                                {idea.status}
+                              </Badge>
+                              {idea.main_creator && (
+                                <Badge variant="outline" className="text-xs flex-shrink-0">
+                                  👤 {idea.main_creator}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                                                     <div className="flex gap-1 flex-shrink-0">
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               onClick={(e) => {
+                                 e.preventDefault()
+                                 e.stopPropagation()
+                                 console.log('Image button clicked for:', idea.title)
+                                 openImageGeneration(idea)
+                               }}
+                               className="h-8 px-2 text-xs flex-shrink-0"
+                               title="Generate Images"
+                             >
+                               <ImageIcon className="h-3 w-3 mr-1" />
+                               Image
+                             </Button>
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               onClick={() => convertIdeaToMovie(idea)}
+                               className="h-8 px-2 text-xs flex-shrink-0"
+                               title="Convert to Movie"
+                             >
+                               <Film className="h-3 w-3 mr-1" />
+                               Movie
+                             </Button>
+                             <Button
+                               variant="outline"
+                               size="sm"
+                               onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
+                               className="h-8 px-2 text-xs flex-shrink-0"
+                               title="Manage Scene List"
+                             >
+                               <List className="h-3 w-3 mr-1" />
+                               Scenes
+                             </Button>
+                             <Button
+                               variant="ghost"
+                               size="sm"
+                               onClick={() => editIdea(idea)}
+                               className="h-8 w-8 p-0 flex-shrink-0"
+                             >
+                               <Edit className="h-4 w-4" />
+                             </Button>
+                             <Button
+                               variant="ghost"
+                               size="sm"
+                               onClick={() => deleteIdea(idea.id)}
+                               className="h-8 w-8 p-0 text-destructive hover:text-destructive flex-shrink-0"
+                             >
+                               <Trash2 className="h-4 w-4" />
+                             </Button>
+                           </div>
                         </div>
                       </div>
                     </CardHeader>
@@ -2270,6 +2408,189 @@ export default function IdeasPage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Movie Conversion Dialog */}
+      <Dialog open={showMovieDialog} onOpenChange={setShowMovieDialog}>
+        <DialogContent className="cinema-card border-border max-h-[90vh] flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle className="text-foreground">Convert Idea to Movie</DialogTitle>
+            <DialogDescription>
+              Convert your idea "{convertingIdea?.title}" into a full movie project with all the details pre-filled.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
+            <div className="grid gap-2">
+              <Label htmlFor="movie-name">Project Title</Label>
+              <Input
+                id="movie-name"
+                value={movieData.name}
+                onChange={(e) => setMovieData({...movieData, name: e.target.value})}
+                className="bg-input border-border"
+              />
+              <p className="text-xs text-muted-foreground">Edit the title if needed</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-genre">Genre</Label>
+              <Input
+                id="movie-genre"
+                value={movieData.genre}
+                onChange={(e) => setMovieData({...movieData, genre: e.target.value})}
+                className="bg-input border-border"
+              />
+              <p className="text-xs text-muted-foreground">Edit the genre if needed</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-writer">Writer</Label>
+              <Input
+                id="movie-writer"
+                value={movieData.writer}
+                onChange={(e) => setMovieData({...movieData, writer: e.target.value})}
+                className="bg-input border-border"
+              />
+              <p className="text-xs text-muted-foreground">Edit the writer if needed</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-cowriters">Co-writers</Label>
+              <div className="space-y-2">
+                {/* Tags Display */}
+                {movieData.cowriters && movieData.cowriters.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {movieData.cowriters.map((name, index) => (
+                      <div key={index} className="flex items-center gap-1 bg-blue-500/20 text-blue-400 px-2 py-1 rounded-md text-sm">
+                        <span>{name}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updatedCowriters = movieData.cowriters?.filter((_, i) => i !== index) || []
+                            setMovieData({...movieData, cowriters: updatedCowriters})
+                          }}
+                          className="text-blue-300 hover:text-blue-100 ml-1"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Input and Add Button */}
+                <div className="flex gap-2">
+                  <Input
+                    id="movie-cowriters"
+                    value={cowriterInput}
+                    onChange={(e) => setCowriterInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && cowriterInput.trim()) {
+                        e.preventDefault()
+                        const newCowriters = [...(movieData.cowriters || []), cowriterInput.trim()]
+                        setMovieData({...movieData, cowriters: newCowriters})
+                        setCowriterInput("")
+                      }
+                    }}
+                    placeholder="Type name and press Enter"
+                    className="flex-1 bg-input border-border"
+                  />
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      if (cowriterInput.trim()) {
+                        const newCowriters = [...(movieData.cowriters || []), cowriterInput.trim()]
+                        setMovieData({...movieData, cowriters: newCowriters})
+                        setCowriterInput("")
+                      }
+                    }}
+                    variant="outline"
+                    size="sm"
+                    className="px-3"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">Add, remove, or edit co-writers</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-description">Description</Label>
+              <Textarea
+                id="movie-description"
+                value={movieData.description}
+                onChange={(e) => setMovieData({...movieData, description: e.target.value})}
+                className="bg-input border-border"
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground">Edit the description if needed</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-phase">Phase</Label>
+              <Select 
+                value={movieData.movie_status} 
+                onValueChange={(value) => setMovieData({...movieData, movie_status: value as any})}
+              >
+                <SelectTrigger className="bg-input border-border">
+                  <SelectValue placeholder="Select phase" />
+                </SelectTrigger>
+                <SelectContent className="cinema-card border-border">
+                  <SelectItem value="Pre-Production">Pre-Production</SelectItem>
+                  <SelectItem value="Production">Production</SelectItem>
+                  <SelectItem value="Post-Production">Post-Production</SelectItem>
+                  <SelectItem value="Distribution">Distribution</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Choose the movie phase</p>
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="movie-status">Status</Label>
+              <Select 
+                value={movieData.project_status} 
+                onValueChange={(value) => setMovieData({...movieData, project_status: value as any})}
+              >
+                <SelectTrigger className="bg-input border-border">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent className="cinema-card border-border">
+                  <SelectItem value="active">Active</SelectItem>
+                  <SelectItem value="paused">Paused</SelectItem>
+                  <SelectItem value="canceled">Canceled</SelectItem>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Choose the project status</p>
+            </div>
+          </div>
+          
+          <DialogFooter className="flex-shrink-0">
+            <Button variant="outline" onClick={() => setShowMovieDialog(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleCreateMovie} 
+              disabled={isConverting}
+              className="flex items-center gap-2"
+            >
+              {isConverting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Creating Movie...
+                </>
+              ) : (
+                <>
+                  <Film className="h-4 w-4" />
+                  Create Movie
+                </>
+                )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       </div>

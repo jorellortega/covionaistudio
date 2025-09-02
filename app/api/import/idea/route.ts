@@ -31,25 +31,34 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { title, description, genre, status } = body
+    const { title, description, genre, status, main_creator, co_creators } = body
+
+    console.log('🎬 DEBUG - Import idea API received:', body)
+    console.log('🎬 DEBUG - main_creator value:', main_creator)
 
     if (!title || !description) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
     }
 
     // Create new movie idea
+    const insertData = {
+      user_id: user.id,
+      title: title,
+      description: description,
+      genre: genre || 'Unspecified',
+      main_creator: main_creator || 'Unknown',
+      co_creators: co_creators || [],
+      status: status || 'concept',
+      original_prompt: `Imported idea: ${title}`,
+      prompt: `Idea: ${title}`,
+      created_at: new Date().toISOString()
+    }
+
+    console.log('🎬 DEBUG - Inserting idea data:', insertData)
+
     const { data: ideaData, error: ideaError } = await supabase
       .from('movie_ideas')
-      .insert({
-        user_id: user.id,
-        title: title,
-        description: description,
-        genre: genre || 'Unspecified',
-        status: status || 'concept',
-        original_prompt: `Imported idea: ${title}`,
-        prompt: `Idea: ${title}`,
-        created_at: new Date().toISOString()
-      })
+      .insert(insertData)
       .select()
       .single()
 
