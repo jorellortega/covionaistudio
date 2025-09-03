@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useSearchParams } from "next/navigation"
+import { useSearchParams, useRouter } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
@@ -59,6 +59,7 @@ const statusColors = {
 
 export default function TimelinePage() {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const movieId = searchParams.get("movie") || searchParams.get("project")
   const [movie, setMovie] = useState<any>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
@@ -1468,7 +1469,7 @@ export default function TimelinePage() {
               <ProjectSelector 
                 onProjectChange={(newProjectId) => {
                   if (newProjectId) {
-                    window.location.href = `/timeline?movie=${newProjectId}`
+                    router.push(`/timeline?movie=${newProjectId}`)
                   }
                 }}
                 placeholder="Select a movie to view its timeline"
@@ -1538,7 +1539,7 @@ export default function TimelinePage() {
               selectedProject={movieId}
               onProjectChange={(newProjectId) => {
                 if (newProjectId && newProjectId !== movieId) {
-                  window.location.href = `/timeline?movie=${newProjectId}`
+                  router.push(`/timeline?movie=${newProjectId}`)
                 }
               }}
               placeholder="Select a different movie"
@@ -2033,7 +2034,7 @@ export default function TimelinePage() {
                                     onClick={(e) => {
                                       e.preventDefault()
                                       e.stopPropagation()
-                                      window.location.href = `/storyboards/${scene.id}`
+                                      router.push(`/storyboards/${scene.id}`)
                                     }}
                                     className="text-xs h-6 px-2 bg-transparent hover:bg-purple-500/10 hover:text-purple-500"
                                   >
@@ -2227,7 +2228,7 @@ export default function TimelinePage() {
                                         onClick={(e) => {
                                           e.preventDefault()
                                           e.stopPropagation()
-                                          window.location.href = `/storyboards/${scene.id}`
+                                          router.push(`/storyboards/${scene.id}`)
                                         }}
                                         className="text-xs h-6 px-2 bg-transparent hover:bg-purple-500/10 hover:text-purple-500"
                                       >
@@ -2425,7 +2426,7 @@ export default function TimelinePage() {
                                 <FolderOpen className="mr-2 h-4 w-4" />
                                 Assets
                               </Button>
-                              <Button size="sm" variant="outline" onClick={() => window.location.href = `/storyboards/${scene.id}`}>
+                              <Button size="sm" variant="outline" onClick={() => router.push(`/storyboards/${scene.id}`)}>
                                 <FileText className="mr-2 h-4 w-4" />
                                 Storyboards
                               </Button>

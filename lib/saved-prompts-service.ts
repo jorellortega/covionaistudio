@@ -135,9 +135,22 @@ export class SavedPromptsService {
     try {
       const supabase = getSupabaseClient()
       
+      // First get the current use_count
+      const { data: currentData, error: fetchError } = await supabase
+        .from('saved_prompts')
+        .select('use_count')
+        .eq('id', promptId)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching current use count:', fetchError)
+        throw fetchError
+      }
+
+      // Then update with the incremented value
       const { error } = await supabase
         .from('saved_prompts')
-        .update({ use_count: supabase.sql`use_count + 1` })
+        .update({ use_count: (currentData.use_count || 0) + 1 })
         .eq('id', promptId)
 
       if (error) {

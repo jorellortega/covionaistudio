@@ -181,7 +181,7 @@ export class AISettingsService {
       case 'images':
         return 'dalle'
       case 'videos':
-        return 'Runway ML'
+        return 'Runway Act-Two'
       case 'audio':
         return 'ElevenLabs'
       default:

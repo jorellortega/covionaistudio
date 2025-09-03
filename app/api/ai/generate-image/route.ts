@@ -108,10 +108,35 @@ export async function POST(request: NextRequest) {
   try {
     console.log('AI image generation request received')
     
-    const body = await request.json()
+    // Handle both JSON and FormData requests
+    let body: any
+    let file: File | null = null
+    
+    const contentType = request.headers.get('content-type') || ''
+    
+    if (contentType.includes('multipart/form-data')) {
+      // Handle FormData (file upload)
+      const formData = await request.formData()
+      body = {
+        prompt: formData.get('prompt'),
+        model: formData.get('model'),
+        service: formData.get('service'),
+        width: parseInt(formData.get('width') as string),
+        height: parseInt(formData.get('height') as string),
+        apiKey: formData.get('apiKey'),
+        userId: formData.get('userId')
+      }
+      file = formData.get('file') as File
+      console.log('FormData request received with file:', file?.name)
+    } else {
+      // Handle JSON request
+      body = await request.json()
+      console.log('JSON request received')
+    }
+    
     console.log('Request body:', { ...body, apiKey: body.apiKey ? `${body.apiKey.substring(0, 10)}...` : 'undefined' })
     
-    const { prompt, service, apiKey, userId, autoSaveToBucket = true } = body
+    const { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true } = body
 
     if (!prompt || !service || !apiKey) {
       console.error('Missing required fields:', { prompt: !!prompt, service: !!service, apiKey: !!apiKey })
@@ -240,19 +265,43 @@ export async function POST(request: NextRequest) {
 
       case 'runway':
         // Runway ML is primarily for video, but can generate images
-        const runwayResponse = await fetch('https://api.dev.runwayml.com/v1/inference', {
+        // Different request structure based on model type
+                let requestBody: any
+        
+        if (model === 'gen4_image_turbo') {
+          if (!file) {
+            throw new Error('Gen-4 Image Turbo requires a reference image file')
+          }
+          
+          // Convert file to base64 for Runway ML API
+          const fileBuffer = await file.arrayBuffer()
+          const base64File = Buffer.from(fileBuffer).toString('base64')
+          const dataUrl = `data:${file.type};base64,${base64File}`
+          
+          requestBody = {
+            model: model,
+            promptText: prompt,
+            ratio: `${width}:${height}`,
+            referenceImages: [{
+              uri: dataUrl
+            }]
+          }
+        } else {
+          requestBody = {
+            model: model,
+            promptText: prompt,
+            ratio: `${width}:${height}`
+          }
+        }
+        
+        const runwayResponse = await fetch('https://api.dev.runwayml.com/v1/text_to_image', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
+            'X-Runway-Version': '2024-11-06',
           },
-          body: JSON.stringify({
-            model: "gen4_turbo",
-            input: {
-              prompt: prompt, // Send only the user's exact prompt
-              image_dimensions: "1024x1024"
-            },
-          })
+          body: JSON.stringify(requestBody)
         })
         
         if (!runwayResponse.ok) {
@@ -262,7 +311,88 @@ export async function POST(request: NextRequest) {
         }
         
         const runwayData = await runwayResponse.json()
-        imageUrl = runwayData.output.images[0]
+        console.log('Runway ML response data:', JSON.stringify(runwayData, null, 2))
+        
+        // Runway ML returns a job ID, we need to poll for completion
+        if (runwayData.id) {
+          console.log('Runway ML job started with ID:', runwayData.id)
+          
+          // Try different possible endpoints for job status
+          const possibleEndpoints = [
+            `https://api.dev.runwayml.com/v1/jobs/${runwayData.id}`,
+            `https://api.dev.runwayml.com/v1/tasks/${runwayData.id}`,
+            `https://api.dev.runwayml.com/v1/text_to_image/${runwayData.id}`,
+            `https://api.dev.runwayml.com/v1/inference/${runwayData.id}`
+          ]
+          
+          // Poll for job completion
+          let attempts = 0
+          const maxAttempts = 30 // 30 attempts = 5 minutes max
+          let jobCompleted = false
+          
+          while (!jobCompleted && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 10000)) // Wait 10 seconds
+            attempts++
+            
+            console.log(`Polling Runway ML job ${runwayData.id}, attempt ${attempts}/${maxAttempts}`)
+            
+            // Try each possible endpoint
+            for (const endpoint of possibleEndpoints) {
+              try {
+                console.log(`Trying endpoint: ${endpoint}`)
+                const statusResponse = await fetch(endpoint, {
+                  method: 'GET',
+                  headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'X-Runway-Version': '2024-11-06',
+                  },
+                })
+                
+                if (statusResponse.ok) {
+                  const statusData = await statusResponse.json()
+                  console.log('Job status:', JSON.stringify(statusData, null, 2))
+                  
+                  if (statusData.status === 'SUCCEEDED' && statusData.output) {
+                    // Extract image URL from completed job
+                    if (Array.isArray(statusData.output) && statusData.output[0]) {
+                      imageUrl = statusData.output[0]
+                      jobCompleted = true
+                      break
+                    } else if (statusData.output.images && statusData.output.images[0]) {
+                      imageUrl = statusData.output.images[0]
+                      jobCompleted = true
+                      break
+                    } else if (statusData.output.image_url) {
+                      imageUrl = statusData.output.image_url
+                      jobCompleted = true
+                      break
+                    } else if (statusData.output.url) {
+                      imageUrl = statusData.output.url
+                      jobCompleted = true
+                      break
+                    }
+                  } else if (statusData.status === 'FAILED') {
+                    throw new Error(`Runway ML job failed: ${statusData.error || 'Unknown error'}`)
+                  }
+                  // If status is 'processing' or 'pending', continue polling
+                } else {
+                  console.log(`Endpoint ${endpoint} returned ${statusResponse.status}`)
+                }
+              } catch (error) {
+                console.error(`Error polling endpoint ${endpoint}:`, error)
+              }
+            }
+            
+            if (jobCompleted) break
+          }
+          
+          if (!jobCompleted) {
+            throw new Error('Runway ML job timed out after 5 minutes')
+          }
+        } else {
+          console.error('Unexpected Runway ML response structure:', runwayData)
+          throw new Error('Unexpected response structure from Runway ML API')
+        }
         break
 
       case 'midjourney':

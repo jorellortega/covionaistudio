@@ -45,9 +45,11 @@ import {
   Loader2,
   Bot,
   Settings,
+  Upload,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
 
 // Real data types
@@ -84,8 +86,8 @@ interface GeneratedContent {
 
 const aiModels = {
   script: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  image: ["OpenArt", "DALL-E 3", "Midjourney", "Stable Diffusion", "Custom"],
-  video: ["Kling", "Runway ML", "Pika Labs", "Stable Video", "LumaAI"],
+  image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  video: ["Kling", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
 
@@ -130,11 +132,19 @@ export default function AIStudioPage() {
   const [selectedTemplate, setSelectedTemplate] = useState("")
   const [selectedProject, setSelectedProject] = useState("")
   const [selectedScene, setSelectedScene] = useState("none")
-  const [selectedDuration, setSelectedDuration] = useState("10s")
+  const [selectedDuration, setSelectedDuration] = useState("5s")
   const [selectedVideoStyle, setSelectedVideoStyle] = useState("cinematic")
   const [selectedCameraMovement, setSelectedCameraMovement] = useState("static")
   const [selectedLighting, setSelectedLighting] = useState("natural")
-  const [selectedResolution, setSelectedResolution] = useState("1024x576")
+  const [selectedResolution, setSelectedResolution] = useState("1280x720")
+  const [useVideoStyle, setUseVideoStyle] = useState(false)
+  const [useCameraMovement, setUseCameraMovement] = useState(false)
+  const [useLighting, setUseLighting] = useState(false)
+  const [selectedRunwayModel, setSelectedRunwayModel] = useState("act_two")
+  const [selectedRunwayImageModel, setSelectedRunwayImageModel] = useState("gen4_image")
+  const [showMoreOptions, setShowMoreOptions] = useState(false)
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
+  const [filePreview, setFilePreview] = useState<string | null>(null)
   const [selectedAudioType, setSelectedAudioType] = useState("music")
   const [selectedAudioDuration, setSelectedAudioDuration] = useState("30s")
   const [selectedVoice, setSelectedVoice] = useState("21m00Tcm4TlvDq8ikWAM")
@@ -170,6 +180,57 @@ export default function AIStudioPage() {
   const handleContentViolation = (type: 'script' | 'image' | 'video' | 'audio', prompt: string) => {
     setContentViolationData({ type, prompt })
     setShowContentViolationDialog(true)
+  }
+
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      setUploadedFile(file)
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        setFilePreview(e.target?.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const handleDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const handleDragLeave = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    
+    const files = event.dataTransfer.files
+    if (files && files[0]) {
+      const file = files[0]
+      if (file.type.startsWith('image/')) {
+        setUploadedFile(file)
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          setFilePreview(e.target?.result as string)
+        }
+        reader.readAsDataURL(file)
+      } else {
+        toast({
+          title: "Invalid File Type",
+          description: "Please upload an image file (JPG, PNG, GIF, etc.)",
+          variant: "destructive",
+        })
+      }
+    }
   }
 
   const pollVideoJobStatus = async (jobId: string, contentId: string) => {
@@ -443,6 +504,12 @@ export default function AIStudioPage() {
       if (currentSetting?.is_locked) {
         console.log(`Setting locked model for ${activeTab}:`, currentSetting.locked_model)
         setSelectedModel(currentSetting.locked_model)
+        
+        // If video tab is locked to Runway ML, reset the sub-model to act_two
+        if (activeTab === 'videos' && currentSetting.locked_model === 'Runway ML') {
+          console.log('Resetting selectedRunwayModel to act_two for locked Runway ML')
+          setSelectedRunwayModel('act_two')
+        }
       }
     }
   }, [aiSettings, activeTab])
@@ -483,11 +550,13 @@ export default function AIStudioPage() {
     
     setSelectedStyle("")
     setSelectedTemplate("")
-    setSelectedDuration("10s")
+    setSelectedDuration("5s")
     setSelectedVideoStyle("cinematic")
     setSelectedCameraMovement("static")
     setSelectedLighting("natural")
-    setSelectedResolution("1024x576")
+    setSelectedResolution("1280x720")
+    setSelectedRunwayModel("act_two")
+    setSelectedRunwayImageModel("gen4_image")
     setSelectedAudioType("music")
     setSelectedAudioDuration("30s")
     setSelectedVoice("21m00Tcm4TlvDq8ikWAM")
@@ -496,6 +565,21 @@ export default function AIStudioPage() {
     setCloningVoiceFiles([])
     setCustomVoices([])
   }, [activeTab])
+
+  // Update resolution when Runway model changes
+  useEffect(() => {
+    if (selectedRunwayModel === "upscale_v1") {
+      setSelectedResolution("auto")
+    } else if (selectedResolution === "auto") {
+      setSelectedResolution("1280x720")
+    }
+  }, [selectedRunwayModel])
+
+  // Force reset selectedRunwayModel to act_two on component mount
+  useEffect(() => {
+    console.log('🎬 Component mount - forcing selectedRunwayModel to act_two')
+    setSelectedRunwayModel('act_two')
+  }, [])
 
   // Load real data from database
   useEffect(() => {
@@ -737,7 +821,7 @@ export default function AIStudioPage() {
             })
           }
         }
-      } else if (type === "image" && selectedModel === "DALL-E 3") {
+      } else if (type === "image" && (selectedModel === "DALL-E 3" || selectedModel.startsWith("Runway"))) {
         console.log('Attempting to generate image with:', {
           prompt: imagePrompt,
           style: selectedStyle || "Cinematic",
@@ -757,15 +841,77 @@ export default function AIStudioPage() {
         }
         
         const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
-        console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to DALL-E 3:`)
+        console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to ${selectedModel}:`)
         console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
         console.log(`🚀 IMAGE GENERATION - Style: ${selectedStyle || "Cinematic"}`)
         
-        const response = await OpenAIService.generateImage({
+        let response
+        if (selectedModel === "DALL-E 3") {
+          response = await OpenAIService.generateImage({
           prompt: enhancedPrompt,
           style: selectedStyle || "Cinematic",
           apiKey: userApiKeys.openai_api_key!,
         })
+        } else if (selectedModel === "Runway ML") {
+          // Use the selected sub-model
+          const actualModel = selectedRunwayImageModel
+          
+          // Parse resolution for gen4_image
+          let width = 1280
+          let height = 720
+          if (selectedRunwayImageModel === "gen4_image") {
+            if (selectedResolution === "720p") {
+              width = 1280
+              height = 720
+            } else if (selectedResolution === "1080p") {
+              width = 1920
+              height = 1080
+            }
+          }
+          
+          // Use Runway ML for image generation
+          if (actualModel === 'gen4_image_turbo' && uploadedFile) {
+            // Use FormData for file upload
+            const formData = new FormData()
+            formData.append('prompt', enhancedPrompt)
+            formData.append('model', actualModel)
+            formData.append('service', 'runway')
+            formData.append('width', width.toString())
+            formData.append('height', height.toString())
+            formData.append('apiKey', userApiKeys.runway_api_key)
+            formData.append('userId', userId)
+            formData.append('file', uploadedFile)
+            
+            response = await fetch('/api/ai/generate-image', {
+              method: 'POST',
+              body: formData,
+            })
+          } else {
+            // Use JSON for regular models
+            response = await fetch('/api/ai/generate-image', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                prompt: enhancedPrompt,
+                model: actualModel,
+                service: 'runway',
+                width: width,
+                height: height,
+                apiKey: userApiKeys.runway_api_key,
+                userId: userId
+              }),
+            })
+          }
+          
+          const result = await response.json()
+          if (response.ok && result.success) {
+            response = { success: true, data: { imageUrl: result.imageUrl } }
+          } else {
+            response = { success: false, error: result.error || 'Unknown error' }
+          }
+        }
 
         if (response.success) {
           // Create new generated content
@@ -778,7 +924,7 @@ export default function AIStudioPage() {
             created_at: new Date().toISOString(),
             project_id: selectedProject,
             scene_id: selectedScene !== "none" ? selectedScene : undefined,
-            url: response.data.data?.[0]?.url,
+            url: response.data.data?.[0]?.url || response.data.imageUrl,
           }
           
           setGeneratedContent(prev => [newContent, ...prev])
@@ -795,7 +941,7 @@ export default function AIStudioPage() {
             })
           }
         }
-              } else if (type === "video" && selectedModel === "Runway ML") {
+              } else if (type === "video" && (selectedModel.startsWith("Runway") || selectedModel === "Runway ML")) {
           console.log('Attempting to generate video with Runway ML:', {
             prompt: videoPrompt,
             duration: "10s", // Default duration
@@ -821,33 +967,53 @@ export default function AIStudioPage() {
             return
           }
           
-          // Build enhanced prompt with all the selected options
+          // Build enhanced prompt with only the enabled optional settings
           let enhancedPrompt = videoPrompt
-          if (selectedVideoStyle !== "cinematic") {
+          if (useVideoStyle && selectedVideoStyle !== "cinematic") {
             enhancedPrompt += `, ${selectedVideoStyle} style`
           }
-          if (selectedCameraMovement !== "static") {
+          if (useCameraMovement && selectedCameraMovement !== "static") {
             enhancedPrompt += `, camera ${selectedCameraMovement}`
           }
-          if (selectedLighting !== "natural") {
+          if (useLighting && selectedLighting !== "natural") {
             enhancedPrompt += `, ${selectedLighting} lighting`
           }
           
           console.log('Enhanced prompt for Runway ML:', enhancedPrompt)
           
+          // Use the selected Runway sub-model directly
+          const actualModel = selectedRunwayModel || 'gen4_turbo'
+          console.log('🎬 Frontend Debug - selectedModel:', selectedModel)
+          console.log('🎬 Frontend Debug - actualModel:', actualModel)
+          console.log('🎬 Frontend Debug - selectedRunwayModel:', selectedRunwayModel)
+          
+          // Parse resolution
+          let width, height
+          if (selectedResolution === "auto") {
+            // For upscale, use the original video dimensions
+            width = 1920
+            height = 1080
+          } else {
+            [width, height] = selectedResolution.split('x').map(Number)
+          }
+          
+          // Prepare form data for file upload
+          const formData = new FormData()
+          formData.append('prompt', enhancedPrompt)
+          formData.append('duration', selectedDuration)
+          formData.append('width', width.toString())
+          formData.append('height', height.toString())
+          formData.append('model', actualModel)
+          
+          // Add file if uploaded
+          if (uploadedFile) {
+            formData.append('file', uploadedFile)
+          }
+          
           // Use server-side API route instead of direct Runway ML calls
           const response = await fetch('/api/ai/generate-video', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              prompt: enhancedPrompt,
-              duration: selectedDuration,
-              width: selectedResolution === '1024x576' ? 1024 : 512,
-              height: selectedResolution === '1024x576' ? 576 : 288,
-              model: selectedModel,
-            }),
+            body: formData, // Use FormData instead of JSON for file upload
           })
 
           const result = await response.json()
@@ -1224,7 +1390,7 @@ export default function AIStudioPage() {
           }
         } else {
           // For other models, show a message that they're not implemented yet
-          alert(`${selectedModel} is not yet implemented. Please use ChatGPT for scripts, DALL-E 3 for images, or Runway ML/Kling for videos.`)
+          alert(`${selectedModel} is not yet implemented. Please use ChatGPT for scripts, DALL-E 3 or Runway models for images, or Runway models/Kling for videos.`)
           setIsGenerating(false)
           return
         }
@@ -2334,6 +2500,9 @@ export default function AIStudioPage() {
                             } else if (model === "OpenArt") {
                               isReady = !false
                               statusText = isReady ? "Ready" : "API Key Required"
+                            } else if (model === "Runway ML") {
+                              isReady = !!userApiKeys.runway_api_key
+                              statusText = isReady ? "Ready" : "Runway ML API Key Required"
                             } else {
                               isReady = false
                               statusText = "Coming Soon"
@@ -2353,6 +2522,51 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
+                      {/* Runway Model Selection - Show when Runway ML is selected */}
+                      {selectedModel === "Runway ML" && (
+                        <div className="grid gap-2">
+                          <Label>Model</Label>
+                          <Select value={selectedRunwayImageModel} onValueChange={setSelectedRunwayImageModel}>
+                            <SelectTrigger className="bg-input border-border">
+                              <SelectValue placeholder="Select Runway model" />
+                            </SelectTrigger>
+                            <SelectContent className="cinema-card border-border">
+                              <SelectItem value="gen4_image">Gen-4 Image (Text → Image, 720p/1080p)</SelectItem>
+                              <SelectItem value="gen4_image_turbo">Gen-4 Image Turbo (Image+Text → Image, requires reference image)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          
+                          {/* Pricing Display */}
+                          <div className="text-xs text-muted-foreground">
+                            {selectedRunwayImageModel === "gen4_image" && "5 credits per 720p image, 8 credits per 1080p image"}
+                            {selectedRunwayImageModel === "gen4_image_turbo" && "2 credits per image (requires reference image)"}
+                          </div>
+                          
+                          {/* Warning for turbo model */}
+                          {selectedRunwayImageModel === "gen4_image_turbo" && (
+                            <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                              ⚠️ This model requires a reference image. Use "Gen-4 Image" for text-only generation.
+                            </div>
+                          )}
+                          
+                          {/* Resolution Selection - Only for gen4_image */}
+                          {selectedRunwayImageModel === "gen4_image" && (
+                            <div className="grid gap-2">
+                              <Label>Resolution</Label>
+                              <Select value={selectedResolution} onValueChange={setSelectedResolution}>
+                                <SelectTrigger className="bg-input border-border">
+                                  <SelectValue placeholder="Select resolution" />
+                                </SelectTrigger>
+                                <SelectContent className="cinema-card border-border">
+                                  <SelectItem value="720p">720p (5 credits)</SelectItem>
+                                  <SelectItem value="1080p">1080p (8 credits)</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      
                       {selectedModel === "DALL-E 3" && false && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
@@ -2371,6 +2585,55 @@ export default function AIStudioPage() {
                         <CheckCircle className="h-4 w-4" />
                         AI Online
                       </p>
+                    </div>
+                  )}
+
+                  {/* File Upload - Show for Gen-4 Image Turbo */}
+                  {selectedModel === "Runway ML" && selectedRunwayImageModel === "gen4_image_turbo" && (
+                    <div className="grid gap-2">
+                      <Label>Reference Image (Required)</Label>
+                      <div 
+                        className="border-2 border-dashed border-border rounded-lg p-4"
+                        onDragOver={handleDragOver}
+                        onDragEnter={handleDragEnter}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                      >
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleFileUpload}
+                          className="hidden"
+                          id="image-upload"
+                        />
+                        <label
+                          htmlFor="image-upload"
+                          className="cursor-pointer flex flex-col items-center justify-center space-y-2"
+                        >
+                          {uploadedFile ? (
+                            <div className="w-full">
+                              <img
+                                src={filePreview}
+                                alt="Uploaded reference"
+                                className="w-full h-32 object-cover rounded-lg"
+                              />
+                              <p className="text-sm text-muted-foreground mt-2 text-center">
+                                Click to change reference image
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="text-center">
+                              <Upload className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                              <p className="text-sm text-muted-foreground">
+                                Click to upload reference image
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                Gen-4 Image Turbo requires a reference image
+                              </p>
+                            </div>
+                          )}
+                        </label>
+                      </div>
                     </div>
                   )}
 
@@ -2402,7 +2665,9 @@ export default function AIStudioPage() {
                       !imagePrompt || 
                       !selectedModel ||
                       (selectedModel === "DALL-E 3" && false) ||
-                      (selectedModel === "OpenArt" && false)
+                      (selectedModel === "OpenArt" && false) ||
+                      (selectedModel === "Runway ML" && !userApiKeys.runway_api_key) ||
+                      (selectedModel === "Runway ML" && selectedRunwayImageModel === "gen4_image_turbo" && !uploadedFile)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -2540,7 +2805,6 @@ export default function AIStudioPage() {
                       <SelectContent className="cinema-card border-border">
                         <SelectItem value="5s">5 seconds</SelectItem>
                         <SelectItem value="10s">10 seconds</SelectItem>
-                        <SelectItem value="15s">15 seconds</SelectItem>
                         <SelectItem value="30s">30 seconds</SelectItem>
                       </SelectContent>
                     </Select>
@@ -2610,10 +2874,102 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  {selectedModel === "Runway ML" && (
+                  {(selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && (
                     <>
+                      {/* Show More Options Button */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowMoreOptions(!showMoreOptions)}
+                        className="w-full"
+                      >
+                        {showMoreOptions ? "Hide Options" : "Show More Options"}
+                      </Button>
+
+                      {/* File Upload - Show for models that support it */}
+                      {(selectedRunwayModel === "gen4_turbo" || selectedRunwayModel === "gen4_aleph" || selectedRunwayModel === "gen3a_turbo" || selectedRunwayModel === "act_two") && (
                       <div className="grid gap-2">
-                        <Label>Video Style</Label>
+                          <Label>
+                            {selectedRunwayModel === "act_two" ? "Upload Video" : "Upload Image (Optional)"}
+                          </Label>
+                          <div className="border-2 border-dashed border-border rounded-lg p-4">
+                            <input
+                              type="file"
+                              accept={selectedRunwayModel === "act_two" ? "video/*" : "image/*"}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                  setUploadedFile(file)
+                                  const reader = new FileReader()
+                                  reader.onload = (e) => {
+                                    setFilePreview(e.target?.result as string)
+                                  }
+                                  reader.readAsDataURL(file)
+                                }
+                              }}
+                              className="hidden"
+                              id="file-upload"
+                            />
+                            <label
+                              htmlFor="file-upload"
+                              className="cursor-pointer flex flex-col items-center gap-2"
+                            >
+                              {filePreview ? (
+                                <div className="relative">
+                                  {selectedRunwayModel === "act_two" ? (
+                                    <video
+                                      src={filePreview}
+                                      className="max-w-full max-h-32 rounded"
+                                      controls
+                                    />
+                                  ) : (
+                                    <img
+                                      src={filePreview}
+                                      alt="Preview"
+                                      className="max-w-full max-h-32 rounded object-cover"
+                                    />
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      setUploadedFile(null)
+                                      setFilePreview(null)
+                                    }}
+                                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <Upload className="h-8 w-8 text-muted-foreground" />
+                                  <span className="text-sm text-muted-foreground">
+                                    {selectedRunwayModel === "act_two" 
+                                      ? "Click to upload a video file" 
+                                      : "Click to upload an image file (optional)"}
+                                  </span>
+                                </>
+                              )}
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Optional Settings - Only show when expanded */}
+                      {showMoreOptions && (
+                        <>
+                          {/* Optional Video Style */}
+                          <div className="grid gap-2">
+                            <div className="flex items-center justify-between">
+                              <Label>Video Style (Optional)</Label>
+                              <Switch
+                                checked={useVideoStyle}
+                                onCheckedChange={setUseVideoStyle}
+                              />
+                            </div>
+                            {useVideoStyle && (
                         <Select value={selectedVideoStyle} onValueChange={setSelectedVideoStyle}>
                           <SelectTrigger className="bg-input border-border">
                             <SelectValue placeholder="Choose video style" />
@@ -2629,10 +2985,19 @@ export default function AIStudioPage() {
                             <SelectItem value="modern">Modern</SelectItem>
                           </SelectContent>
                         </Select>
+                            )}
                       </div>
 
+                          {/* Optional Camera Movement */}
                       <div className="grid gap-2">
-                        <Label>Camera Movement</Label>
+                            <div className="flex items-center justify-between">
+                              <Label>Camera Movement (Optional)</Label>
+                              <Switch
+                                checked={useCameraMovement}
+                                onCheckedChange={setUseCameraMovement}
+                              />
+                            </div>
+                            {useCameraMovement && (
                         <Select value={selectedCameraMovement} onValueChange={setSelectedCameraMovement}>
                           <SelectTrigger className="bg-input border-border">
                             <SelectValue placeholder="Select camera movement" />
@@ -2651,10 +3016,19 @@ export default function AIStudioPage() {
                             <SelectItem value="tilt-down">Tilt Down</SelectItem>
                           </SelectContent>
                         </Select>
+                            )}
                       </div>
 
+                          {/* Optional Lighting */}
                       <div className="grid gap-2">
-                        <Label>Lighting</Label>
+                            <div className="flex items-center justify-between">
+                              <Label>Lighting (Optional)</Label>
+                              <Switch
+                                checked={useLighting}
+                                onCheckedChange={setUseLighting}
+                              />
+                            </div>
+                            {useLighting && (
                         <Select value={selectedLighting} onValueChange={setSelectedLighting}>
                           <SelectTrigger className="bg-input border-border">
                             <SelectValue placeholder="Choose lighting" />
@@ -2673,23 +3047,10 @@ export default function AIStudioPage() {
                             <SelectItem value="high-key">High Key</SelectItem>
                           </SelectContent>
                         </Select>
+                            )}
                       </div>
-
-                      <div className="grid gap-2">
-                        <Label>Resolution</Label>
-                        <Select value={selectedResolution} onValueChange={setSelectedResolution}>
-                          <SelectTrigger className="bg-input border-border">
-                            <SelectValue placeholder="Select resolution" />
-                          </SelectTrigger>
-                          <SelectContent className="cinema-card border-border">
-                            <SelectItem value="1024x576">16:9 (1024x576)</SelectItem>
-                            <SelectItem value="1024x1024">1:1 (1024x1024)</SelectItem>
-                            <SelectItem value="1024x768">4:3 (1024x768)</SelectItem>
-                            <SelectItem value="1280x720">HD (1280x720)</SelectItem>
-                            <SelectItem value="1920x1080">Full HD (1920x1080)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
+                        </>
+                      )}
                     </>
                   )}
 
@@ -2706,7 +3067,7 @@ export default function AIStudioPage() {
                             let isReady = false
                             let statusText = ""
                             
-                            if (model === "Runway ML") {
+                            if (model.startsWith("Runway") || model === "Runway ML") {
                               isReady = !!userApiKeys.runway_api_key
                               statusText = isReady ? "Ready" : "Runway ML API Key Required"
                             } else if (model === "Kling") {
@@ -2731,7 +3092,7 @@ export default function AIStudioPage() {
                         </SelectContent>
                       </Select>
                       
-                      {selectedModel === "Runway ML" && !userApiKeys.runway_api_key && (
+                      {(selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && !userApiKeys.runway_api_key && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -2743,7 +3104,7 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Runway ML" && userApiKeys.runway_api_key && (
+                      {(selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && userApiKeys.runway_api_key && (
                         <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
                           <p className="text-sm text-blue-600">
                             <CheckCircle className="h-4 w-4 inline mr-2" />
@@ -2852,7 +3213,75 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
+                  {/* Show Runway sub-options when Runway ML is locked */}
+                  {isCurrentTabLocked() && getCurrentTabLockedModel() === "Runway ML" && (
+                    <div className="grid gap-2">
+                      <Label>Model</Label>
+                      <Select value={selectedRunwayModel} onValueChange={setSelectedRunwayModel}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select Runway model" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="act_two">Act-Two (Video → Video, up to 30s, 720p)</SelectItem>
+                          <SelectItem value="gen3a_turbo">Gen-3A Turbo (Text/Image → Video, 5s/10s, 720p)</SelectItem>
+                          <SelectItem value="gen4_turbo">Gen-4 Turbo (Text/Image → Video, 5s/10s, 720p)</SelectItem>
+                          <SelectItem value="gen4_aleph">Gen-4 Aleph (Text/Image → Video, 5s/10s, 720p)</SelectItem>
+                          <SelectItem value="upscale_v1">Upscale (Video → 4K, up to 30s)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      
+                      {/* Pricing display */}
+                      <div className="text-xs text-muted-foreground">
+                        {selectedRunwayModel === "gen4_turbo" && "5 credits per second"}
+                        {selectedRunwayModel === "gen4_aleph" && "5 credits per second"}
+                        {selectedRunwayModel === "gen3a_turbo" && "5 credits per second"}
+                        {selectedRunwayModel === "act_two" && "5 credits per second"}
+                        {selectedRunwayModel === "upscale_v1" && "2 credits per second"}
+                      </div>
+                    </div>
+                  )}
 
+                  {/* Resolution - Show for Runway models */}
+                  {(selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && (
+                    <div className="grid gap-2">
+                      <Label>Resolution</Label>
+                      <Select value={selectedResolution} onValueChange={setSelectedResolution}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select resolution" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          {/* Gen-4 Turbo and Aleph resolutions */}
+                          {(selectedRunwayModel === "gen4_turbo" || selectedRunwayModel === "gen4_aleph" || selectedRunwayModel === "gen3a_turbo") && (
+                            <>
+                              <SelectItem value="1280x720">16:9 (1280x720)</SelectItem>
+                              <SelectItem value="720x1280">9:16 (720x1280)</SelectItem>
+                              <SelectItem value="1104x832">4:3 (1104x832)</SelectItem>
+                              <SelectItem value="832x1104">3:4 (832x1104)</SelectItem>
+                              <SelectItem value="960x960">1:1 (960x960)</SelectItem>
+                              <SelectItem value="1584x672">21:9 (1584x672)</SelectItem>
+                            </>
+                          )}
+                          
+                          {/* Act-Two resolutions - may have different supported resolutions */}
+                          {selectedRunwayModel === "act_two" && (
+                            <>
+                              <SelectItem value="1280x720">16:9 (1280x720)</SelectItem>
+                              <SelectItem value="720x1280">9:16 (720x1280)</SelectItem>
+                              <SelectItem value="1104x832">4:3 (1104x832)</SelectItem>
+                              <SelectItem value="832x1104">3:4 (832x1104)</SelectItem>
+                              <SelectItem value="960x960">1:1 (960x960)</SelectItem>
+                              <SelectItem value="1584x672">21:9 (1584x672)</SelectItem>
+                            </>
+                          )}
+                          
+                          {/* Upscale - no resolution selection needed */}
+                          {selectedRunwayModel === "upscale_v1" && (
+                            <SelectItem value="auto">Auto (Upscales to 4K)</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
                   <div className="grid gap-2">
                     <Label>Prompt</Label>
@@ -2909,7 +3338,7 @@ export default function AIStudioPage() {
                         return
                       }
                       
-                      if (selectedModel === "Runway ML" && !userApiKeys.runway_api_key) {
+                      if ((selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && !userApiKeys.runway_api_key) {
                         toast({
                           title: "Missing API Key",
                           description: "Please configure your Runway ML API key",
@@ -2933,7 +3362,7 @@ export default function AIStudioPage() {
                       isGenerating || 
                       !videoPrompt || 
                       !selectedModel ||
-                      (selectedModel === "Runway ML" && !userApiKeys.runway_api_key) ||
+                      ((selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && !userApiKeys.runway_api_key) ||
                       (selectedModel === "Kling" && !userApiKeys.kling_api_key)
                     }
                     className="w-full gradient-button text-white"

@@ -434,10 +434,21 @@ export default function SceneStoryboardsPage() {
 
   const fetchSceneInfo = async () => {
     try {
+      console.log('🎬 fetchSceneInfo: Starting to fetch scene:', sceneId)
+      console.log('🎬 fetchSceneInfo: User ID:', userId)
+      console.log('🎬 fetchSceneInfo: Ready state:', ready)
+      
+      // Don't proceed if authentication isn't ready
+      if (!ready || !userId) {
+        console.log('🎬 fetchSceneInfo: Authentication not ready, skipping')
+        return
+      }
+      
       // Fetch the actual scene data
       const scene = await TimelineService.getSceneById(sceneId)
       
       if (!scene) {
+        console.error('🎬 fetchSceneInfo: Scene not found for ID:', sceneId)
         toast({
           title: "Scene Not Found",
           description: "The requested scene could not be found.",
@@ -602,15 +613,17 @@ export default function SceneStoryboardsPage() {
       }
       
       // Check for overlapping text ranges with existing shots
-      if (textRange) {
+      if (textRange && typeof textRange === 'object' && textRange.start !== null && textRange.end !== null) {
+        const textRangeStart = textRange.start
+        const textRangeEnd = textRange.end
         const hasOverlap = storyboards.some(sb => {
           const start = sb.script_text_start
           const end = sb.script_text_end
           if (start !== null && start !== undefined && end !== null && end !== undefined) {
             return (
-              (start <= textRange.start && end > textRange.start) ||
-              (start < textRange.end && end >= textRange.end) ||
-              (start >= textRange.start && end <= textRange.end)
+              (start <= textRangeStart && end > textRangeStart) ||
+              (start < textRangeEnd && end >= textRangeEnd) ||
+              (start >= textRangeStart && end <= textRangeEnd)
             )
           }
           return false

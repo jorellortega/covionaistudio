@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
 import { OpenAIService, AnthropicService, OpenArtService } from '@/lib/ai-services'
 import { AISettingsService } from '@/lib/ai-settings-service'
-import { useAuth } from '@/components/AuthProvider'
+import { useAuthReady } from '@/components/auth-hooks'
 import { getSupabaseClient } from '@/lib/supabase'
 import { ProjectSelector } from '@/components/project-selector'
 import { MovieService, Movie } from '@/lib/movie-service'
@@ -60,7 +60,7 @@ interface SavedPrompt {
 }
 
 export default function VisualDevelopmentPage() {
-  const { user } = useAuth()
+  const { session, user, userId, ready } = useAuthReady()
   const { toast } = useToast()
   const [items, setItems] = useState<VisualDevelopmentItem[]>([])
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([])
@@ -98,6 +98,7 @@ export default function VisualDevelopmentPage() {
   const [dragActive, setDragActive] = useState(false)
   const [selectedPromptId, setSelectedPromptId] = useState('none')
   const [hidePromptText, setHidePromptText] = useState(false)
+  const [userRole, setUserRole] = useState<string | null>(null)
   
   // Edit prompt state
   const [editingPrompt, setEditingPrompt] = useState<SavedPrompt | null>(null)
@@ -141,6 +142,7 @@ export default function VisualDevelopmentPage() {
 
     useEffect(() => {
     if (user) {
+      loadUserRole()
       loadAISettings()
       loadUserApiKeys()
       loadMovies()
@@ -323,6 +325,25 @@ export default function VisualDevelopmentPage() {
     } catch (error) {
       console.error('Error loading scenes:', error)
       setScenes([])
+    }
+  }
+
+  const loadUserRole = async () => {
+    if (!user) return
+    
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', user.id)
+        .single()
+
+      if (error) throw error
+      setUserRole(data?.role || 'user')
+    } catch (error) {
+      console.error('Error loading user role:', error)
+      setUserRole('user') // Default to user role on error
     }
   }
 
@@ -1739,14 +1760,16 @@ export default function VisualDevelopmentPage() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7 max-w-6xl mx-auto">
+          <TabsList className={`grid w-full max-w-6xl mx-auto ${(userRole === 'ceo' || userRole === 'cinema') ? 'grid-cols-7' : 'grid-cols-6'}`}>
             <TabsTrigger value="characters">Characters</TabsTrigger>
             <TabsTrigger value="environments">Environments</TabsTrigger>
             <TabsTrigger value="props">Props</TabsTrigger>
             <TabsTrigger value="colors">Color Scripts</TabsTrigger>
             <TabsTrigger value="lighting">Lighting</TabsTrigger>
             <TabsTrigger value="style">Style Guides</TabsTrigger>
-            <TabsTrigger value="prompts">Prompts</TabsTrigger>
+            {(userRole === 'ceo' || userRole === 'cinema') && (
+              <TabsTrigger value="prompts">Prompts</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="characters" className="space-y-6">
@@ -1815,7 +1838,8 @@ export default function VisualDevelopmentPage() {
             {getTabContent('style')}
           </TabsContent>
 
-          <TabsContent value="prompts" className="space-y-6">
+          {(userRole === 'ceo' || userRole === 'cinema') && (
+            <TabsContent value="prompts" className="space-y-6">
             <div className="mb-8 text-center sm:text-left">
               <h2 className="text-3xl font-semibold mb-4">Saved Prompts</h2>
               <p className="text-lg text-muted-foreground max-w-4xl mx-auto sm:mx-0">
@@ -2103,6 +2127,7 @@ export default function VisualDevelopmentPage() {
               )}
             </div>
           </TabsContent>
+          )}
         </Tabs>
 
         {(!aiSettings || Object.keys(userApiKeys).length === 0) && (
