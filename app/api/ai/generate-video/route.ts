@@ -209,8 +209,12 @@ export async function POST(request: NextRequest) {
       } catch (error: any) {
         console.log(`🎬 Error with model ${modelToTry}:`, error.message)
         
-        // Check if it's a model access error
-        if (error.message?.includes('403') || error.message?.includes('not available') || error.message?.includes('forbidden')) {
+        // Check if it's a model access error or workspace limitation
+        if (error.message?.includes('403') || 
+            error.message?.includes('not available') || 
+            error.message?.includes('forbidden') ||
+            error.message?.includes('No video models enabled') ||
+            error.message?.includes('workspace')) {
           throw new Error('MODEL_NOT_AVAILABLE')
         }
         
@@ -221,28 +225,54 @@ export async function POST(request: NextRequest) {
     let result = null
     let lastError = null
 
+    // Define available models in order of preference
+    const availableModels = ['gen4_turbo', 'gen3a_turbo']
+    
+    // If the selected model is not suitable for image input, use the first available model
+    let modelToTry = model
+    if (model === 'gen4_aleph' || model === 'act_two') {
+      console.log(`🎬 Model ${model} requires video input, falling back to gen4_turbo`)
+      modelToTry = 'gen4_turbo'
+    }
+
     // Try the selected model first
     try {
-      result = await tryVideoGeneration(model)
+      result = await tryVideoGeneration(modelToTry)
     } catch (error: any) {
       lastError = error
-      console.log(`🎬 Model ${model} failed:`, error.message)
+      console.log(`🎬 Model ${modelToTry} failed:`, error.message)
       
-      // If the selected model is not available, try gen3a_turbo as fallback
-      if (error.message === 'MODEL_NOT_AVAILABLE' && model !== 'gen3a_turbo') {
-        console.log('🎬 Model not available, falling back to gen3a_turbo...')
-        try {
-          result = await tryVideoGeneration('gen3a_turbo')
-        } catch (fallbackError: any) {
-          lastError = fallbackError
-          console.log('🎬 Fallback model gen3a_turbo also failed:', fallbackError.message)
+      // If the selected model is not available, try other models as fallback
+      if (error.message === 'MODEL_NOT_AVAILABLE') {
+        for (const fallbackModel of availableModels) {
+          if (fallbackModel !== modelToTry) {
+            console.log(`🎬 Model not available, trying fallback: ${fallbackModel}...`)
+            try {
+              result = await tryVideoGeneration(fallbackModel)
+              break // Success, exit the loop
+            } catch (fallbackError: any) {
+              lastError = fallbackError
+              console.log(`🎬 Fallback model ${fallbackModel} also failed:`, fallbackError.message)
+            }
+          }
         }
       }
     }
 
-    // If both models failed, return clear error
+    // If all models failed, return clear error with helpful message
     if (!result) {
-      const errorMessage = 'No video models enabled on this API workspace. Contact Runway support to enable video models.'
+      let errorMessage = 'Video generation failed. '
+      
+      if (lastError?.message?.includes('requires video input')) {
+        errorMessage += 'The selected model requires a video input file. Please upload a video or select a different model.'
+      } else if (lastError?.message?.includes('requires an image input')) {
+        errorMessage += 'Please upload an image to generate a video from it.'
+      } else if (lastError?.message?.includes('No video models enabled')) {
+        errorMessage += 'No video models are enabled on this API workspace. Contact Runway support to enable video models.'
+      } else {
+        errorMessage += 'All available models failed. Please check your API key and try again.'
+      }
+      
       console.error('🎬', errorMessage)
       return NextResponse.json({ error: errorMessage }, { status: 403 })
     }

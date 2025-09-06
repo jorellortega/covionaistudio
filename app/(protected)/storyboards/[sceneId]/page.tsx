@@ -11,9 +11,10 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -33,6 +34,11 @@ type SceneInfo = SceneWithMetadata & {
   duration_seconds?: number
 }
 
+// AI Models configuration (matching AI Studio)
+const aiModels = {
+  image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+}
+
 export default function SceneStoryboardsPage() {
   
   const params = useParams()
@@ -41,6 +47,131 @@ export default function SceneStoryboardsPage() {
   
   const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
+
+  // Function to get status badge styling
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status) {
+      case 'draft':
+        return "bg-gray-500/20 text-gray-500 border-gray-500/30"
+      case 'in-progress':
+        return "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
+      case 'review':
+        return "bg-orange-500/20 text-orange-500 border-orange-500/30"
+      case 'approved':
+        return "bg-green-500/20 text-green-500 border-green-500/30"
+      case 'rejected':
+        return "bg-red-500/20 text-red-500 border-red-500/30"
+      case 'completed':
+        return "bg-blue-500/20 text-blue-500 border-blue-500/30"
+      default:
+        return "bg-gray-500/20 text-gray-500 border-gray-500/30"
+    }
+  }
+
+  // Function to get status display text
+  const getStatusDisplayText = (status: string) => {
+    switch (status) {
+      case 'draft':
+        return "Draft"
+      case 'in-progress':
+        return "In Progress"
+      case 'review':
+        return "Review"
+      case 'approved':
+        return "Approved"
+      case 'rejected':
+        return "Rejected"
+      case 'completed':
+        return "Completed"
+      default:
+        return "Draft"
+    }
+  }
+
+  // Function to handle status updates
+  const handleStatusUpdate = async (storyboardId: string, newStatus: string) => {
+    try {
+      // Optimistically update the UI
+      setStoryboards(prev => prev.map(sb => 
+        sb.id === storyboardId ? { ...sb, status: newStatus as any } : sb
+      ))
+      
+      const updatedStoryboard = await StoryboardsService.updateStoryboard(storyboardId, { status: newStatus as any })
+      setStoryboards(prev => prev.map(sb => sb.id === storyboardId ? updatedStoryboard : sb))
+      
+      toast({
+        title: "Status Updated",
+        description: `Shot status changed to ${getStatusDisplayText(newStatus)}`
+      })
+    } catch (error) {
+      console.error("Error updating status:", error)
+      // Revert the optimistic update on error
+      setStoryboards(prev => prev.map(sb => 
+        sb.id === storyboardId ? { ...sb, status: storyboards.find(s => s.id === storyboardId)?.status || 'draft' } : sb
+      ))
+      toast({
+        title: "Error",
+        description: "Failed to update status",
+        variant: "destructive"
+      })
+    }
+  }
+
+  // Function to fetch user API keys
+  const fetchUserApiKeys = async () => {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      setUserApiKeys(data || {})
+    } catch (error) {
+      console.error('Error fetching API keys:', error)
+    }
+  }
+
+  // Function to check model availability
+  const checkModelAvailability = (model: string) => {
+    if (!ready) return { isReady: false, statusText: "Not logged in" }
+    
+    if (model === "DALL-E 3") {
+      const hasKey = !!userApiKeys.openai_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "OpenAI API Key Required" 
+      }
+    } else if (model === "OpenArt") {
+      const hasKey = !!userApiKeys.openart_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "OpenArt API Key Required" 
+      }
+    } else if (model === "Runway ML") {
+      const hasKey = !!userApiKeys.runway_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "Runway ML API Key Required" 
+      }
+    } else if (model === "Midjourney" || model === "Stable Diffusion" || model === "Custom") {
+      return { isReady: false, statusText: "Coming Soon" }
+    }
+    
+    return { isReady: true, statusText: "Ready" }
+  }
+
+  // Function to map model names to service identifiers
+  const mapModelToService = (model: string) => {
+    switch (model) {
+      case "DALL-E 3": return "dalle"
+      case "OpenArt": return "openart"
+      case "Runway ML": return "runway"
+      case "Leonardo AI": return "leonardo"
+      default: return "dalle"
+    }
+  }
   // State variables
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneScript, setSceneScript] = useState<string>("")
@@ -56,7 +187,8 @@ export default function SceneStoryboardsPage() {
     shot_type: "wide",
     camera_angle: "eye-level",
     movement: "static",
-    sequence_order: 0 // Start blank for new shots
+    sequence_order: 0, // Start blank for new shots
+    status: "draft"
   })
   
   // Loading states
@@ -86,6 +218,7 @@ export default function SceneStoryboardsPage() {
   const [savedPrompts, setSavedPrompts] = useState<any[]>([])
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
   const [hidePromptText, setHidePromptText] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -392,6 +525,12 @@ export default function SceneStoryboardsPage() {
       if (!ready || !userId) return
       
       try {
+        // Load API keys and AI settings in parallel
+        await Promise.all([
+          fetchUserApiKeys(),
+          AISettingsService.getUserSettings(userId)
+        ])
+        
         const settings = await AISettingsService.getUserSettings(userId)
         
         // Ensure default settings exist for all tabs
@@ -919,6 +1058,7 @@ export default function SceneStoryboardsPage() {
       camera_angle: "eye-level",
       movement: "static",
       sequence_order: 0, // Start blank for new shots
+      status: "draft",
       dialogue: "",
       action: "",
       visual_notes: "",
@@ -950,7 +1090,13 @@ export default function SceneStoryboardsPage() {
                          storyboard.description.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesFilter = filterStatus === "all" || 
                          (filterStatus === "ai" && storyboard.ai_generated) ||
-                         (filterStatus === "manual" && !storyboard.ai_generated)
+                         (filterStatus === "manual" && !storyboard.ai_generated) ||
+                         (filterStatus === "draft" && storyboard.status === "draft") ||
+                         (filterStatus === "in-progress" && storyboard.status === "in-progress") ||
+                         (filterStatus === "review" && storyboard.status === "review") ||
+                         (filterStatus === "approved" && storyboard.status === "approved") ||
+                         (filterStatus === "rejected" && storyboard.status === "rejected") ||
+                         (filterStatus === "completed" && storyboard.status === "completed")
     
     return matchesSearch && matchesFilter
   })
@@ -1084,25 +1230,14 @@ export default function SceneStoryboardsPage() {
       case 'openart':
       case 'OpenArt':
         return userProfile.openart_api_key
+      case 'runway':
+      case 'Runway ML':
+        return userProfile.runway_api_key
       case 'leonardo':
       case 'Leonardo AI':
         return userProfile.leonardo_api_key
       default:
         return userProfile.openai_api_key // fallback to OpenAI
-    }
-  }
-
-  // Function to map AI model names to service identifiers
-  const mapModelToService = (modelName: string): string => {
-    switch (modelName) {
-      case 'DALL-E 3':
-        return 'dalle'
-      case 'OpenArt':
-        return 'openart'
-      case 'Leonardo AI':
-        return 'leonardo'
-      default:
-        return 'dalle' // fallback
     }
   }
 
@@ -1153,7 +1288,7 @@ export default function SceneStoryboardsPage() {
         console.log('🎬 Mapped to service identifier:', serviceToUse)
       } else {
         // Safety check: ensure we have a valid service
-        if (!serviceToUse || !['dalle', 'openart', 'leonardo'].includes(serviceToUse)) {
+        if (!serviceToUse || !['dalle', 'openart', 'runway', 'leonardo'].includes(serviceToUse)) {
           console.warn('🎬 Invalid service selected, falling back to dalle:', serviceToUse)
           serviceToUse = 'dalle'
         }
@@ -1791,6 +1926,40 @@ export default function SceneStoryboardsPage() {
             </div>
           </div>
 
+          {/* Search and Filter Controls */}
+          <div className="flex flex-col sm:flex-row gap-4 mb-6">
+            <div className="flex-1">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
+                <Input
+                  placeholder="Search storyboards..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="w-[140px]">
+                  <Filter className="h-4 w-4 mr-2" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Shots</SelectItem>
+                  <SelectItem value="ai">AI Generated</SelectItem>
+                  <SelectItem value="manual">Manual</SelectItem>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="in-progress">In Progress</SelectItem>
+                  <SelectItem value="review">Review</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           {/* Sequence Overview */}
           {filteredStoryboards.length > 0 && (
             <div className="mb-6 p-4 bg-muted/50 rounded-lg border">
@@ -1937,6 +2106,24 @@ export default function SceneStoryboardsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              {/* Status Field */}
+              <div>
+                <Label htmlFor="status">Status</Label>
+                <Select value={formData.status || "draft"} onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as any }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="in-progress">In Progress</SelectItem>
+                    <SelectItem value="review">Review</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Content Fields */}
@@ -2091,6 +2278,24 @@ export default function SceneStoryboardsPage() {
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              {/* Status Field */}
+              <div>
+                <Label htmlFor="edit-status">Status</Label>
+                <Select value={formData.status || "draft"} onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as any }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">Draft</SelectItem>
+                    <SelectItem value="in-progress">In Progress</SelectItem>
+                    <SelectItem value="review">Review</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               {/* Content Fields */}
@@ -2262,20 +2467,29 @@ export default function SceneStoryboardsPage() {
                     <div className="flex items-center gap-3">
                       <div className="flex-1">
                         <Label htmlFor="ai-service-select">AI Service</Label>
-                        <select 
-                          id="ai-service-select"
-                          value={selectedAIService} 
-                          onChange={(e) => {
-                            const value = e.target.value
-                            console.log('🎬 Service selection changed from:', selectedAIService, 'to:', value)
-                            setSelectedAIService(value)
-                          }}
-                          className="w-full px-3 py-2 border border-input bg-background rounded-md text-sm"
-                        >
-                          <option value="dalle">DALL-E 3</option>
-                          <option value="openart">OpenArt</option>
-                          <option value="leonardo">Leonardo AI</option>
-                        </select>
+                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Select AI model" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            {aiModels.image.map((model) => {
+                              const availability = checkModelAvailability(model)
+                              return (
+                                <SelectItem key={model} value={mapModelToService(model)} disabled={!availability.isReady}>
+                                  <div className="flex items-center justify-between w-full">
+                                    <span>{model}</span>
+                                    <Badge 
+                                      variant={availability.isReady ? "default" : "secondary"} 
+                                      className="text-xs ml-2"
+                                    >
+                                      {availability.statusText}
+                                    </Badge>
+                                  </div>
+                                </SelectItem>
+                              )
+                            })}
+                          </SelectContent>
+                        </Select>
                       </div>
                       
                       <div className="flex items-end">
@@ -2306,10 +2520,10 @@ export default function SceneStoryboardsPage() {
                     <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
                       <p className="text-sm text-green-600 flex items-center gap-2">
                         <CheckCircle className="h-4 w-4" />
-                        AI Online
+                        Using locked model: {aiSettings.find(setting => setting.tab_type === 'images')?.locked_model} (Hidden)
                       </p>
                       <p className="text-xs text-green-500 mt-1">
-                        Using: {aiSettings.find(setting => setting.tab_type === 'images')?.locked_model}
+                        Model selection is locked. <Link href="/settings-ai" className="underline">Change settings</Link>
                       </p>
                       <div className="flex items-end mt-3">
                         <Button
@@ -2383,7 +2597,7 @@ export default function SceneStoryboardsPage() {
                     {storyboard.ai_generated ? "AI Generated" : "Manual"}
                   </Badge>
                 </div>
-                <CardDescription className="flex items-center gap-2">
+                <CardDescription className="flex items-center gap-2 flex-wrap">
                   <span className="bg-muted px-2 py-1 rounded text-xs font-mono">
                     Shot {storyboard.shot_number || 1}
                   </span>
@@ -2392,6 +2606,73 @@ export default function SceneStoryboardsPage() {
                       Scene {sceneInfo.scene_number}
                     </span>
                   )}
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Badge
+                        variant="secondary"
+                        className={`px-2 py-1 text-xs font-mono border cursor-pointer hover:opacity-80 transition-opacity flex items-center gap-1 ${getStatusBadgeStyle(storyboard.status || 'draft')}`}
+                      >
+                        {getStatusDisplayText(storyboard.status || 'draft')}
+                        <ChevronDown className="h-3 w-3" />
+                      </Badge>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'draft')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-gray-500"></div>
+                          Draft
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'in-progress')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                          In Progress
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'review')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-orange-500"></div>
+                          Review
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'approved')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                          Approved
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'rejected')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                          Rejected
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        onClick={() => handleStatusUpdate(storyboard.id, 'completed')}
+                        className="cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                          Completed
+                        </div>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -2459,6 +2740,7 @@ export default function SceneStoryboardsPage() {
                           camera_angle: storyboard.camera_angle,
                           movement: storyboard.movement,
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
+                          status: storyboard.status || "draft",
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",
@@ -2497,6 +2779,7 @@ export default function SceneStoryboardsPage() {
                           camera_angle: storyboard.camera_angle,
                           movement: storyboard.movement,
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
+                          status: storyboard.status || "draft",
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",

@@ -45,23 +45,59 @@ export class PreferencesService {
       const { data: { user } } = await supabase.auth.getUser()
       
       if (!user) {
+        console.error('No user found for preference update')
         return false
       }
 
-      const { error } = await supabase
+      console.log('🔧 Setting preference:', { key, value, userId: user.id })
+
+      // First try to update existing record
+      const { data: existingData, error: selectError } = await supabase
         .from('user_preferences')
-        .upsert({
-          user_id: user.id,
-          key,
-          value,
-          updated_at: new Date().toISOString()
-        })
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('key', key)
+        .maybeSingle()
 
-      if (error) {
-        console.error('Error setting preference:', error)
+      if (selectError) {
+        console.error('Error checking existing preference:', selectError)
         return false
       }
 
+      if (existingData) {
+        // Update existing record
+        console.log('🔧 Updating existing preference record:', existingData.id)
+        const { error: updateError } = await supabase
+          .from('user_preferences')
+          .update({
+            value,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingData.id)
+
+        if (updateError) {
+          console.error('Error updating preference:', updateError)
+          return false
+        }
+      } else {
+        // Insert new record
+        console.log('🔧 Inserting new preference record')
+        const { error: insertError } = await supabase
+          .from('user_preferences')
+          .insert({
+            user_id: user.id,
+            key,
+            value,
+            updated_at: new Date().toISOString()
+          })
+
+        if (insertError) {
+          console.error('Error inserting preference:', insertError)
+          return false
+        }
+      }
+
+      console.log('🔧 Preference saved successfully')
       return true
     } catch (error) {
       console.error('Error setting preference:', error)

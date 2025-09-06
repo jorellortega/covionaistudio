@@ -21,6 +21,7 @@ export interface Storyboard {
   script_text_end?: number
   script_text_snippet?: string
   sequence_order?: number
+  status: 'draft' | 'in-progress' | 'review' | 'approved' | 'rejected' | 'completed'
   created_at: string
   updated_at: string
 }
@@ -43,6 +44,7 @@ export interface CreateStoryboardData {
   script_text_end?: number
   script_text_snippet?: string
   sequence_order?: number
+  status?: 'draft' | 'in-progress' | 'review' | 'approved' | 'rejected' | 'completed'
 }
 
 export interface UpdateStoryboardData extends Partial<CreateStoryboardData> {
@@ -126,6 +128,7 @@ export class StoryboardsService {
         script_text_end: storyboardData.script_text_end || null,
         script_text_snippet: storyboardData.script_text_snippet || null,
         sequence_order: storyboardData.sequence_order || shotNumber, // Use shot_number as sequence_order if not provided
+        status: storyboardData.status || 'draft',
         ai_generated: false
       }
 
@@ -158,10 +161,10 @@ export class StoryboardsService {
         cleanData.project_id = undefined
       }
       
-      // Ensure shot_number has a default value if not provided
-      const updateData = {
-        ...cleanData,
-        shot_number: cleanData.shot_number || 1
+      // Only include shot_number if it's explicitly provided and not undefined
+      const updateData = { ...cleanData }
+      if (cleanData.shot_number === undefined) {
+        delete updateData.shot_number
       }
 
       console.log('Updating storyboard with data:', { id, updateData })

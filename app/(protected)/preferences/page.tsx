@@ -33,7 +33,7 @@ export default function PreferencesPage() {
   }, [user])
 
   const loadUserRole = async () => {
-    if (!user) return
+    if (!user) return 'user'
     
     try {
       const supabase = getSupabaseClient()
@@ -44,24 +44,38 @@ export default function PreferencesPage() {
         .single()
 
       if (error) throw error
-      setUserRole(data?.role || 'user')
+      const role = data?.role || 'user'
+      setUserRole(role)
+      return role
     } catch (error) {
       console.error('Error loading user role:', error)
-      setUserRole('user') // Default to user role on error
+      const role = 'user' // Default to user role on error
+      setUserRole(role)
+      return role
     }
   }
 
   const checkAccess = async () => {
-    if (!user) return
+    if (!user) {
+      console.log('🔒 No user, skipping access check')
+      return
+    }
     
-    await loadUserRole()
+    console.log('🔒 Starting access check for user:', user.id)
+    
+    // Load user role first
+    const role = await loadUserRole()
+    console.log('🔒 User role loaded:', role)
     
     // Check if user has admin privileges (CEO or Cinema subscription)
-    if (userRole === 'ceo' || userRole === 'cinema') {
+    if (role === 'ceo' || role === 'cinema') {
+      console.log('🔒 Admin user detected, granting access')
       setHasAccess(true)
       loadPreferences()
       return
     }
+    
+    console.log('🔒 Regular user, checking password protection')
     
     // For regular users, check password protection
     try {
@@ -75,17 +89,24 @@ export default function PreferencesPage() {
       if (error) throw error
       
       const isProtected = data?.settings_password_enabled || false
+      console.log('🔒 Password protection status:', isProtected)
       setIsPasswordProtected(isProtected)
       
       if (!isProtected) {
+        console.log('🔒 No password protection, granting access')
         setHasAccess(true)
         loadPreferences()
       } else {
         // Check if user already has access from session storage
         const hasAccess = sessionStorage.getItem('preferences-access') === 'true'
+        console.log('🔒 Session storage access:', hasAccess)
         setHasAccess(hasAccess)
         if (hasAccess) {
           loadPreferences()
+        } else {
+          // User needs to enter password - stop loading
+          console.log('🔒 User needs password, stopping loading')
+          setLoading(false)
         }
       }
     } catch (error) {
@@ -97,11 +118,14 @@ export default function PreferencesPage() {
 
   const loadPreferences = async () => {
     try {
+      console.log('🔧 Loading preferences...')
       setLoading(true)
       const prefs = await PreferencesService.getAllPreferences()
+      console.log('🔧 Preferences loaded:', prefs)
       setPreferences({
         hidePromptText: prefs.hidePromptText || false
       })
+      console.log('🔧 Preferences state updated')
     } catch (error) {
       console.error('Error loading preferences:', error)
       toast({
@@ -110,6 +134,7 @@ export default function PreferencesPage() {
         variant: "destructive"
       })
     } finally {
+      console.log('🔧 Setting loading to false')
       setLoading(false)
     }
   }
@@ -174,22 +199,93 @@ export default function PreferencesPage() {
     }
   }
 
+  // Debug logging
+  console.log('🔍 Preferences page state:', {
+    loading,
+    hasAccess,
+    isPasswordProtected,
+    userRole,
+    ready,
+    user: !!user
+  })
+
   // Show loading state
   if (loading && !hasAccess) {
+    console.log('🔍 Showing loading state')
     return (
       <div className="min-h-screen bg-background">
         <Header />
         <main className="container mx-auto px-4 py-8 max-w-4xl">
           <div className="text-center">
             <h1 className="text-2xl font-bold">Loading...</h1>
+            <p className="text-muted-foreground mt-2">Debug: loading={loading.toString()}, hasAccess={hasAccess.toString()}</p>
+            <p className="text-muted-foreground mt-1">isPasswordProtected={isPasswordProtected.toString()}, userRole={userRole}</p>
           </div>
         </main>
       </div>
     )
   }
 
+  // Fallback: If we're not loading but still don't have access and password is protected, show password form
+  if (!loading && !hasAccess && isPasswordProtected) {
+    console.log('🔍 Fallback: Showing password form')
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        
+        <main className="container mx-auto px-4 py-8 max-w-4xl">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold">User Preferences</h1>
+            <p className="text-muted-foreground">This page is password protected</p>
+          </div>
+
+          <Card className="max-w-md mx-auto">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Shield className="h-5 w-5" />
+                Password Required
+              </CardTitle>
+              <CardDescription>
+                Enter the password to access your preferences
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter password"
+                    required
+                  />
+                </div>
+                {passwordError && (
+                  <p className="text-red-500 text-sm">{passwordError}</p>
+                )}
+                <Button type="submit" className="w-full">
+                  Access Preferences
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </main>
+      </div>
+    )
+  }
+
   // Show access denied for non-admin users when password protected
-  if (!hasAccess && isPasswordProtected && !(userRole === 'ceo' || userRole === 'cinema')) {
+  const shouldShowPasswordForm = !hasAccess && isPasswordProtected && userRole !== 'ceo' && userRole !== 'cinema'
+  console.log('🔍 Password form condition:', {
+    hasAccess,
+    isPasswordProtected,
+    userRole,
+    shouldShowPasswordForm
+  })
+  
+  if (shouldShowPasswordForm) {
     return (
       <div className="min-h-screen bg-background">
         <Header />

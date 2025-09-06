@@ -31,7 +31,7 @@ import {
 
 const aiModels = {
   scripts: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  images: ["OpenArt", "DALL-E 3", "Midjourney", "Stable Diffusion", "Custom"],
+  images: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   videos: ["Kling", "Runway ML", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
@@ -57,6 +57,7 @@ export default function AISettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
 
   // Password protection state
   const [isPasswordProtected, setIsPasswordProtected] = useState(false)
@@ -144,6 +145,22 @@ export default function AISettingsPage() {
     }
   }
 
+  // Function to fetch user API keys
+  const fetchUserApiKeys = async () => {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      setUserApiKeys(data || {})
+    } catch (error) {
+      console.error('Error fetching API keys:', error)
+    }
+  }
+
   // Load user's AI settings
   useEffect(() => {
     const loadSettings = async () => {
@@ -151,6 +168,13 @@ export default function AISettingsPage() {
       
       try {
         setLoading(true)
+        
+        // Fetch API keys and settings in parallel
+        await Promise.all([
+          fetchUserApiKeys(),
+          AISettingsService.getUserSettings(userId!)
+        ])
+        
         let userSettings = await AISettingsService.getUserSettings(userId!)
         
         // If no settings exist, initialize with defaults
@@ -201,7 +225,52 @@ export default function AISettingsPage() {
   const checkModelAvailability = (tabType: string, model: string) => {
     if (!ready) return { isReady: false, statusText: "Not logged in" }
     
-    // For now, assume all models are ready since API keys aren't stored in user object
+    // Check specific API key requirements
+    if (model === "DALL-E 3" || model === "ChatGPT" || model === "GPT-4") {
+      const hasKey = !!userApiKeys.openai_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "OpenAI API Key Required" 
+      }
+    } else if (model === "Claude") {
+      const hasKey = !!userApiKeys.anthropic_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "Anthropic API Key Required" 
+      }
+    } else if (model === "OpenArt") {
+      const hasKey = !!userApiKeys.openart_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "OpenArt API Key Required" 
+      }
+    } else if (model === "Runway ML") {
+      const hasKey = !!userApiKeys.runway_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "Runway ML API Key Required" 
+      }
+    } else if (model === "Kling") {
+      const hasKey = !!userApiKeys.kling_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "Kling API Key Required" 
+      }
+    } else if (model === "ElevenLabs") {
+      const hasKey = !!userApiKeys.elevenlabs_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "ElevenLabs API Key Required" 
+      }
+    } else if (model === "Suno AI") {
+      const hasKey = !!userApiKeys.suno_api_key
+      return { 
+        isReady: hasKey, 
+        statusText: hasKey ? "Ready" : "Suno AI API Key Required" 
+      }
+    }
+    
+    // Default for other models
     return { isReady: true, statusText: "Ready" }
   }
 

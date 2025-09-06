@@ -377,9 +377,13 @@ export default function AIStudioPage() {
   // User API Keys state
   const [userApiKeys, setUserApiKeys] = useState<any>({})
 
-  // Debug logging
-  console.log("AI Studio - User:", user)
-  console.log("AI Studio - OpenAI API Key:", userApiKeys.openai_api_key ? "Available" : "Not available")
+  // Debug logging (moved to useEffect to prevent spam)
+  useEffect(() => {
+    if (user && userApiKeys) {
+      console.log("AI Studio - User:", user)
+      console.log("AI Studio - OpenAI API Key:", userApiKeys.openai_api_key ? "Available" : "Not available")
+    }
+  }, [user, userApiKeys])
 
   // Load AI settings
   useEffect(() => {
@@ -1078,9 +1082,28 @@ export default function AIStudioPage() {
             }
           } else {
             console.error('Runway ML video generation failed:', result.error || 'Unknown error')
+            
+            // Provide more specific error messages based on the error type
+            let errorTitle = "Video Generation Failed"
+            let errorDescription = result.error || 'Unknown error'
+            
+            if (result.error?.includes('requires video input')) {
+              errorTitle = "Model Requires Video Input"
+              errorDescription = "The selected model requires a video file. Please upload a video or select a different model."
+            } else if (result.error?.includes('requires an image input')) {
+              errorTitle = "Image Required"
+              errorDescription = "Please upload an image to generate a video from it."
+            } else if (result.error?.includes('No video models enabled')) {
+              errorTitle = "Video Models Not Available"
+              errorDescription = "No video models are enabled on your Runway ML workspace. Contact Runway support to enable video models."
+            } else if (result.error?.includes('API key')) {
+              errorTitle = "API Key Issue"
+              errorDescription = "Please check your Runway ML API key and try again."
+            }
+            
             toast({
-              title: "Video Generation Failed",
-              description: `Error: ${result.error || 'Unknown error'}. Please check your Runway ML API key and try again.`,
+              title: errorTitle,
+              description: errorDescription,
               variant: "destructive",
             })
           }
@@ -3225,10 +3248,20 @@ export default function AIStudioPage() {
                           <SelectItem value="act_two">Act-Two (Video → Video, up to 30s, 720p)</SelectItem>
                           <SelectItem value="gen3a_turbo">Gen-3A Turbo (Text/Image → Video, 5s/10s, 720p)</SelectItem>
                           <SelectItem value="gen4_turbo">Gen-4 Turbo (Text/Image → Video, 5s/10s, 720p)</SelectItem>
-                          <SelectItem value="gen4_aleph">Gen-4 Aleph (Text/Image → Video, 5s/10s, 720p)</SelectItem>
+                          <SelectItem value="gen4_aleph">Gen-4 Aleph (Video → Video, 5s/10s, 720p)</SelectItem>
                           <SelectItem value="upscale_v1">Upscale (Video → 4K, up to 30s)</SelectItem>
                         </SelectContent>
                       </Select>
+                      
+                      {/* Model requirements note */}
+                      <div className="text-xs text-muted-foreground">
+                        <p>💡 <strong>Model Requirements:</strong></p>
+                        <ul className="list-disc list-inside mt-1 space-y-1">
+                          <li>Gen-3A/4 Turbo: Requires image input</li>
+                          <li>Gen-4 Aleph & Act-Two: Requires video input</li>
+                          <li>Upscale: Requires video input</li>
+                        </ul>
+                      </div>
                       
                       {/* Pricing display */}
                       <div className="text-xs text-muted-foreground">
