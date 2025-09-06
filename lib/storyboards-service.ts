@@ -6,7 +6,7 @@ export interface Storyboard {
   title: string
   description: string
   scene_number: number
-  shot_number: number
+  shot_number: number // Now supports decimals like 1.2, 2.5, etc.
   shot_type: string
   camera_angle: string
   movement: string
@@ -30,7 +30,7 @@ export interface CreateStoryboardData {
   title: string
   description: string
   scene_number: number
-  shot_number: number
+  shot_number: number // Now supports decimals like 1.2, 2.5, etc.
   shot_type: string
   camera_angle: string
   movement: string

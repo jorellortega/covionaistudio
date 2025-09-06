@@ -2009,15 +2009,25 @@ export default function SceneStoryboardsPage() {
                 </div>
                 <div>
                   <Label htmlFor="shot_number">Shot Number</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Use decimals to insert between shots: 1.2, 2.5, etc.
+                  </p>
                   <div className="flex gap-2">
                     <Input
                       id="shot_number"
                       type="number"
                       value={formData.shot_number || ""}
-                      onChange={(e) => setFormData(prev => ({ ...prev, shot_number: parseInt(e.target.value) || 0 }))}
-                      min="1"
-                      step="1"
-                      placeholder="Auto-assigned"
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value) || 0
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          shot_number: value,
+                          sequence_order: value // Sync with sequence_order for proper sorting
+                        }))
+                      }}
+                      min="0.1"
+                      step="0.1"
+                      placeholder="1.2 for between shots 1 and 2"
                     />
                     <Button
                       type="button"
@@ -2025,7 +2035,11 @@ export default function SceneStoryboardsPage() {
                       size="sm"
                       onClick={() => {
                         const nextShot = getNextShotNumber()
-                        setFormData(prev => ({ ...prev, shot_number: nextShot }))
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          shot_number: nextShot,
+                          sequence_order: nextShot // Sync with sequence_order for proper sorting
+                        }))
                       }}
                       title="Auto-fill next shot number"
                     >
@@ -2210,16 +2224,60 @@ export default function SceneStoryboardsPage() {
                 </div>
                 <div>
                   <Label htmlFor="edit-shot_number">Shot Number</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Use decimals to insert between shots: 1.2, 2.5, etc.
+                  </p>
                   <div className="flex gap-2">
                     <Input
                       id="edit-shot_number"
                       type="number"
                       value={formData.shot_number}
-                      onChange={(e) => setFormData(prev => ({ ...prev, shot_number: parseInt(e.target.value) || 1 }))}
-                      min="1"
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value) || 0
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          shot_number: value,
+                          sequence_order: value // Sync with sequence_order for proper sorting
+                        }))
+                      }}
+                      min="0.1"
+                      step="0.1"
+                      placeholder="1.2 for between shots 1 and 2"
                     />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const nextShot = getNextShotNumber()
+                        setFormData(prev => ({ 
+                          ...prev, 
+                          shot_number: nextShot,
+                          sequence_order: nextShot // Sync with sequence_order for proper sorting
+                        }))
+                      }}
+                      title="Auto-fill next shot number"
+                    >
+                      Next
+                    </Button>
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <Label htmlFor="edit-sequence_order">Sequence Order (for positioning)</Label>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Use decimals to insert between shots: 2.5 goes between shots 2 and 3
+                </p>
+                <Input
+                  id="edit-sequence_order"
+                  type="number"
+                  value={formData.sequence_order || ""}
+                  onChange={(e) => setFormData(prev => ({ ...prev, sequence_order: parseFloat(e.target.value) || 0 }))}
+                  min="0.1"
+                  step="0.1"
+                  placeholder="1.5 for between shots 1 and 2"
+                />
               </div>
 
               <div>
