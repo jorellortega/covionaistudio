@@ -98,9 +98,21 @@ export class StoryboardsService {
   // Create a new storyboard
   static async createStoryboard(storyboardData: CreateStoryboardData): Promise<Storyboard> {
     try {
-      const { data: { user } } = await getSupabaseClient().auth.getUser()
-      if (!user) {
-        throw new Error('User not authenticated')
+      // First try to get the current user
+      let { data: { user }, error: userError } = await getSupabaseClient().auth.getUser()
+      
+      // If no user, try to refresh the session
+      if (!user || userError) {
+        console.log('🔐 No user found, attempting to refresh session...')
+        const { data: { session }, error: sessionError } = await getSupabaseClient().auth.getSession()
+        
+        if (sessionError || !session?.user) {
+          console.error('🔐 Session refresh failed:', sessionError)
+          throw new Error('User not authenticated - please refresh the page and try again')
+        }
+        
+        user = session.user
+        console.log('🔐 Session refreshed successfully')
       }
 
       // Ensure shot_number has a default value if not provided

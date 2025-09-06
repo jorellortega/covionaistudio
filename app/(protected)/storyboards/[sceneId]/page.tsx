@@ -858,9 +858,19 @@ export default function SceneStoryboardsPage() {
           console.error("🎬 Error hint:", error.hint)
         }
         
+        // Provide more specific error messages
+        let errorMessage = 'Unknown error'
+        if (error?.message?.includes('User not authenticated')) {
+          errorMessage = 'Your session has expired. Please refresh the page and try again.'
+        } else if (error?.message?.includes('please refresh the page')) {
+          errorMessage = 'Authentication issue. Please refresh the page and try again.'
+        } else if (error?.message) {
+          errorMessage = error.message
+        }
+        
         toast({
           title: "Error",
-          description: `Failed to create storyboard: ${error?.message || 'Unknown error'}`,
+          description: `Failed to create storyboard: ${errorMessage}`,
           variant: "destructive"
         })
       }
@@ -977,11 +987,22 @@ export default function SceneStoryboardsPage() {
         title: "Success",
         description: "Storyboard created successfully"
       })
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating storyboard:", error)
+      
+      // Provide more specific error messages
+      let errorMessage = 'Failed to create storyboard'
+      if (error?.message?.includes('User not authenticated')) {
+        errorMessage = 'Your session has expired. Please refresh the page and try again.'
+      } else if (error?.message?.includes('please refresh the page')) {
+        errorMessage = 'Authentication issue. Please refresh the page and try again.'
+      } else if (error?.message) {
+        errorMessage = `Failed to create storyboard: ${error.message}`
+      }
+      
       toast({
         title: "Error",
-        description: "Failed to create storyboard",
+        description: errorMessage,
         variant: "destructive"
       })
     } finally {
