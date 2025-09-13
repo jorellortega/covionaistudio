@@ -349,12 +349,27 @@ export default function VisualDevelopmentPage() {
 
   const loadPreferences = async () => {
     try {
+      console.log('🔍 VISDEV: Loading preferences...')
       const hidePrompt = await PreferencesService.getHidePromptText()
+      console.log('🔍 VISDEV: hidePromptText from database:', hidePrompt)
       setHidePromptText(hidePrompt)
+      console.log('🔍 VISDEV: hidePromptText state set to:', hidePrompt)
     } catch (error) {
-      console.error('Error loading preferences:', error)
+      console.error('🔍 VISDEV: Error loading preferences:', error)
     }
   }
+
+  // Refresh preferences periodically to catch changes from other tabs
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (user) {
+        console.log('🔍 VISDEV: Periodic preference check...')
+        loadPreferences()
+      }
+    }, 2000) // Check every 2 seconds
+
+    return () => clearInterval(interval)
+  }, [user])
 
   const loadExistingItems = async () => {
     // In a real app, this would load from your database
@@ -2619,3 +2634,4 @@ export default function VisualDevelopmentPage() {
     </div>
   )
 }
+

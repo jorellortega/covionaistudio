@@ -263,8 +263,72 @@ export default function SceneStoryboardsPage() {
   
 
 
+  // Function to extract text from selection more reliably
+  const extractTextFromSelection = (selection: Selection): string => {
+    if (!selection || selection.rangeCount === 0) return ""
+    
+    const range = selection.getRangeAt(0)
+    let text = ""
+    
+    try {
+      // Method 1: Try to get text from the range directly
+      text = range.toString().trim()
+      console.log("🎬 Range toString result:", text)
+      
+      // Method 2: If that doesn't work well, try to extract from the common ancestor
+      if (text.length === 0 || text.length < 3) {
+        const commonAncestor = range.commonAncestorContainer
+        if (commonAncestor.nodeType === Node.TEXT_NODE) {
+          const textNode = commonAncestor as Text
+          const startOffset = range.startOffset
+          const endOffset = range.endOffset
+          text = textNode.textContent?.substring(startOffset, endOffset).trim() || ""
+          console.log("🎬 Text node extraction result:", text)
+        } else {
+          // Method 3: Try to get text from all text nodes in the range
+          const walker = document.createTreeWalker(
+            range.commonAncestorContainer,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode: (node) => {
+                return range.intersectsNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+              }
+            }
+          )
+          
+          let extractedText = ""
+          let node
+          while (node = walker.nextNode()) {
+            const textNode = node as Text
+            const nodeRange = document.createRange()
+            nodeRange.selectNode(textNode)
+            
+            if (range.compareBoundaryPoints(Range.START_TO_START, nodeRange) <= 0 && 
+                range.compareBoundaryPoints(Range.END_TO_END, nodeRange) >= 0) {
+              extractedText += textNode.textContent || ""
+            }
+          }
+          
+          if (extractedText.length > text.length) {
+            text = extractedText.trim()
+            console.log("🎬 TreeWalker extraction result:", text)
+          }
+        }
+      }
+    } catch (error) {
+      console.log("🎬 Error in text extraction:", error)
+      // Fallback to basic selection
+      text = selection.toString().trim()
+    }
+    
+    return text
+  }
+
   // Function to lock the current selection
   const lockSelection = (text: string) => {
+    console.log("🎬 lockSelection called with text:", text)
+    console.log("🎬 Text length:", text.length)
+    
     setLockedSelection(text)
     setIsSelectionLocked(true)
     
@@ -272,7 +336,10 @@ export default function SceneStoryboardsPage() {
     const selection = window.getSelection()
     if (selection && selection.rangeCount > 0) {
       selectionRangeRef.current = selection.getRangeAt(0).cloneRange()
+      console.log("🎬 Stored selection range")
     }
+    
+    console.log("🎬 Locked selection set to:", text)
   }
   
   // Function to unlock selection (only when creating shot)
@@ -291,16 +358,29 @@ export default function SceneStoryboardsPage() {
     const scriptText = sceneScript
     const cleanText = text.trim()
     
+    console.log("🎬 findTextRange called with text:", cleanText)
+    console.log("🎬 Text length:", cleanText.length)
+    console.log("🎬 Script length:", scriptText.length)
+    console.log("🎬 Text (first 100 chars):", cleanText.substring(0, 100))
+    console.log("🎬 Script (first 200 chars):", scriptText.substring(0, 200))
+    
     // Try exact match first
     let startIndex = scriptText.indexOf(cleanText)
+    console.log("🎬 Exact match result:", startIndex)
     
     // If exact match fails, try with normalized whitespace
     if (startIndex === -1) {
+      console.log("🎬 Trying normalized whitespace match...")
       const normalizedScript = scriptText.replace(/\s+/g, ' ')
       const normalizedText = cleanText.replace(/\s+/g, ' ')
+      console.log("🎬 Normalized text:", normalizedText)
+      console.log("🎬 Normalized script (first 200 chars):", normalizedScript.substring(0, 200))
+      
       startIndex = normalizedScript.indexOf(normalizedText)
+      console.log("🎬 Normalized match result:", startIndex)
       
       if (startIndex !== -1) {
+        console.log("🎬 Found normalized match, converting back to original position...")
         // Find the actual position in the original script
         let normalizedCount = 0
         for (let i = 0; i < scriptText.length; i++) {
@@ -316,20 +396,36 @@ export default function SceneStoryboardsPage() {
             normalizedCount++
           }
         }
+        console.log("🎬 Converted start index:", startIndex)
       }
     }
     
     if (startIndex === -1) {
       console.warn("🎬 Could not find text in script:", cleanText)
       console.warn("🎬 Script preview:", scriptText.substring(0, 200))
+      console.warn("🎬 Text preview:", cleanText.substring(0, 200))
+      
+      // Try to find partial matches for debugging
+      const words = cleanText.split(/\s+/)
+      console.warn("🎬 Trying to find individual words:")
+      words.forEach((word, index) => {
+        const wordIndex = scriptText.indexOf(word)
+        console.warn(`🎬 Word ${index} "${word}":`, wordIndex)
+      })
+      
       return null
     }
     
-    return {
+    const result = {
       start: startIndex,
       end: startIndex + cleanText.length,
       text: cleanText
     }
+    
+    console.log("🎬 Found text range:", result)
+    console.log("🎬 Extracted text from script:", scriptText.substring(startIndex, startIndex + cleanText.length))
+    
+    return result
   }
   
   // Function to add used text range
@@ -386,11 +482,26 @@ export default function SceneStoryboardsPage() {
     try {
       const hidePromptTextPref = await PreferencesService.getHidePromptText()
       setHidePromptText(hidePromptTextPref)
-      console.log("🎬 Loaded hidePromptText preference:", hidePromptTextPref)
     } catch (error) {
-      console.error("🎬 Error loading user preferences:", error)
+      console.error("Error loading user preferences:", error)
     }
   }
+
+  // Refresh prompt display when hidePromptText preference changes
+  useEffect(() => {
+    if (aiImagePromptFull && savedPrompts.length > 0) {
+      const matchingPrompt = savedPrompts.find(p => p.prompt === aiImagePromptFull)
+      if (matchingPrompt) {
+        if (hidePromptText) {
+          // Show only the title when hiding text
+          setAiImagePrompt(matchingPrompt.title)
+        } else {
+          // Show the full prompt when showing text
+          setAiImagePrompt(matchingPrompt.prompt)
+        }
+      }
+    }
+  }, [hidePromptText, aiImagePromptFull, savedPrompts])
 
   // Load saved prompts from database for AI image generation  
   const loadSavedPrompts = async () => {
@@ -684,17 +795,38 @@ export default function SceneStoryboardsPage() {
   }
 
   const handleTextSelection = () => {
+    console.log("🎬 Text selection event triggered (immediate)")
+    
     // Add a small delay to ensure selection is complete
     setTimeout(() => {
       const selection = window.getSelection()
-      console.log("🎬 Text selection event triggered")
+      console.log("🎬 Text selection event triggered (delayed)")
       console.log("🎬 Selection:", selection?.toString())
+      console.log("🎬 Selection range count:", selection?.rangeCount)
       console.log("🎬 Current shotMode:", shotMode)
       console.log("🎬 Current showSelectionActions:", showSelectionActions)
       
       if (selection && selection.toString().length > 0) {
-        const text = selection.toString().trim()
-        console.log("🎬 Selected text:", text)
+        // Use the improved text extraction method
+        let text = extractTextFromSelection(selection)
+        console.log("🎬 Selected text (extracted):", text)
+        console.log("🎬 Selected text length:", text.length)
+        
+        // Debug: Show the selection range details
+        if (selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0)
+          console.log("🎬 Selection range details:")
+          console.log("🎬 - Start container:", range.startContainer)
+          console.log("🎬 - Start offset:", range.startOffset)
+          console.log("🎬 - End container:", range.endContainer)
+          console.log("🎬 - End offset:", range.endOffset)
+          console.log("🎬 - Common ancestor:", range.commonAncestorContainer)
+        }
+        
+        console.log("🎬 Final selected text:", text)
+        console.log("🎬 Final text length:", text.length)
+        console.log("🎬 Selected text (first 100 chars):", text.substring(0, 100))
+        console.log("🎬 Selected text (last 100 chars):", text.substring(Math.max(0, text.length - 100)))
         
         if (text.length > 0) {
           setSelectedText(text)
@@ -719,12 +851,21 @@ export default function SceneStoryboardsPage() {
   const handleCreateShotFromSelection = async () => {
     console.log("🎬 handleCreateShotFromSelection called")
     
-    // Use locked selection as primary source - this cannot be lost
-    const textToUse = lockedSelection || selectedText || currentSelectionRef.current
+    // Use the most recent and complete selection - prioritize selectedText over lockedSelection
+    const textToUse = selectedText || currentSelectionRef.current || lockedSelection
     console.log("🎬 lockedSelection:", lockedSelection)
     console.log("🎬 selectedText from state:", selectedText)
     console.log("🎬 selectedText from ref:", currentSelectionRef.current)
     console.log("🎬 Using text:", textToUse)
+    console.log("🎬 Text to use length:", textToUse?.length || 0)
+    console.log("🎬 Text to use (first 200 chars):", textToUse?.substring(0, 200) || "N/A")
+    
+    // If we're using a stale lockedSelection, update it to match the current selection
+    if (textToUse && textToUse !== lockedSelection && (selectedText || currentSelectionRef.current)) {
+      console.log("🎬 Updating lockedSelection to match current selection")
+      setLockedSelection(textToUse)
+    }
+    
     console.log("🎬 shotMode:", shotMode)
     console.log("🎬 shotDetails:", shotDetails)
     console.log("🎬 current formData:", formData)
@@ -1163,6 +1304,11 @@ export default function SceneStoryboardsPage() {
   // Function to render script text with visual highlighting
   const renderHighlightedScript = (script: string, usedRanges: Array<{start: number, end: number, text: string, shotNumber: number}>) => {
     if (!script) return null
+    
+    console.log("🎬 renderHighlightedScript called")
+    console.log("🎬 Script length:", script.length)
+    console.log("🎬 Used ranges:", usedRanges)
+    console.log("🎬 Script (first 200 chars):", script.substring(0, 200))
     
     // Sort ranges by start position
     const sortedRanges = [...usedRanges].sort((a, b) => a.start - b.start)
@@ -1852,7 +1998,15 @@ export default function SceneStoryboardsPage() {
                     onMouseUp={handleTextSelection}
                     onKeyUp={handleTextSelection}
                     onSelect={handleTextSelection}
-                    onMouseDown={() => setShowSelectionActions(false)}
+                    onMouseDown={() => {
+                      setShowSelectionActions(false)
+                      // Clear any stale locked selection when starting new selection
+                      if (lockedSelection && lockedSelection.length < 3) {
+                        console.log("🎬 Clearing stale locked selection:", lockedSelection)
+                        setLockedSelection("")
+                        setIsSelectionLocked(false)
+                      }
+                    }}
                   >
                     {renderHighlightedScript(sceneScript, usedTextRanges)}
                   </pre>
@@ -2440,6 +2594,7 @@ export default function SceneStoryboardsPage() {
                           </Label>
                         <Select onValueChange={(promptId) => {
                           const selectedPrompt = savedPrompts.find(p => p.id === promptId)
+                          
                           if (selectedPrompt) {
                             if (hidePromptText) {
                               // Insert just the prompt name when hiding text

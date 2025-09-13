@@ -17,9 +17,11 @@ export class PreferencesService {
       const { data: { user } } = await supabase.auth.getUser()
       
       if (!user) {
+        console.error('🔍 PREFERENCES SERVICE: No user found for preference retrieval')
         return defaultValue
       }
 
+      console.log('🔍 PREFERENCES SERVICE: Querying database for key:', key, 'user:', user.id)
       const { data, error } = await supabase
         .from('user_preferences')
         .select('value')
@@ -27,13 +29,17 @@ export class PreferencesService {
         .eq('key', key)
         .single()
 
+      console.log('🔍 PREFERENCES SERVICE: Database response:', { data, error })
+
       if (error || !data) {
+        console.log('🔍 PREFERENCES SERVICE: No data found, returning default:', defaultValue)
         return defaultValue
       }
 
+      console.log('🔍 PREFERENCES SERVICE: Found value:', data.value)
       return data.value as T
     } catch (error) {
-      console.error('Error getting preference:', error)
+      console.error('🔍 PREFERENCES SERVICE: Error getting preference:', error)
       return defaultValue
     }
   }
@@ -138,7 +144,10 @@ export class PreferencesService {
 
   // Get specific preference methods
   static async getHidePromptText(): Promise<boolean> {
-    return this.getPreference('hidePromptText', false)
+    console.log('🔍 PREFERENCES SERVICE: Getting hidePromptText...')
+    const result = await this.getPreference('hidePromptText', false)
+    console.log('🔍 PREFERENCES SERVICE: hidePromptText result:', result)
+    return result
   }
 
   static async setHidePromptText(hide: boolean): Promise<boolean> {
