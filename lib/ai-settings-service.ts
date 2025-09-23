@@ -3,7 +3,7 @@ import { getSupabaseClient } from './supabase'
 export interface AISetting {
   id: string
   user_id: string
-  tab_type: 'scripts' | 'images' | 'videos' | 'audio'
+  tab_type: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'
   locked_model: string
   is_locked: boolean
   quick_suggestions: string[]
@@ -12,7 +12,7 @@ export interface AISetting {
 }
 
 export interface AISettingUpdate {
-  tab_type: 'scripts' | 'images' | 'videos' | 'audio'
+  tab_type: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'
   locked_model: string
   is_locked: boolean
   quick_suggestions?: string[]
@@ -48,14 +48,14 @@ export class AISettingsService {
       const settings = await this.getUserSettings(userId)
       
       // If we have settings for all tabs, we're good
-      if (settings.length >= 4) {
+      if (settings.length >= 5) {
         console.log('AI settings table is healthy, all tabs have settings')
         return true
       }
       
       // If we're missing settings, create them
       console.log('Missing AI settings, creating defaults for missing tabs')
-      const requiredTabs: ('scripts' | 'images' | 'videos' | 'audio')[] = ['scripts', 'images', 'videos', 'audio']
+      const requiredTabs: ('scripts' | 'images' | 'videos' | 'audio' | 'timeline')[] = ['scripts', 'images', 'videos', 'audio', 'timeline']
       
       for (const tabType of requiredTabs) {
         const existingSetting = settings.find(s => s.tab_type === tabType)
@@ -124,7 +124,7 @@ export class AISettingsService {
   }
 
   // Get AI setting for a specific tab
-  static async getTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<AISetting | null> {
+  static async getTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting | null> {
     try {
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
@@ -150,7 +150,7 @@ export class AISettingsService {
   }
 
   // Get or create default AI setting for a tab
-  static async getOrCreateDefaultTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<AISetting> {
+  static async getOrCreateDefaultTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting> {
     try {
       // Try to get existing setting
       const existingSetting = await this.getTabSetting(userId, tabType)
@@ -174,7 +174,7 @@ export class AISettingsService {
   }
 
   // Get default model for a tab type
-  private static getDefaultModelForTab(tabType: 'scripts' | 'images' | 'videos' | 'audio'): string {
+  private static getDefaultModelForTab(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): string {
     switch (tabType) {
       case 'scripts':
         return 'ChatGPT'
@@ -184,6 +184,8 @@ export class AISettingsService {
         return 'Runway Act-Two'
       case 'audio':
         return 'ElevenLabs'
+      case 'timeline':
+        return 'DALL-E 3'
       default:
         return 'ChatGPT'
     }
@@ -223,7 +225,7 @@ export class AISettingsService {
   }
 
   // Delete AI setting for a tab
-  static async deleteTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<void> {
+  static async deleteTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<void> {
     try {
       const { error } = await getSupabaseClient()
         .from('ai_settings')
@@ -242,7 +244,7 @@ export class AISettingsService {
   }
 
   // Update quick suggestions for a specific tab
-  static async updateQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio', suggestions: string[]): Promise<AISetting> {
+  static async updateQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', suggestions: string[]): Promise<AISetting> {
     try {
       console.log('Updating quick suggestions:', { userId, tabType, suggestions })
       
@@ -271,7 +273,7 @@ export class AISettingsService {
   }
 
   // Get quick suggestions for a specific tab
-  static async getQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio'): Promise<string[]> {
+  static async getQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<string[]> {
     try {
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
@@ -300,6 +302,33 @@ export class AISettingsService {
       { tab_type: 'videos', locked_model: 'Runway ML', is_locked: false },
       { tab_type: 'audio', locked_model: 'ElevenLabs', is_locked: false }
     ]
+  }
+
+  // Get timeline setting (temporarily uses images until DB migration)
+  static async getTimelineSetting(userId: string): Promise<AISetting | null> {
+    try {
+      // First try to get timeline setting
+      const timelineSetting = await this.getTabSetting(userId, 'timeline')
+      if (timelineSetting) {
+        return timelineSetting
+      }
+      
+      // Fallback to images setting if timeline doesn't exist
+      const imagesSetting = await this.getTabSetting(userId, 'images')
+      if (imagesSetting) {
+        // Return a modified version that represents timeline
+        return {
+          ...imagesSetting,
+          tab_type: 'timeline',
+          id: `${imagesSetting.id}-timeline`
+        }
+      }
+      
+      return null
+    } catch (error) {
+      console.error('Error getting timeline setting:', error)
+      return null
+    }
   }
 
   // Initialize default settings for a user

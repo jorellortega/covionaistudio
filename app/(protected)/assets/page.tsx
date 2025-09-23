@@ -40,6 +40,12 @@ export default function AssetsPage() {
   const projectId = searchParams.get('project')
   const searchQuery = searchParams.get('search') || ''
 
+  console.log('📄 AssetsPage loaded with params:', {
+    projectId,
+    searchQuery,
+    allParams: Object.fromEntries(searchParams.entries())
+  })
+
   return <AssetsPageClient projectId={projectId} searchQuery={searchQuery} />
 }
 
@@ -71,13 +77,24 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
         setProjects(fetchedProjects)
         
         // Set selected project based on URL param
+        console.log('🔍 Setting project from URL param:', {
+          projectId,
+          fetchedProjectsCount: fetchedProjects.length,
+          projectNames: fetchedProjects.map(p => ({ id: p.id, name: p.name }))
+        })
+        
         if (projectId) {
           const project = fetchedProjects.find(p => p.id === projectId)
+          console.log('🎯 Found project by ID:', project)
           if (project) {
             setSelectedProject(project.id)
+            console.log('✅ Set selected project to:', project.id, project.name)
+          } else {
+            console.log('❌ No project found with ID:', projectId)
           }
         } else if (fetchedProjects.length > 0) {
           setSelectedProject(fetchedProjects[0].id)
+          console.log('📝 Set selected project to first available:', fetchedProjects[0].id, fetchedProjects[0].name)
         }
       } catch (error) {
         console.error('Error fetching projects:', error)
@@ -581,7 +598,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                         text={selectedAsset.content}
                         title={selectedAsset.title}
                         projectId={selectedAsset.project_id}
-                        sceneId={selectedAsset.scene_id || undefined}
+                        sceneId={selectedAsset.scene_id as string | undefined}
                         className="mt-6"
                       />
                     </div>
@@ -746,7 +763,7 @@ function AssetCard({
                 text={asset.content}
                 title={asset.title}
                 projectId={asset.project_id}
-                sceneId={asset.scene_id || undefined}
+                sceneId={asset.scene_id as string | undefined}
                 className="mt-2"
               />
               {/* Debug info for TTS */}

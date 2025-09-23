@@ -68,6 +68,13 @@ export class OpenAIService {
 
   static async generateImage(request: GenerateImageRequest): Promise<AIResponse> {
     try {
+      console.log('🎬 DEBUG - OpenAI API request:', {
+        promptLength: request.prompt.length,
+        promptPreview: request.prompt.substring(0, 200) + '...',
+        style: request.style,
+        model: request.model
+      })
+
       const response = await fetch('https://api.openai.com/v1/images/generations', {
         method: 'POST',
         headers: {
@@ -82,10 +89,19 @@ export class OpenAIService {
         }),
       })
 
-      if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`)
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('🎬 DEBUG - OpenAI API error response:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText: errorText
+        })
+        throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
+      }
       const result = await response.json()
       return { success: true, data: result }
     } catch (error) {
+      console.error('🎬 DEBUG - OpenAI API error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }

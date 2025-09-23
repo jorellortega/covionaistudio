@@ -34,6 +34,7 @@ const aiModels = {
   images: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   videos: ["Kling", "Runway ML", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
+  timeline: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
 const tabIcons = {
@@ -41,6 +42,7 @@ const tabIcons = {
   images: ImageIcon,
   videos: Video,
   audio: Sparkles,
+  timeline: ImageIcon,
 }
 
 const tabNames = {
@@ -48,6 +50,7 @@ const tabNames = {
   images: "Images", 
   videos: "Videos",
   audio: "Audio",
+  timeline: "Timeline",
 }
 
 export default function AISettingsPage() {
@@ -195,6 +198,16 @@ export default function AISettingsPage() {
           }
         }
         
+        // Add timeline setting (temporarily using images setting)
+        try {
+          const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
+          if (timelineSetting) {
+            userSettings.push(timelineSetting)
+          }
+        } catch (error) {
+          console.log('Timeline setting not available yet, will be added after DB migration')
+        }
+        
         setSettings(userSettings)
       } catch (error) {
         console.error('Error loading AI settings:', error)
@@ -275,7 +288,7 @@ export default function AISettingsPage() {
   }
 
   // Handle setting changes
-  const handleSettingChange = (tabType: 'scripts' | 'images' | 'videos' | 'audio', field: 'locked_model' | 'is_locked', value: string | boolean) => {
+  const handleSettingChange = (tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', field: 'locked_model' | 'is_locked', value: string | boolean) => {
     console.log(`Setting change: ${tabType}.${field} = ${value}`)
     
     setSettings(prev => {
@@ -303,8 +316,11 @@ export default function AISettingsPage() {
       
       // Auto-save immediately for toggle changes
       if (ready) {
+        // For timeline, save to images setting temporarily until DB migration
+        const saveTabType = tabType === 'timeline' ? 'images' : tabType
+        
         const updateData: AISettingUpdate = {
-          tab_type: tabType,
+          tab_type: saveTabType,
           locked_model: field === 'is_locked' ? 
             (settings.find(s => s.tab_type === tabType)?.locked_model || 'ChatGPT') : 
             value as string,
@@ -312,7 +328,7 @@ export default function AISettingsPage() {
             settings.find(s => s.tab_type === tabType)?.is_locked || false,
         }
         
-        console.log(`Auto-saving ${tabType}:`, updateData)
+        console.log(`Auto-saving ${tabType} (as ${saveTabType}):`, updateData)
         AISettingsService.upsertTabSetting(userId, updateData)
           .then(result => {
             console.log(`Auto-save successful for ${tabType}:`, result)

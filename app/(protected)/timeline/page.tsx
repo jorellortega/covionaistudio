@@ -674,15 +674,27 @@ export default function TimelinePage() {
       const selectedLines = visualLines.slice(0, 5)
       let result = selectedLines.join('. ')
       
-      // Limit to reasonable length for DALL-E
-      if (result.length > 500) {
-        result = result.substring(0, 500).replace(/\.[^.]*$/, '') + '.'
+      // More aggressive length limiting for DALL-E (max 400 characters)
+      if (result.length > 400) {
+        result = result.substring(0, 400).replace(/\.[^.]*$/, '') + '.'
       }
       
       // Add cinematic context if it's too short
       if (result.length < 50) {
         result = `A cinematic movie scene showing ${result}`
       }
+      
+      // Additional DALL-E content policy compliance
+      result = result
+        .replace(/\b(violence|blood|gore|weapon|gun|knife|fight|attack|kill|death|die|dead)\b/gi, 'action')
+        .replace(/\b(nude|naked|sex|sexual|adult)\b/gi, 'dramatic')
+        .replace(/\b(hate|hateful|offensive|discriminatory)\b/gi, 'intense')
+        .replace(/\b(real person|celebrity|famous person)\b/gi, 'character')
+        .replace(/\b(political|government|election)\b/gi, 'dramatic')
+        .replace(/\b(religion|religious|church|god)\b/gi, 'spiritual')
+        .replace(/\b(drug|alcohol|smoking|cigarette)\b/gi, 'dramatic')
+        .replace(/\b(monkey|ape|primate)\b/gi, 'animal') // Replace potentially problematic animal references
+        .trim()
       
       console.log('🎬 DEBUG - Prompt sanitization:', {
         originalLength: scriptContent.length,
@@ -695,7 +707,7 @@ export default function TimelinePage() {
     } catch (error) {
       console.error('🎬 DEBUG - Error sanitizing prompt:', error)
       // Fallback to a simple description
-      return `A cinematic movie scene from the story`
+      return `A cinematic movie scene: ${scene.name}`
     }
   }
 
@@ -783,52 +795,89 @@ export default function TimelinePage() {
         fullPrompt: scenePrompt
       })
       
-      // Get the locked AI service for images
-      const aiSettings = await AISettingsService.getUserSettings(userId!)
-      const imagesSetting = aiSettings.find(s => s.tab_type === 'images')
+      // Get the locked AI service for timeline
+      const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
       
-      console.log('🎬 DEBUG - AI settings found:', {
-        totalSettings: aiSettings.length,
-        imagesSetting: imagesSetting ? {
-          id: imagesSetting.id,
-          tab_type: imagesSetting.tab_type,
-          locked_model: imagesSetting.locked_model,
-          is_locked: imagesSetting.is_locked
+      console.log('🎬 DEBUG - Timeline AI setting found:', {
+        timelineSetting: timelineSetting ? {
+          id: timelineSetting.id,
+          tab_type: timelineSetting.tab_type,
+          locked_model: timelineSetting.locked_model,
+          is_locked: timelineSetting.is_locked
         } : null
       })
       
-      if (!imagesSetting || !imagesSetting.is_locked) {
+      console.log('🎬 DEBUG - Checking timeline setting conditions:', {
+        timelineSettingExists: !!timelineSetting,
+        isLocked: timelineSetting?.is_locked,
+        willProceed: !(!timelineSetting || !timelineSetting.is_locked)
+      })
+      
+      if (!timelineSetting) {
+        console.log('🎬 DEBUG - Timeline AI setting not found, showing error toast')
         toast({
           title: "AI not configured",
-          description: "Please configure your AI settings first",
+          description: "Please configure your Timeline AI settings in AI Settings first",
           variant: "destructive"
         })
         return
       }
 
+      // If timeline setting exists but isn't locked, use it anyway with a warning
+      if (!timelineSetting.is_locked) {
+        console.log('🎬 DEBUG - Timeline AI setting exists but not locked, proceeding anyway')
+        toast({
+          title: "Using default timeline AI setting",
+          description: "Consider locking your Timeline AI setting in AI Settings for consistency",
+          variant: "default"
+        })
+      }
+
       // For now, use a placeholder API key since these aren't stored in user object
       const apiKey = 'configured'
+
+      console.log('🎬 DEBUG - Timeline setting is properly configured, proceeding with API call')
 
       // Generate image using the locked service
       console.log('🎬 DEBUG - Sending request to API with data:', {
         prompt: scenePrompt,
-        service: imagesSetting.locked_model,
+        service: timelineSetting.locked_model,
         apiKeyExists: !!apiKey
       })
       
-      const response = await fetch('/api/ai/generate-scene-image', {
+      let response = await fetch('/api/ai/generate-scene-image', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           prompt: scenePrompt,
-          service: imagesSetting.locked_model,
+          service: timelineSetting.locked_model,
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
         })
       })
+      
+      // If the first attempt fails, try with a simpler prompt
+      if (!response.ok) {
+        console.log('🎬 DEBUG - First attempt failed, trying with simpler prompt...')
+        const simplePrompt = `A cinematic movie scene: ${scene.name}`
+        
+        response = await fetch('/api/ai/generate-scene-image', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prompt: simplePrompt,
+            service: timelineSetting.locked_model,
+            apiKey: apiKey,
+            userId: user?.id,
+            autoSaveToBucket: true,
+          })
+        })
+      }
 
       console.log('🎬 DEBUG - API response received:', {
         status: response.status,
@@ -875,8 +924,18 @@ export default function TimelinePage() {
     const scene = scenes.find((s) => s.id === sceneId)
     const searchQuery = scene ? scene.name : movie?.name
 
-    // Navigate to assets with context
-    window.open(`/assets?project=${movie?.name}&search=${encodeURIComponent(searchQuery || "")}`, "_blank")
+    console.log('🔍 handleViewAssets called:', {
+      sceneId,
+      scene: scene?.name,
+      movieId: movie?.id,
+      movieName: movie?.name,
+      searchQuery
+    })
+
+    // Navigate to assets with context - use movie ID instead of name
+    const assetsUrl = `/assets?project=${movie?.id}&search=${encodeURIComponent(searchQuery || "")}`
+    console.log('🔗 Opening assets URL:', assetsUrl)
+    window.open(assetsUrl, "_blank")
   }
 
   const handleUploadImage = (scene: SceneWithMetadata) => {
@@ -1554,7 +1613,7 @@ export default function TimelinePage() {
               </Button>
             </Link>
 
-            <Link href={`/assets?project=${movie.name}`}>
+            <Link href={`/assets?project=${movie.id}`}>
               <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
                 <FolderOpen className="mr-2 h-4 w-4" />
                 Assets

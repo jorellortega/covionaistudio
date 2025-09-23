@@ -1,35 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
 
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
   try {
-    const response = await fetch('/api/ai/download-and-store-image', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        imageUrl,
-        fileName,
-        userId
-      }),
-    })
+    const { createServerClient } = await import('@supabase/ssr')
+    
+    // Create server-side Supabase client with service role for bucket operations
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return []
+          },
+          setAll() {
+            // No-op for service role client
+          },
+        },
+      }
+    )
 
+    console.log('🎬 DEBUG - Downloading image from:', imageUrl)
+    console.log('🎬 DEBUG - File name:', fileName)
+    console.log('🎬 DEBUG - User ID:', userId)
+
+    // Download the image from the AI service (server-side, no CORS issues)
+    const response = await fetch(imageUrl)
     if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(`Failed to save image: ${errorData.error || response.statusText}`)
+      console.error('🎬 DEBUG - Failed to download image:', response.status, response.statusText)
+      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
     }
 
-    const result = await response.json()
-    if (result.success && result.supabaseUrl) {
-      return result.supabaseUrl
-    } else {
-      throw new Error('Failed to get bucket URL')
+    const imageBuffer = await response.arrayBuffer()
+    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    
+    console.log('🎬 DEBUG - Image downloaded, size:', imageBlob.size)
+
+    // Create a unique filename
+    const timestamp = Date.now()
+    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
+    const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
+
+    // Upload to Supabase storage
+    const filePath = `${userId}/images/${uniqueFileName}`
+    console.log('🎬 DEBUG - Uploading to Supabase path:', filePath)
+
+    const { data, error } = await supabase.storage
+      .from('cinema_files')
+      .upload(filePath, imageBlob, {
+        contentType: 'image/png',
+        cacheControl: '3600',
+        upsert: false
+      })
+
+    if (error) {
+      console.error('🎬 DEBUG - Supabase upload error:', error)
+      throw new Error(`Failed to upload to Supabase: ${error.message}`)
     }
+
+    console.log('🎬 DEBUG - Upload successful, data:', data)
+
+    // Get the public URL
+    const { data: urlData } = supabase.storage
+      .from('cinema_files')
+      .getPublicUrl(filePath)
+
+    console.log('🎬 DEBUG - Image uploaded successfully to Supabase:', urlData.publicUrl)
+
+    return urlData.publicUrl
+
   } catch (error) {
-    console.error('Error saving image to bucket:', error)
+    console.error('🎬 DEBUG - Error in downloadAndStoreImage:', error)
     throw error
   }
 }
@@ -74,7 +120,94 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log(`🎬 DEBUG - Service: ${service}, API key exists: ${!!apiKey}, Key length: ${apiKey ? apiKey.length : 0}`)
+    // Get actual API key from database if apiKey is 'configured' or not provided
+    let actualApiKey = apiKey
+    if (apiKey === 'configured' || apiKey === 'use_env_vars' || !apiKey) {
+      if (!userId) {
+        console.error('🎬 DEBUG - No userId provided for database API key lookup')
+        return NextResponse.json(
+          { error: 'Missing userId for API key lookup' },
+          { status: 400 }
+        )
+      }
+
+      try {
+        // Create server-side Supabase client with proper authentication
+        const cookieStore = await cookies()
+        const supabase = createServerClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          {
+            cookies: {
+              getAll() {
+                return cookieStore.getAll()
+              },
+              setAll(cookiesToSet) {
+                try {
+                  cookiesToSet.forEach(({ name, value, options }) =>
+                    cookieStore.set(name, value, options)
+                  )
+                } catch {
+                  // The `setAll` method was called from a Server Component.
+                  // This can be ignored if you have middleware refreshing
+                  // user sessions.
+                }
+              },
+            },
+          }
+        )
+
+        const { data, error } = await supabase
+          .from('users')
+          .select('openai_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+          .eq('id', userId)
+          .single()
+
+        if (error) {
+          console.error('🎬 DEBUG - Error fetching API keys from database:', error)
+          return NextResponse.json(
+            { error: `Failed to fetch API keys from database: ${error.message}` },
+            { status: 500 }
+          )
+        }
+
+        if (service === 'DALL-E 3' || service === 'dalle') {
+          actualApiKey = data?.openai_api_key
+          console.log('🎬 DEBUG - Retrieved OpenAI API key:', {
+            hasKey: !!actualApiKey,
+            keyLength: actualApiKey?.length || 0,
+            keyPrefix: actualApiKey?.substring(0, 10) + '...' || 'None'
+          })
+        } else if (service === 'OpenArt' || service === 'openart') {
+          actualApiKey = data?.openart_api_key
+        } else if (service === 'Kling' || service === 'kling') {
+          actualApiKey = data?.kling_api_key
+        } else if (service === 'Runway ML' || service === 'runway') {
+          actualApiKey = data?.runway_api_key
+        } else if (service === 'ElevenLabs' || service === 'elevenlabs') {
+          actualApiKey = data?.elevenlabs_api_key
+        } else if (service === 'Suno AI' || service === 'suno') {
+          actualApiKey = data?.suno_api_key
+        }
+
+      } catch (error) {
+        console.error('🎬 DEBUG - Database error:', error)
+        return NextResponse.json(
+          { error: 'Database error while fetching API keys' },
+          { status: 500 }
+        )
+      }
+    }
+
+    if (!actualApiKey) {
+      console.error('🎬 DEBUG - No API key available for service:', service)
+      return NextResponse.json(
+        { error: `API key not configured for ${service}. Please set up your API key in the AI settings.` },
+        { status: 400 }
+      )
+    }
+
+    console.log(`🎬 DEBUG - Service: ${service}, API key exists: ${!!actualApiKey}, Key length: ${actualApiKey ? actualApiKey.length : 0}`)
 
     let imageUrl = ""
 
@@ -91,12 +224,13 @@ export async function POST(request: NextRequest) {
           prompt: prompt,
           style: 'cinematic',
           model: 'dall-e-3',
-          apiKey
+          apiKey: actualApiKey
         })
         
         console.log('🎬 DEBUG - DALL-E response:', dalleResponse)
         
         if (!dalleResponse.success) {
+          console.error('🎬 DEBUG - DALL-E API failed with error:', dalleResponse.error)
           throw new Error(dalleResponse.error || 'DALL-E API failed')
         }
         
@@ -120,7 +254,7 @@ export async function POST(request: NextRequest) {
           prompt: prompt,
           style: 'cinematic',
           model: 'sdxl',
-          apiKey
+          apiKey: actualApiKey
         })
         
         console.log('🎬 DEBUG - OpenArt response:', openartResponse)
@@ -149,7 +283,7 @@ export async function POST(request: NextRequest) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
+            'Authorization': `Bearer ${actualApiKey}`,
           },
           body: JSON.stringify({
             prompt: prompt,
