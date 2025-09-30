@@ -921,21 +921,23 @@ export default function TimelinePage() {
   }
 
   const handleViewAssets = (sceneId?: string) => {
-    const scene = scenes.find((s) => s.id === sceneId)
-    const searchQuery = scene ? scene.name : movie?.name
+    if (sceneId) {
+      // If sceneId is provided, navigate to the scene-specific assets page
+      console.log('🔗 Opening scene assets page for:', sceneId)
+      window.open(`/timeline-scene/${sceneId}`, "_blank")
+    } else {
+      // Otherwise, navigate to the movie assets page with search
+      const searchQuery = movie?.name
+      console.log('🔍 handleViewAssets called for movie:', {
+        movieId: movie?.id,
+        movieName: movie?.name,
+        searchQuery
+      })
 
-    console.log('🔍 handleViewAssets called:', {
-      sceneId,
-      scene: scene?.name,
-      movieId: movie?.id,
-      movieName: movie?.name,
-      searchQuery
-    })
-
-    // Navigate to assets with context - use movie ID instead of name
-    const assetsUrl = `/assets?project=${movie?.id}&search=${encodeURIComponent(searchQuery || "")}`
-    console.log('🔗 Opening assets URL:', assetsUrl)
-    window.open(assetsUrl, "_blank")
+      const assetsUrl = `/assets?project=${movie?.id}&search=${encodeURIComponent(searchQuery || "")}`
+      console.log('🔗 Opening movie assets URL:', assetsUrl)
+      window.open(assetsUrl, "_blank")
+    }
   }
 
   const handleUploadImage = (scene: SceneWithMetadata) => {
