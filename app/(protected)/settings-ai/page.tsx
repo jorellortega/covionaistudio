@@ -198,17 +198,34 @@ export default function AISettingsPage() {
           }
         }
         
-        // Add timeline setting (temporarily using images setting)
+        // Add timeline setting (temporarily using images setting) only if not already present
         try {
-          const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
-          if (timelineSetting) {
-            userSettings.push(timelineSetting)
+          const hasTimelineSetting = userSettings.some(s => s.tab_type === 'timeline')
+          if (!hasTimelineSetting) {
+            const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
+            if (timelineSetting) {
+              userSettings.push(timelineSetting)
+            }
           }
         } catch (error) {
           console.log('Timeline setting not available yet, will be added after DB migration')
         }
         
-        setSettings(userSettings)
+        // Deduplicate settings by tab_type to prevent any duplicates
+        const uniqueSettings = userSettings.reduce((acc, setting) => {
+          const existingIndex = acc.findIndex(s => s.tab_type === setting.tab_type)
+          if (existingIndex >= 0) {
+            // Keep the most recent one (or the one with a real timeline id)
+            if (setting.tab_type === 'timeline' && !setting.id.includes('-timeline')) {
+              acc[existingIndex] = setting
+            }
+          } else {
+            acc.push(setting)
+          }
+          return acc
+        }, [] as AISetting[])
+        
+        setSettings(uniqueSettings)
       } catch (error) {
         console.error('Error loading AI settings:', error)
         
@@ -577,7 +594,7 @@ export default function AISettingsPage() {
             const modelAvailability = checkModelAvailability(setting.tab_type, setting.locked_model)
             
             return (
-              <Card key={setting.id} className="cinema-card">
+              <Card key={`${setting.tab_type}-${setting.id}`} className="cinema-card">
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">

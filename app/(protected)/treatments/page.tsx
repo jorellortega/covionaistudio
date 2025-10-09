@@ -10,8 +10,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/hooks/use-toast'
-import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2, CheckCircle, Download } from 'lucide-react'
+import { Search, Plus, FileText, Clock, User, Filter, Calendar, Edit, Trash2, Eye, Sparkles, ImageIcon, Save, Loader2, CheckCircle, Download, Film, Link as LinkIcon, ChevronDown, Zap } from 'lucide-react'
 import { TreatmentsService, Treatment, CreateTreatmentData } from '@/lib/treatments-service'
 import Header from '@/components/header'
 import Link from 'next/link'
@@ -22,6 +23,7 @@ export default function TreatmentsPage() {
   const { toast } = useToast()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  const [projectFilter, setProjectFilter] = useState('all') // 'all', 'linked', 'standalone'
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [treatments, setTreatments] = useState<Treatment[]>([])
@@ -35,6 +37,7 @@ export default function TreatmentsPage() {
   const [newTreatment, setNewTreatment] = useState({
     title: '',
     genre: '',
+    status: 'draft' as 'draft' | 'in-progress' | 'completed' | 'archived',
     cover_image_url: '',
     synopsis: '',
     target_audience: '',
@@ -57,6 +60,9 @@ export default function TreatmentsPage() {
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Quick AI generation state
+  const [generatingTreatmentId, setGeneratingTreatmentId] = useState<string | null>(null)
 
   // Load treatments on component mount
   useEffect(() => {
@@ -572,6 +578,7 @@ export default function TreatmentsPage() {
     setNewTreatment({
       title: '',
       genre: '',
+      status: 'draft',
       cover_image_url: '',
       synopsis: '',
       target_audience: '',
@@ -625,6 +632,7 @@ export default function TreatmentsPage() {
     setNewTreatment({
       title: treatment.title,
       genre: treatment.genre,
+      status: treatment.status,
       cover_image_url: treatment.cover_image_url || '',
       synopsis: treatment.synopsis,
       target_audience: treatment.target_audience || '',
@@ -672,6 +680,7 @@ export default function TreatmentsPage() {
       const treatmentData: CreateTreatmentData = {
         title: newTreatment.title,
         genre: newTreatment.genre,
+        status: newTreatment.status,
         cover_image_url: finalCoverUrl,
         synopsis: newTreatment.synopsis,
         target_audience: newTreatment.target_audience || undefined,
@@ -710,7 +719,10 @@ export default function TreatmentsPage() {
                          treatment.synopsis.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          treatment.genre.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = statusFilter === 'all' || treatment.status === statusFilter
-    return matchesSearch && matchesStatus
+    const matchesProject = projectFilter === 'all' || 
+                          (projectFilter === 'linked' && treatment.project_id) ||
+                          (projectFilter === 'standalone' && !treatment.project_id)
+    return matchesSearch && matchesStatus && matchesProject
   })
 
   const getStatusColor = (status: string) => {
@@ -740,6 +752,136 @@ export default function TreatmentsPage() {
         description: "Failed to delete treatment",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleQuickStatusUpdate = async (treatmentId: string, newStatus: 'draft' | 'in-progress' | 'completed' | 'archived') => {
+    try {
+      await TreatmentsService.updateTreatment(treatmentId, { status: newStatus })
+      
+      setTreatments(prev => 
+        prev.map(t => t.id === treatmentId ? { ...t, status: newStatus } : t)
+      )
+      
+      toast({
+        title: "Status Updated",
+        description: `Treatment status changed to ${newStatus.replace('-', ' ')}`,
+      })
+    } catch (error) {
+      console.error('Error updating treatment status:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update treatment status",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleQuickAIGenerate = async (treatment: Treatment) => {
+    if (!ready || !user) {
+      toast({
+        title: "Authentication required",
+        description: "Please log in to use AI features",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      setGeneratingTreatmentId(treatment.id)
+
+      // Create prompt from treatment details
+      const prompt = `Movie treatment cover for "${treatment.title}". ${treatment.genre} genre. ${treatment.synopsis.substring(0, 300)}. Cinematic movie poster style, dramatic lighting, professional quality.`
+      
+      console.log('🎬 Generating cover for treatment with prompt:', prompt)
+
+      // Get the locked AI service for images
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      
+      if (!imagesSetting || !imagesSetting.is_locked) {
+        toast({
+          title: "AI not configured",
+          description: "Please configure your Images AI settings in AI Settings first",
+          variant: "destructive"
+        })
+        setGeneratingTreatmentId(null)
+        return
+      }
+
+      const serviceToUse = imagesSetting.locked_model.toLowerCase().includes('dall') ? 'dalle' : 
+                          imagesSetting.locked_model.toLowerCase().includes('openart') ? 'openart' : 
+                          imagesSetting.locked_model.toLowerCase().includes('leonardo') ? 'leonardo' : 
+                          'dalle'
+
+      // Generate image
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: prompt,
+          service: serviceToUse,
+          apiKey: 'configured',
+          userId: user.id,
+          autoSaveToBucket: true,
+        })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(`AI API failed: ${response.status} - ${errorData.error || 'Unknown error'}`)
+      }
+
+      const data = await response.json()
+      const imageUrl = data.imageUrl
+
+      if (!imageUrl) {
+        throw new Error('No image URL received from AI service')
+      }
+
+      // Upload to Supabase storage
+      const uploadResponse = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: `treatment-cover-${treatment.id}-${Date.now()}`,
+          userId: user.id
+        })
+      })
+
+      if (!uploadResponse.ok) {
+        throw new Error('Failed to upload image to storage')
+      }
+
+      const uploadResult = await uploadResponse.json()
+      const finalImageUrl = uploadResult.supabaseUrl || imageUrl
+
+      // Update treatment with new cover
+      await TreatmentsService.updateTreatment(treatment.id, { 
+        cover_image_url: finalImageUrl 
+      })
+
+      // Update local state
+      setTreatments(prev => 
+        prev.map(t => t.id === treatment.id ? { ...t, cover_image_url: finalImageUrl } : t)
+      )
+
+      toast({
+        title: "✨ Cover Generated!",
+        description: "AI has created a cover image for your treatment",
+      })
+
+    } catch (error) {
+      console.error('Error generating AI cover:', error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : 'Failed to generate cover',
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingTreatmentId(null)
     }
   }
 
@@ -780,6 +922,7 @@ export default function TreatmentsPage() {
       const treatmentData: CreateTreatmentData = {
         title: newTreatment.title,
         genre: newTreatment.genre,
+        status: newTreatment.status,
         cover_image_url: finalCoverUrl,
         synopsis: newTreatment.synopsis,
         target_audience: newTreatment.target_audience || undefined,
@@ -860,6 +1003,16 @@ export default function TreatmentsPage() {
               <SelectItem value="archived">Archived</SelectItem>
             </SelectContent>
           </Select>
+          <Select value={projectFilter} onValueChange={setProjectFilter}>
+            <SelectTrigger className="w-full md:w-48">
+              <SelectValue placeholder="Filter by type" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Treatments</SelectItem>
+              <SelectItem value="linked">Linked to Projects</SelectItem>
+              <SelectItem value="standalone">Standalone</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Create Treatment Form */}
@@ -871,7 +1024,7 @@ export default function TreatmentsPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={handleCreateTreatment} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="title">Title</Label>
                   <Input
@@ -897,6 +1050,20 @@ export default function TreatmentsPage() {
                       <SelectItem value="Thriller">Thriller</SelectItem>
                       <SelectItem value="Romance">Romance</SelectItem>
                       <SelectItem value="Documentary">Documentary</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="status">Status</Label>
+                  <Select value={newTreatment.status} onValueChange={(value: any) => setNewTreatment(prev => ({ ...prev, status: value }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="in-progress">In Progress</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1246,7 +1413,7 @@ export default function TreatmentsPage() {
           </CardHeader>
           <CardContent>
             <form onSubmit={(e) => { e.preventDefault(); handleUpdateTreatment(); }} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="edit-title">Title</Label>
                   <Input
@@ -1272,6 +1439,20 @@ export default function TreatmentsPage() {
                       <SelectItem value="Thriller">Thriller</SelectItem>
                       <SelectItem value="Romance">Romance</SelectItem>
                       <SelectItem value="Documentary">Documentary</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="edit-status">Status</Label>
+                  <Select value={newTreatment.status} onValueChange={(value: any) => setNewTreatment(prev => ({ ...prev, status: value }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="in-progress">In Progress</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1627,7 +1808,7 @@ export default function TreatmentsPage() {
               <Card key={treatment.id} className="hover:shadow-lg transition-shadow">
                 {/* Cover Image */}
                 {treatment.cover_image_url && (
-                  <div className="relative h-48 bg-muted rounded-t-lg overflow-hidden">
+                  <div className="relative h-48 bg-muted rounded-t-lg overflow-hidden group">
                     <img
                       src={treatment.cover_image_url}
                       alt={`${treatment.title} cover`}
@@ -1644,17 +1825,113 @@ export default function TreatmentsPage() {
                         <p className="text-sm">Cover Image</p>
                       </div>
                     </div>
+                    {/* Quick AI Button Overlay */}
+                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          handleQuickAIGenerate(treatment)
+                        }}
+                        disabled={generatingTreatmentId === treatment.id}
+                        className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white shadow-lg"
+                      >
+                        {generatingTreatmentId === treatment.id ? (
+                          <>
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            AI
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="h-3 w-3 mr-1" />
+                            Quick AI
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {/* No Cover Image - Show Quick AI Button */}
+                {!treatment.cover_image_url && (
+                  <div className="relative h-48 bg-muted rounded-t-lg overflow-hidden flex items-center justify-center">
+                    <div className="text-center">
+                      <FileText className="h-12 w-12 mx-auto mb-2 text-muted-foreground" />
+                      <p className="text-sm text-muted-foreground mb-3">No Cover Image</p>
+                      <Button
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          handleQuickAIGenerate(treatment)
+                        }}
+                        disabled={generatingTreatmentId === treatment.id}
+                        className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white"
+                      >
+                        {generatingTreatmentId === treatment.id ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="h-4 w-4 mr-2" />
+                            Generate with AI
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 )}
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <CardTitle className="text-lg mb-2">{treatment.title}</CardTitle>
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
                         <Badge variant="outline">{treatment.genre}</Badge>
-                        <Badge className={getStatusColor(treatment.status)}>
-                          {treatment.status.replace('-', ' ')}
-                        </Badge>
+                        
+                        {/* Clickable Status Badge with Dropdown */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Badge 
+                              className={`${getStatusColor(treatment.status)} cursor-pointer hover:opacity-80 transition-opacity`}
+                            >
+                              {treatment.status.replace('-', ' ')}
+                              <ChevronDown className="h-3 w-3 ml-1" />
+                            </Badge>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="start">
+                            <DropdownMenuItem onClick={() => handleQuickStatusUpdate(treatment.id, 'draft')}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-gray-500" />
+                                Draft
+                              </div>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleQuickStatusUpdate(treatment.id, 'in-progress')}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-blue-500" />
+                                In Progress
+                              </div>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleQuickStatusUpdate(treatment.id, 'completed')}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-green-500" />
+                                Completed
+                              </div>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleQuickStatusUpdate(treatment.id, 'archived')}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-red-500" />
+                                Archived
+                              </div>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        
+                        {treatment.project_id && (
+                          <Badge className="bg-purple-500/20 text-purple-400 border-purple-500/30">
+                            <LinkIcon className="h-3 w-3 mr-1" />
+                            Linked to Project
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>

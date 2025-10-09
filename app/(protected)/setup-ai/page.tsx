@@ -35,6 +35,7 @@ export default function SetupAIPage() {
     anthropic: '',
     openart: '',
     kling: '',
+    klingSecret: '',
     runway: '',
     elevenlabs: '',
     suno: '',
@@ -44,6 +45,7 @@ export default function SetupAIPage() {
     anthropic: false,
     openart: false,
     kling: false,
+    klingSecret: false,
     runway: false,
     elevenlabs: false,
     suno: false,
@@ -57,7 +59,7 @@ export default function SetupAIPage() {
     try {
       const { data, error } = await getSupabaseClient()
         .from('users')
-        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, kling_secret_key, runway_api_key, elevenlabs_api_key, suno_api_key')
         .eq('id', userId)
         .single()
 
@@ -68,6 +70,7 @@ export default function SetupAIPage() {
         anthropic: data?.anthropic_api_key || '',
         openart: data?.openart_api_key || '',
         kling: data?.kling_api_key || '',
+        klingSecret: data?.kling_secret_key || '',
         runway: data?.runway_api_key || '',
         elevenlabs: data?.elevenlabs_api_key || '',
         suno: data?.suno_api_key || '',
@@ -87,6 +90,7 @@ export default function SetupAIPage() {
         'anthropic': 'anthropic_api_key',
         'openart': 'openart_api_key',
         'kling': 'kling_api_key',
+        'klingSecret': 'kling_secret_key',
         'runway': 'runway_api_key',
         'elevenlabs': 'elevenlabs_api_key',
         'suno': 'suno_api_key',
@@ -805,72 +809,109 @@ export default function SetupAIPage() {
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-medium">Kling</h4>
                     <Badge variant="outline" className="text-xs">
-                      {apiKeys.kling ? "Configured" : "Not Configured"}
+                      {(apiKeys.kling || apiKeys.klingSecret) ? "Configured" : "Not Configured"}
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">
                     High-quality AI video generation
                   </p>
+                  
+                  {/* Access Key */}
+                  <div className="mb-3">
+                    <Label className="text-xs text-muted-foreground mb-1 block">Access Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type={showKeys.kling ? "text" : "password"}
+                        placeholder="Kling Access Key"
+                        value={apiKeys.kling}
+                        onChange={(e) => setApiKeys(prev => ({ ...prev, kling: e.target.value }))}
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowKeys(prev => ({ ...prev, kling: !prev.kling }))}
+                        className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                      >
+                        {showKeys.kling ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Secret Key */}
+                  <div className="mb-3">
+                    <Label className="text-xs text-muted-foreground mb-1 block">Secret Key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type={showKeys.klingSecret ? "text" : "password"}
+                        placeholder="Kling Secret Key"
+                        value={apiKeys.klingSecret}
+                        onChange={(e) => setApiKeys(prev => ({ ...prev, klingSecret: e.target.value }))}
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowKeys(prev => ({ ...prev, klingSecret: !prev.klingSecret }))}
+                        className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                      >
+                        {showKeys.klingSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Action Buttons */}
                   <div className="flex gap-2">
-                    <Input
-                      type={showKeys.kling ? "text" : "password"}
-                      placeholder="Kling API Key"
-                      value={apiKeys.kling}
-                      onChange={(e) => setApiKeys(prev => ({ ...prev, kling: e.target.value }))}
-                      className="flex-1"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setShowKeys(prev => ({ ...prev, kling: !prev.kling }))}
-                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
-                    >
-                      {showKeys.kling ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={async () => {
                         try {
-                          await saveApiKey('kling', apiKeys.kling)
+                          await Promise.all([
+                            saveApiKey('kling', apiKeys.kling),
+                            saveApiKey('klingSecret', apiKeys.klingSecret)
+                          ])
                           toast({
                             title: "Success",
-                            description: "Kling API key saved successfully",
+                            description: "Kling API keys saved successfully",
                           })
                         } catch (error) {
                           toast({
                             title: "Error",
-                            description: "Failed to save Kling API key",
+                            description: "Failed to save Kling API keys",
                             variant: "destructive",
                           })
                         }
                       }}
                       className="border-green-500/20 text-green-500 hover:bg-blue-500/10"
                     >
-                      Save
+                      Save Both
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={async () => {
-                        setApiKeys(prev => ({ ...prev, kling: '' }))
+                        setApiKeys(prev => ({ ...prev, kling: '', klingSecret: '' }))
                         try {
-                          await saveApiKey('kling', '')
+                          await Promise.all([
+                            saveApiKey('kling', ''),
+                            saveApiKey('klingSecret', '')
+                          ])
                           toast({
                             title: "Cleared",
-                            description: "Kling API key cleared",
+                            description: "Kling API keys cleared",
                           })
                         } catch (error) {
                           toast({
                             title: "Error",
-                            description: "Failed to clear Kling API key",
+                            description: "Failed to clear Kling API keys",
                             variant: "destructive",
                           })
                         }
                       }}
                       className="border-red-500/20 text-red-500 hover:bg-red-500/10"
                     >
-                      Clear
+                      Clear Both
                     </Button>
                   </div>
                 </div>

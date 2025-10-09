@@ -136,7 +136,7 @@ export async function POST(request: NextRequest) {
     
     console.log('Request body:', { ...body, apiKey: body.apiKey ? `${body.apiKey.substring(0, 10)}...` : 'undefined' })
     
-    const { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true } = body
+    let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true } = body
 
     if (!prompt || !service || !apiKey) {
       console.error('Missing required fields:', { prompt: !!prompt, service: !!service, apiKey: !!apiKey })
@@ -153,6 +153,76 @@ export async function POST(request: NextRequest) {
         { error: 'Missing userId for bucket storage' },
         { status: 400 }
       )
+    }
+
+    // If apiKey is 'configured', fetch the actual API key from user settings
+    if (apiKey === 'configured') {
+      console.log('Fetching configured API key for service:', service)
+      const { createServerClient } = await import('@supabase/ssr')
+      const { cookies } = await import('next/headers')
+      
+      const cookieStore = await cookies()
+      const supabase = createServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll()
+            },
+            setAll(cookiesToSet) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                )
+              } catch {}
+            },
+          },
+        }
+      )
+
+      // Fetch API key from users table based on service
+      let keyColumn = ''
+      switch (service.toLowerCase()) {
+        case 'dalle':
+          keyColumn = 'openai_api_key'
+          break
+        case 'openart':
+          keyColumn = 'openart_api_key'
+          break
+        case 'leonardo':
+          keyColumn = 'leonardo_api_key'
+          break
+        case 'runway':
+          keyColumn = 'runway_api_key'
+          break
+        case 'stable-diffusion':
+          keyColumn = 'openart_api_key' // Using OpenArt as SD alternative
+          break
+        default:
+          keyColumn = `${service.toLowerCase()}_api_key`
+      }
+
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select(keyColumn)
+        .eq('id', userId)
+        .single()
+
+      if (userError || !userData || !userData[keyColumn]) {
+        console.error('Failed to fetch API key:', userError)
+        const serviceName = service.toLowerCase() === 'dalle' ? 'OpenAI' : 
+                          service.toLowerCase() === 'openart' ? 'OpenArt' :
+                          service.toLowerCase() === 'leonardo' ? 'Leonardo' :
+                          service.toLowerCase() === 'runway' ? 'Runway ML' : service
+        return NextResponse.json(
+          { error: `No API key configured for ${serviceName}. Please add your API key in Settings → AI Settings.` },
+          { status: 400 }
+        )
+      }
+
+      apiKey = userData[keyColumn]
+      console.log('Successfully fetched configured API key for', keyColumn)
     }
 
     let imageUrl = ""

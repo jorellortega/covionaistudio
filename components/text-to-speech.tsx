@@ -479,330 +479,201 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
   if (!elevenLabsApiKey) {
     return (
-      <Card className={`bg-card border-orange-500/20 w-full overflow-hidden ${className}`}>
-        <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
-          <CardTitle className="text-orange-500 text-base sm:text-lg">ElevenLabs Not Configured</CardTitle>
-        </CardHeader>
-        <CardContent className="px-4 py-3 sm:px-6 sm:py-4">
-          <p className="text-sm text-muted-foreground mb-3">
-            To use text-to-speech, please configure your ElevenLabs API key in AI Setup.
-          </p>
-          {projectId && (
-            <p className="text-xs text-muted-foreground mb-2">
-              Debug: projectId={projectId}, sceneId={sceneId || 'none'}
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10 w-full sm:w-auto"
-            onClick={() => window.location.href = '/setup-ai'}
-          >
-            Go to AI Setup
-          </Button>
-        </CardContent>
-      </Card>
+      <div className={`w-full p-2 bg-orange-500/10 rounded border border-orange-500/20 ${className}`}>
+        <p className="text-xs text-orange-400 mb-2">
+          ElevenLabs not configured
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10 h-7 text-xs"
+          onClick={() => window.location.href = '/setup-ai'}
+        >
+          Setup AI
+        </Button>
+      </div>
     )
   }
 
   return (
-    <Card className={`bg-card border-blue-500/20 w-full overflow-hidden ${className}`}>
-      <CardHeader className="px-4 py-3 sm:px-6 sm:py-4">
-        <CardTitle className="text-blue-500 flex items-center gap-2 text-base sm:text-lg">
-          <Volume2 className="h-4 w-4 sm:h-5 sm:w-5" />
-          Text to Speech
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4 px-4 py-3 sm:px-6 sm:py-4">
-        {/* Voice Selection */}
-        <div className="space-y-3">
-          <label className="text-sm font-medium text-foreground">Select Voice</label>
-          <Select value={selectedVoice} onValueChange={setSelectedVoice}>
-            <SelectTrigger className="bg-card border-blue-500/30 w-full">
-              <SelectValue placeholder="Loading voices..." />
-            </SelectTrigger>
-            <SelectContent className="bg-card border-blue-500/30 max-h-60 overflow-y-auto">
-              {isLoadingVoices ? (
-                <div className="flex items-center gap-2 p-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Loading voices...</span>
-                </div>
-              ) : (
-                voices.map((voice) => (
-                  <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                    <div className="flex flex-col min-w-0">
-                      <span className="font-medium truncate">{voice.name}</span>
-                      {voice.description && (
-                        <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
-                      )}
-                    </div>
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
-          {selectedVoice && (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400">
-                {getSelectedVoiceName()}
-              </Badge>
-              <Badge variant="secondary" className="text-xs">
-                {voices.find(v => v.voice_id === selectedVoice)?.category || 'Unknown'}
-              </Badge>
-            </div>
-          )}
-        </div>
-
-        {/* Generate Speech Button */}
+    <div className={`w-full space-y-2 ${className}`}>
+      {/* Compact Voice Selection and Generate Button */}
+      <div className="flex items-center gap-2">
+        <Volume2 className="h-4 w-4 text-blue-500 flex-shrink-0" />
+        <Select value={selectedVoice} onValueChange={setSelectedVoice}>
+          <SelectTrigger className="bg-card border-blue-500/30 h-8 text-xs flex-1 min-w-[150px]">
+            <SelectValue placeholder="Select Voice" />
+          </SelectTrigger>
+          <SelectContent className="bg-card border-blue-500/30 max-h-60 overflow-y-auto">
+            {isLoadingVoices ? (
+              <div className="flex items-center gap-2 p-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                <span className="text-xs">Loading...</span>
+              </div>
+            ) : (
+              voices.map((voice) => (
+                <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-medium truncate text-xs">{voice.name}</span>
+                    {voice.description && (
+                      <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
+                    )}
+                  </div>
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
+        {selectedVoice && (
+          <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400 hidden sm:flex">
+            {voices.find(v => v.voice_id === selectedVoice)?.category || 'premade'}
+          </Badge>
+        )}
         <Button
           onClick={generateSpeech}
           disabled={isLoading || !selectedVoice || !text.trim()}
-          className="w-full bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90"
+          size="sm"
+          className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 h-8 text-xs px-3"
         >
           {isLoading ? (
             <>
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              Generating Speech...
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+              Generating...
             </>
           ) : (
             <>
-              <Volume2 className="h-4 w-4 mr-2" />
-              Generate Speech
+              <Volume2 className="h-3 w-3 mr-1" />
+              Generate
             </>
           )}
         </Button>
-        
+      </div>
 
-        
-        {/* No Audio Generated Yet */}
-        {!audioUrl && (
-          <div className="text-center py-4 text-sm text-muted-foreground px-2">
-            <div className="mb-2">🎤 Ready to generate speech</div>
-            <div className="text-xs">Select a voice and click "Generate Speech" to get started</div>
-          </div>
-        )}
+      {/* No Audio Generated Yet */}
+      {!audioUrl && !isLoading && (
+        <div className="text-center py-1 text-xs text-muted-foreground">
+          🎤 Ready to generate speech
+        </div>
+      )}
 
-        {/* Audio Player */}
-        {audioUrl && (
-          <div className="space-y-3 p-4 bg-muted/20 rounded-lg border border-border">
-            <div className="flex items-center gap-2">
-              <h4 className="font-medium text-foreground">Generated Audio</h4>
-              <Badge variant="outline" className="text-xs border-green-500/30 text-green-400">
-                Ready to Play
-              </Badge>
-            </div>
-            
-            <audio
-              ref={audioRef}
-              src={audioUrl}
-              onEnded={handleAudioEnded}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              className="w-full"
-            />
-            
-            <div className="flex gap-2">
+      {/* Audio Player - Compact */}
+      {audioUrl && (
+        <div className="space-y-2 p-2 bg-muted/20 rounded border border-border">
+          <audio
+            ref={audioRef}
+            src={audioUrl}
+            onEnded={handleAudioEnded}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            className="w-full h-8"
+            controls
+          />
+          
+          <div className="flex gap-1 flex-wrap">
+            <Button
+              onClick={downloadAudio}
+              variant="outline"
+              size="sm"
+              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 h-7 text-xs px-2"
+            >
+              <Download className="h-3 w-3 mr-1" />
+              Download
+            </Button>
+
+            {/* Save to Bucket Button */}
+            {projectId && (
               <Button
-                onClick={playAudio}
+                onClick={saveToBucket}
+                disabled={isSavingToBucket || !!savedAssetId}
                 variant="outline"
                 size="sm"
-                className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                className={`h-7 text-xs px-2 ${
+                  savedAssetId 
+                    ? 'border-green-500/30 text-green-400 bg-green-500/10' 
+                    : 'border-purple-500/30 text-purple-400 hover:bg-purple-500/10'
+                }`}
               >
-                {isPlaying ? (
+                {isSavingToBucket ? (
                   <>
-                    <Pause className="h-4 w-4 mr-2" />
-                    Pause
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    Saving...
+                  </>
+                ) : savedAssetId ? (
+                  <>
+                    <span className="mr-1">✓</span>
+                    Saved
                   </>
                 ) : (
                   <>
-                    <Play className="h-4 w-4 mr-2" />
-                    Play
+                    <span className="mr-1">☁️</span>
+                    Save
                   </>
                 )}
               </Button>
-              
-              <Button
-                onClick={downloadAudio}
-                variant="outline"
-                size="sm"
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-              >
-                <Download className="h-4 w-4 mr-2" />
-                Download
-              </Button>
-
-              {/* Save to Bucket Button */}
-              {projectId && (
-                <Button
-                  onClick={saveToBucket}
-                  disabled={isSavingToBucket || !!savedAssetId}
-                  variant="outline"
-                  size="sm"
-                  className={`${
-                    savedAssetId 
-                      ? 'border-green-500/30 text-green-400 bg-green-500/10' 
-                      : 'border-purple-500/30 text-purple-400 hover:bg-purple-500/10'
-                  }`}
-                >
-                  {isSavingToBucket ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : savedAssetId ? (
-                    <>
-                      <span className="mr-2">✓</span>
-                      Saved
-                    </>
-                  ) : (
-                    <>
-                      <span className="mr-2">☁️</span>
-                      Save
-                    </>
-                  )}
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Success Indicator */}
-        {savedAssetId && (
-          <div className="text-xs text-green-400 text-center mt-2 px-2">
-            ✓ Audio saved as asset #{savedAssetId.slice(0, 8)}...
-          </div>
-        )}
-
-        {/* Saved Audio Files Section */}
-        {projectId && (
-          <div className="mt-4 pt-4 border-t border-border">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-foreground">Saved Audio</h4>
-              <Button
-                onClick={fetchSavedAudio}
-                disabled={isLoadingSavedAudio}
-                variant="outline"
-                size="sm"
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-              >
-                {isLoadingSavedAudio ? (
-                  <>
-                    <Loader2 className="h-3 w-3 mr-2 animate-spin" />
-                    Loading...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="h-3 w-3 mr-2" />
-                    Refresh
-                  </>
-                )}
-              </Button>
-            </div>
-
-            {savedAudioFiles.length > 0 ? (
-              <div className="space-y-3">
-                {savedAudioFiles.map((file, index) => (
-                  <div key={index} className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-muted/20 rounded border border-border">
-                    <div className="flex-1 min-w-0">
-                      {editingAudioId === file.id ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={editingAudioName}
-                            onChange={(e) => setEditingAudioName(e.target.value)}
-                            className="text-sm font-medium text-foreground bg-background border border-border rounded px-2 py-1 flex-1"
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                saveEditedAudioName(file)
-                              } else if (e.key === 'Escape') {
-                                cancelEditingAudioName()
-                              }
-                            }}
-                            autoFocus
-                          />
-                          <Button
-                            onClick={() => saveEditedAudioName(file)}
-                            disabled={isRenamingAudio === file.id}
-                            size="sm"
-                            className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
-                          >
-                            {isRenamingAudio === file.id ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              '✓'
-                            )}
-                          </Button>
-                          <Button
-                            onClick={cancelEditingAudioName}
-                            size="sm"
-                            className="h-6 px-2 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          >
-                            ×
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 group">
-                          <p 
-                            className="text-sm font-medium text-foreground truncate cursor-pointer hover:text-blue-400 transition-colors"
-                            onClick={() => startEditingAudioName(file)}
-                            title="Click to rename"
-                          >
-                            {file.name}
-                          </p>
-                          <Button
-                            onClick={() => startEditingAudioName(file)}
-                            variant="ghost"
-                            size="sm"
-                            className="h-4 w-4 p-0 opacity-0 group-hover:opacity-100 transition-opacity text-blue-400 hover:text-blue-300"
-                          >
-                            ✏️
-                          </Button>
-                        </div>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        {(file.size / 1024 / 1024).toFixed(2)} MB • {new Date(file.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <audio
-                        src={file.public_url}
-                        controls
-                        className="h-8 w-full sm:w-auto"
-                        preload="none"
-                      />
-                      <Button
-                        onClick={() => window.open(file.public_url, '_blank')}
-                        variant="outline"
-                        size="sm"
-                        className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                      >
-                        <Download className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        onClick={() => deleteAudioFile(file)}
-                        disabled={isDeletingAudio === file.id}
-                        variant="outline"
-                        size="sm"
-                        className="border-gray-500/30 text-gray-400 hover:bg-gray-500/10"
-                      >
-                        {isDeletingAudio === file.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          '×'
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-4 text-sm text-muted-foreground px-2">
-                {isLoadingSavedAudio ? 'Loading saved audio...' : 'No saved audio files yet'}
-              </div>
+            )}
+            {savedAssetId && (
+              <span className="text-xs text-green-400 flex items-center">
+                ✓ Saved to project
+              </span>
             )}
           </div>
-        )}
-      </CardContent>
-    </Card>
+        </div>
+      )}
+
+      {/* Saved Audio Files Section - Compact & Collapsible */}
+      {projectId && savedAudioFiles.length > 0 && (
+        <details className="mt-2 pt-2 border-t border-border/50">
+          <summary className="text-xs font-medium text-muted-foreground cursor-pointer flex items-center gap-2 hover:text-foreground">
+            <span>Saved Audio ({savedAudioFiles.length})</span>
+            <RefreshCw 
+              className="h-3 w-3 hover:text-blue-400" 
+              onClick={(e) => {
+                e.preventDefault()
+                fetchSavedAudio()
+              }}
+            />
+          </summary>
+          <div className="space-y-2 mt-2">
+            {savedAudioFiles.map((file, index) => (
+              <div key={index} className="flex items-center gap-2 p-2 bg-muted/20 rounded border border-border/50">
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-foreground truncate">{file.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {(file.size / 1024 / 1024).toFixed(2)} MB
+                  </p>
+                </div>
+                <audio
+                  src={file.public_url}
+                  controls
+                  className="h-8 w-32"
+                  preload="none"
+                />
+                <Button
+                  onClick={() => window.open(file.public_url, '_blank')}
+                  variant="outline"
+                  size="sm"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 h-7 w-7 p-0"
+                >
+                  <Download className="h-3 w-3" />
+                </Button>
+                <Button
+                  onClick={() => deleteAudioFile(file)}
+                  disabled={isDeletingAudio === file.id}
+                  variant="outline"
+                  size="sm"
+                  className="border-gray-500/30 text-gray-400 hover:bg-gray-500/10 h-7 w-7 p-0"
+                >
+                  {isDeletingAudio === file.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    '×'
+                  )}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
   )
 }

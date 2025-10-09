@@ -35,6 +35,7 @@ import {
   Download,
   CheckCircle,
   User,
+  FileText,
 } from "lucide-react"
 import Link from "next/link"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
@@ -1453,6 +1454,16 @@ export default function MoviesPage() {
                       Timeline
                     </Button>
                   </Link>
+                  <Link href={`/treatments/movie/${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10 bg-transparent text-xs h-6"
+                    >
+                      <FileText className="mr-1 h-2.5 w-2.5" />
+                      Treatment
+                    </Button>
+                  </Link>
                   <Link href={`/ai-studio?project=${movie.id}`}>
                     <Button
                       variant="outline"
@@ -1471,6 +1482,16 @@ export default function MoviesPage() {
                     >
                       <FolderOpen className="mr-1 h-2.5 w-2.5" />
                       Assets
+                    </Button>
+                  </Link>
+                  <Link href={`/casting/${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-pink-500/20 hover:border-pink-500 hover:bg-pink-500/10 bg-transparent text-xs h-6"
+                    >
+                      <User className="mr-1 h-2.5 w-2.5" />
+                      Casting
                     </Button>
                   </Link>
                 </div>

@@ -34,7 +34,7 @@ import { getSupabaseClient } from '@/lib/supabase'
 
 interface FileImportProps {
   projectId: string
-  sceneId: string
+  sceneId: string | null
   onFileImported?: (assetId: string) => void
   className?: string
 }
@@ -735,7 +735,10 @@ export default function FileImport({
           storedFileId: file.storedFile?.id,
           storedFileUrl: file.storedFile?.url,
           extractedText: file.extractedText,
-          extractionMethod: file.extractedText ? 'automatic' : 'manual'
+          extractionMethod: file.extractedText ? 'automatic' : 'manual',
+          // Add special metadata to bypass scene validation for imported scripts
+          isImportedScript: true,
+          bypassSceneValidation: true
         }
       }
 

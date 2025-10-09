@@ -81,8 +81,8 @@ export class AssetService {
       }
     }
     
-    // Validate that the referenced scene exists (if provided)
-    if (assetData.scene_id && assetData.scene_id !== null && typeof assetData.scene_id === 'string') {
+    // Validate that the referenced scene exists (if provided and not bypassed)
+    if (assetData.scene_id && assetData.scene_id !== null && typeof assetData.scene_id === 'string' && !assetData.metadata?.bypassSceneValidation) {
       const { data: sceneExists, error: sceneError } = await getSupabaseClient()
         .from('scenes')
         .select('id')

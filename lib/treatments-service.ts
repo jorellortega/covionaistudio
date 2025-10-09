@@ -3,6 +3,7 @@ import { getSupabaseClient } from './supabase'
 export interface Treatment {
   id: string
   user_id: string
+  project_id?: string
   title: string
   genre: string
   status: 'draft' | 'in-progress' | 'completed' | 'archived'
@@ -21,8 +22,10 @@ export interface Treatment {
 }
 
 export interface CreateTreatmentData {
+  project_id?: string
   title: string
   genre: string
+  status?: 'draft' | 'in-progress' | 'completed' | 'archived'
   cover_image_url?: string
   synopsis: string
   target_audience?: string
@@ -37,6 +40,7 @@ export interface CreateTreatmentData {
 
 export interface UpdateTreatmentData extends Partial<CreateTreatmentData> {
   status?: 'draft' | 'in-progress' | 'completed' | 'archived'
+  project_id?: string
 }
 
 export class TreatmentsService {
@@ -96,8 +100,10 @@ export class TreatmentsService {
       // Clean and map the data to match database schema exactly
       const treatmentWithUserId = {
         user_id: user.id,
+        project_id: treatmentData.project_id || null,
         title: treatmentData.title,
         genre: treatmentData.genre,
+        status: treatmentData.status || 'draft',
         synopsis: treatmentData.synopsis,
         cover_image_url: treatmentData.cover_image_url || null,
         target_audience: treatmentData.target_audience || null,
@@ -235,6 +241,29 @@ export class TreatmentsService {
       return data || []
     } catch (error) {
       console.error('Error in getTreatmentsByGenre:', error)
+      throw error
+    }
+  }
+
+  // Get treatment by project ID
+  static async getTreatmentByProjectId(projectId: string): Promise<Treatment | null> {
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('treatments')
+        .select('*')
+        .eq('project_id', projectId)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (error) {
+        console.error('Error fetching treatment by project ID:', error)
+        throw error
+      }
+
+      return data
+    } catch (error) {
+      console.error('Error in getTreatmentByProjectId:', error)
       throw error
     }
   }
