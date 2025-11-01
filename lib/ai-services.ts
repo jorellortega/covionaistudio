@@ -25,8 +25,11 @@ interface GenerateVideoRequest {
   prompt: string
   duration: string
   model: string
-  apiKey: string
+  apiKey?: string
   resolution?: string
+  file?: File | null
+  startFrame?: File | null
+  endFrame?: File | null
 }
 
 interface GenerateAudioRequest {
@@ -207,38 +210,82 @@ export class OpenArtService {
   }
 }
 
-// Kling Service (Video Generation)
+// Kling Service (Video Generation) - Server-side only
 export class KlingService {
   static async generateVideo(request: GenerateVideoRequest): Promise<AIResponse> {
     try {
-      console.log('🎬 Kling generateVideo called with:', {
+      console.log('🎬 Kling generateVideo called - forwarding to server-side API')
+      console.log('🎬 Request:', {
         promptLength: request.prompt?.length || 0,
         duration: request.duration,
-        hasApiKey: !!request.apiKey,
-        apiKeyStart: request.apiKey?.substring(0, 10) + '...',
+        model: request.model,
+        hasFile: !!request.file,
+        hasStartFrame: !!request.startFrame,
+        hasEndFrame: !!request.endFrame,
       })
       
-      const response = await fetch('https://api.klingai.com/v1/generations', {
+      // Prepare form data for file upload support
+      const formData = new FormData()
+      formData.append('prompt', request.prompt || '')
+      
+      // Map model to API model format
+      let apiModel = 'kling_t2v'
+      if (request.model === 'Kling I2V' || request.model === 'Kling I2V Extended') {
+        apiModel = 'kling_i2v'
+      }
+      formData.append('model', apiModel)
+      
+      // Parse duration (handle both "10s" and 10 formats)
+      const durationStr = String(request.duration || '5')
+      const durationNum = durationStr.includes('s') 
+        ? parseInt(durationStr.replace('s', '')) 
+        : parseInt(durationStr)
+      formData.append('duration', durationNum.toString())
+      
+      // Map resolution to ratio
+      const resolutionToRatio: Record<string, string> = {
+        '1280:720': '16:9',
+        '1920:1080': '16:9',
+        '720:1280': '9:16',
+        '1080:1920': '9:16',
+        '960:960': '1:1',
+        '1024:1024': '1:1',
+      }
+      const ratio = resolutionToRatio[request.resolution || '1280:720'] || '16:9'
+      formData.append('ratio', ratio)
+      
+      // Add files based on model type
+      if (request.model === 'Kling I2V' && request.file) {
+        formData.append('file', request.file)
+      } else if (request.model === 'Kling I2V Extended') {
+        if (request.startFrame) {
+          formData.append('start_frame', request.startFrame)
+        }
+        if (request.endFrame) {
+          formData.append('end_frame', request.endFrame)
+        }
+      }
+      
+      // Call our server-side API route
+      const response = await fetch('/api/kling/generate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${request.apiKey}`,
-        },
-        body: JSON.stringify({
-          prompt: request.prompt,
-          duration: request.duration,
-          model: "kling-v1",
-        }),
+        body: formData, // Use FormData for file upload support
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`Kling API error (${response.status}): ${errorText}`)
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(errorData.error || `API error (${response.status})`)
       }
       
       const result = await response.json()
-      return { success: true, data: result }
+      
+      if (result.success) {
+        return { success: true, data: result.data }
+      } else {
+        return { success: false, error: result.error || 'Unknown error' }
+      }
     } catch (error) {
+      console.error('🎬 Kling video generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }
@@ -256,25 +303,24 @@ export class KlingService {
 
   static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
     try {
-      console.log('🧪 Testing Kling API connection...')
+      console.log('🧪 Testing Kling API connection via server-side...')
       
-      const response = await fetch('https://api.klingai.com/v1/generations', {
+      // Test with a simple prompt via our server-side API
+      const formData = new FormData()
+      formData.append('prompt', 'test')
+      formData.append('model', 'kling_t2v')
+      formData.append('duration', '5')
+      formData.append('ratio', '16:9')
+      
+      const response = await fetch('/api/kling/generate', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          prompt: "test",
-          duration: "3s",
-          model: "kling-v1",
-        }),
+        body: formData,
       })
       
       console.log('🧪 Kling API test response status:', response.status)
       
       if (response.status === 401 || response.status === 403) {
-        return { success: false, status: response.status, error: 'Invalid API key' }
+        return { success: false, status: response.status, error: 'Invalid API key or insufficient credits' }
       }
       
       if (response.status === 400) {

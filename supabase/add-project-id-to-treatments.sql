@@ -13,3 +13,8 @@ COMMENT ON COLUMN public.treatments.project_id IS 'Optional reference to the ass
 
 -- Note: project_id is nullable to allow standalone treatments that are not linked to any movie project
 
+
+
+
+
+

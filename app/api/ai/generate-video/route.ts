@@ -152,10 +152,28 @@ export async function POST(request: NextRequest) {
       const base64 = Buffer.from(fileBuffer).toString('base64')
       const mimeType = file.type
       promptImage = `data:${mimeType};base64,${base64}`
+      console.log('🎬 File uploaded - type:', mimeType, 'size:', file.size)
+    }
+
+    // Validate required files for each model
+    const imageRequiredModels = ['gen4_turbo', 'gen3a_turbo']
+    const videoRequiredModels = ['act_two', 'gen4_aleph', 'upscale_v1']
+    
+    if (imageRequiredModels.includes(model) && !promptImage) {
+      return NextResponse.json({ 
+        error: `${model} requires an image to be uploaded. Please upload an image and try again.` 
+      }, { status: 400 })
+    }
+    
+    if (videoRequiredModels.includes(model) && !promptImage) {
+      return NextResponse.json({ 
+        error: `${model} requires a video to be uploaded. Please upload a video and try again.` 
+      }, { status: 400 })
     }
 
     console.log('🎬 Using Runway SDK with model:', model)
     console.log('🎬 Base parameters:', baseParams)
+    console.log('🎬 Has file uploaded:', !!promptImage)
 
     // Function to try video generation with a specific model
     async function tryVideoGeneration(modelToTry: string) {
@@ -197,6 +215,7 @@ export async function POST(request: NextRequest) {
           
           const task = await taskPromise
           console.log(`🎬 Task created for ${modelToTry}:`, task.id)
+          console.log(`🎬 Task initial status:`, task.status)
           
           // Wait for task completion using the SDK's built-in method
           const result = await taskPromise.waitForTaskOutput({
@@ -204,10 +223,20 @@ export async function POST(request: NextRequest) {
           })
           
           console.log(`🎬 Task completed for ${modelToTry}:`, result)
+          console.log(`🎬 Task final status:`, result?.status)
+          
+          // Check if task failed
+          if (result?.status === 'FAILED' || result?.failure) {
+            const failureReason = result?.failure || result?.failureReason || 'Unknown reason'
+            console.error(`🎬 Task failed with reason:`, failureReason)
+            throw new Error(`Video generation failed: ${failureReason}`)
+          }
+          
           return result
         }
       } catch (error: any) {
         console.log(`🎬 Error with model ${modelToTry}:`, error.message)
+        console.error(`🎬 Full error details:`, error)
         
         // Check if it's a model access error or workspace limitation
         if (error.message?.includes('403') || 
@@ -216,6 +245,11 @@ export async function POST(request: NextRequest) {
             error.message?.includes('No video models enabled') ||
             error.message?.includes('workspace')) {
           throw new Error('MODEL_NOT_AVAILABLE')
+        }
+        
+        // Check for specific error types
+        if (error.name === 'TaskFailedError' || error.message?.includes('Task failed')) {
+          console.error(`🎬 Task failed error details:`, error.task || error)
         }
         
         throw error
@@ -262,6 +296,7 @@ export async function POST(request: NextRequest) {
     // If all models failed, return clear error with helpful message
     if (!result) {
       let errorMessage = 'Video generation failed. '
+      let errorDetails = lastError?.message || 'Unknown error'
       
       if (lastError?.message?.includes('requires video input')) {
         errorMessage += 'The selected model requires a video input file. Please upload a video or select a different model.'
@@ -269,11 +304,20 @@ export async function POST(request: NextRequest) {
         errorMessage += 'Please upload an image to generate a video from it.'
       } else if (lastError?.message?.includes('No video models enabled')) {
         errorMessage += 'No video models are enabled on this API workspace. Contact Runway support to enable video models.'
+      } else if (lastError?.message?.includes('credits') || lastError?.message?.includes('quota')) {
+        errorMessage += 'You may have run out of credits. Please check your Runway account balance.'
+      } else if (lastError?.message?.includes('content') || lastError?.message?.includes('policy')) {
+        errorMessage += 'The content may have been flagged. Please try a different prompt or image.'
+      } else if (lastError?.message?.includes('timeout') || lastError?.message?.includes('Timeout')) {
+        errorMessage += 'The request timed out. Please try again.'
+      } else if (errorDetails.includes('An unexpected error occurred')) {
+        errorMessage += 'The Runway API returned an unexpected error. This could be due to: image format/quality issues, content policy violations, or temporary API issues. Try a different image or contact Runway support.'
       } else {
-        errorMessage += 'All available models failed. Please check your API key and try again.'
+        errorMessage += `Error: ${errorDetails}`
       }
       
-      console.error('🎬', errorMessage)
+      console.error('🎬 Final error message:', errorMessage)
+      console.error('🎬 Last error object:', lastError)
       return NextResponse.json({ error: errorMessage }, { status: 403 })
     }
 

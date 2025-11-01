@@ -87,7 +87,7 @@ interface GeneratedContent {
 const aiModels = {
   script: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
   image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
-  video: ["Kling", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
+  video: ["Kling T2V", "Kling I2V", "Kling I2V Extended", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
 
@@ -145,6 +145,11 @@ export default function AIStudioPage() {
   const [showMoreOptions, setShowMoreOptions] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [filePreview, setFilePreview] = useState<string | null>(null)
+  // Kling start/end frame support
+  const [startFrame, setStartFrame] = useState<File | null>(null)
+  const [endFrame, setEndFrame] = useState<File | null>(null)
+  const [startFramePreview, setStartFramePreview] = useState<string | null>(null)
+  const [endFramePreview, setEndFramePreview] = useState<string | null>(null)
   const [selectedAudioType, setSelectedAudioType] = useState("music")
   const [selectedAudioDuration, setSelectedAudioDuration] = useState("30s")
   const [selectedVoice, setSelectedVoice] = useState("21m00Tcm4TlvDq8ikWAM")
@@ -180,6 +185,46 @@ export default function AIStudioPage() {
   const handleContentViolation = (type: 'script' | 'image' | 'video' | 'audio', prompt: string) => {
     setContentViolationData({ type, prompt })
     setShowContentViolationDialog(true)
+  }
+
+  // Helper function to determine what file type is needed for Runway models
+  const getRunwayFileRequirement = (): 'image' | 'video' | null => {
+    // If "Runway ML" is selected, use the sub-model state
+    if (selectedModel === "Runway ML") {
+      if (selectedRunwayModel === "gen4_turbo" || selectedRunwayModel === "gen3a_turbo") {
+        return 'image'
+      } else if (selectedRunwayModel === "act_two" || selectedRunwayModel === "gen4_aleph" || selectedRunwayModel === "upscale_v1") {
+        return 'video'
+      }
+    }
+    
+    // If a specific Runway model is selected from the main dropdown
+    if (selectedModel === "Runway Gen-4 Turbo" || selectedModel === "Runway Gen-3A Turbo") {
+      return 'image'
+    } else if (selectedModel === "Runway Act-Two" || selectedModel === "Runway Gen-4 Aleph" || selectedModel === "Runway Upscale") {
+      return 'video'
+    }
+    
+    return null
+  }
+
+  // Helper function to get the actual Runway model code to send to the API
+  const getActualRunwayModel = (): string => {
+    // If "Runway ML" is selected, use the sub-model state
+    if (selectedModel === "Runway ML") {
+      return selectedRunwayModel || 'gen4_turbo'
+    }
+    
+    // Map main dropdown selections to model codes
+    const modelMap: { [key: string]: string } = {
+      "Runway Gen-4 Turbo": "gen4_turbo",
+      "Runway Gen-4 Aleph": "gen4_aleph",
+      "Runway Gen-3A Turbo": "gen3a_turbo",
+      "Runway Act-Two": "act_two",
+      "Runway Upscale": "upscale_v1"
+    }
+    
+    return modelMap[selectedModel] || 'gen4_turbo'
   }
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -985,8 +1030,8 @@ export default function AIStudioPage() {
           
           console.log('Enhanced prompt for Runway ML:', enhancedPrompt)
           
-          // Use the selected Runway sub-model directly
-          const actualModel = selectedRunwayModel || 'gen4_turbo'
+          // Get the actual model code to send to the API
+          const actualModel = getActualRunwayModel()
           console.log('🎬 Frontend Debug - selectedModel:', selectedModel)
           console.log('🎬 Frontend Debug - actualModel:', actualModel)
           console.log('🎬 Frontend Debug - selectedRunwayModel:', selectedRunwayModel)
@@ -1107,27 +1152,52 @@ export default function AIStudioPage() {
               variant: "destructive",
             })
           }
-        } else if (type === "video" && selectedModel === "Kling") {
+        } else if (type === "video" && (selectedModel === "Kling T2V" || selectedModel === "Kling I2V" || selectedModel === "Kling I2V Extended")) {
           console.log('Attempting to generate video with Kling:', {
             prompt: videoPrompt,
-            duration: "10s", // Default duration
-            apiKeyLength: userApiKeys.kling_api_key?.length || 0,
-            apiKeyPrefix: userApiKeys.kling_api_key?.substring(0, 7) || 'None'
+            model: selectedModel,
+            duration: selectedDuration,
+            hasStartFrame: !!startFrame,
+            hasEndFrame: !!endFrame,
+            hasUploadedFile: !!uploadedFile
           })
+          
+          // Validate required files for each model
+          if (selectedModel === "Kling I2V" && !uploadedFile) {
+            toast({
+              title: "Missing Image",
+              description: "Kling I2V requires an image to be uploaded",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
+          
+          if (selectedModel === "Kling I2V Extended" && (!startFrame || !endFrame)) {
+            toast({
+              title: "Missing Frames",
+              description: "Kling I2V Extended requires both start and end frames",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
           
           // Import the Kling service
           const { KlingService } = await import('@/lib/ai-services')
           
           const enhancedPrompt = enhancePromptWithScript(videoPrompt, 'video')
-          console.log(`🚀 VIDEO GENERATION (Kling) - Final Prompt Sent to Kling:`)
-          console.log(`🚀 VIDEO GENERATION (Kling) - ${enhancedPrompt}`)
-          console.log(`🚀 VIDEO GENERATION (Kling) - Duration: 10s`)
+          console.log(`🚀 VIDEO GENERATION (${selectedModel}) - Final Prompt:`, enhancedPrompt)
+          console.log(`🚀 VIDEO GENERATION - Duration: ${selectedDuration}`)
           
           const response = await KlingService.generateVideo({
             prompt: enhancedPrompt,
-            duration: "10s",
+            duration: selectedDuration,
             model: selectedModel,
-            apiKey: userApiKeys.kling_api_key!,
+            file: uploadedFile,
+            startFrame: startFrame,
+            endFrame: endFrame,
+            resolution: selectedResolution,
           })
 
           if (response.success) {
@@ -1141,12 +1211,20 @@ export default function AIStudioPage() {
               created_at: new Date().toISOString(),
               project_id: selectedProject,
               scene_id: selectedScene !== "none" ? selectedScene : undefined,
-              duration: "10s",
+              duration: selectedDuration,
               url: response.data?.url || response.data?.output?.url,
             }
             
             setGeneratedContent(prev => [newContent, ...prev])
             setVideoPrompt("") // Clear the prompt after successful generation
+            
+            // Clear uploaded files
+            setUploadedFile(null)
+            setFilePreview(null)
+            setStartFrame(null)
+            setEndFrame(null)
+            setStartFramePreview(null)
+            setEndFramePreview(null)
           } else {
             // Check if it's a content policy violation
             if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
@@ -2911,15 +2989,17 @@ export default function AIStudioPage() {
                       </Button>
 
                       {/* File Upload - Show for models that support it */}
-                      {(selectedRunwayModel === "gen4_turbo" || selectedRunwayModel === "gen4_aleph" || selectedRunwayModel === "gen3a_turbo" || selectedRunwayModel === "act_two") && (
+                      {getRunwayFileRequirement() && (
                       <div className="grid gap-2">
                           <Label>
-                            {selectedRunwayModel === "act_two" ? "Upload Video" : "Upload Image (Optional)"}
+                            {getRunwayFileRequirement() === 'video'
+                              ? "Upload Video (Required)" 
+                              : "Upload Image (Required)"}
                           </Label>
                           <div className="border-2 border-dashed border-border rounded-lg p-4">
                             <input
                               type="file"
-                              accept={selectedRunwayModel === "act_two" ? "video/*" : "image/*"}
+                              accept={getRunwayFileRequirement() === 'video' ? "video/*" : "image/*"}
                               onChange={(e) => {
                                 const file = e.target.files?.[0]
                                 if (file) {
@@ -2940,7 +3020,7 @@ export default function AIStudioPage() {
                             >
                               {filePreview ? (
                                 <div className="relative">
-                                  {selectedRunwayModel === "act_two" ? (
+                                  {getRunwayFileRequirement() === 'video' ? (
                                     <video
                                       src={filePreview}
                                       className="max-w-full max-h-32 rounded"
@@ -2969,13 +3049,191 @@ export default function AIStudioPage() {
                                 <>
                                   <Upload className="h-8 w-8 text-muted-foreground" />
                                   <span className="text-sm text-muted-foreground">
-                                    {selectedRunwayModel === "act_two" 
+                                    {getRunwayFileRequirement() === 'video'
                                       ? "Click to upload a video file" 
-                                      : "Click to upload an image file (optional)"}
+                                      : "Click to upload an image file"}
                                   </span>
                                 </>
                               )}
                             </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Kling File Upload - Show for Kling models */}
+                      {selectedModel === "Kling I2V" && (
+                        <div className="grid gap-2">
+                          <Label>Upload Image (Required)</Label>
+                          <div className="border-2 border-dashed border-border rounded-lg p-4">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                  setUploadedFile(file)
+                                  const reader = new FileReader()
+                                  reader.onload = (e) => {
+                                    setFilePreview(e.target?.result as string)
+                                  }
+                                  reader.readAsDataURL(file)
+                                }
+                              }}
+                              className="hidden"
+                              id="kling-file-upload"
+                            />
+                            <label
+                              htmlFor="kling-file-upload"
+                              className="cursor-pointer flex flex-col items-center gap-2"
+                            >
+                              {filePreview ? (
+                                <div className="relative">
+                                  <img
+                                    src={filePreview}
+                                    alt="Preview"
+                                    className="max-w-full max-h-32 rounded object-cover"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      setUploadedFile(null)
+                                      setFilePreview(null)
+                                    }}
+                                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <Upload className="h-8 w-8 text-muted-foreground" />
+                                  <span className="text-sm text-muted-foreground">
+                                    Click to upload an image file
+                                  </span>
+                                </>
+                              )}
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Kling I2V Extended - Start and End Frames */}
+                      {selectedModel === "Kling I2V Extended" && (
+                        <div className="grid gap-4">
+                          {/* Start Frame */}
+                          <div className="grid gap-2">
+                            <Label>Start Frame (Required)</Label>
+                            <div className="border-2 border-dashed border-border rounded-lg p-4">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0]
+                                  if (file) {
+                                    setStartFrame(file)
+                                    const reader = new FileReader()
+                                    reader.onload = (e) => {
+                                      setStartFramePreview(e.target?.result as string)
+                                    }
+                                    reader.readAsDataURL(file)
+                                  }
+                                }}
+                                className="hidden"
+                                id="kling-start-frame"
+                              />
+                              <label
+                                htmlFor="kling-start-frame"
+                                className="cursor-pointer flex flex-col items-center gap-2"
+                              >
+                                {startFramePreview ? (
+                                  <div className="relative">
+                                    <img
+                                      src={startFramePreview}
+                                      alt="Start Frame"
+                                      className="max-w-full max-h-32 rounded object-cover"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        setStartFrame(null)
+                                        setStartFramePreview(null)
+                                      }}
+                                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <Upload className="h-8 w-8 text-muted-foreground" />
+                                    <span className="text-sm text-muted-foreground">
+                                      Click to upload start frame
+                                    </span>
+                                  </>
+                                )}
+                              </label>
+                            </div>
+                          </div>
+
+                          {/* End Frame */}
+                          <div className="grid gap-2">
+                            <Label>End Frame (Required)</Label>
+                            <div className="border-2 border-dashed border-border rounded-lg p-4">
+                              <input
+                                type="file"
+                                accept="image/*"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0]
+                                  if (file) {
+                                    setEndFrame(file)
+                                    const reader = new FileReader()
+                                    reader.onload = (e) => {
+                                      setEndFramePreview(e.target?.result as string)
+                                    }
+                                    reader.readAsDataURL(file)
+                                  }
+                                }}
+                                className="hidden"
+                                id="kling-end-frame"
+                              />
+                              <label
+                                htmlFor="kling-end-frame"
+                                className="cursor-pointer flex flex-col items-center gap-2"
+                              >
+                                {endFramePreview ? (
+                                  <div className="relative">
+                                    <img
+                                      src={endFramePreview}
+                                      alt="End Frame"
+                                      className="max-w-full max-h-32 rounded object-cover"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        setEndFrame(null)
+                                        setEndFramePreview(null)
+                                      }}
+                                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <Upload className="h-8 w-8 text-muted-foreground" />
+                                    <span className="text-sm text-muted-foreground">
+                                      Click to upload end frame
+                                    </span>
+                                  </>
+                                )}
+                              </label>
+                            </div>
+                          </div>
+                          <div className="text-xs text-muted-foreground bg-blue-500/10 p-3 rounded-lg">
+                            💡 <strong>I2V Extended:</strong> Upload a start frame and end frame. Kling AI will generate a smooth transition between them, creating motion from your two images.
                           </div>
                         </div>
                       )}
@@ -3171,7 +3429,7 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Kling" && !userApiKeys.kling_api_key && (
+                      {selectedModel.startsWith("Kling") && !userApiKeys.kling_api_key && (
                         <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                           <p className="text-sm text-orange-600">
                             <AlertCircle className="h-4 w-4 inline mr-2" />
@@ -3180,7 +3438,7 @@ export default function AIStudioPage() {
                         </div>
                       )}
                       
-                      {selectedModel === "Kling" && userApiKeys.kling_api_key && (
+                      {selectedModel.startsWith("Kling") && userApiKeys.kling_api_key && (
                         <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
                           <p className="text-sm text-blue-600">
                             <CheckCircle className="h-4 w-4 inline mr-2" />
@@ -3380,7 +3638,7 @@ export default function AIStudioPage() {
                         return
                       }
                       
-                      if (selectedModel === "Kling" && !userApiKeys.kling_api_key) {
+                      if (selectedModel.startsWith("Kling") && !userApiKeys.kling_api_key) {
                         toast({
                           title: "Missing API Key",
                           description: "Please configure your Kling API key",
@@ -3396,7 +3654,7 @@ export default function AIStudioPage() {
                       !videoPrompt || 
                       !selectedModel ||
                       ((selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && !userApiKeys.runway_api_key) ||
-                      (selectedModel === "Kling" && !userApiKeys.kling_api_key)
+                      (selectedModel.startsWith("Kling") && !userApiKeys.kling_api_key)
                     }
                     className="w-full gradient-button text-white"
                   >
