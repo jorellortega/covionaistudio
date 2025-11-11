@@ -1312,7 +1312,7 @@ export default function AIStudioPage() {
 
           if (response.success) {
             // Get the audio blob from the response
-            const audioBlob = response.data?.audio_blob
+            const audioBlob = response.data?.audio_blob || response.data?.blob
             if (!audioBlob) {
               throw new Error('No audio blob received from ElevenLabs')
             }

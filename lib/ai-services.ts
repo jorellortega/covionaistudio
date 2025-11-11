@@ -94,12 +94,34 @@ export class OpenAIService {
 
       if (!response.ok) {
         const errorText = await response.text()
+        let errorJson: any = {}
+        try {
+          errorJson = JSON.parse(errorText)
+        } catch {
+          // If not JSON, use the text as is
+        }
+        
         console.error('🎬 DEBUG - OpenAI API error response:', {
           status: response.status,
           statusText: response.statusText,
-          errorText: errorText
+          errorText: errorText,
+          errorJson: errorJson
         })
-        throw new Error(`OpenAI API error: ${response.status} - ${errorText}`)
+        
+        // Check for content policy violations
+        const errorMessage = errorJson.error?.message || errorText || 'Unknown error'
+        if (errorMessage.toLowerCase().includes('content policy') || 
+            errorMessage.toLowerCase().includes('safety') ||
+            errorMessage.toLowerCase().includes('content_filter') ||
+            errorMessage.toLowerCase().includes('violates our usage policy') ||
+            errorMessage.toLowerCase().includes('not allowed') ||
+            errorMessage.toLowerCase().includes('sensitive content') ||
+            errorJson.error?.code === 'content_filter' ||
+            response.status === 400) {
+          throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+        }
+        
+        throw new Error(`OpenAI API error: ${response.status} - ${errorMessage}`)
       }
       const result = await response.json()
       return { success: true, data: result }
@@ -430,7 +452,21 @@ export class ElevenLabsService {
       }
       
       // For audio, we need to handle the binary response
-      const audioBlob = await response.blob()
+      const arrayBuffer = await response.arrayBuffer()
+      const contentType = response.headers.get('content-type') || 'audio/mpeg'
+      
+      if (typeof window === 'undefined') {
+        return {
+          success: true,
+          data: {
+            audio_array_buffer: arrayBuffer,
+            content_type: contentType,
+            voiceId: voiceId
+          }
+        }
+      }
+
+      const audioBlob = new Blob([arrayBuffer], { type: contentType })
       const audioUrl = URL.createObjectURL(audioBlob)
       
       return { 
@@ -438,6 +474,8 @@ export class ElevenLabsService {
         data: {
           url: audioUrl,
           blob: audioBlob,
+          audio_blob: audioBlob,
+          content_type: contentType,
           voiceId: voiceId
         }
       }
@@ -488,6 +526,31 @@ export class ElevenLabsService {
     }
   }
 
+  static async getUserInfo(apiKey: string): Promise<AIResponse> {
+    try {
+      const response = await fetch('https://api.elevenlabs.io/v1/user', {
+        method: 'GET',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+
+      const result = await response.json()
+      return {
+        success: true,
+        data: result,
+      }
+    } catch (error) {
+      console.error('🎤 Error fetching ElevenLabs user info:', error)
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch user info' }
+    }
+  }
+
   static async testApiConnection(apiKey: string): Promise<{ success: boolean; status?: number; error?: string }> {
     try {
       console.log('🧪 Testing ElevenLabs API connection...')
@@ -530,6 +593,95 @@ export class ElevenLabsService {
     } catch (error) {
       console.error('🧪 ElevenLabs API test error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Network error' }
+    }
+  }
+
+  static async getVoicePreview(apiKey: string, voiceId: string): Promise<AIResponse> {
+    try {
+      console.log('🎵 Getting voice preview for voice ID:', voiceId)
+      
+      // First, try to get the voice details to see if there's a preview_url
+      const voicesResponse = await fetch('https://api.elevenlabs.io/v1/voices', {
+        method: 'GET',
+        headers: {
+          'xi-api-key': apiKey,
+        },
+      })
+
+      if (voicesResponse.ok) {
+        const voicesData = await voicesResponse.json()
+        const voice = voicesData.voices?.find((v: any) => v.voice_id === voiceId)
+        
+        // If voice has a preview_url, use it
+        if (voice?.preview_url) {
+          return {
+            success: true,
+            data: {
+              audioUrl: voice.preview_url,
+              voiceId: voiceId
+            }
+          }
+        }
+      }
+
+      // If no preview_url, generate a short preview using text-to-speech
+      const previewText = "Hello, this is a voice preview."
+      
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          text: previewText,
+          model_id: "eleven_monolingual_v1",
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5,
+            style: 0.0,
+            use_speaker_boost: true,
+          },
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+      const contentType = response.headers.get('content-type') || 'audio/mpeg'
+
+      if (typeof window === 'undefined') {
+        // Server-side: return base64 encoded audio
+        const base64 = Buffer.from(arrayBuffer).toString('base64')
+        return {
+          success: true,
+          data: {
+            audioUrl: `data:${contentType};base64,${base64}`,
+            voiceId: voiceId
+          }
+        }
+      }
+
+      // Client-side: create blob URL
+      const audioBlob = new Blob([arrayBuffer], { type: contentType })
+      const audioUrl = URL.createObjectURL(audioBlob)
+      
+      return {
+        success: true,
+        data: {
+          audioUrl: audioUrl,
+          voiceId: voiceId
+        }
+      }
+    } catch (error) {
+      console.error('🎵 Error getting voice preview:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get voice preview'
+      }
     }
   }
 }

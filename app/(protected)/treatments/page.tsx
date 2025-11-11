@@ -17,10 +17,13 @@ import { TreatmentsService, Treatment, CreateTreatmentData } from '@/lib/treatme
 import Header from '@/components/header'
 import Link from 'next/link'
 import { AISettingsService, type AISetting } from '@/lib/ai-settings-service'
+import { MovieService, type CreateMovieData } from '@/lib/movie-service'
+import { useRouter } from 'next/navigation'
 
 export default function TreatmentsPage() {
   const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
+  const router = useRouter()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all') // 'all', 'linked', 'standalone'
@@ -40,6 +43,7 @@ export default function TreatmentsPage() {
     status: 'draft' as 'draft' | 'in-progress' | 'completed' | 'archived',
     cover_image_url: '',
     synopsis: '',
+    prompt: '',
     target_audience: '',
     estimated_budget: '',
     estimated_duration: ''
@@ -266,7 +270,21 @@ export default function TreatmentsPage() {
           if (!dalleResponse.ok) {
             const errorData = await dalleResponse.json().catch(() => ({}))
             console.error('DALL-E API error details:', errorData)
-            throw new Error(`DALL-E API failed: ${dalleResponse.status} - ${errorData.error || 'Unknown error'}`)
+            const errorMessage = errorData.error || errorData.details || 'Unknown error'
+            
+            // Check for content policy violations
+            if (errorMessage.toLowerCase().includes('content policy') || 
+                errorMessage.toLowerCase().includes('safety') ||
+                errorMessage.toLowerCase().includes('content_filter') ||
+                errorMessage.toLowerCase().includes('violates our usage policy') ||
+                errorMessage.toLowerCase().includes('not allowed') ||
+                errorMessage.toLowerCase().includes('copyrighted material') ||
+                errorMessage.toLowerCase().includes('explicit content') ||
+                (dalleResponse.status === 400 && errorMessage.toLowerCase().includes('prompt'))) {
+              throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+            }
+            
+            throw new Error(`Image generation failed: ${errorMessage}`)
           }
           const dalleData = await dalleResponse.json()
           imageUrl = dalleData.imageUrl
@@ -581,6 +599,7 @@ export default function TreatmentsPage() {
       status: 'draft',
       cover_image_url: '',
       synopsis: '',
+      prompt: '',
       target_audience: '',
       estimated_budget: '',
       estimated_duration: ''
@@ -635,6 +654,7 @@ export default function TreatmentsPage() {
       status: treatment.status,
       cover_image_url: treatment.cover_image_url || '',
       synopsis: treatment.synopsis,
+      prompt: treatment.prompt || '',
       target_audience: treatment.target_audience || '',
       estimated_budget: treatment.estimated_budget || '',
       estimated_duration: treatment.estimated_duration || ''
@@ -790,8 +810,55 @@ export default function TreatmentsPage() {
     try {
       setGeneratingTreatmentId(treatment.id)
 
-      // Create prompt from treatment details
-      const prompt = `Movie treatment cover for "${treatment.title}". ${treatment.genre} genre. ${treatment.synopsis.substring(0, 300)}. Cinematic movie poster style, dramatic lighting, professional quality.`
+      // Create prompt from treatment details - use logline if available, otherwise use a shorter synopsis excerpt
+      // Avoid including full script content that might trigger content filters
+      let contentDescription = ""
+      if (treatment.logline && treatment.logline.trim()) {
+        // Use logline (usually shorter and safer) - clean it first
+        let logline = treatment.logline.trim()
+        // Remove markdown formatting
+        logline = logline.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/`/g, '')
+        // Remove newlines and extra spaces
+        logline = logline.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
+        contentDescription = logline.substring(0, 150).trim()
+      } else if (treatment.synopsis && treatment.synopsis.trim()) {
+        // Use first sentence or 100 chars of synopsis, avoid including full script
+        // Clean the synopsis first
+        let synopsis = treatment.synopsis.trim()
+        // Remove markdown formatting
+        synopsis = synopsis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/__/g, '').replace(/`/g, '')
+        // Remove newlines and extra spaces
+        synopsis = synopsis.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim()
+        // Get first sentence or first 100 chars
+        const synopsisExcerpt = synopsis.split(/[.!?]/)[0] || synopsis.substring(0, 100)
+        contentDescription = synopsisExcerpt.trim()
+      }
+      
+      // Build a cleaner, safer prompt - avoid including full script content
+      let prompt = `Movie poster for "${treatment.title}"`
+      if (treatment.genre) {
+        prompt += `, ${treatment.genre} genre`
+      }
+      if (contentDescription) {
+        // Clean the description one more time to remove any problematic content
+        const cleanedDescription = contentDescription
+          .replace(/Act \d+:|Scene \d+:|Chapter \d+:/gi, '') // Remove script structure markers
+          .replace(/Title:|Genre:|Logline:/gi, '') // Remove metadata labels
+          .replace(/\*\*/g, '') // Remove markdown
+          .replace(/\*/g, '')
+          .replace(/\n/g, ' ') // Remove newlines
+          .replace(/\s+/g, ' ') // Remove extra spaces
+          .trim()
+        if (cleanedDescription) {
+          prompt += `. ${cleanedDescription}`
+        }
+      }
+      prompt += `. Cinematic movie poster style, dramatic lighting, professional quality, cinematic composition`
+      
+      // Limit prompt length to avoid API errors (DALL-E 3 has 1000 character limit)
+      if (prompt.length > 900) {
+        prompt = prompt.substring(0, 900) + "..."
+      }
       
       console.log('🎬 Generating cover for treatment with prompt:', prompt)
 
@@ -828,7 +895,19 @@ export default function TreatmentsPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(`AI API failed: ${response.status} - ${errorData.error || 'Unknown error'}`)
+        const errorMessage = errorData.error || errorData.details || 'Unknown error'
+        
+        // Check for content policy violations
+        if (errorMessage.toLowerCase().includes('content policy') || 
+            errorMessage.toLowerCase().includes('safety') ||
+            errorMessage.toLowerCase().includes('content_filter') ||
+            errorMessage.toLowerCase().includes('violates our usage policy') ||
+            errorMessage.toLowerCase().includes('not allowed') ||
+            response.status === 400 && errorMessage.toLowerCase().includes('prompt')) {
+          throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+        }
+        
+        throw new Error(`AI API failed: ${response.status} - ${errorMessage}`)
       }
 
       const data = await response.json()
@@ -875,13 +954,93 @@ export default function TreatmentsPage() {
 
     } catch (error) {
       console.error('Error generating AI cover:', error)
+      let errorMessage = 'Failed to generate cover image'
+      
+      if (error instanceof Error) {
+        // Check for content policy violations
+        if (error.message.includes('copyrighted material') || 
+            error.message.includes('explicit content') ||
+            error.message.includes('content policy') ||
+            error.message.includes('violates our usage policy')) {
+          errorMessage = error.message
+        } else if (error.message.includes('API key')) {
+          errorMessage = 'API key issue. Please check your API key in Settings → Profile'
+        } else {
+          errorMessage = error.message
+        }
+      }
+      
       toast({
         title: "Generation Failed",
-        description: error instanceof Error ? error.message : 'Failed to generate cover',
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {
       setGeneratingTreatmentId(null)
+    }
+  }
+
+  const convertTreatmentToMovie = async (treatment: Treatment) => {
+    if (!user || !userId) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to create a movie",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Check if treatment is already linked to a movie
+      if (treatment.project_id) {
+        // Navigate to the existing movie treatment page
+        router.push(`/treatments/movie/${treatment.project_id}`)
+        toast({
+          title: "Already Linked",
+          description: "This treatment is already linked to a movie project",
+        })
+        return
+      }
+
+      // Create movie data from treatment
+      const movieData: CreateMovieData = {
+        name: treatment.title,
+        description: treatment.synopsis,
+        genre: treatment.genre,
+        project_type: 'movie',
+        movie_status: 'Pre-Production',
+        project_status: 'active',
+        writer: user.user_metadata?.name || user.email?.split('@')[0] || 'Unknown',
+        cowriters: [],
+      }
+
+      // Create the movie
+      const movie = await MovieService.createMovie(movieData)
+
+      // Link the treatment to the movie by updating the treatment's project_id
+      await TreatmentsService.updateTreatment(treatment.id, {
+        project_id: movie.id
+      })
+
+      // Update local state to reflect the link
+      setTreatments(prev => 
+        prev.map(t => t.id === treatment.id ? { ...t, project_id: movie.id } : t)
+      )
+
+      toast({
+        title: "Success!",
+        description: `Treatment "${treatment.title}" converted to movie and linked successfully!`,
+      })
+
+      // Navigate to the movie treatment page
+      router.push(`/treatments/movie/${movie.id}`)
+    } catch (error) {
+      console.error('Error converting treatment to movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to convert treatment to movie. Please try again.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -925,6 +1084,7 @@ export default function TreatmentsPage() {
         status: newTreatment.status,
         cover_image_url: finalCoverUrl,
         synopsis: newTreatment.synopsis,
+        prompt: newTreatment.prompt || undefined,
         target_audience: newTreatment.target_audience || undefined,
         estimated_budget: newTreatment.estimated_budget || undefined,
         estimated_duration: newTreatment.estimated_duration || undefined,
@@ -1359,6 +1519,25 @@ export default function TreatmentsPage() {
                 />
                 </div>
               </div>
+
+              {/* Treatment Content (Full Document) - Create Form */}
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="prompt">Treatment (Full Document)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Paste your complete treatment document here. This is the full treatment content, separate from the synopsis above.
+                  </p>
+                  <Textarea
+                    id="prompt"
+                    value={newTreatment.prompt}
+                    onChange={(e) => setNewTreatment(prev => ({ ...prev, prompt: e.target.value }))}
+                    placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
+                    rows={20}
+                    className="text-base leading-relaxed font-mono min-h-[400px]"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="targetAudience">Target Audience</Label>
@@ -1750,6 +1929,25 @@ export default function TreatmentsPage() {
                 />
                 </div>
               </div>
+
+              {/* Treatment Content (Full Document) */}
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="edit-prompt">Treatment (Full Document)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Paste your complete treatment document here. This is the full treatment content, separate from the synopsis above.
+                  </p>
+                  <Textarea
+                    id="edit-prompt"
+                    value={newTreatment.prompt}
+                    onChange={(e) => setNewTreatment(prev => ({ ...prev, prompt: e.target.value }))}
+                    placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
+                    rows={20}
+                    className="text-base leading-relaxed font-mono min-h-[400px]"
+                  />
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="edit-targetAudience">Target Audience</Label>
@@ -1958,7 +2156,7 @@ export default function TreatmentsPage() {
                   
                   <Separator className="my-4" />
                   
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     <Button variant="outline" size="sm" className="flex-1" asChild>
                       <Link href={`/treatments/${treatment.id}`}>
                         <Eye className="h-4 w-4 mr-1" />
@@ -1982,6 +2180,19 @@ export default function TreatmentsPage() {
                     >
                       <Trash2 className="h-4 w-4 mr-1" />
                       Delete
+                    </Button>
+                  </div>
+                  
+                  {/* Convert to Movie Button */}
+                  <div className="mt-2">
+                    <Button 
+                      variant="default" 
+                      size="sm" 
+                      className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white"
+                      onClick={() => convertTreatmentToMovie(treatment)}
+                    >
+                      <Film className="h-4 w-4 mr-1" />
+                      {treatment.project_id ? 'Go to Movie' : 'Convert to Movie'}
                     </Button>
                   </div>
                   

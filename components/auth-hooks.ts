@@ -5,8 +5,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { getSupabaseClient } from '@/lib/supabase';
 
 export function useAuthReady() {
-  const { loading, user, userId } = useAuth();
-  return { loading, user, userId, ready: !loading && !!userId, signedIn: !!userId };
+  const { loading, user, userId, session } = useAuth();
+  return { loading, user, userId, session, ready: !loading && !!userId, signedIn: !!userId };
 }
 
 // If a user is required, call this at the top of protected pages

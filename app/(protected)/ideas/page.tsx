@@ -7,6 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
@@ -19,7 +22,8 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List } from "lucide-react"
+import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List, Copy, Download, ChevronDown, ChevronUp, Wand2 } from "lucide-react"
+import { jsPDF } from "jspdf"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
@@ -30,6 +34,7 @@ import { IdeaImagesService } from "@/lib/idea-images-service"
 import { Navigation } from "@/components/navigation"
 import { sanitizeFilename } from '@/lib/utils'
 import { MovieService, type CreateMovieData } from "@/lib/movie-service"
+import { TreatmentsService, type CreateTreatmentData } from "@/lib/treatments-service"
 
 export default function IdeasPage() {
   const router = useRouter()
@@ -45,8 +50,10 @@ export default function IdeasPage() {
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<any>({})
   const [userApiKeys, setUserApiKeys] = useState<any>({})
+  const [userName, setUserName] = useState<string>("")
   const [isLoadingAI, setIsLoadingAI] = useState(false)
   const [aiResponse, setAiResponse] = useState<string>("")
+  const [aiResponseRaw, setAiResponseRaw] = useState<string>("") // Store raw response before cleaning for genre extraction
   const [generatedImage, setGeneratedImage] = useState<string>("")
   const [isSavingImage, setIsSavingImage] = useState(false)
   
@@ -57,6 +64,7 @@ export default function IdeasPage() {
   const [ideaImages, setIdeaImages] = useState<{[key: string]: string[]}>({})
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [dialogGeneratedImage, setDialogGeneratedImage] = useState<string | null>(null)
+  const [generatingCoverForIdea, setGeneratingCoverForIdea] = useState<string | null>(null) // Track which idea is generating a cover
   
   // Store generated image data for form access
   const [pendingImageData, setPendingImageData] = useState<{
@@ -91,10 +99,15 @@ export default function IdeasPage() {
   // Import search state
   const [importIdeaSearch, setImportIdeaSearch] = useState("")
   
+  // Tab state
+  const [activeTab, setActiveTab] = useState("ai-prompt")
+  
   // Form state
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
-  const [genre, setGenre] = useState("")
+  const [genre, setGenre] = useState("") // Legacy, kept for backward compatibility
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]) // New: array of genres
+  const [genresOpen, setGenresOpen] = useState(false) // Collapsible state for genres (default collapsed)
   const [mainCreator, setMainCreator] = useState("")
   const [coCreators, setCoCreators] = useState<string[]>([])
   const [originalPrompt, setOriginalPrompt] = useState("")
@@ -169,7 +182,9 @@ export default function IdeasPage() {
         user_id: userId,
         title: title.trim(),
         description: description.trim(),
-        genre: genre || "Unspecified",
+        // Support both old genre field (for backward compatibility) and new genres array
+        genre: selectedGenres.length > 0 ? selectedGenres[0] : (genre || "Unspecified"),
+        genres: selectedGenres.length > 0 ? selectedGenres : (genre ? [genre] : []),
         main_creator: mainCreator.trim() || "Unknown",
         co_creators: coCreators,
         original_prompt: originalPrompt.trim(),
@@ -208,23 +223,26 @@ export default function IdeasPage() {
             })
             
             toast({
-              title: "Success",
+              title: "Saved to library",
               description: "Idea saved with image!",
             })
           } catch (imageError) {
             console.error('Error saving image:', imageError)
             toast({
-              title: "Partial Success",
+              title: "Saved to library",
               description: "Idea saved but image failed to save",
               variant: "destructive",
             })
           }
         } else {
           toast({
-            title: "Success",
-            description: "Idea saved successfully",
+            title: "Saved to library",
+            description: "Your idea has been saved successfully",
           })
         }
+        
+        // Switch to library tab after saving
+        setActiveTab("library")
       }
 
       // Reset form and close dialog
@@ -265,7 +283,17 @@ export default function IdeasPage() {
     setEditingIdea(idea)
     setTitle(idea.title)
     setDescription(idea.description)
-    setGenre(idea.genre)
+    // Support both old genre field and new genres array
+    if (idea.genres && idea.genres.length > 0) {
+      setSelectedGenres(idea.genres)
+      setGenre(idea.genres[0]) // Set legacy genre to first genre for backward compatibility
+    } else if (idea.genre) {
+      setGenre(idea.genre)
+      setSelectedGenres([idea.genre]) // Convert legacy genre to array
+    } else {
+      setGenre("")
+      setSelectedGenres([])
+    }
     setMainCreator(idea.main_creator || "")
     setCoCreators(idea.co_creators || [])
     setOriginalPrompt(idea.original_prompt || "")
@@ -279,6 +307,8 @@ export default function IdeasPage() {
     setTitle("")
     setDescription("")
     setGenre("")
+    setSelectedGenres([])
+    setGenresOpen(false) // Reset to collapsed state
     setMainCreator("")
     setCoCreators([])
     setOriginalPrompt("")
@@ -309,10 +339,14 @@ export default function IdeasPage() {
   const convertIdeaToMovie = async (idea: MovieIdea) => {
     setConvertingIdea(idea)
     // Pre-populate movie data from idea
+    // Use first genre from genres array, or fallback to legacy genre field
+    const firstGenre = (idea.genres && idea.genres.length > 0) 
+      ? idea.genres[0] 
+      : (idea.genre || "Unspecified")
     setMovieData({
       name: idea.title,
       description: idea.description,
-      genre: idea.genre || "Unspecified",
+      genre: firstGenre,
       project_type: "movie",
       movie_status: "Pre-Production",
       project_status: "active",
@@ -320,6 +354,151 @@ export default function IdeasPage() {
       cowriters: idea.co_creators || []
     })
     setShowMovieDialog(true)
+  }
+
+  const convertIdeaToTreatment = async (idea: MovieIdea) => {
+    if (!user || !userId) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to create a treatment",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Use first genre from genres array, or fallback to legacy genre field
+      const firstGenre = (idea.genres && idea.genres.length > 0) 
+        ? idea.genres[0] 
+        : (idea.genre || "Unspecified")
+      
+      // Create synopsis from prompt (full content) if available, otherwise use description
+      // Extract a meaningful synopsis from the full prompt content
+      let synopsis = idea.description || 'No description available'
+      
+      // If prompt exists and is longer than description, use it to create a better synopsis
+      if (idea.prompt && idea.prompt.trim()) {
+        const promptText = idea.prompt.trim()
+        // Remove markdown formatting
+        const cleanedPrompt = promptText
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/__/g, '')
+          .replace(/`/g, '')
+          .replace(/#{1,6}\s+/g, '') // Remove markdown headers
+          .replace(/\n{3,}/g, '\n\n') // Normalize multiple newlines
+          .trim()
+        
+        // Extract first 2-3 paragraphs or first 500-800 characters as synopsis
+        const paragraphs = cleanedPrompt.split(/\n\n+/).filter(p => p.trim().length > 0)
+        if (paragraphs.length > 0) {
+          // Take first 2-3 paragraphs, up to 800 characters
+          let synopsisText = ''
+          for (let i = 0; i < Math.min(3, paragraphs.length); i++) {
+            const para = paragraphs[i].trim()
+            if (synopsisText.length + para.length + 2 <= 800) {
+              synopsisText += (synopsisText ? '\n\n' : '') + para
+            } else {
+              // If adding this paragraph would exceed limit, take a portion of it
+              const remaining = 800 - synopsisText.length - 2
+              if (remaining > 50) {
+                synopsisText += (synopsisText ? '\n\n' : '') + para.substring(0, remaining).trim()
+              }
+              break
+            }
+          }
+          synopsis = synopsisText || cleanedPrompt.substring(0, 800).trim()
+        } else {
+          // No clear paragraphs, just take first 800 characters
+          synopsis = cleanedPrompt.substring(0, 800).trim()
+        }
+      }
+      
+      // Extract logline from prompt or description (first sentence or first 200 chars)
+      let logline = idea.description || ''
+      if (idea.prompt && idea.prompt.trim()) {
+        const promptText = idea.prompt.trim()
+        // Remove markdown
+        const cleanedPrompt = promptText
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/__/g, '')
+          .replace(/`/g, '')
+          .replace(/#{1,6}\s+/g, '')
+          .trim()
+        
+        // Try to extract first sentence (ending with . ! or ?)
+        const firstSentenceMatch = cleanedPrompt.match(/^[^.!?]+[.!?]/)
+        if (firstSentenceMatch && firstSentenceMatch[0].length <= 250) {
+          logline = firstSentenceMatch[0].trim()
+        } else {
+          // Use first 200 characters, but try to end at a word boundary
+          const excerpt = cleanedPrompt.substring(0, 200).trim()
+          const lastSpace = excerpt.lastIndexOf(' ')
+          if (lastSpace > 150) {
+            logline = excerpt.substring(0, lastSpace).trim() + '...'
+          } else {
+            logline = excerpt + '...'
+          }
+        }
+      } else if (idea.description && idea.description.length > 200) {
+        // If description is long, extract first sentence or first 200 chars
+        const firstSentenceMatch = idea.description.match(/^[^.!?]+[.!?]/)
+        if (firstSentenceMatch && firstSentenceMatch[0].length <= 250) {
+          logline = firstSentenceMatch[0].trim()
+        } else {
+          logline = idea.description.substring(0, 200).trim() + (idea.description.length > 200 ? '...' : '')
+        }
+      }
+
+      // Fetch idea images to get the cover image
+      let coverImageUrl: string | undefined = undefined
+      try {
+        const ideaImages = await IdeaImagesService.getIdeaImages(idea.id)
+        // Get the first image (most recent) as cover image
+        // Filter for image files (jpg, jpeg, png, gif, webp, svg)
+        const imageFiles = ideaImages.filter(img => 
+          img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)
+        )
+        if (imageFiles.length > 0) {
+          coverImageUrl = imageFiles[0].image_url
+          console.log('Found cover image for treatment:', coverImageUrl)
+        }
+      } catch (imageError) {
+        console.error('Error fetching idea images:', imageError)
+        // Continue without cover image if there's an error
+      }
+
+      // Create treatment data from idea
+      const treatmentData: CreateTreatmentData = {
+        title: idea.title,
+        genre: firstGenre,
+        status: 'draft',
+        synopsis: synopsis, // Extended synopsis from prompt (up to 800 chars, 2-3 paragraphs)
+        prompt: idea.prompt || undefined, // Full treatment document (like ideas.prompt)
+        logline: logline || idea.description || '', // Extracted logline (first sentence or excerpt from prompt)
+        notes: idea.original_prompt || undefined, // Use original prompt as notes if available
+        cover_image_url: coverImageUrl, // Set cover image if available
+      }
+
+      // Create the treatment
+      const treatment = await TreatmentsService.createTreatment(treatmentData)
+
+      toast({
+        title: "Success!",
+        description: `Idea "${idea.title}" converted to treatment successfully!`,
+      })
+
+      // Navigate to treatments page
+      router.push('/treatments')
+    } catch (error) {
+      console.error('Error converting idea to treatment:', error)
+      toast({
+        title: "Error",
+        description: "Failed to convert idea to treatment",
+        variant: "destructive",
+      })
+    }
   }
 
   const handleCreateMovie = async () => {
@@ -471,7 +650,8 @@ export default function IdeasPage() {
         const ideaData = {
           title: importIdeaTitle,
           description: importIdeaDescription || `Imported idea: ${importIdeaTitle}`,
-          genre: importIdeaGenre || "Unspecified",
+          genre: importIdeaGenre || "Unspecified", // Legacy field for backward compatibility
+          genres: importIdeaGenre ? [importIdeaGenre] : [], // New genres array
           main_creator: importIdeaMainCreator.trim() || "Unknown",
           co_creators: importIdeaCoCreators,
           status: importIdeaStatus || "concept"
@@ -623,7 +803,20 @@ export default function IdeasPage() {
 
   const fetchAISettings = async () => {
     try {
-      const settings = await AISettingsService.getUserSettings(user!.id)
+      let settings = await AISettingsService.getUserSettings(user!.id)
+      
+      // Ensure selected_model is set for scripts tab with ChatGPT/GPT-4/Claude
+      settings = settings.map(setting => {
+        if (setting.tab_type === 'scripts' && !setting.selected_model) {
+          if (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4') {
+            setting.selected_model = 'gpt-4o-mini'
+          } else if (setting.locked_model === 'Claude') {
+            setting.selected_model = 'claude-3-5-sonnet-20241022'
+          }
+        }
+        return setting
+      })
+      
       const settingsMap = settings.reduce((acc, setting) => {
         acc[setting.tab_type] = setting
         return acc
@@ -638,12 +831,21 @@ export default function IdeasPage() {
     try {
       const { data, error } = await getSupabaseClient()
         .from('users')
-        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key, name')
         .eq('id', user!.id)
         .single()
 
       if (error) throw error
       setUserApiKeys(data || {})
+      // Set user name if available
+      if (data?.name) {
+        setUserName(data.name)
+      } else if (user?.name) {
+        setUserName(user.name)
+      } else if (user?.email) {
+        // Fallback to email username if name not available
+        setUserName(user.email.split('@')[0])
+      }
     } catch (error) {
       console.error('Error fetching user API keys:', error)
     }
@@ -679,6 +881,285 @@ export default function IdeasPage() {
     }
   }
 
+  // Function to extract genres from text (returns array)
+  const extractTitle = (text: string): string => {
+    if (!text) return ""
+    
+    // Try to extract title from various patterns
+    // Pattern 1: "Title: Title Name" or "Title:Title Name"
+    let match = text.match(/Title:\s*([^\n]+)/i)
+    if (match && match[1]) {
+      return match[1].trim()
+    }
+    
+    // Pattern 2: "# Title Name" or "## Title Name" (markdown headers)
+    match = text.match(/^#{1,3}\s+(.+)$/m)
+    if (match && match[1]) {
+      return match[1].trim()
+    }
+    
+    // Pattern 3: "**Title:** Title Name" (bold markdown)
+    match = text.match(/\*\*Title:\*\*\s*([^\n*]+)/i)
+    if (match && match[1]) {
+      return match[1].trim().replace(/\*/g, '')
+    }
+    
+    // Pattern 4: First line if it looks like a title (short, no punctuation at end)
+    const lines = text.split('\n').filter(line => line.trim().length > 0)
+    if (lines.length > 0) {
+      const firstLine = lines[0].trim()
+      // If first line is short and looks like a title (no period at end, less than 100 chars)
+      if (firstLine.length < 100 && !firstLine.endsWith('.') && !firstLine.includes(':')) {
+        return firstLine
+      }
+    }
+    
+    return ""
+  }
+
+  const extractGenres = (text: string): string[] => {
+    if (!text) return []
+    
+    const availableGenres = [
+      "Action", "Adventure", "Comedy", "Crime", "Drama", "Fantasy", 
+      "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "Western",
+      "Animation", "Documentary", "Musical", "War", "Biography", "History"
+    ]
+    
+    const foundGenres: string[] = []
+    
+    // Look for patterns like "Genre: Fantasy/Adventure" or "Genre: Fantasy, Adventure"
+    // Try multiple patterns to catch different formats
+    const genrePatterns = [
+      /Genre:\s*([^\n\r]+)/i,           // "Genre: Fantasy/Adventure"
+      /Genre\s*:\s*([^\n\r]+)/i,        // "Genre : Fantasy/Adventure"
+      /\*\*Genre:\*\*\s*([^\n\r]+)/i,   // "**Genre:** Fantasy/Adventure"
+      /Genre\s+([^\n\r]+)/i,            // "Genre Fantasy/Adventure"
+      /^Genre[:\s]+([^\n\r]+)/i,        // At start of line
+    ]
+    
+    for (const pattern of genrePatterns) {
+      const match = text.match(pattern)
+      if (match && match[1]) {
+        let genre = match[1].trim()
+        
+        // Clean up markdown formatting if present
+        genre = genre
+          .replace(/\*\*/g, '') // Remove bold
+          .replace(/\*/g, '') // Remove italic
+          .replace(/__/g, '') // Remove underline
+          .replace(/`/g, '') // Remove code formatting
+          .trim()
+        
+        // If genre contains "/" or ",", check each part
+        // For example: "Fantasy/Adventure" -> check "Fantasy" and "Adventure"
+        const genreParts = genre.split(/[\/,]/).map(part => part.trim()).filter(part => part.length > 0)
+        
+        for (const genrePart of genreParts) {
+          // Try to match the genre (case-insensitive, exact or partial match)
+          const matchedGenre = availableGenres.find(g => {
+            const genreLower = genrePart.toLowerCase()
+            const availableLower = g.toLowerCase()
+            // Exact match
+            if (genreLower === availableLower) return true
+            // Partial match (contains) - but be careful with short words
+            if (genrePart.length >= 3 && availableLower.length >= 3) {
+              if (genreLower.includes(availableLower) || availableLower.includes(genreLower)) return true
+            }
+            // Handle "Sci-Fi" variations
+            if ((genreLower.includes('sci') || genreLower.includes('science')) && 
+                (genreLower.includes('fi') || genreLower.includes('fiction'))) {
+              return g === 'Sci-Fi'
+            }
+            // Handle common variations
+            if (genreLower === 'scifi' || genreLower === 'science fiction') return g === 'Sci-Fi'
+            if (genreLower === 'scifi' || genreLower === 'sci fi') return g === 'Sci-Fi'
+            return false
+          })
+          
+          // Add to found genres if we found a match and it's not already in the array
+          if (matchedGenre && !foundGenres.includes(matchedGenre)) {
+            foundGenres.push(matchedGenre)
+          }
+        }
+        
+        // If we found genres, return them (don't continue searching other patterns)
+        if (foundGenres.length > 0) {
+          return foundGenres
+        }
+      }
+    }
+    
+    // If no genre pattern found, return empty array
+    return []
+  }
+
+  // Legacy function for backward compatibility (returns first genre or empty string)
+  const extractGenre = (text: string): string => {
+    const genres = extractGenres(text)
+    return genres.length > 0 ? genres[0] : ""
+  }
+
+  // Function to clean markdown formatting from text
+  const cleanMarkdown = (text: string): string => {
+    if (!text) return ""
+    
+    let cleaned = text
+      // Remove horizontal rules (---) on their own line
+      .replace(/^[\s]*-{3,}[\s]*$/gm, '')
+      // Remove markdown code blocks first (```code```)
+      .replace(/```[\s\S]*?```/g, '')
+      // Remove inline code (`code`) but keep the content
+      .replace(/`([^`]+)`/g, '$1')
+      // Remove markdown images ![alt](url)
+      .replace(/!\[([^\]]*)\]\([^\)]+\)/g, '')
+      // Remove markdown links [text](url) but keep the text
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      // Process lines to handle bullet points with markdown formatting
+      // First, handle complex patterns like "**Title:** *text*" in bullet points
+      .split('\n')
+      .map(line => {
+        // Handle bullet points with bold labels and italic values
+        line = line.replace(/\*\*([^*:]+):\*\*\s*\*([^*]+)\*/g, '$1: $2')
+        // Handle standalone bold labels with italic values (not in bullets)
+        line = line.replace(/\*\*([^*:]+):\*\*\s*\*([^*\n]+)\*/g, '$1: $2')
+        return line
+      })
+      .join('\n')
+      // Remove all remaining bold formatting (**text**)
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      // Remove all remaining italic formatting (*text*) but preserve bullet points
+      .replace(/\*([^*\n\s][^*\n]*[^*\n\s])\*/g, '$1')
+      .replace(/\*([^*\n\s])\*/g, '$1')
+      // Remove markdown headers (###, ##, #) but keep the text
+      .replace(/^#{1,6}\s+(.+)$/gm, '$1')
+      // Convert markdown bullet points to plain text bullets
+      .replace(/^[\s]*[-*+]\s+(.+)$/gm, '  • $1')
+      // Remove numbered list markers but keep content
+      .replace(/^[\s]*\d+\.\s+(.+)$/gm, '$1')
+      // Clean up extra blank lines (more than 2 consecutive newlines)
+      .replace(/\n{3,}/g, '\n\n')
+      // Remove trailing whitespace from each line
+      .replace(/[ \t]+$/gm, '')
+      .trim()
+    
+    return cleaned
+  }
+
+  // Function to copy text to clipboard
+  const copyToClipboard = async (text: string) => {
+    try {
+      const cleanedText = cleanMarkdown(text)
+      await navigator.clipboard.writeText(cleanedText)
+      toast({
+        title: "Copied!",
+        description: "Script copied to clipboard",
+      })
+    } catch (error) {
+      console.error('Failed to copy:', error)
+      toast({
+        title: "Copy Failed",
+        description: "Failed to copy script to clipboard",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Function to export to PDF
+  const exportToPDF = (text: string) => {
+    try {
+      const cleanedText = cleanMarkdown(text)
+      
+      // Create a new PDF document (A4 size in mm)
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      })
+
+      // Set up margins and page dimensions
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const pageHeight = doc.internal.pageSize.getHeight()
+      const margin = 20
+      const maxWidth = pageWidth - (margin * 2)
+      let yPosition = margin
+
+      // Set default font
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(11)
+      const lineHeight = 7
+      const paragraphSpacing = 3
+
+      // Split text into paragraphs
+      const paragraphs = cleanedText.split(/\n\n+/).filter(p => p.trim().length > 0)
+      
+      paragraphs.forEach((paragraph: string) => {
+        // Check if we need a new page before adding paragraph
+        if (yPosition + lineHeight * 2 > pageHeight - margin) {
+          doc.addPage()
+          yPosition = margin
+        }
+
+        // Check if paragraph looks like a heading (short line, potentially uppercase or title case)
+        const isHeading = paragraph.length < 80 && (
+          paragraph === paragraph.toUpperCase() || 
+          /^[A-Z][a-z]+(\s+[A-Z][a-z]+)*:?$/.test(paragraph.trim())
+        )
+
+        if (isHeading) {
+          // Format as heading
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(14)
+          const headingLines = doc.splitTextToSize(paragraph.trim(), maxWidth)
+          headingLines.forEach((line: string) => {
+            if (yPosition + lineHeight > pageHeight - margin) {
+              doc.addPage()
+              yPosition = margin
+            }
+            doc.text(line, margin, yPosition)
+            yPosition += lineHeight + 2
+          })
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(11)
+        } else {
+          // Format as regular text
+          const lines = doc.splitTextToSize(paragraph.trim(), maxWidth)
+          lines.forEach((line: string) => {
+            if (yPosition + lineHeight > pageHeight - margin) {
+              doc.addPage()
+              yPosition = margin
+            }
+            doc.text(line, margin, yPosition)
+            yPosition += lineHeight
+          })
+        }
+
+        // Add spacing between paragraphs
+        yPosition += paragraphSpacing
+      })
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().split('T')[0]
+      const filename = `generated-script-${timestamp}.pdf`
+
+      // Save the PDF
+      doc.save(filename)
+
+      toast({
+        title: "PDF Exported",
+        description: "Script has been exported as PDF successfully.",
+      })
+    } catch (error) {
+      console.error('Failed to export PDF:', error)
+      toast({
+        title: "Export Failed",
+        description: "Failed to export script to PDF. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const generateWithAI = async () => {
     if (!prompt.trim()) {
       toast({
@@ -710,18 +1191,62 @@ export default function IdeasPage() {
 
     setIsLoadingAI(true)
     setAiResponse("")
+    setAiResponseRaw("")
     
     try {
+      // Get the actual model to use - prefer selected_model, fallback to mapping locked_model
+      let modelToUse = scriptsSetting.selected_model
+      
+      // If no selected_model, map locked_model to default models
+      if (!modelToUse) {
+        if (scriptsSetting.locked_model === 'ChatGPT' || scriptsSetting.locked_model === 'GPT-4') {
+          modelToUse = 'gpt-4o-mini' // Default OpenAI model
+        } else if (scriptsSetting.locked_model === 'Claude') {
+          // Claude uses Anthropic service, not OpenAI - this would need different handling
+          toast({
+            title: "Unsupported Model",
+            description: "Claude is not yet supported for script generation on this page. Please use ChatGPT or GPT-4.",
+            variant: "destructive",
+          })
+          setIsLoadingAI(false)
+          return
+        } else {
+          modelToUse = 'gpt-4o-mini' // Fallback default
+        }
+      }
+      
+      // Validate that we have a valid OpenAI model
+      if (!modelToUse || (!modelToUse.startsWith('gpt-') && !modelToUse.startsWith('o1-'))) {
+        toast({
+          title: "Invalid Model",
+          description: `Invalid model configuration: ${modelToUse}. Please check your AI settings.`,
+          variant: "destructive",
+        })
+        setIsLoadingAI(false)
+        return
+      }
+      
       const response = await OpenAIService.generateScript({
         prompt: prompt,
-        template: "Generate a creative movie script outline or scene based on the user's idea. Focus on storytelling, character development, and cinematic elements.",
-        model: scriptsSetting.locked_model,
+        template: "Generate a creative movie script outline or scene based on the user's idea. Focus on storytelling, character development, and cinematic elements. Do not use markdown formatting like **, *, ---, or ###. Use plain text with clear headings and paragraphs.",
+        model: modelToUse,
         apiKey: userApiKeys.openai_api_key || ""
       })
 
       if (response.success && response.data) {
         const content = response.data.choices?.[0]?.message?.content || "No response generated"
-        setAiResponse(content)
+        // Store raw response for genre extraction (before cleaning)
+        setAiResponseRaw(content)
+        // Clean the content when storing it
+        const cleanedContent = cleanMarkdown(content)
+        setAiResponse(cleanedContent)
+        
+        // Auto-extract and set title from generated content
+        const extractedTitle = extractTitle(content)
+        if (extractedTitle) {
+          setTitle(extractedTitle)
+        }
+        
         toast({
           title: "Success",
           description: "AI script generated successfully",
@@ -979,6 +1504,170 @@ export default function IdeasPage() {
     setDialogGeneratedImage(null)
   }
 
+  // Quick cover generation function
+  const generateQuickCover = async (idea: MovieIdea) => {
+    if (!user || !userId) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to generate images",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const imagesSetting = aiSettings.images
+    if (!imagesSetting || !imagesSetting.is_locked) {
+      toast({
+        title: "AI Not Available",
+        description: "Please lock an image model in AI Settings first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setGeneratingCoverForIdea(idea.id)
+    
+    try {
+      // Build prompt from idea context - avoid including full script content
+      const genres = (idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : [])).join(", ")
+      
+      // Use description, but clean it and limit it to avoid including full script
+      let description = ""
+      if (idea.description && idea.description.trim()) {
+        // Clean the description - remove markdown and script structure
+        description = idea.description
+          .replace(/\*\*/g, '') // Remove markdown
+          .replace(/\*/g, '')
+          .replace(/__/g, '')
+          .replace(/`/g, '')
+          .replace(/\n/g, ' ') // Remove newlines
+          .replace(/\s+/g, ' ') // Remove extra spaces
+          .replace(/Act \d+:|Scene \d+:|Chapter \d+:/gi, '') // Remove script structure markers
+          .replace(/Title:|Genre:|Logline:/gi, '') // Remove metadata labels
+          .trim()
+        
+        // Use first sentence or first 150 chars (avoid full script)
+        const firstSentence = description.split(/[.!?]/)[0]
+        description = (firstSentence && firstSentence.length > 0 && firstSentence.length < 150) 
+          ? firstSentence 
+          : description.substring(0, 150)
+        description = description.trim()
+      }
+      
+      // Create a cinematic movie poster prompt
+      let coverPrompt = `Movie poster for "${idea.title}"`
+      if (genres) {
+        coverPrompt += `, ${genres} genre`
+      }
+      if (description) {
+        coverPrompt += `. ${description}`
+      }
+      coverPrompt += `. Cinematic style, professional movie poster, high quality, dramatic lighting`
+
+      // Limit prompt length to avoid API errors (DALL-E 3 has 1000 character limit)
+      if (coverPrompt.length > 900) {
+        coverPrompt = coverPrompt.substring(0, 900) + "..."
+      }
+
+      console.log('Generating quick cover with prompt:', coverPrompt)
+      
+      // Normalize model name (handle "DALL-E 3" -> "dall-e-3")
+      let modelName = "dall-e-3"
+      if (imagesSetting.locked_model) {
+        const lockedModel = imagesSetting.locked_model.toLowerCase()
+        if (lockedModel.includes('dall') || lockedModel.includes('dalle')) {
+          modelName = "dall-e-3"
+        }
+      }
+      
+      const response = await OpenAIService.generateImage({
+        prompt: coverPrompt,
+        style: "cinematic, movie poster, professional",
+        model: modelName,
+        apiKey: userApiKeys.openai_api_key
+      })
+
+      if (response.success && response.data) {
+        const imageUrl = response.data.data?.[0]?.url || ""
+        
+        // Save the image to the bucket
+        const saveResponse = await fetch('/api/ai/download-and-store-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageUrl: imageUrl,
+            fileName: `idea_cover_${idea.id}_${Date.now()}`,
+            userId: userId
+          })
+        })
+
+        if (!saveResponse.ok) {
+          throw new Error('Failed to save image to bucket')
+        }
+
+        const saveResult = await saveResponse.json()
+        
+        if (saveResult.success) {
+          const bucketUrl = saveResult.supabaseUrl
+          
+          // Save the image to the idea
+          await IdeaImagesService.saveIdeaImage(userId, {
+            idea_id: idea.id,
+            image_url: bucketUrl,
+            prompt: coverPrompt,
+            bucket_path: saveResult.filePath || ''
+          })
+          
+          // Refresh idea images
+          await loadSavedImages()
+          
+          toast({
+            title: "Success!",
+            description: `Cover image generated for "${idea.title}"`,
+          })
+        } else {
+          throw new Error(saveResult.error || 'Failed to save image')
+        }
+      } else {
+        throw new Error(response.error || "Failed to generate image")
+      }
+    } catch (error) {
+      console.error('Error generating quick cover:', error)
+      let errorMessage = 'Failed to generate cover image'
+      
+      if (error instanceof Error) {
+        // Check for content policy violations
+        if (error.message.includes('copyrighted material') || 
+            error.message.includes('explicit content') ||
+            error.message.includes('content policy') ||
+            error.message.includes('violates our usage policy')) {
+          errorMessage = error.message
+        } else if (error.message.includes('API key')) {
+          errorMessage = 'API key issue. Please check your API key in Settings → Profile'
+        } else {
+          errorMessage = error.message
+        }
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingCoverForIdea(null)
+    }
+  }
+
   const handleImport = async () => {
     if (!ready) {
       toast({
@@ -1043,7 +1732,8 @@ export default function IdeasPage() {
           body: JSON.stringify({
             title: importScriptTitle,
             content: importScriptContent,
-            genre: importScriptGenre,
+            genre: importScriptGenre, // Legacy field for backward compatibility
+            genres: importScriptGenre ? [importScriptGenre] : [], // New genres array
             userId: user!.id
           })
         })
@@ -1075,7 +1765,8 @@ export default function IdeasPage() {
         const importData = {
           title: importIdeaTitle,
           description: importIdeaDescription,
-          genre: importIdeaGenre,
+          genre: importIdeaGenre, // Legacy field for backward compatibility
+          genres: importIdeaGenre ? [importIdeaGenre] : [], // New genres array
           main_creator: importIdeaMainCreator.trim() || "Unknown",
           co_creators: importIdeaCoCreators,
           status: importIdeaStatus,
@@ -1127,7 +1818,10 @@ export default function IdeasPage() {
                          (idea.prompt && idea.prompt.toLowerCase().includes(searchTerm.toLowerCase())) ||
                          idea.main_creator.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (idea.co_creators && idea.co_creators.some(creator => creator.toLowerCase().includes(searchTerm.toLowerCase())))
-    const matchesGenre = filterGenre === "all" || idea.genre === filterGenre
+    // Support both old genre field and new genres array for filtering
+    const matchesGenre = filterGenre === "all" || 
+      idea.genre === filterGenre || 
+      (idea.genres && idea.genres.includes(filterGenre))
     const matchesStatus = filterStatus === "all" || idea.status === filterStatus
     
     return matchesSearch && matchesGenre && matchesStatus
@@ -1197,17 +1891,112 @@ export default function IdeasPage() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="genre">Genre</Label>
-                    <Select value={genre} onValueChange={setGenre}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select genre" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {genres.map((g) => (
-                          <SelectItem key={g} value={g}>{g}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Collapsible open={genresOpen} onOpenChange={setGenresOpen}>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="genres">Genres</Label>
+                          <CollapsibleTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 px-2"
+                            >
+                              {genresOpen ? (
+                                <>
+                                  <ChevronUp className="h-3 w-3 mr-1" />
+                                  Collapse
+                                </>
+                              ) : (
+                                <>
+                                  <ChevronDown className="h-3 w-3 mr-1" />
+                                  Expand
+                                </>
+                              )}
+                            </Button>
+                          </CollapsibleTrigger>
+                        </div>
+                        
+                        {/* Selected genres displayed as badges */}
+                        {selectedGenres.length > 0 && (
+                          <div className="flex flex-wrap gap-2 pb-2">
+                            {selectedGenres.map((g) => (
+                              <Badge 
+                                key={g} 
+                                variant="secondary" 
+                                className="flex items-center gap-1"
+                              >
+                                {g}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedGenres(selectedGenres.filter(genre => genre !== g))
+                                    // Update legacy genre field if this was the first genre
+                                    if (selectedGenres.length === 1) {
+                                      setGenre("")
+                                    } else if (selectedGenres[0] === g && selectedGenres.length > 1) {
+                                      setGenre(selectedGenres[1])
+                                    }
+                                  }}
+                                  className="ml-1 hover:text-destructive focus:outline-none"
+                                  aria-label={`Remove ${g}`}
+                                >
+                                  ×
+                                </button>
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Genre selection with checkboxes - Collapsible */}
+                        <CollapsibleContent>
+                          <div className="border rounded-md p-3 max-h-48 overflow-y-auto">
+                            <div className="grid grid-cols-2 gap-3">
+                              {genres.map((g) => {
+                                const isSelected = selectedGenres.includes(g)
+                                return (
+                                  <div key={g} className="flex items-center space-x-2">
+                                    <Checkbox
+                                      id={`genre-${g}`}
+                                      checked={isSelected}
+                                      onCheckedChange={(checked) => {
+                                        if (checked) {
+                                          // Add genre
+                                          const newGenres = [...selectedGenres, g]
+                                          setSelectedGenres(newGenres)
+                                          // Update legacy genre field to first genre for backward compatibility
+                                          if (selectedGenres.length === 0) {
+                                            setGenre(g)
+                                          }
+                                        } else {
+                                          // Remove genre
+                                          const newGenres = selectedGenres.filter(genre => genre !== g)
+                                          setSelectedGenres(newGenres)
+                                          // Update legacy genre field
+                                          if (newGenres.length === 0) {
+                                            setGenre("")
+                                          } else if (selectedGenres[0] === g) {
+                                            setGenre(newGenres[0])
+                                          }
+                                        }
+                                      }}
+                                    />
+                                    <label
+                                      htmlFor={`genre-${g}`}
+                                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                                    >
+                                      {g}
+                                    </label>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-2">
+                            Select one or more genres
+                          </p>
+                        </CollapsibleContent>
+                      </div>
+                    </Collapsible>
                   </div>
                 </div>
                 
@@ -1319,7 +2108,7 @@ export default function IdeasPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="ai-prompt" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="ai-prompt" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
@@ -1399,88 +2188,120 @@ export default function IdeasPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6">
                 {filteredIdeas.map((idea) => (
-                  <Card key={idea.id} className="hover:shadow-lg transition-shadow overflow-hidden">
-                    <CardHeader className="pb-4">
-                      <div className="flex flex-col gap-4">
-                        {/* Title Section - Full Width */}
-                        <div className="w-full">
-                          <CardTitle className="text-lg line-clamp-2 break-words">{idea.title}</CardTitle>
-                        </div>
-                        
-                        {/* Bottom Row - Badges and Buttons */}
-                        <div className="flex justify-between items-start gap-4 min-w-0">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge variant="secondary" className="text-xs flex-shrink-0">
-                                {idea.genre}
-                              </Badge>
-                              <Badge className={`text-xs flex-shrink-0 ${getStatusColor(idea.status)}`}>
-                                {idea.status}
-                              </Badge>
-                              {idea.main_creator && (
-                                <Badge variant="outline" className="text-xs flex-shrink-0">
-                                  👤 {idea.main_creator}
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
-                                                     <div className="flex gap-1 flex-shrink-0">
-                             <Button
-                               variant="outline"
-                               size="sm"
-                               onClick={(e) => {
-                                 e.preventDefault()
-                                 e.stopPropagation()
-                                 console.log('Image button clicked for:', idea.title)
-                                 openImageGeneration(idea)
-                               }}
-                               className="h-8 px-2 text-xs flex-shrink-0"
-                               title="Generate Images"
-                             >
-                               <ImageIcon className="h-3 w-3 mr-1" />
-                               Image
-                             </Button>
-                             <Button
-                               variant="outline"
-                               size="sm"
-                               onClick={() => convertIdeaToMovie(idea)}
-                               className="h-8 px-2 text-xs flex-shrink-0"
-                               title="Convert to Movie"
-                             >
-                               <Film className="h-3 w-3 mr-1" />
-                               Movie
-                             </Button>
-                             <Button
-                               variant="outline"
-                               size="sm"
-                               onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
-                               className="h-8 px-2 text-xs flex-shrink-0"
-                               title="Manage Scene List"
-                             >
-                               <List className="h-3 w-3 mr-1" />
-                               Scenes
-                             </Button>
-                             <Button
-                               variant="ghost"
-                               size="sm"
-                               onClick={() => editIdea(idea)}
-                               className="h-8 w-8 p-0 flex-shrink-0"
-                             >
-                               <Edit className="h-4 w-4" />
-                             </Button>
-                             <Button
-                               variant="ghost"
-                               size="sm"
-                               onClick={() => deleteIdea(idea.id)}
-                               className="h-8 w-8 p-0 text-destructive hover:text-destructive flex-shrink-0"
-                             >
-                               <Trash2 className="h-4 w-4" />
-                             </Button>
-                           </div>
+                  <Card key={idea.id} className="hover:shadow-lg transition-shadow overflow-hidden flex flex-col h-full">
+                    <CardHeader className="pb-3 pt-4 px-4">
+                      {/* Title Section - Full Width */}
+                      <div className="mb-3">
+                        <CardTitle className="text-lg line-clamp-2 break-words mb-3">{idea.title}</CardTitle>
+                      </div>
+                      
+                      {/* Badges Section */}
+                      <div className="mb-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {/* Display all genres (support both genres array and legacy genre field) */}
+                          {(idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : [])).map((g, index) => (
+                            <Badge key={index} variant="secondary" className="text-xs flex-shrink-0">
+                              {g}
+                            </Badge>
+                          ))}
+                          <Badge className={`text-xs flex-shrink-0 ${getStatusColor(idea.status)}`}>
+                            {idea.status}
+                          </Badge>
+                          {idea.main_creator && (
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                              👤 {idea.main_creator}
+                            </Badge>
+                          )}
                         </div>
                       </div>
+                      
+                      {/* Action Buttons Section */}
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            generateQuickCover(idea)
+                          }}
+                          disabled={generatingCoverForIdea === idea.id}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Generate Cover Image"
+                        >
+                          {generatingCoverForIdea === idea.id ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Wand2 className="h-3 w-3 mr-1" />
+                          )}
+                          Cover
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            console.log('Image button clicked for:', idea.title)
+                            openImageGeneration(idea)
+                          }}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Generate Custom Images"
+                        >
+                          <ImageIcon className="h-3 w-3 mr-1" />
+                          Image
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => convertIdeaToTreatment(idea)}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Convert to Treatment"
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Treatment
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => convertIdeaToMovie(idea)}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Convert to Movie"
+                        >
+                          <Film className="h-3 w-3 mr-1" />
+                          Movie
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Manage Scene List"
+                        >
+                          <List className="h-3 w-3 mr-1" />
+                          Scenes
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => editIdea(idea)}
+                          className="h-7 w-7 p-0 flex-shrink-0"
+                          title="Edit Idea"
+                        >
+                          <Edit className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteIdea(idea.id)}
+                          className="h-7 w-7 p-0 text-destructive hover:text-destructive flex-shrink-0"
+                          title="Delete Idea"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="px-4 pb-4 pt-0">
                       {/* Prominent Image Display */}
                       {ideaImages[idea.id] && ideaImages[idea.id].filter(url => url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)).length > 0 && (
                         <div className="mb-4">
@@ -1662,22 +2483,34 @@ export default function IdeasPage() {
                     onClick={() => {
                       // Pre-fill the form with current prompt and generated content
                       if (aiResponse) {
-                        setTitle("Generated Script Idea")
-                        setDescription(aiResponse.substring(0, 200) + (aiResponse.length > 200 ? "..." : ""))
+                        // Extract title from generated content (use raw response for better extraction)
+                        const extractedTitle = extractTitle(aiResponseRaw || aiResponse)
+                        setTitle(extractedTitle || "Generated Script Idea")
+                        // Store first 500 characters as description (increased from 200 to preserve more content)
+                        // The full content is stored in prompt field
+                        setDescription(aiResponse.substring(0, 500) + (aiResponse.length > 500 ? "..." : ""))
                         setOriginalPrompt(prompt) // Save your original prompt
                         setPrompt(aiResponse) // Save AI-generated content
+                        // Extract genre from the generated script
+                        // Try raw response first (has markdown), then cleaned response
+                        // Extract genres (array) from the generated script
+                        const extractedGenres = extractGenres(aiResponseRaw || aiResponse)
+                        setSelectedGenres(extractedGenres)
+                        setGenre(extractedGenres.length > 0 ? extractedGenres[0] : "") // Set legacy genre for backward compatibility
                       } else if (generatedImage) {
                         setTitle("Generated Image Idea")
                         setDescription("AI-generated image concept: " + prompt)
                         setOriginalPrompt(prompt) // Save your original prompt
                         setPrompt("AI-generated image: " + prompt) // Save AI image reference
+                        setGenre("") // No genre for images
                       } else {
                         setTitle("")
                         setDescription("")
                         setOriginalPrompt(prompt) // Save your original prompt
                         setPrompt("") // No AI content yet
+                        setGenre("") // No genre detected
                       }
-                      setGenre("")
+                      setMainCreator(userName || user?.name || user?.email?.split('@')[0] || "") // Auto-populate with user's name
                       setStatus("concept")
                       setShowAddDialog(true)
                     }} 
@@ -1705,48 +2538,82 @@ export default function IdeasPage() {
               {aiResponse && (
                 <Card>
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Sparkles className="h-5 w-5 text-green-500" />
-                      Generated Script
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="bg-muted p-4 rounded-md max-h-96 overflow-y-auto">
-                      <pre className="whitespace-pre-wrap text-sm font-mono">{aiResponse}</pre>
-                    </div>
-                                          <div className="flex gap-2 mt-4">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <Sparkles className="h-5 w-5 text-green-500" />
+                        Generated Script
+                      </CardTitle>
+                      <div className="flex gap-2">
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => setPrompt(aiResponse)}
-                        >
-                          Use as Prompt
-                        </Button>
-                        <Button 
-                          variant="default" 
-                          size="sm"
-                          onClick={() => {
-                            setTitle("Generated Script Idea")
-                            setDescription(aiResponse.substring(0, 200) + (aiResponse.length > 200 ? "..." : ""))
-                            setOriginalPrompt(prompt) // Save your original prompt
-                            setPrompt(aiResponse) // Save AI-generated content
-                            setGenre("")
-                            setStatus("concept")
-                            setShowAddDialog(true)
-                          }}
+                          onClick={() => copyToClipboard(aiResponse)}
                           className="flex items-center gap-2"
                         >
-                          <Save className="h-4 w-4" />
-                          Save as Idea
+                          <Copy className="h-4 w-4" />
+                          Copy
                         </Button>
                         <Button 
                           variant="outline" 
                           size="sm"
-                          onClick={() => setAiResponse("")}
+                          onClick={() => exportToPDF(aiResponse)}
+                          className="flex items-center gap-2"
                         >
-                          Clear
+                          <Download className="h-4 w-4" />
+                          Export PDF
                         </Button>
                       </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-muted p-4 rounded-md max-h-[600px] overflow-y-auto">
+                      <pre className="whitespace-pre-wrap text-sm font-sans">{aiResponse}</pre>
+                    </div>
+                    <div className="flex gap-2 mt-4 flex-wrap">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => setPrompt(aiResponse)}
+                      >
+                        Use as Prompt
+                      </Button>
+                      <Button 
+                        variant="default" 
+                        size="sm"
+                        onClick={async () => {
+                          // Extract title from generated content (use raw response for better extraction)
+                          const extractedTitle = extractTitle(aiResponseRaw || aiResponse)
+                          setTitle(extractedTitle || "Generated Script Idea")
+                          // Store first 500 characters as description (increased from 200 to preserve more content)
+                          // The full content is stored in prompt field
+                          setDescription(aiResponse.substring(0, 500) + (aiResponse.length > 500 ? "..." : ""))
+                          setOriginalPrompt(prompt) // Save your original prompt
+                          setPrompt(aiResponse) // Save AI-generated content
+                          // Extract genres (array) from the generated script
+                          // Try raw response first (has markdown), then cleaned response
+                          const extractedGenres = extractGenres(aiResponseRaw || aiResponse)
+                          setSelectedGenres(extractedGenres)
+                          setGenre(extractedGenres.length > 0 ? extractedGenres[0] : "") // Set legacy genre for backward compatibility
+                          setMainCreator(userName || user?.name || user?.email?.split('@')[0] || "") // Auto-populate with user's name
+                          setStatus("concept")
+                          setShowAddDialog(true)
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Save className="h-4 w-4" />
+                        Save as Idea
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => {
+                          setAiResponse("")
+                          setAiResponseRaw("")
+                        }}
+                      >
+                        Clear
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               )}
@@ -1780,7 +2647,7 @@ export default function IdeasPage() {
                                 description: "AI-generated image concept: " + prompt,
                                 original_prompt: prompt,
                                 prompt: "AI-generated image: " + prompt,
-                                genre: "",
+                                genres: [],
                                 status: "concept" as const,
                                 main_creator: user?.id || "unknown"
                               }
@@ -1851,7 +2718,14 @@ export default function IdeasPage() {
                             setDescription("AI-generated image concept: " + prompt)
                             setOriginalPrompt(prompt)
                             setPrompt("AI-generated image: " + prompt)
-                            setGenre(selectedIdeaForImage?.genre || "")
+                            // Set genres from idea (support both genres array and legacy genre field)
+                            if (selectedIdeaForImage?.genres && selectedIdeaForImage.genres.length > 0) {
+                              setSelectedGenres(selectedIdeaForImage.genres)
+                              setGenre(selectedIdeaForImage.genres[0])
+                            } else {
+                              setGenre(selectedIdeaForImage?.genre || "")
+                              setSelectedGenres(selectedIdeaForImage?.genre ? [selectedIdeaForImage.genre] : [])
+                            }
                             setStatus(selectedIdeaForImage?.status || "concept")
                             setShowAddDialog(true)
                             setShowImageDialog(false)
@@ -1967,7 +2841,9 @@ export default function IdeasPage() {
               <h4 className="font-medium mb-2 text-sm">Quick Reference:</h4>
               <div className="space-y-1 text-xs">
                 <p><strong>Title:</strong> {selectedIdeaForImage?.title}</p>
-                <p><strong>Genre:</strong> {selectedIdeaForImage?.genre}</p>
+                <p><strong>Genre:</strong> {(selectedIdeaForImage?.genres && selectedIdeaForImage.genres.length > 0) 
+                  ? selectedIdeaForImage.genres.join(", ") 
+                  : (selectedIdeaForImage?.genre || "Unspecified")}</p>
                 <p><strong>Description:</strong> {selectedIdeaForImage?.description.substring(0, 80)}...</p>
               </div>
             </div>
@@ -2061,7 +2937,14 @@ export default function IdeasPage() {
                       setDescription(selectedIdeaForImage?.description || "")
                       setOriginalPrompt(imagePrompt)
                       setPrompt("AI-generated image: " + imagePrompt)
-                      setGenre(selectedIdeaForImage?.genre || "")
+                      // Set genres from idea (support both genres array and legacy genre field)
+                      if (selectedIdeaForImage?.genres && selectedIdeaForImage.genres.length > 0) {
+                        setSelectedGenres(selectedIdeaForImage.genres)
+                        setGenre(selectedIdeaForImage.genres[0])
+                      } else {
+                        setGenre(selectedIdeaForImage?.genre || "")
+                        setSelectedGenres(selectedIdeaForImage?.genre ? [selectedIdeaForImage.genre] : [])
+                      }
                       setStatus(selectedIdeaForImage?.status || "concept")
                       setShowAddDialog(true)
                       setShowImageDialog(false)

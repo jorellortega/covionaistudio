@@ -9,6 +9,7 @@ export interface Treatment {
   status: 'draft' | 'in-progress' | 'completed' | 'archived'
   cover_image_url?: string
   synopsis: string
+  prompt?: string
   target_audience?: string
   estimated_budget?: string
   estimated_duration?: string
@@ -28,6 +29,7 @@ export interface CreateTreatmentData {
   status?: 'draft' | 'in-progress' | 'completed' | 'archived'
   cover_image_url?: string
   synopsis: string
+  prompt?: string
   target_audience?: string
   estimated_budget?: string
   estimated_duration?: string
@@ -105,6 +107,7 @@ export class TreatmentsService {
         genre: treatmentData.genre,
         status: treatmentData.status || 'draft',
         synopsis: treatmentData.synopsis,
+        prompt: treatmentData.prompt || null,
         cover_image_url: treatmentData.cover_image_url || null,
         target_audience: treatmentData.target_audience || null,
         estimated_budget: treatmentData.estimated_budget || null,

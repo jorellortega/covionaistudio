@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Play, Pause, Volume2, Download, RefreshCw } from 'lucide-react'
+import { Loader2, Play, Pause, Volume2, Download, RefreshCw, Headphones } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { useAuthReady } from '@/components/auth-hooks'
 import { AISettingsService } from '@/lib/ai-settings-service'
@@ -15,6 +15,7 @@ interface Voice {
   name: string
   category: string
   description?: string
+  preview_url?: string
 }
 
 interface TextToSpeechProps {
@@ -23,9 +24,11 @@ interface TextToSpeechProps {
   className?: string
   projectId?: string
   sceneId?: string
+  treatmentId?: string
+  onAudioSaved?: (assetId: string) => void
 }
 
-export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId }: TextToSpeechProps) {
+export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId, treatmentId, onAudioSaved }: TextToSpeechProps) {
   const { toast } = useToast()
   const { user, userId, ready } = useAuthReady()
   const [voices, setVoices] = useState<Voice[]>([])
@@ -46,6 +49,9 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const [isRenamingAudio, setIsRenamingAudio] = useState<string | null>(null)
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
+  const [isPreviewingVoice, setIsPreviewingVoice] = useState(false)
+  const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null)
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
   // Load available voices when component mounts
   useEffect(() => {
@@ -62,11 +68,12 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }, [elevenLabsApiKey])
 
   // Load saved audio files when component mounts
+  // Allow loading even without projectId if treatmentId or sceneId is provided
   useEffect(() => {
-    if (projectId && sceneId) {
+    if ((projectId || sceneId || treatmentId) && user?.id) {
       fetchSavedAudio()
     }
-  }, [projectId, sceneId])
+  }, [projectId, sceneId, treatmentId, user?.id])
 
   // Set default voice when voices are loaded
   useEffect(() => {
@@ -220,6 +227,9 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       console.log('🎵 Client: Audio blob received, size:', audioBlob.size, 'bytes')
       const url = URL.createObjectURL(audioBlob)
       setAudioUrl(url)
+      
+      // Reset savedAssetId when new audio is generated (user can save the new audio)
+      setSavedAssetId(null)
 
       toast({
         title: "Speech Generated",
@@ -265,15 +275,21 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }
 
-  const fetchSavedAudio = async () => {
-    if (!projectId) return
+  const fetchSavedAudio = async (options?: { showToast?: boolean }) => {
+    // Require at least one of projectId, sceneId, or treatmentId
+    if (!projectId && !sceneId && !treatmentId) return
 
     setIsLoadingSavedAudio(true)
     try {
       const response = await fetch('/api/ai/get-scene-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, sceneId: sceneId || null, userId: user?.id })
+        body: JSON.stringify({ 
+          projectId: projectId || null, 
+          sceneId: sceneId || null, 
+          treatmentId: treatmentId || null,
+          userId: user?.id 
+        })
       })
 
       if (!response.ok) {
@@ -283,10 +299,12 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       const result = await response.json()
       if (result.success) {
         setSavedAudioFiles(result.data.audioFiles)
-        toast({
-          title: "Audio Loaded",
-          description: `Found ${result.data.count} saved audio files.`,
-        })
+        if (options?.showToast !== false) {
+          toast({
+            title: "Audio Loaded",
+            description: `Found ${result.data.count} saved audio files.`,
+          })
+        }
       }
     } catch (error) {
       console.error('Error fetching saved audio:', error)
@@ -300,11 +318,40 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }
 
+  const blobToBase64 = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        resolve(reader.result as string)
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+
   const saveToBucket = async () => {
-    if (!audioUrl || !projectId || !user?.id) {
+    if (!audioUrl) {
       toast({
         title: "Cannot Save",
-        description: "Missing project information for saving.",
+        description: "No audio generated yet. Please generate audio first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!user?.id) {
+      toast({
+        title: "Cannot Save",
+        description: "You must be logged in to save audio.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Require at least one of projectId, sceneId, or treatmentId
+    if (!projectId && !sceneId && !treatmentId) {
+      toast({
+        title: "Cannot Save",
+        description: "Cannot save: No project, scene, or treatment specified.",
         variant: "destructive",
       })
       return
@@ -312,49 +359,75 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
     setIsSavingToBucket(true)
     try {
+      console.log('💾 Starting save process...', {
+        hasAudioUrl: !!audioUrl,
+        projectId,
+        treatmentId,
+        sceneId,
+        userId: user?.id
+      })
+
       // Convert audio URL to blob
       const response = await fetch(audioUrl)
+      if (!response.ok) {
+        throw new Error('Failed to fetch audio blob')
+      }
+      
       const audioBlob = await response.blob()
+      console.log('💾 Audio blob fetched, size:', audioBlob.size, 'bytes')
 
       // Convert blob to base64 for transmission
-      const reader = new FileReader()
-      reader.readAsDataURL(audioBlob)
-      reader.onloadend = async () => {
-        const base64Audio = reader.result as string
+      const base64Audio = await blobToBase64(audioBlob)
+      console.log('💾 Audio converted to base64, length:', base64Audio.length)
 
-        const saveResponse = await fetch('/api/ai/save-audio', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            audioBlob: base64Audio,
-            fileName: `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`,
-            projectId,
-            sceneId: sceneId || null,
-            userId: user?.id
-          })
+      const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+      console.log('💾 Saving audio with filename:', fileName)
+
+      const saveResponse = await fetch('/api/ai/save-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          audioBlob: base64Audio,
+          fileName: fileName,
+          projectId,
+          sceneId: sceneId || null,
+          treatmentId: treatmentId || null,
+          userId: user?.id
         })
+      })
 
-        if (!saveResponse.ok) {
-          throw new Error('Failed to save audio to bucket')
-        }
+      console.log('💾 Save response status:', saveResponse.status)
 
-        const result = await saveResponse.json()
-        
-        if (result.success) {
-          setSavedAssetId(result.data.asset.id)
-                  toast({
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json().catch(() => ({ error: 'Unknown error' }))
+        console.error('💾 Save failed:', errorData)
+        throw new Error(errorData.error || 'Failed to save audio to bucket')
+      }
+
+      const result = await saveResponse.json()
+      console.log('💾 Save result:', result)
+      
+      if (result.success) {
+        const assetId = result.data.asset.id
+        setSavedAssetId(assetId)
+        toast({
           title: "Audio Saved!",
           description: `Audio file has been saved as an asset in your project.`,
         })
-        } else {
-          throw new Error(result.error || 'Unknown error')
+        if (typeof onAudioSaved === 'function') {
+          onAudioSaved(assetId)
         }
+        // Refresh saved audio list quietly
+        await fetchSavedAudio({ showToast: false })
+      } else {
+        throw new Error(result.error || 'Unknown error')
       }
     } catch (error) {
-      console.error('Error saving to bucket:', error)
+      console.error('💾 Error saving to bucket:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to save audio to bucket. Please try again.'
       toast({
         title: "Save Failed",
-        description: "Failed to save audio to bucket. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {
@@ -365,6 +438,159 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const getSelectedVoiceName = () => {
     return voices.find(v => v.voice_id === selectedVoice)?.name || 'Select Voice'
   }
+
+  const previewVoice = async () => {
+    if (!selectedVoice) {
+      toast({
+        title: "Cannot Preview",
+        description: "Please select a voice first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsPreviewingVoice(true)
+    try {
+      // Stop any currently playing preview
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+        previewAudioRef.current = null
+      }
+
+      // Check if voice has a preview_url (from ElevenLabs API)
+      const voice = voices.find(v => v.voice_id === selectedVoice)
+      if (voice?.preview_url) {
+        // Use the preview URL directly from ElevenLabs
+        const audio = new Audio(voice.preview_url)
+        previewAudioRef.current = audio
+        
+        audio.onended = () => {
+          setIsPreviewingVoice(false)
+          previewAudioRef.current = null
+        }
+        
+        audio.onerror = (e) => {
+          console.error('Preview URL failed, generating preview instead:', e)
+          setIsPreviewingVoice(false)
+          // If preview_url fails, try generating a preview
+          generateVoicePreview().catch(err => {
+            console.error('Failed to generate preview:', err)
+            setIsPreviewingVoice(false)
+          })
+        }
+        
+        try {
+          await audio.play()
+          toast({
+            title: "Voice Preview",
+            description: "Playing voice preview...",
+          })
+          return
+        } catch (playError) {
+          console.error('Failed to play preview URL:', playError)
+          // Fall through to generate preview
+        }
+      }
+
+      // If no preview_url or preview_url failed, generate a preview via API
+      await generateVoicePreview()
+    } catch (error) {
+      console.error('Error previewing voice:', error)
+      toast({
+        title: "Preview Failed",
+        description: error instanceof Error ? error.message : "Failed to preview voice",
+        variant: "destructive",
+      })
+      setIsPreviewingVoice(false)
+    }
+  }
+
+  const generateVoicePreview = async () => {
+    if (!elevenLabsApiKey) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key first.",
+        variant: "destructive",
+      })
+      setIsPreviewingVoice(false)
+      return
+    }
+
+    try {
+      // Get voice preview from API
+      const response = await fetch('/api/ai/voice-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: selectedVoice })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to get voice preview')
+      }
+
+      // Check if response is JSON (URL) or audio blob
+      const contentType = response.headers.get('content-type')
+      
+      if (contentType?.includes('audio')) {
+        // It's an audio blob
+        const audioBlob = await response.blob()
+        const audioUrl = URL.createObjectURL(audioBlob)
+        setPreviewAudioUrl(audioUrl)
+        
+        // Create and play audio
+        const audio = new Audio(audioUrl)
+        previewAudioRef.current = audio
+        audio.onended = () => {
+          setIsPreviewingVoice(false)
+          setPreviewAudioUrl(null)
+          if (previewAudioRef.current) {
+            URL.revokeObjectURL(audioUrl)
+            previewAudioRef.current = null
+          }
+        }
+        audio.play()
+      } else {
+        // It's JSON with audioUrl
+        const result = await response.json()
+        if (result.audioUrl) {
+          setPreviewAudioUrl(result.audioUrl)
+          
+          // Create and play audio
+          const audio = new Audio(result.audioUrl)
+          previewAudioRef.current = audio
+          audio.onended = () => {
+            setIsPreviewingVoice(false)
+            setPreviewAudioUrl(null)
+            previewAudioRef.current = null
+          }
+          audio.play()
+        } else {
+          throw new Error('No audio URL in response')
+        }
+      }
+
+      toast({
+        title: "Voice Preview",
+        description: "Playing voice preview...",
+      })
+    } catch (error) {
+      console.error('Error generating voice preview:', error)
+      throw error
+    }
+  }
+
+  // Cleanup preview audio on unmount
+  useEffect(() => {
+    return () => {
+      if (previewAudioUrl) {
+        URL.revokeObjectURL(previewAudioUrl)
+      }
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+        previewAudioRef.current = null
+      }
+    }
+  }, [previewAudioUrl])
 
   // Start editing audio name
   const startEditingAudioName = (audioFile: any) => {
@@ -498,7 +724,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   return (
     <div className={`w-full space-y-2 ${className}`}>
       {/* Compact Voice Selection and Generate Button */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <Volume2 className="h-4 w-4 text-blue-500 flex-shrink-0" />
         <Select value={selectedVoice} onValueChange={setSelectedVoice}>
           <SelectTrigger className="bg-card border-blue-500/30 h-8 text-xs flex-1 min-w-[150px]">
@@ -525,9 +751,25 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
           </SelectContent>
         </Select>
         {selectedVoice && (
+          <>
+            <Button
+              onClick={previewVoice}
+              disabled={isPreviewingVoice}
+              variant="outline"
+              size="sm"
+              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 h-8 text-xs px-2 flex-shrink-0"
+              title="Preview Voice - Listen before generating"
+            >
+              {isPreviewingVoice ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Headphones className="h-3 w-3" />
+              )}
+            </Button>
           <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400 hidden sm:flex">
             {voices.find(v => v.voice_id === selectedVoice)?.category || 'premade'}
           </Badge>
+          </>
         )}
         <Button
           onClick={generateSpeech}
@@ -548,6 +790,23 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
           )}
         </Button>
       </div>
+      
+      {/* Hidden audio element for preview */}
+      {previewAudioUrl && (
+        <audio
+          ref={previewAudioRef}
+          src={previewAudioUrl}
+          onEnded={() => {
+            setIsPreviewingVoice(false)
+            setPreviewAudioUrl(null)
+            if (previewAudioRef.current) {
+              URL.revokeObjectURL(previewAudioUrl)
+              previewAudioRef.current = null
+            }
+          }}
+          className="hidden"
+        />
+      )}
 
       {/* No Audio Generated Yet */}
       {!audioUrl && !isLoading && (
@@ -569,7 +828,8 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             controls
           />
           
-          <div className="flex gap-1 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
+            {/* Download Button */}
             <Button
               onClick={downloadAudio}
               variant="outline"
@@ -580,40 +840,56 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
               Download
             </Button>
 
-            {/* Save to Bucket Button */}
-            {projectId && (
-              <Button
-                onClick={saveToBucket}
-                disabled={isSavingToBucket || !!savedAssetId}
-                variant="outline"
-                size="sm"
-                className={`h-7 text-xs px-2 ${
-                  savedAssetId 
-                    ? 'border-green-500/30 text-green-400 bg-green-500/10' 
-                    : 'border-purple-500/30 text-purple-400 hover:bg-purple-500/10'
-                }`}
-              >
-                {isSavingToBucket ? (
-                  <>
-                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                    Saving...
-                  </>
-                ) : savedAssetId ? (
-                  <>
-                    <span className="mr-1">✓</span>
-                    Saved
-                  </>
-                ) : (
-                  <>
-                    <span className="mr-1">☁️</span>
-                    Save
-                  </>
-                )}
-              </Button>
-            )}
+            {/* Save Button - Always show when audio is generated */}
+            <Button
+              onClick={saveToBucket}
+              disabled={isSavingToBucket || !!savedAssetId || !user?.id || (!projectId && !sceneId && !treatmentId)}
+              variant="default"
+              size="sm"
+              className={`h-7 text-xs px-3 ${
+                savedAssetId 
+                  ? 'bg-green-500/20 border-green-500/30 text-green-400 hover:bg-green-500/30 cursor-default' 
+                  : (!user?.id || (!projectId && !sceneId && !treatmentId))
+                  ? 'bg-gray-500/50 border-gray-500/30 text-gray-400 cursor-not-allowed'
+                  : 'bg-purple-500 hover:bg-purple-600 text-white border-purple-500'
+              }`}
+              title={
+                !user?.id 
+                  ? "Cannot save: User not logged in"
+                  : (!projectId && !sceneId && !treatmentId)
+                  ? "Cannot save: No project, scene, or treatment specified"
+                  : savedAssetId 
+                  ? "Audio already saved" 
+                  : treatmentId
+                  ? `Save audio to treatment${projectId ? ' (with project)' : ' (standalone)'}`
+                  : "Save audio to your project"
+              }
+            >
+              {isSavingToBucket ? (
+                <>
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                  Saving...
+                </>
+              ) : savedAssetId ? (
+                <>
+                  <span className="mr-1">✓</span>
+                  Saved
+                </>
+              ) : (
+                <>
+                  <span className="mr-1">💾</span>
+                  Save
+                </>
+              )}
+            </Button>
             {savedAssetId && (
               <span className="text-xs text-green-400 flex items-center">
                 ✓ Saved to project
+              </span>
+            )}
+            {(!user?.id || (!projectId && !sceneId && !treatmentId)) && (
+              <span className="text-xs text-yellow-400 flex items-center">
+                ⚠ Cannot save: {!user?.id ? 'Not logged in' : 'No project/scene/treatment'}
               </span>
             )}
           </div>
@@ -621,7 +897,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       )}
 
       {/* Saved Audio Files Section - Compact & Collapsible */}
-      {projectId && savedAudioFiles.length > 0 && (
+      {(sceneId || treatmentId) && savedAudioFiles.length > 0 && (
         <details className="mt-2 pt-2 border-t border-border/50">
           <summary className="text-xs font-medium text-muted-foreground cursor-pointer flex items-center gap-2 hover:text-foreground">
             <span>Saved Audio ({savedAudioFiles.length})</span>

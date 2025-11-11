@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
+import { cookies } from 'next/headers'
+import { createServerClient } from '@supabase/ssr'
+import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     console.log('Received request body:', JSON.stringify(body, null, 2))
     
-    const { prompt, field, service, apiKey, selectedText, fullContent, sceneContext, contentType } = body
+    const { prompt, field, service, apiKey, model, selectedText, fullContent, sceneContext, contentType, userId } = body
 
     // Handle both old format (field-based) and new format (AI text editing)
     if (!prompt || !service) {
@@ -20,19 +23,155 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get actual API keys from environment variables
+    // Get actual API keys - try user's database keys first, then environment variables
     let actualApiKey = apiKey
     if (apiKey === 'configured' || apiKey === 'use_env_vars' || !apiKey) {
-      if (service === 'openai') {
-        actualApiKey = process.env.OPENAI_API_KEY
-      } else if (service === 'anthropic') {
-        actualApiKey = process.env.ANTHROPIC_API_KEY
+      // Try to get API key from user's database record
+      let targetUserId = userId
+      
+      // If no userId provided, try to get from authenticated session
+      if (!targetUserId) {
+        try {
+          const cookieStore = await cookies()
+          const supabaseAuth = createServerClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            {
+              cookies: {
+                getAll() {
+                  return cookieStore.getAll()
+                },
+                setAll(cookiesToSet) {
+                  try {
+                    cookiesToSet.forEach(({ name, value, options }) =>
+                      cookieStore.set(name, value, options)
+                    )
+                  } catch {
+                    // Ignore setAll errors in server components
+                  }
+                },
+              },
+            }
+          )
+
+          const { data: { user: authUser } } = await supabaseAuth.auth.getUser()
+          targetUserId = authUser?.id
+        } catch (authError) {
+          console.error('Error getting authenticated user:', authError)
+        }
+      }
+
+      // Fetch API keys from database using service role (bypasses RLS)
+      if (targetUserId) {
+        try {
+          // Use service role key to read user API keys (bypasses RLS)
+          if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+            const supabaseAdmin = createClient(
+              process.env.NEXT_PUBLIC_SUPABASE_URL!,
+              process.env.SUPABASE_SERVICE_ROLE_KEY!,
+              {
+                auth: {
+                  autoRefreshToken: false,
+                  persistSession: false
+                }
+              }
+            )
+
+            const { data, error } = await supabaseAdmin
+              .from('users')
+              .select('openai_api_key, anthropic_api_key')
+              .eq('id', targetUserId)
+              .single()
+
+            if (!error && data) {
+              if (service === 'openai' && data.openai_api_key) {
+                actualApiKey = data.openai_api_key.trim()
+                console.log('✅ Using user OpenAI API key from database')
+              } else if (service === 'anthropic' && data.anthropic_api_key) {
+                actualApiKey = data.anthropic_api_key.trim()
+                console.log('✅ Using user Anthropic API key from database')
+              } else {
+                console.log(`ℹ️ User doesn't have ${service} API key in database, will try environment variables`)
+              }
+            } else if (error) {
+              console.error('❌ Error fetching API keys from database:', error)
+              // If RLS error, try with authenticated client instead
+              if (error.code === '42501' || error.message?.includes('permission')) {
+                console.log('ℹ️ RLS blocked access, trying authenticated client...')
+                try {
+                  const cookieStore = await cookies()
+                  const supabaseAuth = createServerClient(
+                    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+                    {
+                      cookies: {
+                        getAll() {
+                          return cookieStore.getAll()
+                        },
+                        setAll(cookiesToSet) {
+                          try {
+                            cookiesToSet.forEach(({ name, value, options }) =>
+                              cookieStore.set(name, value, options)
+                            )
+                          } catch {
+                            // Ignore setAll errors
+                          }
+                        },
+                      },
+                    }
+                  )
+
+                  const { data: authData, error: authError } = await supabaseAuth
+                    .from('users')
+                    .select('openai_api_key, anthropic_api_key')
+                    .eq('id', targetUserId)
+                    .single()
+
+                  if (!authError && authData) {
+                    if (service === 'openai' && authData.openai_api_key) {
+                      actualApiKey = authData.openai_api_key.trim()
+                      console.log('✅ Using user OpenAI API key from database (authenticated)')
+                    } else if (service === 'anthropic' && authData.anthropic_api_key) {
+                      actualApiKey = authData.anthropic_api_key.trim()
+                      console.log('✅ Using user Anthropic API key from database (authenticated)')
+                    }
+                  }
+                } catch (authDbError) {
+                  console.error('❌ Error with authenticated client:', authDbError)
+                }
+              }
+            }
+          } else {
+            console.log('ℹ️ Service role key not available, will try environment variables')
+          }
+        } catch (dbError) {
+          console.error('❌ Error in API key lookup:', dbError)
+          // Fall through to environment variables
+        }
+      }
+
+      // Fallback to environment variables if no user key found
+      if (!actualApiKey || actualApiKey === 'configured' || actualApiKey === 'use_env_vars') {
+        if (service === 'openai') {
+          actualApiKey = process.env.OPENAI_API_KEY
+          if (actualApiKey) {
+            console.log('✅ Using OpenAI API key from environment variables')
+          }
+        } else if (service === 'anthropic') {
+          actualApiKey = process.env.ANTHROPIC_API_KEY
+          if (actualApiKey) {
+            console.log('✅ Using Anthropic API key from environment variables')
+          }
+        }
       }
     }
 
     if (!actualApiKey) {
       return NextResponse.json(
-        { error: `API key not configured for ${service}. Please set up your API key in the AI settings.` },
+        { 
+          error: `API key not configured for ${service}. Please set up your API key in Settings → AI Settings, or configure environment variables.`,
+          details: userId ? `User ID: ${userId}` : 'No userId provided'
+        },
         { status: 400 }
       )
     }
@@ -71,10 +210,12 @@ Generate only the replacement text:`
 
       switch (service) {
         case 'openai':
+          // Use provided model or default to gpt-4o-mini
+          const openaiModel = model || 'gpt-4o-mini'
           const openaiResponse = await OpenAIService.generateScript({
             prompt: userPrompt,
             template: systemPrompt,
-            model: 'gpt-4',
+            model: openaiModel,
             apiKey: actualApiKey
           })
           
@@ -86,10 +227,12 @@ Generate only the replacement text:`
           break
 
         case 'anthropic':
+          // Use provided model or default to claude-3-5-sonnet-20241022
+          const anthropicModel = model || 'claude-3-5-sonnet-20241022'
           const claudeResponse = await AnthropicService.generateScript({
             prompt: userPrompt,
             template: systemPrompt,
-            model: 'claude-3-sonnet-20240229',
+            model: anthropicModel,
             apiKey: actualApiKey
           })
           
@@ -112,12 +255,45 @@ Generate only the replacement text:`
         )
       }
 
+      // Check if the prompt already contains detailed instructions (like for synopsis generation)
+      // If it does, use it directly; otherwise use the generic template
+      const hasDetailedInstructions = prompt.includes('SYNOPSIS REQUIREMENTS') || 
+                                      prompt.includes('IMPORTANT:') || 
+                                      prompt.includes('You are a professional')
+      
+      let systemTemplate: string
+      let userPromptText: string
+
+      if (hasDetailedInstructions) {
+        // Use the prompt as-is since it contains detailed instructions
+        // Extract system instructions and user prompt if present, otherwise use prompt as user message
+        if (field === 'synopsis' && prompt.includes('SYNOPSIS REQUIREMENTS')) {
+          // For synopsis, use a simple system prompt and the detailed user prompt
+          systemTemplate = `You are a professional screenwriter. Follow the user's instructions precisely to generate a concise synopsis.`
+          userPromptText = prompt
+        } else {
+          systemTemplate = `You are a professional screenwriter. Follow the user's instructions precisely.`
+          userPromptText = prompt
+        }
+      } else {
+        // Use generic template for backward compatibility
+        if (field === 'synopsis') {
+          systemTemplate = `You are a professional screenwriter. Generate a concise 2-3 paragraph synopsis (150-300 words). Focus on the main story, protagonist, and central conflict. Do not generate a full treatment, scene breakdown, or detailed character descriptions.`
+          userPromptText = prompt
+        } else {
+          systemTemplate = `You are a professional filmmaker. Generate creative and detailed ${field} for a storyboard scene. Be specific about visual details, mood, and cinematic elements.`
+          userPromptText = `Generate ${field} for a storyboard scene: ${prompt}`
+        }
+      }
+
       switch (service) {
         case 'openai':
+          // Use provided model or default to gpt-4o-mini for legacy calls
+          const legacyOpenaiModel = model || 'gpt-4o-mini'
           const openaiResponse = await OpenAIService.generateScript({
-            prompt: `Generate ${field} for a storyboard scene: ${prompt}`,
-            template: `You are a professional filmmaker. Generate creative and detailed ${field} for a storyboard scene. Be specific about visual details, mood, and cinematic elements.`,
-            model: 'gpt-3.5-turbo',
+            prompt: userPromptText,
+            template: systemTemplate,
+            model: legacyOpenaiModel,
             apiKey: actualApiKey
           })
           
@@ -129,10 +305,12 @@ Generate only the replacement text:`
           break
 
         case 'anthropic':
+          // Use provided model or default to claude-3-5-sonnet-20241022 for legacy calls
+          const legacyAnthropicModel = model || 'claude-3-5-sonnet-20241022'
           const claudeResponse = await AnthropicService.generateScript({
-            prompt: `Generate ${field} for a storyboard scene: ${prompt}`,
-            template: `You are a professional filmmaker. Generate creative and detailed ${field} for a storyboard scene. Be specific about visual details, mood, and cinematic elements.`,
-            model: 'claude-3-sonnet-20240229',
+            prompt: userPromptText,
+            template: systemTemplate,
+            model: legacyAnthropicModel,
             apiKey: actualApiKey
           })
           
@@ -146,6 +324,59 @@ Generate only the replacement text:`
         default:
           throw new Error(`Unsupported service: ${service}`)
       }
+    }
+
+    // Post-process the generated text for synopsis field
+    if (field === 'synopsis') {
+      // Clean up the text
+      let cleanedText = generatedText.trim()
+      
+      // Remove any markdown formatting that might have been added
+      cleanedText = cleanedText
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/__/g, '')
+        .replace(/`/g, '')
+        .replace(/#{1,6}\s+/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+
+      // If the text is very long (likely a full treatment), try to extract just the synopsis
+      // Split into paragraphs and take first 2-3 paragraphs
+      const paragraphs = cleanedText.split(/\n\n+/).filter(p => p.trim().length > 0)
+      
+      if (paragraphs.length > 3 || cleanedText.length > 1000) {
+        // Likely generated a full treatment, extract synopsis
+        console.log('⚠️ Generated text appears to be a full treatment, extracting synopsis...')
+        
+        // Take first 2-3 paragraphs that are reasonable length
+        let synopsisParagraphs: string[] = []
+        let totalLength = 0
+        
+        for (const para of paragraphs.slice(0, 5)) {
+          const paraTrimmed = para.trim()
+          if (paraTrimmed.length > 50 && totalLength + paraTrimmed.length <= 800) {
+            synopsisParagraphs.push(paraTrimmed)
+            totalLength += paraTrimmed.length
+            if (synopsisParagraphs.length >= 3) break
+          }
+        }
+        
+        if (synopsisParagraphs.length > 0) {
+          cleanedText = synopsisParagraphs.join('\n\n')
+          console.log(`✅ Extracted ${synopsisParagraphs.length} paragraph synopsis (${cleanedText.length} chars)`)
+        } else {
+          // Fallback: take first 500 characters
+          cleanedText = cleanedText.substring(0, 500).trim()
+          // Try to end at a sentence
+          const lastPeriod = cleanedText.lastIndexOf('.')
+          if (lastPeriod > 400) {
+            cleanedText = cleanedText.substring(0, lastPeriod + 1)
+          }
+        }
+      }
+      
+      generatedText = cleanedText
     }
 
     return NextResponse.json({ 

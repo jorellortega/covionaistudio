@@ -5,6 +5,7 @@ export interface AISetting {
   user_id: string
   tab_type: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'
   locked_model: string
+  selected_model?: string | null
   is_locked: boolean
   quick_suggestions: string[]
   created_at: string
@@ -14,6 +15,7 @@ export interface AISetting {
 export interface AISettingUpdate {
   tab_type: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'
   locked_model: string
+  selected_model?: string | null
   is_locked: boolean
   quick_suggestions?: string[]
 }
@@ -159,9 +161,11 @@ export class AISettingsService {
       }
 
       // Create default setting if none exists
+      const defaultModel = this.getDefaultModelForTab(tabType)
       const defaultSetting: AISettingUpdate = {
         tab_type: tabType,
-        locked_model: this.getDefaultModelForTab(tabType),
+        locked_model: defaultModel,
+        selected_model: this.getDefaultSelectedModel(tabType, defaultModel),
         is_locked: false
       }
 
@@ -191,6 +195,21 @@ export class AISettingsService {
     }
   }
 
+  // Get default selected model based on provider
+  private static getDefaultSelectedModel(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', lockedModel: string): string | null {
+    if (tabType !== 'scripts') {
+      return null
+    }
+    
+    if (lockedModel === 'ChatGPT' || lockedModel === 'GPT-4') {
+      return 'gpt-4o-mini'
+    } else if (lockedModel === 'Claude') {
+      return 'claude-3-5-sonnet-20241022'
+    }
+    
+    return null
+  }
+
   // Create or update AI setting for a tab
   static async upsertTabSetting(userId: string, setting: AISettingUpdate): Promise<AISetting> {
     try {
@@ -202,6 +221,7 @@ export class AISettingsService {
           user_id: userId,
           tab_type: setting.tab_type,
           locked_model: setting.locked_model,
+          selected_model: setting.selected_model ?? null,
           is_locked: setting.is_locked,
           quick_suggestions: setting.quick_suggestions || [],
           updated_at: new Date().toISOString()
@@ -297,10 +317,10 @@ export class AISettingsService {
   // Get default settings for a new user
   static getDefaultSettings(): AISettingUpdate[] {
     return [
-      { tab_type: 'scripts', locked_model: 'ChatGPT', is_locked: false },
-      { tab_type: 'images', locked_model: 'DALL-E 3', is_locked: false },
-      { tab_type: 'videos', locked_model: 'Runway ML', is_locked: false },
-      { tab_type: 'audio', locked_model: 'ElevenLabs', is_locked: false }
+      { tab_type: 'scripts', locked_model: 'ChatGPT', selected_model: 'gpt-4o-mini', is_locked: false },
+      { tab_type: 'images', locked_model: 'DALL-E 3', selected_model: null, is_locked: false },
+      { tab_type: 'videos', locked_model: 'Runway ML', selected_model: null, is_locked: false },
+      { tab_type: 'audio', locked_model: 'ElevenLabs', selected_model: null, is_locked: false }
     ]
   }
 

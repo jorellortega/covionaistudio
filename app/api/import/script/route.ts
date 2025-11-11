@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json()
-    const { title, content, genre, userId, ideaId } = body
+    const { title, content, genre, genres, userId, ideaId } = body
 
     if (!title || !content || !userId) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
@@ -46,6 +46,12 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    // Support both genres array and legacy genre field
+    const genresArray = genres && Array.isArray(genres) && genres.length > 0 
+      ? genres 
+      : (genre ? [genre] : [])
+    const legacyGenre = genresArray.length > 0 ? genresArray[0] : 'Unspecified'
+
     // Create new movie idea from script (only if no ideaId provided)
     const { data: ideaData, error: ideaError } = await supabase
       .from('movie_ideas')
@@ -53,7 +59,8 @@ export async function POST(request: NextRequest) {
         user_id: userId,
         title: title,
         description: content.substring(0, 500) + (content.length > 500 ? '...' : ''),
-        genre: genre || 'Unspecified',
+        genre: legacyGenre, // Legacy field for backward compatibility
+        genres: genresArray, // New genres array
         status: 'concept',
         original_prompt: `Imported from script: ${title}`,
         prompt: `Script: ${title}`,

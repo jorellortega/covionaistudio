@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { LogOut, User, Key, Save, Settings, Bot, Lock, Unlock, Shield } from 'lucide-react'
+import { LogOut, User, Key, Save, Settings, Bot, Lock, Unlock, Shield, Sparkles, Cog } from 'lucide-react'
 import Link from 'next/link'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
@@ -35,6 +35,8 @@ export default function SettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordManagementError, setPasswordManagementError] = useState('')
   const [isPasswordProtected, setIsPasswordProtected] = useState(false)
+  const [userRole, setUserRole] = useState<string>('user')
+  const [isLoadingRole, setIsLoadingRole] = useState(true)
   
   // Password management functions
   const setSettingsPassword = async () => {
@@ -80,13 +82,23 @@ export default function SettingsPage() {
     }
 
     try {
-      // Verify current password first
-      if (currentPassword !== apiKeys.settings_password) {
+      // Get current password hash from database to verify
+      const supabase = getSupabaseClient()
+      const { data: userData, error: fetchError } = await supabase
+        .from('users')
+        .select('settings_password_hash')
+        .eq('id', userId)
+        .single()
+
+      if (fetchError) throw fetchError
+
+      // Verify current password (stored as plain text in this implementation)
+      if (currentPassword !== userData?.settings_password_hash) {
         setPasswordManagementError('Incorrect password')
         return
       }
 
-      const supabase = getSupabaseClient()
+      // Remove password protection
       const { error } = await supabase
         .from('users')
         .update({ 
@@ -134,7 +146,29 @@ export default function SettingsPage() {
   const handleApiKeyUpdate = async (service: string, apiKey: string) => {
     setIsLoading(true)
     try {
-      await updateServiceApiKey(service, apiKey)
+      const supabase = getSupabaseClient()
+      const serviceKeyMap: Record<string, string> = {
+        openai: 'openai_api_key',
+        anthropic: 'anthropic_api_key',
+        openart: 'openart_api_key',
+        kling: 'kling_api_key',
+        runway: 'runway_api_key',
+        elevenlabs: 'elevenlabs_api_key',
+        suno: 'suno_api_key',
+      }
+      
+      const keyColumn = serviceKeyMap[service]
+      if (!keyColumn) {
+        throw new Error(`Unknown service: ${service}`)
+      }
+
+      const { error } = await supabase
+        .from('users')
+        .update({ [keyColumn]: apiKey })
+        .eq('id', userId)
+
+      if (error) throw error
+
       toast({
         title: "Success",
         description: `${service} API key updated successfully`,
@@ -150,15 +184,19 @@ export default function SettingsPage() {
     }
   }
 
-
-
   const handleLogout = async () => {
     try {
-      await signOut()
+      const supabase = getSupabaseClient()
+      const { error } = await supabase.auth.signOut()
+      if (error) throw error
+      
       toast({
         title: "Logged out",
         description: "You have been successfully logged out",
       })
+      
+      // Redirect to login page
+      window.location.href = '/login'
     } catch (error) {
       toast({
         title: "Error",
@@ -168,12 +206,80 @@ export default function SettingsPage() {
     }
   }
 
+  // Load user role
+  const loadUserRole = async () => {
+    if (!userId || !user) {
+      console.log('🔍 No userId or user, setting role to user')
+      setIsLoadingRole(false)
+      return
+    }
+    
+    try {
+      const supabase = getSupabaseClient()
+      console.log('🔍 Fetching role for userId:', userId, 'user.id:', user.id)
+      
+      // Try with userId first, then try with user.id
+      const userIdToUse = userId || user.id
+      
+      const { data, error } = await supabase
+        .from('users')
+        .select('role, id, email')
+        .eq('id', userIdToUse)
+        .single()
+
+      if (error) {
+        console.error('❌ Error loading user role:', error)
+        // Try alternative: check by email
+        if (user.email) {
+          console.log('🔍 Trying to fetch role by email:', user.email)
+          const { data: emailData, error: emailError } = await supabase
+            .from('users')
+            .select('role, id, email')
+            .eq('email', user.email)
+            .single()
+          
+          if (!emailError && emailData) {
+            console.log('✅ Found user by email, role:', emailData.role)
+            setUserRole(emailData.role || 'user')
+            setIsLoadingRole(false)
+            return
+          }
+        }
+        setUserRole('user')
+        setIsLoadingRole(false)
+        return
+      }
+
+      const role = data?.role || 'user'
+      console.log('✅ Loaded user role:', role, 'for userId:', userIdToUse, 'data:', data)
+      setUserRole(role)
+    } catch (error) {
+      console.error('❌ Exception loading user role:', error)
+      setUserRole('user')
+    } finally {
+      setIsLoadingRole(false)
+    }
+  }
+
   // Check password protection status when component mounts
   useEffect(() => {
     if (ready && userId) {
       checkPasswordProtection()
+      loadUserRole()
+    } else if (ready && !userId) {
+      setIsLoadingRole(false)
     }
   }, [ready, userId])
+
+  // Check for admin roles (ceo or admin)
+  const isAdmin = userRole === 'ceo' || userRole === 'admin'
+  
+  // Debug logging
+  useEffect(() => {
+    if (ready && !isLoadingRole) {
+      console.log('🔍 Settings page - User role:', userRole, 'isAdmin:', isAdmin, 'isLoadingRole:', isLoadingRole)
+    }
+  }, [userRole, isAdmin, isLoadingRole, ready])
 
   if (!ready) {
     return (
@@ -366,6 +472,76 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Debug Info - Temporary - Remove after testing */}
+        <Card className="bg-muted/50 border-dashed">
+          <CardContent className="pt-6">
+            <p className="text-sm">
+              <strong>Debug Info:</strong> Role: {userRole || 'loading...'}, 
+              isAdmin: {isAdmin ? 'true' : 'false'}, 
+              isLoadingRole: {isLoadingRole ? 'true' : 'false'},
+              userId: {userId || 'none'},
+              ready: {ready ? 'true' : 'false'}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Admin Section - Only visible to CEOs/Admins */}
+        {isAdmin && !isLoadingRole && (
+          <>
+            <Separator className="my-6" />
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Shield className="h-5 w-5 text-amber-500" />
+                <h2 className="text-2xl font-bold text-amber-600 dark:text-amber-400">Admin Controls</h2>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* AI System Prompt Admin */}
+                <Card className="border-2 border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/30">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                      <Sparkles className="h-5 w-5" />
+                      AI System Prompt
+                    </CardTitle>
+                    <CardDescription className="text-amber-600 dark:text-amber-300">
+                      Configure the system prompt that defines how Covion Intelligence behaves
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+                      <Link href="/ai-info" className="flex items-center justify-center gap-2">
+                        <Sparkles className="h-4 w-4" />
+                        Manage System Prompt
+                      </Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* AI Settings Admin */}
+                <Card className="border-2 border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/30">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                      <Cog className="h-5 w-5" />
+                      AI Provider Settings
+                    </CardTitle>
+                    <CardDescription className="text-amber-600 dark:text-amber-300">
+                      Configure API keys and models for the AI assistant system-wide
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+                      <Link href="/ai-settings-admin" className="flex items-center justify-center gap-2">
+                        <Cog className="h-4 w-4" />
+                        Manage Provider Settings
+                      </Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Password Management Modal */}

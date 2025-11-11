@@ -37,6 +37,24 @@ const aiModels = {
   timeline: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
+// OpenAI models
+const OPENAI_MODELS = [
+  'gpt-4o',
+  'gpt-4o-mini',
+  'gpt-4-turbo',
+  'gpt-4',
+  'gpt-3.5-turbo',
+]
+
+// Anthropic models
+const ANTHROPIC_MODELS = [
+  'claude-3-5-sonnet-20241022',
+  'claude-3-5-haiku-20241022',
+  'claude-3-opus-20240229',
+  'claude-3-sonnet-20240229',
+  'claude-3-haiku-20240307',
+]
+
 const tabIcons = {
   scripts: FileText,
   images: ImageIcon,
@@ -198,6 +216,18 @@ export default function AISettingsPage() {
           }
         }
         
+        // Ensure selected_model is set for scripts tab with ChatGPT/GPT-4/Claude
+        userSettings = userSettings.map(setting => {
+          if (setting.tab_type === 'scripts' && !setting.selected_model) {
+            if (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4') {
+              setting.selected_model = 'gpt-4o-mini'
+            } else if (setting.locked_model === 'Claude') {
+              setting.selected_model = 'claude-3-5-sonnet-20241022'
+            }
+          }
+          return setting
+        })
+        
         // Add timeline setting (temporarily using images setting) only if not already present
         try {
           const hasTimelineSetting = userSettings.some(s => s.tab_type === 'timeline')
@@ -305,15 +335,78 @@ export default function AISettingsPage() {
   }
 
   // Handle setting changes
-  const handleSettingChange = (tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', field: 'locked_model' | 'is_locked', value: string | boolean) => {
+  const handleSettingChange = (tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', field: 'locked_model' | 'is_locked' | 'selected_model', value: string | boolean) => {
     console.log(`Setting change: ${tabType}.${field} = ${value}`)
     
     setSettings(prev => {
-      const newSettings = prev.map(setting => 
-        setting.tab_type === tabType 
-          ? { ...setting, [field]: value }
-          : setting
-      )
+      let newSettings = prev.map(setting => {
+        if (setting.tab_type === tabType) {
+          const updated = { ...setting, [field]: value }
+          
+          // When changing locked_model, update selected_model if needed
+          if (field === 'locked_model' && tabType === 'scripts') {
+            const model = value as string
+            if (model === 'ChatGPT' || model === 'GPT-4') {
+              // Set default OpenAI model if not already set
+              if (!updated.selected_model) {
+                updated.selected_model = 'gpt-4o-mini'
+              }
+            } else if (model === 'Claude') {
+              // Set default Anthropic model if not already set
+              if (!updated.selected_model) {
+                updated.selected_model = 'claude-3-5-sonnet-20241022'
+              }
+            } else {
+              // Clear selected_model for other providers
+              updated.selected_model = null
+            }
+          }
+          
+          return updated
+        }
+        
+        return setting
+      })
+      
+      // After updating the primary setting, sync timeline and images
+      // Since timeline uses images as backend, they should always be in sync
+      if (tabType === 'timeline') {
+        // Find the updated timeline setting
+        const timelineSetting = newSettings.find(s => s.tab_type === 'timeline')
+        const imagesSetting = newSettings.find(s => s.tab_type === 'images')
+        
+        if (timelineSetting && imagesSetting) {
+          // Update images to match timeline (since timeline saves to images)
+          newSettings = newSettings.map(s => 
+            s.tab_type === 'images' 
+              ? { 
+                  ...s, 
+                  [field]: value,
+                  locked_model: timelineSetting.locked_model,
+                  selected_model: timelineSetting.selected_model,
+                }
+              : s
+          )
+        }
+      } else if (tabType === 'images') {
+        // Find the updated images setting
+        const imagesSetting = newSettings.find(s => s.tab_type === 'images')
+        const timelineSetting = newSettings.find(s => s.tab_type === 'timeline' && s.id.includes('-timeline'))
+        
+        if (imagesSetting && timelineSetting) {
+          // Update timeline to match images (since timeline reads from images)
+          newSettings = newSettings.map(s => 
+            s.tab_type === 'timeline' && s.id.includes('-timeline')
+              ? { 
+                  ...s, 
+                  [field]: value,
+                  locked_model: imagesSetting.locked_model,
+                  selected_model: imagesSetting.selected_model,
+                }
+              : s
+          )
+        }
+      }
       
       // Log the updated settings for debugging
       console.log('Updated settings state:', newSettings)
@@ -332,23 +425,61 @@ export default function AISettingsPage() {
       })
       
       // Auto-save immediately for toggle changes
-      if (ready) {
+      if (ready && userId) {
+        // Get current setting BEFORE state update to build the save data
+        const currentSetting = settings.find(s => s.tab_type === tabType)
+        if (!currentSetting) return
+        
         // For timeline, save to images setting temporarily until DB migration
         const saveTabType = tabType === 'timeline' ? 'images' : tabType
         
+        // Build update data - use the new value for the changed field
         const updateData: AISettingUpdate = {
           tab_type: saveTabType,
-          locked_model: field === 'is_locked' ? 
-            (settings.find(s => s.tab_type === tabType)?.locked_model || 'ChatGPT') : 
-            value as string,
-          is_locked: field === 'is_locked' ? value as boolean : 
-            settings.find(s => s.tab_type === tabType)?.is_locked || false,
+          locked_model: field === 'locked_model' ? value as string : currentSetting.locked_model,
+          selected_model: field === 'selected_model' ? (value as string) : (currentSetting.selected_model || null),
+          is_locked: field === 'is_locked' ? value as boolean : currentSetting.is_locked,
         }
         
         console.log(`Auto-saving ${tabType} (as ${saveTabType}):`, updateData)
+        
+        // Save to database
         AISettingsService.upsertTabSetting(userId, updateData)
           .then(result => {
             console.log(`Auto-save successful for ${tabType}:`, result)
+            
+            // Update state with the saved result to keep it in sync
+            setSettings(prevState => {
+              if (tabType === 'timeline') {
+                // Timeline was saved as images, so update both images and timeline
+                return prevState.map(s => {
+                  if (s.tab_type === 'images') {
+                    return { ...result, tab_type: 'images' }
+                  }
+                  if (s.tab_type === 'timeline' && s.id.includes('-timeline')) {
+                    return { ...result, tab_type: 'timeline', id: s.id }
+                  }
+                  return s
+                })
+              } else if (tabType === 'images') {
+                // Images was saved, update timeline to match
+                return prevState.map(s => {
+                  if (s.tab_type === 'images') {
+                    return { ...result }
+                  }
+                  if (s.tab_type === 'timeline' && s.id.includes('-timeline')) {
+                    return { ...result, tab_type: 'timeline', id: s.id }
+                  }
+                  return s
+                })
+              } else {
+                // Other tabs - just update the specific setting
+                return prevState.map(s => 
+                  s.tab_type === tabType ? { ...result } : s
+                )
+              }
+            })
+            
             setHasChanges(false)
           })
           .catch(error => {
@@ -374,19 +505,64 @@ export default function AISettingsPage() {
       console.log('Settings that will be saved:')
       
       // Update all settings
-      for (const setting of settings) {
+      // Separate timeline from other settings since timeline saves as images
+      const timelineSetting = settings.find(s => s.tab_type === 'timeline' && s.id.includes('-timeline'))
+      const otherSettings = settings.filter(s => s.tab_type !== 'timeline' || !s.id.includes('-timeline'))
+      
+      // Save timeline first as images (if it exists)
+      if (timelineSetting) {
+        let selectedModel = timelineSetting.selected_model
+        const updateData: AISettingUpdate = {
+          tab_type: 'images', // Save timeline as images
+          locked_model: timelineSetting.locked_model,
+          selected_model: selectedModel,
+          is_locked: timelineSetting.is_locked,
+        }
+        
+        console.log(`Saving timeline (as images):`, updateData)
+        const result = await AISettingsService.upsertTabSetting(userId, updateData)
+        console.log(`Database result for timeline:`, result)
+        
+        // Update state: update images setting and sync timeline
+        setSettings(prev => prev.map(s => 
+          s.tab_type === 'images'
+            ? { ...result, tab_type: 'images' }
+            : s.tab_type === 'timeline' && s.id.includes('-timeline')
+            ? { ...result, tab_type: 'timeline', id: s.id }
+            : s
+        ))
+      }
+      
+      // Save all other settings (excluding timeline, but including images if timeline doesn't exist)
+      for (const setting of otherSettings) {
+        // Skip images if we already saved it as timeline
+        if (setting.tab_type === 'images' && timelineSetting) {
+          console.log(`Skipping images save (already saved as timeline)`)
+          continue
+        }
+        
+        // Ensure selected_model is set for scripts with ChatGPT/GPT-4/Claude
+        let selectedModel = setting.selected_model
+        if (setting.tab_type === 'scripts' && !selectedModel) {
+          if (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4') {
+            selectedModel = 'gpt-4o-mini'
+          } else if (setting.locked_model === 'Claude') {
+            selectedModel = 'claude-3-5-sonnet-20241022'
+          }
+        }
+        
         const updateData: AISettingUpdate = {
           tab_type: setting.tab_type,
           locked_model: setting.locked_model,
+          selected_model: selectedModel,
           is_locked: setting.is_locked,
         }
         
         console.log(`Saving ${setting.tab_type}:`, {
           tab_type: updateData.tab_type,
           locked_model: updateData.locked_model,
+          selected_model: updateData.selected_model,
           is_locked: updateData.is_locked,
-          is_locked_type: typeof updateData.is_locked,
-          is_locked_value: updateData.is_locked
         })
         
         const result = await AISettingsService.upsertTabSetting(userId, updateData)
@@ -663,6 +839,32 @@ export default function AISettingsPage() {
                         </p>
                       </div>
                     )}
+
+                    {/* LLM Model Selection for Scripts */}
+                    {setting.tab_type === 'scripts' && (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4' || setting.locked_model === 'Claude') && (
+                      <div className="grid gap-2 mt-4">
+                        <Label>LLM Model</Label>
+                        <Select 
+                          value={setting.selected_model || ''} 
+                          onValueChange={(value) => handleSettingChange(setting.tab_type, 'selected_model', value)}
+                          disabled={setting.is_locked}
+                        >
+                          <SelectTrigger className="bg-input border-border">
+                            <SelectValue placeholder="Select LLM model" />
+                          </SelectTrigger>
+                          <SelectContent className="cinema-card border-border">
+                            {(setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4' ? OPENAI_MODELS : ANTHROPIC_MODELS).map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Select the specific {setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4' ? 'OpenAI' : 'Anthropic'} model to use for script generation
+                        </p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Lock Toggle */}
@@ -706,10 +908,21 @@ export default function AISettingsPage() {
                           </Badge>
                         )}
                       </div>
+                      {setting.tab_type === 'scripts' && setting.selected_model && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-muted-foreground">LLM Model:</span>
+                          <Badge variant="outline" className="text-xs">
+                            {setting.selected_model}
+                          </Badge>
+                        </div>
+                      )}
                       {/* Debug info */}
                       <div className="text-xs text-muted-foreground bg-background/50 p-2 rounded border">
                         <div>Current State: is_locked = {setting.is_locked.toString()}</div>
                         <div>Model: {setting.locked_model}</div>
+                        {setting.selected_model && (
+                          <div>Selected Model: {setting.selected_model}</div>
+                        )}
                         <div>Tab: {setting.tab_type}</div>
                       </div>
                     </div>

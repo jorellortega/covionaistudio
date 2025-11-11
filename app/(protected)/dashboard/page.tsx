@@ -26,6 +26,41 @@ export default function DashboardPage() {
 
   const [ideasCount, setIdeasCount] = useState(0)
   const [hasFetchedData, setHasFetchedData] = useState(false)
+  const [userName, setUserName] = useState<string>('User')
+
+  // Fetch user name from public.users table
+  useEffect(() => {
+    const fetchUserName = async () => {
+      if (!userId) return
+      
+      try {
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', userId)
+          .single()
+
+        if (error) {
+          console.error('Error fetching user name:', error)
+          // Fallback to email or default
+          setUserName(session?.user?.email?.split('@')[0] || 'User')
+        } else if (data?.name) {
+          setUserName(data.name)
+        } else {
+          // Fallback to email or default
+          setUserName(session?.user?.email?.split('@')[0] || 'User')
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error)
+        setUserName(session?.user?.email?.split('@')[0] || 'User')
+      }
+    }
+
+    if (ready && userId) {
+      fetchUserName()
+    }
+  }, [ready, userId, session?.user?.email])
 
   // Memoize the fetch data function to prevent unnecessary re-renders
   const fetchData = useCallback(async () => {
@@ -85,8 +120,6 @@ export default function DashboardPage() {
     }
   }, [router])
 
-  // Memoize the user name to prevent unnecessary re-renders
-  const userName = useMemo(() => user?.user_metadata?.name || 'User', [user?.user_metadata?.name])
 
   if (!ready) {
     return (

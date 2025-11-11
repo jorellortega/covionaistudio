@@ -97,15 +97,29 @@ export async function POST(request: NextRequest) {
     }
 
     // Return the audio blob as a response
-    const audioBlob = result.data.audio_blob
-    const response = new NextResponse(audioBlob, {
-      headers: {
-        'Content-Type': 'audio/mpeg',
-        'Content-Length': audioBlob.size.toString(),
-      },
-    })
+    const contentType = result.data?.content_type || 'audio/mpeg'
 
-    return response
+    if (result.data?.audio_array_buffer) {
+      return new NextResponse(result.data.audio_array_buffer, {
+        headers: {
+          'Content-Type': contentType,
+        },
+      })
+    }
+
+    if (result.data?.blob) {
+      const arrayBuffer = await result.data.blob.arrayBuffer()
+      return new NextResponse(arrayBuffer, {
+        headers: {
+          'Content-Type': contentType,
+        },
+      })
+    }
+
+    return NextResponse.json(
+      { error: 'Audio data missing from ElevenLabs response' },
+      { status: 500 }
+    )
   } catch (error) {
     console.error('Text-to-speech error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'

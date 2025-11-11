@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import {
@@ -26,12 +27,17 @@ import {
   Loader2,
   RefreshCw,
   Trash2,
+  Upload,
+  Save,
+  Bot,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { useAuthReady } from "@/components/auth-hooks"
 import TextToSpeech from "@/components/text-to-speech"
+import FileImport from "@/components/file-import"
+import AITextEditor from "@/components/ai-text-editor"
 import Link from "next/link"
 import Header from "@/components/header"
 
@@ -66,6 +72,19 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [assetToDelete, setAssetToDelete] = useState<Asset | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // Script editing states
+  const [editingScriptId, setEditingScriptId] = useState<string | null>(null)
+  const [editingScriptContent, setEditingScriptContent] = useState("")
+  const [editingScriptTitle, setEditingScriptTitle] = useState("")
+  const [showAITextEditor, setShowAITextEditor] = useState(false)
+  const [aiEditData, setAiEditData] = useState<{
+    selectedText: string;
+    fullContent: string;
+    assetId: string;
+    field: 'content';
+  } | null>(null)
+
 
   // Effect to fetch projects
   useEffect(() => {
@@ -180,34 +199,37 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
   // Filter assets based on search and content type
   const filteredAssets = assets.filter(asset => {
+    const type = asset.content_type?.toLowerCase?.() || ''
     const matchesSearch = asset.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          asset.prompt?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          asset.content?.toLowerCase().includes(searchTerm.toLowerCase())
     
-    const matchesType = contentTypeFilter === "all" || asset.content_type === contentTypeFilter
+    const matchesType = contentTypeFilter === "all" || type === contentTypeFilter
     
     return matchesSearch && matchesType
   })
 
   // Group assets by content type
   const assetsByType = {
-    script: filteredAssets.filter(a => a.content_type === 'script') || [],
-    image: filteredAssets.filter(a => a.content_type === 'image') || [],
-    video: filteredAssets.filter(a => a.content_type === 'video') || [],
-    audio: filteredAssets.filter(a => a.content_type === 'audio') || [],
+    script: filteredAssets.filter(a => a.content_type?.toLowerCase?.() === 'script') || [],
+    image: filteredAssets.filter(a => a.content_type?.toLowerCase?.() === 'image') || [],
+    video: filteredAssets.filter(a => a.content_type?.toLowerCase?.() === 'video') || [],
+    audio: filteredAssets.filter(a => a.content_type?.toLowerCase?.() === 'audio') || [],
   }
 
-  const refreshAssets = async () => {
+  const refreshAssets = async (options?: { showToast?: boolean }) => {
     if (!selectedProject) return
     
     try {
       setLoading(true)
       const fetchedAssets = await AssetService.getAssetsForProject(selectedProject)
       setAssets(fetchedAssets)
-      toast({
-        title: "Assets Refreshed",
-        description: "Project assets have been updated.",
-      })
+      if (options?.showToast !== false) {
+        toast({
+          title: "Assets Refreshed",
+          description: "Project assets have been updated.",
+        })
+      }
     } catch (error) {
       console.error('Error refreshing assets:', error)
       toast({
@@ -218,6 +240,134 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
     } finally {
       setLoading(false)
     }
+  }
+
+  // Script editing handlers
+  const startEditingScript = (script: Asset) => {
+    setEditingScriptId(script.id)
+    setEditingScriptContent(script.content || "")
+    setEditingScriptTitle(script.title)
+  }
+
+  const cancelEditingScript = () => {
+    setEditingScriptId(null)
+    setEditingScriptContent("")
+    setEditingScriptTitle("")
+  }
+
+  const saveScriptChanges = async () => {
+    if (!editingScriptId) return
+    
+    try {
+      setLoading(true)
+      const script = assets.find(a => a.id === editingScriptId)
+      if (!script) return
+
+      await AssetService.updateAsset(editingScriptId, {
+        title: editingScriptTitle,
+        content: editingScriptContent,
+        metadata: {
+          ...script.metadata,
+          last_edited: new Date().toISOString()
+        }
+      })
+
+      // Refresh assets
+      await refreshAssets()
+
+      toast({
+        title: "Script Updated!",
+        description: "Your script changes have been saved.",
+      })
+
+      cancelEditingScript()
+    } catch (error) {
+      console.error('Error saving script:', error)
+      toast({
+        title: "Error",
+        description: "Failed to save script changes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const saveScriptAsNewVersion = async () => {
+    if (!editingScriptId || !selectedProject) return
+    
+    try {
+      setLoading(true)
+      const script = assets.find(a => a.id === editingScriptId)
+      if (!script) return
+
+      // Create new version
+      const newAsset = await AssetService.createAsset({
+        project_id: selectedProject,
+        scene_id: script.scene_id,
+        title: editingScriptTitle,
+        content_type: 'script',
+        content: editingScriptContent,
+        version_name: `Edited version of ${script.title}`,
+        metadata: {
+          ...script.metadata,
+          parent_asset_id: editingScriptId,
+          last_edited: new Date().toISOString()
+        }
+      })
+
+      // Refresh assets
+      await refreshAssets()
+
+      toast({
+        title: "New Version Created!",
+        description: "A new version of your script has been created.",
+      })
+
+      cancelEditingScript()
+    } catch (error) {
+      console.error('Error creating new version:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create new version. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // AI text editing handlers
+  const handleAITextEdit = (script: Asset, selectedText: string) => {
+    setAiEditData({
+      selectedText,
+      fullContent: script.content || "",
+      assetId: script.id,
+      field: 'content'
+    })
+    setShowAITextEditor(true)
+  }
+
+  const handleAITextReplace = (newText: string) => {
+    if (!aiEditData) return
+    
+    // Replace the selected text in the editing content
+    const script = assets.find(a => a.id === aiEditData.assetId)
+    if (!script) return
+
+    const fullContent = script.content || ""
+    const selectedText = aiEditData.selectedText
+    const startIndex = fullContent.indexOf(selectedText)
+    
+    if (startIndex !== -1) {
+      const newContent = fullContent.substring(0, startIndex) + newText + fullContent.substring(startIndex + selectedText.length)
+      setEditingScriptContent(newContent)
+      setEditingScriptId(aiEditData.assetId)
+      setEditingScriptTitle(script.title)
+    }
+
+    setAiEditData(null)
+    setShowAITextEditor(false)
   }
 
   const handleCopyScript = (content: string) => {
@@ -268,7 +418,8 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   }
 
   const getContentTypeIcon = (type: string) => {
-    switch (type) {
+    const normalizedType = type?.toLowerCase?.() || ''
+    switch (normalizedType) {
       case 'script': return <FileText className="h-4 w-4" />
       case 'image': return <ImageIcon className="h-4 w-4" />
       case 'video': return <Play className="h-4 w-4" />
@@ -278,7 +429,8 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   }
 
   const getContentTypeColor = (type: string) => {
-    switch (type) {
+    const normalizedType = type?.toLowerCase?.() || ''
+    switch (normalizedType) {
       case 'script': return 'bg-blue-500/20 text-blue-500 border-blue-500/30'
       case 'image': return 'bg-green-500/20 text-green-500 border-green-500/30'
       case 'video': return 'bg-purple-500/20 text-purple-500 border-purple-500/30'
@@ -329,6 +481,26 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             >
               <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
               Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // Switch to import tab first
+                setActiveTab("import")
+                // Then trigger the FileImport component's file input
+                setTimeout(() => {
+                  // Find the FileImport component's file input and trigger it
+                  const fileImportInput = document.querySelector('[data-file-import-input]') as HTMLInputElement
+                  if (fileImportInput) {
+                    fileImportInput.click()
+                  }
+                }, 200)
+              }}
+              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Import Files
             </Button>
             <Link href="/ai-studio">
               <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
@@ -464,6 +636,10 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             <TabsTrigger value="audio" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
               Audio ({assetsByType.audio.length})
             </TabsTrigger>
+            <TabsTrigger value="import" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+              <Upload className="h-4 w-4 mr-2" />
+              Import Files
+            </TabsTrigger>
           </TabsList>
 
           {/* All Assets Tab */}
@@ -484,6 +660,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                     onView={handleViewAsset}
                     onCopy={handleCopyScript}
                     onDelete={handleDeleteAsset}
+                    onAudioSaved={() => refreshAssets({ showToast: false })}
                   />
                 ))}
               </div>
@@ -508,8 +685,190 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             )}
           </TabsContent>
 
-          {/* Individual Type Tabs */}
-          {['scripts', 'images', 'videos', 'audio'].map((type) => (
+          {/* Scripts Tab - With Editing Support */}
+          <TabsContent value="scripts" className="space-y-6">
+            {loading ? (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+                  <p className="text-muted-foreground">Loading scripts...</p>
+                </CardContent>
+              </Card>
+            ) : assetsByType.script.length > 0 ? (
+              <div className="space-y-6">
+                {assetsByType.script.map((script) => (
+                  <Card key={script.id} className="bg-card border-primary/20">
+                    {editingScriptId === script.id ? (
+                      <CardContent className="p-6 space-y-4">
+                        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
+                          <p className="text-blue-400 font-medium flex items-center gap-2">
+                            <Edit3 className="h-4 w-4" />
+                            Editing Mode - Make your changes below
+                          </p>
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">Title</label>
+                          <Input
+                            value={editingScriptTitle}
+                            onChange={(e) => setEditingScriptTitle(e.target.value)}
+                            className="bg-background"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">Content</label>
+                          <Textarea
+                            value={editingScriptContent}
+                            onChange={(e) => setEditingScriptContent(e.target.value)}
+                            className="bg-background font-mono min-h-[300px]"
+                            placeholder="Edit your script content here..."
+                          />
+                        </div>
+                        <div className="flex gap-3 pt-4 border-t border-border">
+                          <Button
+                            onClick={saveScriptChanges}
+                            disabled={loading}
+                            className="bg-green-500 hover:bg-green-600"
+                          >
+                            <Save className="h-4 w-4 mr-2" />
+                            Save Changes
+                          </Button>
+                          <Button
+                            onClick={saveScriptAsNewVersion}
+                            disabled={loading}
+                            variant="outline"
+                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          >
+                            <Copy className="h-4 w-4 mr-2" />
+                            Save as New Version
+                          </Button>
+                          <Button
+                            onClick={cancelEditingScript}
+                            variant="outline"
+                            disabled={loading}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </CardContent>
+                    ) : (
+                      <CardContent className="p-6">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <h3 className="text-xl font-bold text-primary">{script.title}</h3>
+                              <Badge className="bg-blue-500/20 text-blue-500 border-blue-500/30">
+                                v{script.version}
+                              </Badge>
+                              {script.is_latest_version && (
+                                <Badge className="bg-green-500/20 text-green-500 border-green-500/30">
+                                  Latest
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="bg-muted/20 rounded-lg p-4 max-h-96 overflow-y-auto mb-4">
+                              <div className="text-sm text-foreground font-mono break-words select-text" style={{ lineHeight: '1.6' }}>
+                                {script.content.split('\n').map((line, idx) => {
+                                  // Highlight and style page markers
+                                  const pageMatch = line.trim().match(/^---\s*PAGE\s+(\d+)\s*---$/i)
+                                  if (pageMatch) {
+                                    const pageNum = pageMatch[1]
+                                    return (
+                                      <div key={idx} className="my-6 py-3 border-t-2 border-b-2 border-primary/50 bg-primary/10 rounded-lg">
+                                        <div className="text-center">
+                                          <span className="font-bold text-primary text-base px-4 py-2 bg-primary/20 rounded">
+                                            PAGE {pageNum}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )
+                                  }
+                                  // Regular text lines - preserve empty lines
+                                  if (line.trim() === '') {
+                                    return <div key={idx} className="h-3"></div>
+                                  }
+                                  return <div key={idx}>{line}</div>
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-2 pt-4 border-t border-border">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => startEditingScript(script)}
+                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          >
+                            <Edit3 className="h-4 w-4 mr-2" />
+                            Edit Script
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              if (script.content) {
+                                // Try to get selected text, otherwise use the whole content
+                                const selection = window.getSelection()?.toString() || ""
+                                const textToEdit = selection || script.content
+                                handleAITextEdit(script, textToEdit)
+                              }
+                            }}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            <Bot className="h-4 w-4 mr-2" />
+                            AI Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleViewAsset(script)}
+                            className="border-primary/30 text-primary hover:bg-primary/10"
+                          >
+                            <Eye className="h-4 w-4 mr-2" />
+                            View
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleCopyScript(script.content || "")}
+                            className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                          >
+                            <Copy className="h-4 w-4 mr-2" />
+                            Copy
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteAsset(script)}
+                            className="border-red-500/30 text-red-500 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Delete
+                          </Button>
+                        </div>
+                      </CardContent>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">No scripts found for this project</p>
+                  <Link href="/ai-studio">
+                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Generate Script
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* Other Type Tabs */}
+          {['images', 'videos', 'audio'].map((type) => (
             <TabsContent key={type} value={type} className="space-y-6">
               {loading ? (
                 <Card className="bg-card border-primary/20">
@@ -527,6 +886,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                       onView={handleViewAsset}
                       onCopy={handleCopyScript}
                       onDelete={handleDeleteAsset}
+                      onAudioSaved={() => refreshAssets({ showToast: false })}
                     />
                   ))}
                 </div>
@@ -546,6 +906,40 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
               )}
             </TabsContent>
           ))}
+
+          {/* Import Files Tab */}
+          <TabsContent value="import" className="space-y-6">
+            <div className="flex justify-between items-center">
+              <div>
+                <h3 className="text-xl font-semibold text-primary">Import Documents</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Import PDF, Word, and text files into your project as assets
+                </p>
+              </div>
+            </div>
+
+            {selectedProject ? (
+              <FileImport
+                projectId={selectedProject}
+                sceneId={null}
+                onFileImported={(assetId) => {
+                  // Refresh assets after import
+                  refreshAssets()
+                  toast({
+                    title: "File Imported",
+                    description: "Your file has been imported and saved as a project asset!",
+                  })
+                }}
+              />
+            ) : (
+              <Card className="bg-card border-primary/20">
+                <CardContent className="p-8 text-center">
+                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-muted-foreground mb-4">Please select a project to import files</p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
         </Tabs>
 
         {/* Asset Details Dialog */}
@@ -600,6 +994,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                         projectId={selectedAsset.project_id}
                         sceneId={selectedAsset.scene_id as string | undefined}
                         className="mt-6"
+                        onAudioSaved={() => refreshAssets({ showToast: false })}
                       />
                     </div>
                   </div>
@@ -684,6 +1079,21 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* AI Text Editor Dialog */}
+        {showAITextEditor && aiEditData && (
+          <AITextEditor
+            isOpen={showAITextEditor}
+            onClose={() => {
+              setShowAITextEditor(false)
+              setAiEditData(null)
+            }}
+            selectedText={aiEditData.selectedText}
+            fullContent={aiEditData.fullContent}
+            onTextReplace={handleAITextReplace}
+            contentType="script"
+          />
+        )}
       </div>
     </div>
   )
@@ -694,15 +1104,18 @@ function AssetCard({
   asset, 
   onView, 
   onCopy,
-  onDelete
+  onDelete,
+  onAudioSaved
 }: { 
   asset: Asset, 
   onView: (asset: Asset) => void, 
   onCopy: (content: string) => void,
-  onDelete: (asset: Asset) => void
+  onDelete: (asset: Asset) => void,
+  onAudioSaved?: () => void
 }) {
   const getContentTypeIcon = (type: string) => {
-    switch (type) {
+    const normalizedType = type?.toLowerCase?.() || ''
+    switch (normalizedType) {
       case 'script': return <FileText className="h-4 w-4" />
       case 'image': return <ImageIcon className="h-4 w-4" />
       case 'video': return <Play className="h-4 w-4" />
@@ -712,7 +1125,8 @@ function AssetCard({
   }
 
   const getContentTypeColor = (type: string) => {
-    switch (type) {
+    const normalizedType = type?.toLowerCase?.() || ''
+    switch (normalizedType) {
       case 'script': return 'bg-blue-500/20 text-blue-500 border-blue-500/30'
       case 'image': return 'bg-green-500/20 text-green-500 border-green-500/30'
       case 'video': return 'bg-purple-500/20 text-purple-500 border-purple-500/30'
@@ -765,6 +1179,7 @@ function AssetCard({
                 projectId={asset.project_id}
                 sceneId={asset.scene_id as string | undefined}
                 className="mt-2"
+                onAudioSaved={onAudioSaved}
               />
               {/* Debug info for TTS */}
               {process.env.NODE_ENV === 'development' && (

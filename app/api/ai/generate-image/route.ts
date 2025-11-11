@@ -243,7 +243,8 @@ export async function POST(request: NextRequest) {
         console.log('DALL-E response:', dalleResponse)
         
         if (!dalleResponse.success) {
-          throw new Error(dalleResponse.error || 'DALL-E API failed')
+          // The error message from OpenAIService is already user-friendly for content policy violations
+          throw new Error(dalleResponse.error || 'Image generation failed')
         }
         
         if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
@@ -509,12 +510,25 @@ export async function POST(request: NextRequest) {
     // Provide more specific error messages
     let errorMessage = 'Unknown error occurred'
     if (error instanceof Error) {
-      if (error.message.includes('OpenAI API error')) {
-        errorMessage = 'DALL-E API request failed. Please check your API key and try again.'
+      // Check for content policy violations first
+      if (error.message.includes('copyrighted material') || 
+          error.message.includes('explicit content') ||
+          error.message.includes('content policy') ||
+          error.message.includes('violates our usage policy')) {
+        errorMessage = error.message // Use the user-friendly message we set
+      } else if (error.message.includes('OpenAI API error')) {
+        // Check if it's a content policy issue
+        if (error.message.toLowerCase().includes('content') || 
+            error.message.toLowerCase().includes('policy') ||
+            error.message.toLowerCase().includes('safety')) {
+          errorMessage = 'This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.'
+        } else {
+          errorMessage = 'Image generation failed. Please check your API key and try again.'
+        }
       } else if (error.message.includes('OpenArt API error')) {
-        errorMessage = 'OpenArt API request failed. Please check your API key and try again.'
+        errorMessage = 'Image generation failed. Please check your API key and try again.'
       } else if (error.message.includes('Invalid response structure')) {
-        errorMessage = 'AI service returned an invalid response. Please try again.'
+        errorMessage = 'Image generation service returned an invalid response. Please try again.'
       } else {
         errorMessage = error.message
       }

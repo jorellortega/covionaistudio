@@ -86,18 +86,25 @@ const extractTextFromFile = async (file: File): Promise<string> => {
 }
 
 const extractPDFText = async (file: File): Promise<string> => {
+  console.log('📄 PDF EXTRACT - Starting PDF extraction for file:', file.name, file.size, 'bytes')
+  
   try {
     // Dynamic import of PDF.js
     const pdfjsLib = await import('pdfjs-dist')
+    console.log('📄 PDF EXTRACT - PDF.js library loaded, version:', pdfjsLib.version)
     
     // Set worker path
     pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
     
     const arrayBuffer = await file.arrayBuffer()
+    console.log('📄 PDF EXTRACT - File converted to ArrayBuffer, size:', arrayBuffer.byteLength)
+    
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    console.log('📄 PDF EXTRACT - PDF loaded, total pages:', pdf.numPages)
     
     let fullText = ''
     for (let i = 1; i <= pdf.numPages; i++) {
+      console.log(`📄 PDF EXTRACT - Processing page ${i}/${pdf.numPages}`)
       const page = await pdf.getPage(i)
       const textContent = await page.getTextContent()
       
@@ -151,34 +158,272 @@ const extractPDFText = async (file: File): Promise<string> => {
       }
       
       // Add to full text with page separator
-      fullText += pageText + '\n'
+      fullText += pageText
+      
+      // Add page break marker (except for last page)
+      if (i < pdf.numPages) {
+        fullText += `\n\n--- PAGE ${i} ---\n\n`
+        console.log(`📄 PDF EXTRACT - Added page break marker for page ${i}`)
+      } else {
+        // Add final page marker
+        fullText += `\n\n--- PAGE ${i} ---\n\n`
+        console.log(`📄 PDF EXTRACT - Added final page marker for page ${i}`)
+      }
     }
     
-      // Clean up and preserve structure with screenplay formatting
-      return preserveScreenplayFormatting(fullText)
+    console.log('📄 PDF EXTRACT - All pages processed, total text length:', fullText.length)
+    console.log('📄 PDF EXTRACT - First 300 chars:', fullText.substring(0, 300))
+    
+    // Clean up and preserve structure with formatting
+    const formatted = preserveScreenplayFormatting(fullText)
+    console.log('📄 PDF EXTRACT - Formatting preserved, final length:', formatted.length)
+    console.log('📄 PDF EXTRACT - Extraction complete')
+    
+    return formatted
   } catch (error) {
-    console.error('PDF text extraction error:', error)
-    throw new Error('Failed to extract text from PDF. Please ensure the PDF contains selectable text.')
+    console.error('📄 PDF EXTRACT - ERROR:', error)
+    console.error('📄 PDF EXTRACT - Error stack:', error instanceof Error ? error.stack : 'No stack')
+    throw new Error(`Failed to extract text from PDF: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
 const extractWordText = async (file: File): Promise<string> => {
+  console.log('📄 WORD EXTRACT - Starting extraction for file:', file.name, file.size, 'bytes')
+  
   try {
     // Dynamic import of mammoth.js
     const mammoth = await import('mammoth')
+    console.log('📄 WORD EXTRACT - Mammoth library loaded')
     
     const arrayBuffer = await file.arrayBuffer()
+    console.log('📄 WORD EXTRACT - File converted to ArrayBuffer, size:', arrayBuffer.byteLength)
     
-    // Extract with basic options
-    const result = await mammoth.extractRawText({ arrayBuffer })
+    // Extract with HTML preservation to maintain formatting structure
+    console.log('📄 WORD EXTRACT - Extracting text with formatting preservation...')
+    const result = await mammoth.convertToHtml({ arrayBuffer }, {
+      styleMap: [
+        "p[style-name='Heading 1'] => h1:fresh",
+        "p[style-name='Heading 2'] => h2:fresh",
+        "p[style-name='Heading 3'] => h3:fresh",
+        "p[style-name='Title'] => h1:fresh",
+        "r[style-name='Strong'] => strong",
+        "p => p:fresh"
+      ],
+      includeDefaultStyleMap: true,
+      includeEmbeddedStyleMap: true
+    })
     
-    let text = result.value || 'No text content found in document'
+    console.log('📄 WORD EXTRACT - HTML extraction complete, messages:', result.messages)
     
-    // Clean up and preserve structure with screenplay formatting
-    return preserveScreenplayFormatting(text)
+    // Also extract raw text for comparison
+    const rawResult = await mammoth.extractRawText({ arrayBuffer })
+    console.log('📄 WORD EXTRACT - Raw text length:', rawResult.value?.length || 0)
+    
+    // Convert HTML to text while preserving structure
+    let text = ''
+    
+    if (result.value) {
+      // Create a temporary DOM element to parse HTML
+      const parser = new DOMParser()
+      const doc = parser.parseFromString(result.value, 'text/html')
+      
+      // Extract text with structure preservation
+      const processNode = (node: Node, depth: number = 0): string => {
+        let output = ''
+        
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node.textContent?.trim()
+          if (text) {
+            output += text
+          }
+        } else if (node.nodeType === Node.ELEMENT_NODE) {
+          const element = node as Element
+          const tagName = element.tagName.toLowerCase()
+          
+          // Handle block elements
+          if (['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tagName)) {
+            // Add spacing before headings
+            if (output && !output.endsWith('\n\n')) {
+              output += '\n\n'
+            }
+            // Process children
+            for (const child of Array.from(element.childNodes)) {
+              output += processNode(child, depth + 1)
+            }
+            // Add spacing after headings
+            output += '\n\n'
+          } else if (tagName === 'p') {
+            // Process paragraph children
+            let paraText = ''
+            for (const child of Array.from(element.childNodes)) {
+              paraText += processNode(child, depth + 1)
+            }
+            if (paraText.trim()) {
+              // Add spacing before paragraph if not first
+              if (output && !output.endsWith('\n\n') && !output.endsWith('\n')) {
+                output += '\n'
+              }
+              output += paraText.trim()
+              // Add line break after paragraph
+              output += '\n'
+            }
+          } else if (tagName === 'br') {
+            output += '\n'
+          } else if (tagName === 'strong' || tagName === 'b') {
+            // Process bold text
+            for (const child of Array.from(element.childNodes)) {
+              output += processNode(child, depth + 1)
+            }
+          } else {
+            // Process other elements
+            for (const child of Array.from(element.childNodes)) {
+              output += processNode(child, depth + 1)
+            }
+          }
+        }
+        
+        return output
+      }
+      
+      // Process body
+      const body = doc.body
+      if (body) {
+        for (const child of Array.from(body.childNodes)) {
+          text += processNode(child)
+        }
+      }
+    }
+    
+    // Fallback to raw text if HTML extraction didn't work well
+    if (!text || text.trim().length < 10) {
+      console.log('📄 WORD EXTRACT - HTML extraction produced minimal text, using raw text')
+      text = rawResult.value || 'No text content found in document'
+    }
+    
+    console.log('📄 WORD EXTRACT - Processed text length:', text.length)
+    console.log('📄 WORD EXTRACT - First 200 chars:', text.substring(0, 200))
+    
+    // Add page breaks based on content length and structure
+    // Average screenplay page is about 2000-2500 characters
+    const charsPerPage = 2200
+    const lines = text.split('\n')
+    let processedLines: string[] = []
+    let currentPageChars = 0
+    let pageNumber = 1
+    let lastSceneHeadingIndex = -1
+    
+    // First pass: detect natural page breaks (scene headings, major breaks)
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      const trimmed = line.trim()
+      
+      // Detect page number indicators (common patterns)
+      if (trimmed.match(/^[-_]{3,}$/) || trimmed.match(/^Page\s+\d+/i) || trimmed.match(/^---\s*PAGE\s+\d+/i)) {
+        processedLines.push('')
+        processedLines.push(`--- PAGE ${pageNumber} ---`)
+        processedLines.push('')
+        pageNumber++
+        currentPageChars = 0
+        continue
+      }
+      
+      // Detect scene headings (INT./EXT.) - these are natural page break points
+      if (isLocationHeading(trimmed) || isSceneHeading(trimmed)) {
+        // If we've accumulated enough content, add a page break before this scene
+        if (currentPageChars > charsPerPage && lastSceneHeadingIndex >= 0) {
+          processedLines.push('')
+          processedLines.push(`--- PAGE ${pageNumber} ---`)
+          processedLines.push('')
+          pageNumber++
+          currentPageChars = 0
+        }
+        lastSceneHeadingIndex = i
+      }
+      
+      processedLines.push(line)
+      currentPageChars += line.length + 1 // +1 for newline
+      
+      // If we've gone way over a page without a scene break, add one
+      if (currentPageChars > charsPerPage * 1.5 && i > 0) {
+        // Insert page break before current line
+        const lastFewLines = processedLines.slice(-3)
+        processedLines = processedLines.slice(0, -3)
+        processedLines.push('')
+        processedLines.push(`--- PAGE ${pageNumber} ---`)
+        processedLines.push('')
+        processedLines.push(...lastFewLines)
+        pageNumber++
+        currentPageChars = line.length + 1
+      }
+    }
+    
+    text = processedLines.join('\n')
+    
+    // Ensure we have page markers - check if any were added
+    const hasPageMarkers = text.match(/---\s*PAGE\s+\d+/i)
+    
+    if (!hasPageMarkers && text.length > 1000) {
+      console.log('📄 WORD EXTRACT - No page markers found, adding them based on content length')
+      // Add page markers at natural break points (scene headings) or every ~2200 chars
+      const finalLines = text.split('\n')
+      const finalProcessed: string[] = []
+      let pageChars = 0
+      let finalPageNum = 1
+      let lastBreakPoint = 0
+      
+      for (let i = 0; i < finalLines.length; i++) {
+        const line = finalLines[i]
+        const trimmed = line.trim()
+        
+        // Check if this is a good break point (scene heading) and we've accumulated enough content
+        const isGoodBreakPoint = trimmed && (isLocationHeading(trimmed) || isSceneHeading(trimmed))
+        const shouldBreak = pageChars > charsPerPage && (isGoodBreakPoint || pageChars > charsPerPage * 1.2)
+        
+        if (shouldBreak && i > lastBreakPoint + 10) { // Don't break too frequently
+          // Add page break before this line
+          finalProcessed.push('')
+          finalProcessed.push(`--- PAGE ${finalPageNum} ---`)
+          finalProcessed.push('')
+          finalPageNum++
+          pageChars = 0
+          lastBreakPoint = i
+        }
+        
+        finalProcessed.push(line)
+        pageChars += line.length + 1
+      }
+      
+      // Always add final page marker if we added any, or if content is long
+      if (finalPageNum > 1) {
+        finalProcessed.push('')
+        finalProcessed.push(`--- PAGE ${finalPageNum} ---`)
+      } else if (text.length > charsPerPage) {
+        // If content is long but we didn't break, add a single page marker at the end
+        finalProcessed.push('')
+        finalProcessed.push(`--- PAGE 1 ---`)
+      }
+      
+      text = finalProcessed.join('\n')
+      console.log('📄 WORD EXTRACT - Added page markers, total pages:', finalPageNum)
+    }
+    
+    // Preserve formatting but don't over-process
+    const formatted = preserveScreenplayFormatting(text)
+    
+    // Count actual page markers in final text
+    const pageMarkerCount = (formatted.match(/---\s*PAGE\s+\d+/gi) || []).length
+    const estimatedPages = pageMarkerCount || Math.ceil(formatted.length / charsPerPage)
+    
+    console.log('📄 WORD EXTRACT - Final formatted text length:', formatted.length)
+    console.log('📄 WORD EXTRACT - Page markers found:', pageMarkerCount)
+    console.log('📄 WORD EXTRACT - Estimated pages:', estimatedPages)
+    console.log('📄 WORD EXTRACT - Extraction complete')
+    
+    return formatted
   } catch (error) {
-    console.error('Word document text extraction error:', error)
-    throw new Error('Failed to extract text from Word document. Please ensure the document contains text content.')
+    console.error('📄 WORD EXTRACT - ERROR:', error)
+    console.error('📄 WORD EXTRACT - Error stack:', error instanceof Error ? error.stack : 'No stack')
+    throw new Error(`Failed to extract text from Word document: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
 }
 
@@ -218,62 +463,119 @@ const preserveTextFormatting = (text: string): string => {
 }
 
 // Enhanced function for screenplay formatting preservation
+// Now preserves more general formatting (titles, paragraphs, page breaks)
 const preserveScreenplayFormatting = (text: string): string => {
+  console.log('🎨 FORMAT - Starting formatting preservation, input length:', text.length)
+  
   let formatted = text
     .replace(/\r\n/g, '\n') // Normalize Windows line breaks
     .replace(/\r/g, '\n')   // Normalize Mac line breaks
   
+  console.log('🎨 FORMAT - Normalized line breaks, length:', formatted.length)
+  
   // Split into lines to analyze structure
   const lines = formatted.split('\n')
+  console.log('🎨 FORMAT - Split into lines, total lines:', lines.length)
+  
   const processedLines: string[] = []
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const trimmedLine = line.trim()
     
-    // Skip completely empty lines but preserve intentional breaks
+    // Preserve empty lines (paragraph breaks, page breaks) - don't skip them!
     if (trimmedLine === '') {
-      // Only add empty line if the previous line wasn't empty
-      if (processedLines.length > 0 && processedLines[processedLines.length - 1] !== '') {
-        processedLines.push('')
-      }
+      processedLines.push('')
+      continue
+    }
+    
+    // Preserve original line with its leading/trailing spaces
+    // This helps maintain indentation and formatting
+    const originalLine = line
+    
+    // Detect page break markers (--- PAGE X ---)
+    if (trimmedLine.match(/^---\s*PAGE\s+\d+\s*---$/i)) {
+      processedLines.push('')
+      processedLines.push(originalLine)
+      processedLines.push('')
+      continue
+    }
+    
+    // Detect page breaks (common patterns like "---" or "Page X")
+    if (trimmedLine.match(/^[-=_]{3,}$/) || trimmedLine.match(/^Page\s+\d+/i)) {
+      processedLines.push('')
+      processedLines.push(originalLine)
+      processedLines.push('')
       continue
     }
     
     // Detect scene headings (usually all caps, contains scene indicators)
     if (isSceneHeading(trimmedLine)) {
       // Add extra space before scene headings (except first line)
-      if (processedLines.length > 0) {
+      if (processedLines.length > 0 && processedLines[processedLines.length - 1] !== '') {
         processedLines.push('')
       }
-      processedLines.push(trimmedLine)
+      processedLines.push(originalLine)
       processedLines.push('') // Add space after scene heading
       continue
     }
     
     // Detect location headings (EXT./INT.)
     if (isLocationHeading(trimmedLine)) {
-      processedLines.push('')
-      processedLines.push(trimmedLine)
+      if (processedLines.length > 0 && processedLines[processedLines.length - 1] !== '') {
+        processedLines.push('')
+      }
+      processedLines.push(originalLine)
       processedLines.push('')
       continue
     }
     
     // Detect character names (usually all caps, centered-ish)
     if (isCharacterName(trimmedLine)) {
-      processedLines.push('')
-      processedLines.push(trimmedLine)
+      if (processedLines.length > 0 && processedLines[processedLines.length - 1] !== '') {
+        processedLines.push('')
+      }
+      processedLines.push(originalLine)
       continue
     }
     
-    // Regular action/dialogue lines
-    processedLines.push(trimmedLine)
+    // Detect titles (centered, all caps, or bold-like patterns)
+    if (isTitle(trimmedLine)) {
+      if (processedLines.length > 0 && processedLines[processedLines.length - 1] !== '') {
+        processedLines.push('')
+      }
+      processedLines.push(originalLine)
+      processedLines.push('')
+      continue
+    }
+    
+    // Regular lines - preserve original formatting (including indentation)
+    processedLines.push(originalLine)
   }
   
-  return processedLines
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n') // Limit consecutive empty lines
-    .trim()
+  console.log('🎨 FORMAT - Processed lines, total:', processedLines.length)
+  
+  // Join lines - preserve all empty lines and structure
+  let result = processedLines.join('\n')
+  
+  // Only clean up excessive empty lines (more than 4 consecutive) - allow page breaks
+  result = result.replace(/\n{5,}/g, '\n\n\n\n') // Allow up to 4 empty lines for page breaks
+  
+  console.log('🎨 FORMAT - Final result length:', result.length)
+  console.log('🎨 FORMAT - Formatting preservation complete')
+  
+  // Don't trim - preserve leading/trailing whitespace that might be intentional
+  return result
+}
+
+// Helper to detect titles
+const isTitle = (line: string): boolean => {
+  const trimmed = line.trim()
+  // Titles are often: all caps, short, centered, or have special formatting
+  return (
+    (trimmed.toUpperCase() === trimmed && trimmed.length < 80 && trimmed.length > 3) ||
+    trimmed.match(/^[A-Z][a-zA-Z\s]{3,60}$/) && trimmed.split(' ').length <= 8
+  )
 }
 
 // Helper functions for screenplay format detection
@@ -533,7 +835,15 @@ export default function FileImport({
   }
 
   const processFile = async (file: File) => {
+    console.log('📦 FILE IMPORT - Starting file processing:', {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      lastModified: new Date(file.lastModified).toISOString()
+    })
+    
     if (!isSupportedFile(file)) {
+      console.error('📦 FILE IMPORT - Unsupported file type:', file.type)
       toast({
         title: "Unsupported File",
         description: `${file.name} is not a supported file type.`,
@@ -541,6 +851,8 @@ export default function FileImport({
       })
       return
     }
+
+    console.log('📦 FILE IMPORT - File is supported, proceeding with extraction')
 
     try {
       setIsImporting(true)
@@ -560,28 +872,75 @@ export default function FileImport({
       let content = ''
       let mimeType = file.type
 
-      // Process different file types
+      // Process different file types - AUTO-EXTRACT TEXT WITH FORMATTING
       if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        // For PDFs, show a message about future implementation
-        content = `[PDF Content from ${file.name}]\n\nThis PDF file has been uploaded. In a future update, we will integrate PDF text extraction to automatically parse the content.\n\nFor now, you can manually copy and paste the text content from your PDF into the content field when saving as an asset.`
-        mimeType = 'application/pdf'
+        console.log('📦 FILE IMPORT - Processing PDF file')
+        // For PDFs, extract text immediately with formatting preservation
+        try {
+          content = await extractPDFText(file)
+          console.log('📦 FILE IMPORT - PDF extraction successful, content length:', content.length)
+          mimeType = 'application/pdf'
+        } catch (error) {
+          console.error('📦 FILE IMPORT - PDF extraction error:', error)
+          toast({
+            title: "PDF Extraction Warning",
+            description: "Could not extract text automatically. Please use 'Convert to Script' after upload.",
+            variant: "default",
+          })
+          content = `[PDF Content from ${file.name}]\n\nPDF file uploaded. Use "Convert to Script" to extract text with formatting.`
+        }
       } else if (file.type.includes('word') || file.type.includes('document') || 
                  file.name.toLowerCase().endsWith('.doc') || file.name.toLowerCase().endsWith('.docx')) {
-        // For Word documents, show a message about future implementation
-        content = `[Word Document Content from ${file.name}]\n\nThis Word document has been uploaded. In a future update, we will integrate Word document text extraction to automatically parse the content.\n\nFor now, you can manually copy and paste the text content from your Word document into the content field when saving as an asset.`
-        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        console.log('📦 FILE IMPORT - Processing Word document')
+        // For Word documents, extract text immediately with formatting preservation
+        try {
+          content = await extractWordText(file)
+          console.log('📦 FILE IMPORT - Word extraction successful, content length:', content.length)
+          console.log('📦 FILE IMPORT - Word content preview (first 500 chars):', content.substring(0, 500))
+          mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        } catch (error) {
+          console.error('📦 FILE IMPORT - Word extraction error:', error)
+          toast({
+            title: "Word Extraction Warning",
+            description: "Could not extract text automatically. Please use 'Convert to Script' after upload.",
+            variant: "default",
+          })
+          content = `[Word Document Content from ${file.name}]\n\nWord document uploaded. Use "Convert to Script" to extract text with formatting.`
+        }
       } else if (file.type.startsWith('text/') || 
                  file.name.toLowerCase().endsWith('.txt') || 
                  file.name.toLowerCase().endsWith('.rtf') ||
                  file.name.toLowerCase().endsWith('.md')) {
-        // For text files, read directly
-        content = await file.text()
+        console.log('📦 FILE IMPORT - Processing text file')
+        // For text files, read directly with formatting preservation
+        const reader = new FileReader()
+        content = await new Promise<string>((resolve, reject) => {
+          reader.onload = (e) => {
+            const text = e.target?.result as string
+            console.log('📦 FILE IMPORT - Text file read, length:', text.length)
+            // Preserve original formatting - just normalize line breaks
+            const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+            console.log('📦 FILE IMPORT - Text file normalized, length:', normalized.length)
+            resolve(normalized)
+          }
+          reader.onerror = () => {
+            console.error('📦 FILE IMPORT - Text file read error')
+            reject(new Error('Failed to read text file'))
+          }
+          reader.readAsText(file)
+        })
         mimeType = file.type || 'text/plain'
+        console.log('📦 FILE IMPORT - Text file processing complete')
       } else {
+        console.error('📦 FILE IMPORT - Unsupported file type:', file.type)
         throw new Error('Unsupported file type')
       }
+      
+      console.log('📦 FILE IMPORT - Content extracted, length:', content.length)
+      console.log('📦 FILE IMPORT - Content preview:', content.substring(0, 300))
 
       // Upload file to storage bucket
+      console.log('📦 FILE IMPORT - Uploading file to storage bucket...')
       const storedFile = await StorageService.uploadFile({
         file,
         projectId,
@@ -594,6 +953,7 @@ export default function FileImport({
           sceneId: sceneId
         }
       })
+      console.log('📦 FILE IMPORT - File uploaded to storage:', storedFile.id)
 
       clearInterval(progressInterval)
       setImportProgress(100)
@@ -616,13 +976,27 @@ export default function FileImport({
         isExtracting: false
       }
 
+      console.log('📦 FILE IMPORT - Created imported file object:', {
+        id: importedFile.id,
+        name: importedFile.name,
+        type: importedFile.type,
+        contentLength: importedFile.content.length,
+        hasStoredFile: !!importedFile.storedFile
+      })
+
       // Add to imported files list
-      setImportedFiles(prev => [importedFile, ...prev])
+      setImportedFiles(prev => {
+        const updated = [importedFile, ...prev]
+        console.log('📦 FILE IMPORT - Added to imported files list, total files:', updated.length)
+        return updated
+      })
 
       toast({
         title: "File Imported",
         description: `${file.name} has been imported and saved to your project bucket!`,
       })
+
+      console.log('📦 FILE IMPORT - File processing complete successfully')
 
       // Reset progress after a delay
       setTimeout(() => setImportProgress(0), 1000)
@@ -919,6 +1293,7 @@ export default function FileImport({
               <div className="flex items-center justify-center gap-4">
                 <input
                   ref={fileInputRef}
+                  data-file-import-input
                   type="file"
                   multiple
                   accept=".pdf,.doc,.docx,.txt,.rtf,.md"

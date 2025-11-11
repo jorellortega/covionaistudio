@@ -3,11 +3,19 @@ import { getSupabaseClient } from '@/lib/supabase'
 
 export async function POST(request: NextRequest) {
   try {
-    const { projectId, sceneId, userId } = await request.json()
+    const { projectId, sceneId, treatmentId, userId } = await request.json()
 
-    if (!projectId || !userId) {
+    if (!userId) {
       return NextResponse.json(
-        { error: 'Missing required fields: projectId, userId' },
+        { error: 'Missing required field: userId' },
+        { status: 400 }
+      )
+    }
+
+    // Require at least one of projectId, sceneId, or treatmentId
+    if (!projectId && !sceneId && !treatmentId) {
+      return NextResponse.json(
+        { error: 'Missing required field: at least one of projectId, sceneId, or treatmentId must be provided' },
         { status: 400 }
       )
     }
@@ -15,42 +23,68 @@ export async function POST(request: NextRequest) {
     // Get Supabase client
     const supabase = getSupabaseClient()
 
-    // List audio files for this project using the correct folder structure: userId/projectId/audio
-    // If sceneId is provided, look in scene-specific folder, otherwise look in project-level folder
-    const audioPath = sceneId 
-      ? `${userId}/${projectId}/audio/${sceneId}`
-      : `${userId}/${projectId}/audio`
-    
-    const { data: files, error: listError } = await supabase.storage
-      .from('cinema_files')
-      .list(audioPath, {
-        limit: 100,
-        offset: 0,
-        sortBy: { column: 'created_at', order: 'desc' }
-      })
+    // Query assets table to get audio files for this treatment/scene/project
+    // This gives us proper asset IDs for delete/rename operations
+    let query = supabase
+      .from('assets')
+      .select('id, title, content_url, created_at, metadata')
+      .eq('user_id', userId)
+      .eq('content_type', 'audio')
+      .order('created_at', { ascending: false })
+      .limit(100)
 
-    if (listError) {
-      console.error('Error listing audio files:', listError)
+    // Filter by treatment_id, scene_id, or project_id
+    if (treatmentId) {
+      // For treatments, filter by treatment_id
+      // If projectId is provided, also filter by it; otherwise allow null project_id
+      query = query.eq('treatment_id', treatmentId)
+      if (projectId) {
+        query = query.eq('project_id', projectId)
+      } else {
+        // Standalone treatment: project_id should be null
+        query = query.is('project_id', null)
+      }
+    } else if (sceneId) {
+      // For scenes, filter by scene_id
+      // If projectId is provided, also filter by it; otherwise allow null project_id
+      query = query.eq('scene_id', sceneId)
+      if (projectId) {
+        query = query.eq('project_id', projectId)
+      } else {
+        // Standalone scene: project_id should be null (unlikely but handle it)
+        query = query.is('project_id', null)
+      }
+    } else if (projectId) {
+      // Project-level: no treatment_id and no scene_id
+      query = query.eq('project_id', projectId)
+        .is('treatment_id', null)
+        .is('scene_id', null)
+    }
+
+    const { data: assets, error: queryError } = await query
+
+    if (queryError) {
+      console.error('Error querying audio assets:', queryError)
       return NextResponse.json(
-        { error: `Failed to list audio files: ${listError.message}` },
+        { error: `Failed to fetch audio files: ${queryError.message}` },
         { status: 500 }
       )
     }
 
-    // Get public URLs for each file
-    const audioFiles = files?.map(file => {
-      const { data: urlData } = supabase.storage
-        .from('cinema_files')
-        .getPublicUrl(`${audioPath}/${file.name}`)
+    // Map assets to audio files format
+    const audioFiles = (assets || []).map(asset => {
+      // Extract file size from metadata if available
+      const fileSize = asset.metadata?.file_size || asset.metadata?.size || 0
       
       return {
-        name: file.name,
-        size: file.metadata?.size || 0,
-        created_at: file.created_at,
-        public_url: urlData.publicUrl,
-        storage_path: `${audioPath}/${file.name}`
+        id: asset.id, // Use asset ID for delete/rename operations
+        name: asset.title || 'Untitled Audio',
+        size: fileSize,
+        created_at: asset.created_at,
+        public_url: asset.content_url || '',
+        storage_path: asset.metadata?.storage_path || ''
       }
-    }) || []
+    })
 
     return NextResponse.json({
       success: true,
@@ -61,7 +95,7 @@ export async function POST(request: NextRequest) {
     })
 
   } catch (error) {
-    console.error('Get scene audio error:', error)
+    console.error('Get audio error:', error)
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

@@ -36,9 +36,13 @@ import {
   CheckCircle,
   User,
   FileText,
+  Eye,
+  Users,
 } from "lucide-react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
+import { TreatmentsService, type CreateTreatmentData } from "@/lib/treatments-service"
 import { useToast } from "@/hooks/use-toast"
 import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
@@ -62,6 +66,9 @@ export default function MoviesPage() {
   const [editingMovie, setEditingMovie] = useState<Movie | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
+  const [movieTreatmentMap, setMovieTreatmentMap] = useState<Record<string, string>>({}) // movieId -> treatmentId
+  const [creatingTreatmentForMovieId, setCreatingTreatmentForMovieId] = useState<string | null>(null)
+  const router = useRouter()
   const [newMovie, setNewMovie] = useState<CreateMovieData>({
     name: "",
     description: "",
@@ -211,6 +218,25 @@ export default function MoviesPage() {
       setMovies(moviesData)
       console.log('🎬 Movies Page - Movies state updated successfully')
       
+      // Fetch treatments for each movie
+      const treatmentMap: Record<string, string> = {}
+      for (const movie of moviesData) {
+        try {
+          const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
+          if (treatment) {
+            treatmentMap[movie.id] = treatment.id
+            console.log(`✅ Movies Page - Found treatment ${treatment.id} for movie ${movie.id} (${movie.name})`)
+          } else {
+            console.log(`⚠️ Movies Page - No treatment found for movie ${movie.id} (${movie.name})`)
+          }
+        } catch (error) {
+          console.error(`❌ Movies Page - Error fetching treatment for movie ${movie.id} (${movie.name}):`, error)
+          // Continue with other movies even if one fails
+        }
+      }
+      console.log(`🎬 Movies Page - Treatment map:`, treatmentMap)
+      setMovieTreatmentMap(treatmentMap)
+      
       // Show success message
       if (moviesData.length > 0) {
         toast({
@@ -238,6 +264,60 @@ export default function MoviesPage() {
       console.log('🎬 Movies Page - Setting loading to false...')
       setLoading(false)
       console.log('🎬 Movies Page - loadMovies() completed')
+    }
+  }
+
+  // Create treatment from movie
+  const createTreatmentFromMovie = async (movie: Movie) => {
+    if (!user || !userId) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to create a treatment",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setCreatingTreatmentForMovieId(movie.id)
+
+      // Create treatment data from movie
+      const treatmentData: CreateTreatmentData = {
+        project_id: movie.id, // Link treatment to movie
+        title: movie.name,
+        genre: movie.genre || 'Drama', // Default genre if not set
+        status: 'draft',
+        synopsis: movie.description || `${movie.name} - Treatment synopsis`,
+        cover_image_url: movie.thumbnail || undefined,
+        logline: movie.description ? movie.description.substring(0, 200) : undefined,
+        notes: `Created from movie: ${movie.name}`,
+      }
+
+      // Create the treatment
+      const treatment = await TreatmentsService.createTreatment(treatmentData)
+
+      // Update the treatment map
+      setMovieTreatmentMap(prev => ({
+        ...prev,
+        [movie.id]: treatment.id
+      }))
+
+      toast({
+        title: "Treatment Created!",
+        description: `Treatment created and linked to "${movie.name}". Redirecting...`,
+      })
+
+      // Navigate to the treatment page
+      router.push(`/treatments/${treatment.id}`)
+    } catch (error) {
+      console.error('Error creating treatment from movie:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create treatment. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setCreatingTreatmentForMovieId(null)
     }
   }
 
@@ -1355,7 +1435,10 @@ export default function MoviesPage() {
           {filteredMovies.map((movie) => (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
               <CardHeader className="pb-2">
-                <Link href={`/timeline?movie=${movie.id}`} className="block">
+                <Link 
+                  href={movieTreatmentMap[movie.id] ? `/treatments/${movieTreatmentMap[movie.id]}` : `/timeline?movie=${movie.id}`} 
+                  className="block"
+                >
                   <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
                     <img
                       src={movie.thumbnail || "/placeholder.svg?height=300&width=200"}
@@ -1412,9 +1495,41 @@ export default function MoviesPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <CardDescription className="mb-2 line-clamp-2 text-sm">{movie.description}</CardDescription>
+                <CardDescription className="mb-3 line-clamp-2 text-sm">{movie.description}</CardDescription>
+                {movieTreatmentMap[movie.id] ? (
+                  <Link href={`/treatments/${movieTreatmentMap[movie.id]}`} className="block mb-3">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 h-8 text-xs"
+                    >
+                      <Eye className="h-3.5 w-3.5 mr-2" />
+                      View Movie
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full mb-3 border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 h-8 text-xs"
+                    onClick={() => createTreatmentFromMovie(movie)}
+                    disabled={creatingTreatmentForMovieId === movie.id}
+                  >
+                    {creatingTreatmentForMovieId === movie.id ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="h-3.5 w-3.5 mr-2" />
+                        Create Treatment
+                      </>
+                    )}
+                  </Button>
+                )}
 
-                <div className="space-y-1 text-xs text-muted-foreground">
+                <div className="space-y-1 text-xs text-muted-foreground mt-3">
                   <div className="flex items-center gap-2">
                     <Film className="h-3 w-3" />
                     <span>{movie.scenes || 0} scenes</span>
@@ -1448,9 +1563,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-blue-500/20 hover:border-blue-500 hover:bg-blue-500/10 bg-transparent text-xs h-6"
+                      className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
                     >
-                      <Play className="mr-1 h-2.5 w-2.5" />
+                      <Play className="mr-2 h-3.5 w-3.5" />
                       Timeline
                     </Button>
                   </Link>
@@ -1458,9 +1573,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-purple-500/20 hover:border-purple-500 hover:bg-purple-500/10 bg-transparent text-xs h-6"
+                      className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
                     >
-                      <FileText className="mr-1 h-2.5 w-2.5" />
+                      <FileText className="mr-2 h-3.5 w-3.5" />
                       Treatment
                     </Button>
                   </Link>
@@ -1468,9 +1583,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-cyan-500/20 hover:border-cyan-500 hover:bg-cyan-500/10 bg-transparent text-xs h-6"
+                      className="w-full border-cyan-500/30 bg-transparent hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 text-xs h-8"
                     >
-                      <Sparkles className="mr-1 h-2.5 w-2.5" />
+                      <Sparkles className="mr-2 h-3.5 w-3.5" />
                       AI Studio
                     </Button>
                   </Link>
@@ -1478,9 +1593,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-cyan-600/20 hover:border-cyan-500 hover:bg-cyan-600/10 bg-transparent text-xs h-6"
+                      className="w-full border-orange-500/30 bg-transparent hover:bg-orange-500/10 text-orange-400 hover:text-orange-300 text-xs h-8"
                     >
-                      <FolderOpen className="mr-1 h-2.5 w-2.5" />
+                      <FolderOpen className="mr-2 h-3.5 w-3.5" />
                       Assets
                     </Button>
                   </Link>
@@ -1488,9 +1603,9 @@ export default function MoviesPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-pink-500/20 hover:border-pink-500 hover:bg-pink-500/10 bg-transparent text-xs h-6"
+                      className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
                     >
-                      <User className="mr-1 h-2.5 w-2.5" />
+                      <Users className="mr-2 h-3.5 w-3.5" />
                       Casting
                     </Button>
                   </Link>

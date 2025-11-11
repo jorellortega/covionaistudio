@@ -12,11 +12,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/hooks/use-toast'
 import { ArrowLeft, Sparkles, ImageIcon, Loader2, CheckCircle, Download, FileText } from 'lucide-react'
-import { TreatmentsService, CreateTreatmentData } from '@/lib/treatments-service'
+import { TreatmentsService, CreateTreatmentData, Treatment } from '@/lib/treatments-service'
 import { MovieService, type Movie } from '@/lib/movie-service'
 import { AISettingsService, type AISetting } from '@/lib/ai-settings-service'
 import Header from '@/components/header'
 import Link from 'next/link'
+import TextToSpeech from '@/components/text-to-speech'
+import { Eye, Edit as EditIcon } from 'lucide-react'
 
 export default function MovieTreatmentPage() {
   const { id } = useParams()
@@ -25,8 +27,10 @@ export default function MovieTreatmentPage() {
   const { toast } = useToast()
   
   const [movie, setMovie] = useState<Movie | null>(null)
+  const [treatment, setTreatment] = useState<Treatment | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isCreating, setIsCreating] = useState(false)
+  const [showCreateForm, setShowCreateForm] = useState(false)
   const [newTreatment, setNewTreatment] = useState({
     title: '',
     genre: '',
@@ -122,23 +126,26 @@ export default function MovieTreatmentPage() {
       const existingTreatment = await TreatmentsService.getTreatmentByProjectId(movieId)
       
       if (existingTreatment) {
-        // Redirect to existing treatment
-        router.push(`/treatments/${existingTreatment.id}`)
-        return
+        // Display the existing treatment instead of redirecting
+        setTreatment(existingTreatment)
+        setShowCreateForm(false)
+      } else {
+        // No treatment exists, show create form
+        setTreatment(null)
+        setShowCreateForm(true)
+        // Pre-fill treatment form with movie data
+        setNewTreatment({
+          title: movieData.name,
+          genre: movieData.genre || '',
+          status: 'draft',
+          cover_image_url: movieData.thumbnail || '',
+          synopsis: movieData.description || '',
+          target_audience: '',
+          estimated_budget: '',
+          estimated_duration: movieData.duration || ''
+        })
+        setGeneratedCoverUrl(movieData.thumbnail || '')
       }
-      
-      // Pre-fill treatment form with movie data
-      setNewTreatment({
-        title: movieData.name,
-        genre: movieData.genre || '',
-        status: 'draft',
-        cover_image_url: movieData.thumbnail || '',
-        synopsis: movieData.description || '',
-        target_audience: '',
-        estimated_budget: '',
-        estimated_duration: movieData.duration || ''
-      })
-      setGeneratedCoverUrl(movieData.thumbnail || '')
       
     } catch (error) {
       console.error('Error loading movie and treatment:', error)
@@ -524,13 +531,14 @@ export default function MovieTreatmentPage() {
       
       const createdTreatment = await TreatmentsService.createTreatment(treatmentData)
       
+      // Update state to show the created treatment
+      setTreatment(createdTreatment)
+      setShowCreateForm(false)
+      
       toast({
         title: "Success",
         description: "Treatment created successfully for this movie!",
       })
-
-      // Redirect to the created treatment
-      router.push(`/treatments/${createdTreatment.id}`)
       
     } catch (error) {
       console.error('Error creating treatment:', error)
@@ -595,29 +603,202 @@ export default function MovieTreatmentPage() {
               Back to Movies
             </Link>
           </Button>
+          
+          {/* Movie Info Card */}
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex items-center gap-3">
+                <FileText className="h-6 w-6 text-blue-500" />
+                <div>
+                  <CardTitle className="text-xl">{movie.name}</CardTitle>
+                  <CardDescription>Movie Project</CardDescription>
+                </div>
+              </div>
+              {movie.genre && (
+                <div className="mt-2">
+                  <Badge variant="outline">{movie.genre}</Badge>
+                </div>
+              )}
+            </CardHeader>
+            {movie.description && (
+              <CardContent>
+                <p className="text-sm text-muted-foreground">{movie.description}</p>
+              </CardContent>
+            )}
+          </Card>
         </div>
 
-        <Card className="mb-6">
-          <CardHeader>
-            <div className="flex items-center gap-3 mb-2">
-              <FileText className="h-8 w-8 text-purple-500" />
-              <div>
-                <CardTitle className="text-2xl">Create Treatment for "{movie.name}"</CardTitle>
-                <CardDescription>Write a comprehensive treatment for your movie project</CardDescription>
-              </div>
-            </div>
-            {movie.thumbnail && (
-              <div className="mt-4">
-                <img 
-                  src={movie.thumbnail} 
-                  alt={movie.name}
-                  className="w-full max-w-md h-48 object-cover rounded-lg"
-                />
-              </div>
+        {/* Show treatment if it exists, otherwise show create form */}
+        {treatment ? (
+          /* Treatment Display */
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <FileText className="h-8 w-8 text-purple-500" />
+                    <div>
+                      <CardTitle className="text-2xl">{treatment.title}</CardTitle>
+                      <CardDescription>Treatment for "{movie.name}"</CardDescription>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" asChild>
+                      <Link href={`/treatments/${treatment.id}`}>
+                        <Eye className="h-4 w-4 mr-2" />
+                        View Full Treatment
+                      </Link>
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-4">
+                  <Badge variant="outline">{treatment.genre}</Badge>
+                  <Badge variant={treatment.status === 'completed' ? 'default' : 'secondary'}>
+                    {treatment.status.replace('-', ' ')}
+                  </Badge>
+                </div>
+              </CardHeader>
+            </Card>
+
+            {/* Treatment Cover Image */}
+            {treatment.cover_image_url && (
+              <Card>
+                <CardContent className="pt-6">
+                  <img
+                    src={treatment.cover_image_url}
+                    alt={`${treatment.title} cover`}
+                    className="w-full max-w-2xl mx-auto h-96 object-cover rounded-lg"
+                  />
+                </CardContent>
+              </Card>
             )}
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleCreateTreatment} className="space-y-6">
+
+            {/* Synopsis */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileText className="h-5 w-5" />
+                  Synopsis
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <p className="text-lg leading-relaxed whitespace-pre-wrap">{treatment.synopsis}</p>
+                  <TextToSpeech 
+                    text={treatment.synopsis}
+                    title={`${treatment.title} - Synopsis`}
+                    projectId={treatment.project_id || undefined}
+                    sceneId={null}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Logline */}
+            {treatment.logline && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Logline</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">{treatment.logline}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Additional Details */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {treatment.target_audience && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Target Audience</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm">{treatment.target_audience}</p>
+                  </CardContent>
+                </Card>
+              )}
+              {treatment.estimated_budget && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Estimated Budget</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm">{treatment.estimated_budget}</p>
+                  </CardContent>
+                </Card>
+              )}
+              {treatment.estimated_duration && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-sm">Estimated Duration</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm">{treatment.estimated_duration}</p>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Characters */}
+            {treatment.characters && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Characters</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm whitespace-pre-wrap">{treatment.characters}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Themes */}
+            {treatment.themes && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Themes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm whitespace-pre-wrap">{treatment.themes}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Notes */}
+            {treatment.notes && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Notes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm whitespace-pre-wrap">{treatment.notes}</p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        ) : (
+          /* Create Treatment Form */
+          <Card className="mb-6">
+            <CardHeader>
+              <div className="flex items-center gap-3 mb-2">
+                <FileText className="h-8 w-8 text-purple-500" />
+                <div>
+                  <CardTitle className="text-2xl">Create Treatment for "{movie.name}"</CardTitle>
+                  <CardDescription>Write a comprehensive treatment for your movie project</CardDescription>
+                </div>
+              </div>
+              {movie.thumbnail && (
+                <div className="mt-4">
+                  <img 
+                    src={movie.thumbnail} 
+                    alt={movie.name}
+                    className="w-full max-w-md h-48 object-cover rounded-lg"
+                  />
+                </div>
+              )}
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleCreateTreatment} className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="title">Title *</Label>
@@ -927,6 +1108,7 @@ export default function MovieTreatmentPage() {
             </form>
           </CardContent>
         </Card>
+        )}
       </div>
     </>
   )

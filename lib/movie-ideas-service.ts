@@ -5,7 +5,8 @@ export interface MovieIdea {
   user_id: string
   title: string
   description: string
-  genre: string
+  genre?: string // Legacy field, kept for backward compatibility
+  genres?: string[] // New field: array of genres
   main_creator: string
   co_creators?: string[]
   original_prompt?: string
@@ -18,7 +19,8 @@ export interface MovieIdea {
 export interface CreateMovieIdeaData {
   title: string
   description: string
-  genre?: string
+  genre?: string // Legacy field, kept for backward compatibility
+  genres?: string[] // New field: array of genres
   main_creator: string
   co_creators?: string[]
   original_prompt?: string
@@ -29,7 +31,8 @@ export interface CreateMovieIdeaData {
 export interface UpdateMovieIdeaData {
   title?: string
   description?: string
-  genre?: string
+  genre?: string // Legacy field, kept for backward compatibility
+  genres?: string[] // New field: array of genres
   main_creator?: string
   co_creators?: string[]
   original_prompt?: string
@@ -150,15 +153,33 @@ export class MovieIdeasService {
   }
 
   static async getIdeasByGenre(userId: string, genre: string): Promise<MovieIdea[]> {
+    // Support both old genre field and new genres array
+    // For JSONB arrays, we need to check if the array contains the genre
     const { data, error } = await getSupabaseClient()
       .from('movie_ideas')
       .select('*')
       .eq('user_id', userId)
-      .eq('genre', genre)
+      .or(`genre.eq.${genre},genres.cs.["${genre}"]`)
       .order('created_at', { ascending: false })
 
     if (error) {
-      throw new Error(`Failed to fetch ideas by genre: ${error.message}`)
+      // If the query fails, try a simpler approach: fetch all and filter in memory
+      // This is less efficient but more compatible
+      const { data: allData, error: allError } = await getSupabaseClient()
+        .from('movie_ideas')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+
+      if (allError) {
+        throw new Error(`Failed to fetch ideas by genre: ${allError.message}`)
+      }
+
+      // Filter in memory
+      return (allData || []).filter(idea => 
+        idea.genre === genre || 
+        (idea.genres && Array.isArray(idea.genres) && idea.genres.includes(genre))
+      )
     }
 
     return data || []
