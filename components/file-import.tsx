@@ -1246,30 +1246,33 @@ export default function FileImport({
     return file.type === 'PDF' || file.type === 'Word' || file.type === 'Text'
   }
 
+  // Ensure the component respects container width
+  const containerClassName = `w-full max-w-full space-y-4 overflow-hidden ${className}`
+  
   return (
-    <div className={`space-y-4 ${className}`}>
+    <div className={containerClassName}>
       {/* Import Section */}
-      <Card className="bg-card border-primary/20">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-primary flex items-center gap-2">
-              <Upload className="h-5 w-5" />
-              Import Documents
+      <Card className="bg-card border-primary/20 w-full max-w-full overflow-hidden">
+        <CardHeader className="w-full max-w-full overflow-hidden">
+          <div className="flex items-center justify-between gap-2 w-full">
+            <CardTitle className="text-primary flex items-center gap-2 truncate min-w-0">
+              <Upload className="h-5 w-5 flex-shrink-0" />
+              <span className="truncate">Import Documents</span>
             </CardTitle>
             <Button
               variant="outline"
               size="sm"
               onClick={loadExistingFiles}
               disabled={isLoading}
-              className="border-primary/30 text-primary hover:bg-primary/10"
+              className="border-primary/30 text-primary hover:bg-primary/10 flex-shrink-0"
             >
               <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
+        <CardContent className="w-full max-w-full overflow-hidden">
+          <div className="space-y-4 w-full max-w-full">
             {/* Drag & Drop Zone */}
             <div
               className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
@@ -1376,19 +1379,19 @@ export default function FileImport({
       </Card>
 
       {/* Imported Files List */}
-      <Card className="bg-card border-primary/20">
-        <CardHeader>
-          <CardTitle className="text-primary flex items-center gap-2">
-            <FileText className="h-5 w-5" />
-            Imported Files ({importedFiles.length})
+      <Card className="bg-card border-primary/20 w-full max-w-full overflow-hidden">
+        <CardHeader className="w-full max-w-full overflow-hidden">
+          <CardTitle className="text-primary flex items-center gap-2 truncate">
+            <FileText className="h-5 w-5 flex-shrink-0" />
+            <span className="truncate">Imported Files ({importedFiles.length})</span>
           </CardTitle>
           {process.env.NODE_ENV === 'development' && (
-            <div className="text-xs text-muted-foreground">
+            <div className="text-xs text-muted-foreground truncate">
               Debug: Project ID: {projectId} | Loading: {isLoading ? 'Yes' : 'No'}
             </div>
           )}
         </CardHeader>
-        <CardContent>
+        <CardContent className="w-full max-w-full overflow-hidden">
           {isLoading ? (
             <div className="text-center py-8">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
@@ -1401,23 +1404,23 @@ export default function FileImport({
               <p className="text-sm text-muted-foreground">Upload files above to get started</p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 w-full">
               {importedFiles.map((file) => (
                 <div
                   key={file.id}
-                  className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+                  className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 rounded-lg border transition-all w-full ${
                     file.isProcessed 
                       ? 'bg-green-500/10 border-green-500/30' 
                       : 'bg-muted/30 border-border/50'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-lg bg-blue-500/10">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <div className="p-2 rounded-lg bg-blue-500/10 flex-shrink-0">
                       {getFileIcon(file.mimeType)}
                     </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <p className="font-medium text-sm truncate">{file.name}</p>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <p className="font-medium text-sm truncate min-w-0">{file.name}</p>
                         {file.isProcessed && (
                           <Badge className={getAssetTypeColor(file.assetType!)}>
                             {getAssetTypeIcon(file.assetType!)}
@@ -1437,11 +1440,11 @@ export default function FileImport({
                         )}
                       </div>
                       {process.env.NODE_ENV === 'development' && file.storedFile && (
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-xs text-muted-foreground truncate">
                           Storage: {file.storedFile.name}
                         </p>
                       )}
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                         <span>{formatFileSize(file.size)}</span>
                         <span>•</span>
                         <span>{file.type}</span>
@@ -1463,7 +1466,7 @@ export default function FileImport({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                     {/* File Type Badge */}
                     <Badge variant="secondary" className="text-xs">
                       {file.type}
@@ -1476,7 +1479,7 @@ export default function FileImport({
                         variant="outline"
                         onClick={() => handleExtractText(file)}
                         disabled={file.isExtracting}
-                        className="h-8 px-3 border-green-500/30 text-green-600 hover:bg-green-500/10"
+                        className="h-8 px-2 sm:px-3 border-green-500/30 text-green-600 hover:bg-green-500/10 text-xs whitespace-nowrap"
                         title="Extract text and convert to script"
                       >
                         {file.isExtracting ? (
@@ -1484,7 +1487,8 @@ export default function FileImport({
                         ) : (
                           <Sparkles className="h-4 w-4 mr-2" />
                         )}
-                        Convert to Script
+                        <span className="hidden sm:inline">Convert to Script</span>
+                        <span className="sm:hidden">Convert</span>
                       </Button>
                     )}
 
@@ -1502,7 +1506,7 @@ export default function FileImport({
                         </Button>
                         
                         {showQuickActions === file.id && (
-                          <div className="absolute right-0 top-10 z-50 w-48 bg-background border border-border rounded-lg shadow-lg p-2 space-y-1">
+                          <div className="absolute right-0 top-10 z-[60] w-48 bg-background border border-border rounded-lg shadow-lg p-2 space-y-1 max-w-[calc(100vw-2rem)]">
                             <Button
                               size="sm"
                               variant="ghost"

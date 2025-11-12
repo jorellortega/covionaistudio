@@ -750,22 +750,31 @@ export default function CastingPage() {
                           )}
                           
                           <div className="flex gap-2">
-                            <Link href={`/treatments/movie/${movieId}`}>
+                            {treatment.id ? (
+                              <Link href={`/treatments/${treatment.id}`}>
                               <Button variant="outline">
                                 <FileText className="h-4 w-4 mr-2" />
                                 View Full Treatment
                               </Button>
                             </Link>
+                            ) : (
+                              <Link href={`/screenplay/${movieId}`}>
+                                <Button variant="outline">
+                                  <FileText className="h-4 w-4 mr-2" />
+                                  View Screenplay
+                                </Button>
+                              </Link>
+                            )}
                           </div>
                         </div>
                       </div>
                     ) : (
                       <div className="p-6 bg-muted/30 rounded-lg">
                         <p className="text-muted-foreground">No treatment available for this movie</p>
-                        <Link href={`/treatments/movie/${movieId}`}>
+                        <Link href={`/treatments`}>
                           <Button variant="outline" className="mt-4">
                             <FileText className="h-4 w-4 mr-2" />
-                            Create Treatment
+                            Go to Treatments
                           </Button>
                         </Link>
                       </div>

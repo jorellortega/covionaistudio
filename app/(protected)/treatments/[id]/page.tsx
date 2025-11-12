@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2 } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -19,6 +19,10 @@ import TextToSpeech from '@/components/text-to-speech'
 import Link from 'next/link'
 import { AISettingsService } from '@/lib/ai-settings-service'
 import { useAuthReady } from '@/components/auth-hooks'
+import { getSupabaseClient } from '@/lib/supabase'
+import { sanitizeFilename } from '@/lib/utils'
+import { AssetService, type Asset } from '@/lib/asset-service'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 
 export default function TreatmentDetailPage() {
   const { id } = useParams()
@@ -47,6 +51,19 @@ export default function TreatmentDetailPage() {
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [selectedScriptAIService, setSelectedScriptAIService] = useState<string>('')
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Cover image editing states
+  const [isEditingCover, setIsEditingCover] = useState(false)
+  const [isGeneratingCover, setIsGeneratingCover] = useState(false)
+  const [generatedCoverUrl, setGeneratedCoverUrl] = useState<string>('')
+  const [selectedAIService, setSelectedAIService] = useState<string>('dalle')
+  
+  // Script assets states
+  const [scriptAssets, setScriptAssets] = useState<Asset[]>([])
+  const [scriptContent, setScriptContent] = useState<string>('')
+  const [isLoadingScript, setIsLoadingScript] = useState(false)
+  const [isGeneratingTreatmentFromScript, setIsGeneratingTreatmentFromScript] = useState(false)
+  const [isScriptExpanded, setIsScriptExpanded] = useState(false)
 
   useEffect(() => {
     if (id) {
@@ -62,9 +79,10 @@ export default function TreatmentDetailPage() {
       try {
         const settings = await AISettingsService.getUserSettings(userId)
         
-        // Ensure default settings exist for scripts tab
+        // Ensure default settings exist for scripts and images tabs
         const defaultSettings = await Promise.all([
           AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -83,6 +101,14 @@ export default function TreatmentDetailPage() {
         } else if (scriptsSetting?.selected_model) {
           setSelectedScriptAIService(scriptsSetting.selected_model)
         }
+        
+        // Auto-select locked model for images tab if available
+        const imagesSetting = mergedSettings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+          setSelectedAIService(imagesSetting.locked_model)
+        } else if (imagesSetting?.selected_model) {
+          setSelectedAIService(imagesSetting.selected_model)
+        }
       } catch (error) {
         console.error('Error loading AI settings:', error)
       }
@@ -99,6 +125,20 @@ export default function TreatmentDetailPage() {
 
   const getScriptsTabLockedModel = () => {
     const setting = aiSettings.find(s => s.tab_type === 'scripts')
+    return setting?.locked_model || ""
+  }
+
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
     return setting?.locked_model || ""
   }
 
@@ -121,13 +161,16 @@ export default function TreatmentDetailPage() {
         // Note: Treatment can be saved without project_id (standalone treatment)
         // Audio saving will work even without a project_id
         
-        // If treatment is linked to a movie project, load the movie
+        // If treatment is linked to a movie project, load the movie and script assets
         if (data.project_id) {
           try {
             const movieData = await MovieService.getMovieById(data.project_id)
             if (movieData) {
               setMovie(movieData)
             }
+            
+            // Fetch script assets from the movie project
+            await fetchScriptAssets(data.project_id)
           } catch (movieError) {
             console.error('Error loading linked movie:', movieError)
             // Don't show error for movie, just continue without it
@@ -151,6 +194,265 @@ export default function TreatmentDetailPage() {
       router.push('/treatments')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Fetch script assets from the linked movie project
+  const fetchScriptAssets = async (projectId: string) => {
+    if (!ready || !userId) return
+    
+    try {
+      setIsLoadingScript(true)
+      
+      // Get all script assets for this project
+      const assets = await AssetService.getAssetsForProject(projectId)
+      const scripts = assets.filter(a => a.content_type === 'script' && a.is_latest_version)
+      
+      // Sort by created_at to get the latest
+      scripts.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      
+      setScriptAssets(scripts)
+      
+      // Combine script content
+      if (scripts.length > 0) {
+        if (scripts.length === 1) {
+          setScriptContent(scripts[0].content || "")
+        } else {
+          // Combine all scripts, separated by scene markers
+          const combinedScript = scripts
+            .map(script => {
+              const content = script.content || ""
+              return script.title ? `\n\n=== ${script.title} ===\n\n${content}` : content
+            })
+            .join("\n\n")
+          setScriptContent(combinedScript)
+        }
+      } else {
+        // Try fetching scripts from scenes
+        await fetchScriptsFromScenes(projectId)
+      }
+    } catch (error) {
+      console.error('Error fetching script assets:', error)
+      // Don't show error toast, just log it - script is optional
+    } finally {
+      setIsLoadingScript(false)
+    }
+  }
+
+  // Fetch scripts from scenes if no project-level scripts exist
+  const fetchScriptsFromScenes = async (projectId: string) => {
+    if (!ready || !userId) return
+    
+    try {
+      // Get timeline for this project
+      const { data: timeline, error: timelineError } = await getSupabaseClient()
+        .from('timelines')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('user_id', userId)
+        .single()
+
+      if (timelineError || !timeline) {
+        console.log('No timeline found for project')
+        return
+      }
+
+      // Get all scenes for this timeline
+      const { data: scenes, error: scenesError } = await getSupabaseClient()
+        .from('scenes')
+        .select('id, name, metadata, order_index')
+        .eq('timeline_id', timeline.id)
+        .eq('user_id', userId)
+        .order('order_index', { ascending: true })
+
+      if (scenesError || !scenes || scenes.length === 0) {
+        console.log('No scenes found for timeline')
+        return
+      }
+
+      // Get scripts for each scene using a batch query
+      const sceneIds = scenes.map(s => s.id)
+      const { data: sceneScripts, error: scriptsError } = await getSupabaseClient()
+        .from('assets')
+        .select('*')
+        .in('scene_id', sceneIds)
+        .eq('content_type', 'script')
+        .eq('user_id', userId)
+        .eq('is_latest_version', true)
+        .order('created_at', { ascending: false })
+
+      if (scriptsError) {
+        console.error('Error fetching scene scripts:', scriptsError)
+        return
+      }
+
+      if (sceneScripts && sceneScripts.length > 0) {
+        setScriptAssets(sceneScripts as Asset[])
+        
+        // Combine scripts in scene order
+        const combinedScript = scenes
+          .map(scene => {
+            const sceneScript = sceneScripts.find((s: any) => s.scene_id === scene.id)
+            if (!sceneScript) return null
+            
+            const sceneNumber = scene.metadata?.sceneNumber || scene.name
+            const content = sceneScript.content || ""
+            return `\n\n=== SCENE ${sceneNumber}: ${scene.name} ===\n\n${content}`
+          })
+          .filter(Boolean)
+          .join("\n\n")
+        
+        setScriptContent(combinedScript)
+      }
+    } catch (error) {
+      console.error('Error fetching scripts from scenes:', error)
+    }
+  }
+
+  // Generate treatment from script using AI
+  const generateTreatmentFromScript = async () => {
+    if (!treatment || !scriptContent || scriptContent.trim().length === 0) {
+      toast({
+        title: "Error",
+        description: "No script content available to generate treatment from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!ready || !user || !userId) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating treatment.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Use locked model if available, otherwise use selected service
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings in Settings → AI Settings. You need to set up an OpenAI or Anthropic API key.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Normalize service name
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             serviceToUse.toLowerCase().includes('gemini') || serviceToUse.toLowerCase().includes('google') ? 'google' : 
+                             'openai'
+
+    if (normalizedService === 'google') {
+      toast({
+        title: "Service Not Available",
+        description: "Google Gemini is not currently configured. Please use OpenAI or Anthropic.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingTreatmentFromScript(true)
+
+      // Limit script content to avoid token limits (use first 8000 characters for better context)
+      const scriptForPrompt = scriptContent.length > 8000 
+        ? scriptContent.substring(0, 8000) + '\n\n[... script continues ...]'
+        : scriptContent
+
+      const aiPrompt = `Write a comprehensive movie treatment based on the following screenplay script.
+
+REQUIREMENTS:
+- Create a full treatment document (similar to a professional pitch document)
+- Structure should include:
+  * Title (use the movie title if available)
+  * Logline (one-sentence summary)
+  * Synopsis (2-3 paragraphs summarizing the story)
+  * Characters (brief descriptions of main characters)
+  * Themes (key themes and messages)
+  * Visual Style (cinematic approach and tone)
+  * Key Scenes (brief descriptions of important scenes)
+- Write in present tense, third person
+- Be detailed and cinematic in description
+- Focus on story structure, character arcs, and narrative flow
+- Include genre and tone descriptions
+- NO markdown formatting (no #, *, **, etc.)
+- Write as a professional treatment document that could be used for pitching
+
+Script to analyze:
+${scriptForPrompt}
+
+Treatment:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'treatment',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate treatment')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.text) {
+        // Update the treatment prompt field with the generated treatment
+        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+          prompt: result.text.trim(),
+        })
+
+        setTreatment(updatedTreatment)
+        
+        toast({
+          title: "Treatment Generated!",
+          description: "AI has generated a treatment from the script.",
+        })
+      } else {
+        throw new Error('No treatment text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate treatment from script:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      if (errorMessage.includes('API key not configured') || errorMessage.includes('API key')) {
+        toast({
+          title: "API Key Required",
+          description: "Please set up your OpenAI or Anthropic API key in Settings → AI Settings.",
+          variant: "destructive",
+        })
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: `Failed to generate treatment: ${errorMessage}`,
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setIsGeneratingTreatmentFromScript(false)
     }
   }
 
@@ -481,6 +783,377 @@ Synopsis (2-3 paragraphs only):`
     }
   }
 
+  // Upload generated image to Supabase storage
+  const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
+    try {
+      console.log('Uploading generated treatment cover to Supabase storage...')
+      
+      const response = await fetch('/api/ai/download-and-store-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: imageUrl,
+          fileName: fileName,
+          userId: user!.id
+        })
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(`API error: ${errorData.error || response.statusText}`)
+      }
+      
+      const result = await response.json()
+      
+      if (result.success && result.supabaseUrl) {
+        console.log('Treatment cover uploaded successfully to Supabase:', result.supabaseUrl)
+        return result.supabaseUrl
+      } else {
+        throw new Error('API did not return a valid Supabase URL')
+      }
+      
+    } catch (error) {
+      console.error('Error uploading treatment cover to Supabase:', error)
+      throw error
+    }
+  }
+
+  // Quick generate AI cover from treatment content
+  const generateQuickAICover = async () => {
+    if (!treatment) {
+      toast({
+        title: "Error",
+        description: "Treatment not loaded",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!ready || !user || !userId) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating images.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Check if treatment has content to generate from
+    const hasContent = treatment.synopsis || treatment.prompt || treatment.logline || treatment.title
+    if (!hasContent) {
+      toast({
+        title: "Missing Content",
+        description: "Treatment needs content (title, synopsis, prompt, or logline) to generate a cover.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Use locked model if available, otherwise use selected service
+    const lockedModel = getImagesTabLockedModel()
+    const serviceToUse = (isImagesTabLocked() && lockedModel) ? lockedModel : selectedAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "Error",
+        description: "No AI service selected. Please configure your AI settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Normalize service name
+    const normalizedService = serviceToUse.toLowerCase().includes('dall') ? 'dalle' : 
+                             serviceToUse.toLowerCase().includes('openart') ? 'openart' : 
+                             serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
+                             'dalle'
+
+    try {
+      setIsGeneratingCover(true)
+
+      // Extract key information from treatment for movie cover
+      const title = treatment.title || 'Movie'
+      const genre = treatment.genre || ''
+      
+      // Helper function to build prompt with content summary
+      const buildPrompt = (contentSummary: string) => {
+        let movieCoverPrompt = `Movie Cover for "${title}"`
+        
+        if (genre) {
+          movieCoverPrompt += `, ${genre} genre`
+        }
+        
+        if (contentSummary) {
+          movieCoverPrompt += `. ${contentSummary}`
+        }
+        
+        // Add movie cover specific styling - no text, no poster design elements
+        movieCoverPrompt += `. Professional movie cover, cinematic style, high quality, dramatic lighting, no text, no words, visual only`
+
+        // Limit prompt length (DALL-E 3 has 1000 character limit)
+        if (movieCoverPrompt.length > 900) {
+          movieCoverPrompt = movieCoverPrompt.substring(0, 900)
+        }
+        
+        return movieCoverPrompt
+      }
+
+      // Helper function to generate image with a given prompt
+      const generateWithPrompt = async (prompt: string, isRetry: boolean = false) => {
+        const response = await fetch('/api/ai/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: prompt,
+            service: normalizedService,
+            apiKey: 'configured',
+            userId: user.id,
+            autoSaveToBucket: true,
+          })
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          const errorMessage = errorData.error || 'Unknown error'
+          
+          // Check for server errors (500, 502, 503, 504)
+          if (response.status >= 500) {
+            throw new Error('OpenAI server is temporarily unavailable. Please try again in a moment.')
+          }
+          
+          // Check for content policy violations - if this is the first attempt and we have synopsis, retry with synopsis
+          if (!isRetry && 
+              (errorMessage.toLowerCase().includes('content policy') || 
+               errorMessage.toLowerCase().includes('safety') ||
+               errorMessage.toLowerCase().includes('content_filter')) &&
+              treatment.synopsis) {
+            // Retry with synopsis only
+            console.log('Content policy violation detected, retrying with synopsis only...')
+            const synopsisSummary = treatment.synopsis
+              .replace(/\*\*/g, '')
+              .replace(/\*/g, '')
+              .replace(/\n/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .substring(0, 150)
+            
+            const fallbackPrompt = buildPrompt(synopsisSummary)
+            console.log('Retrying with synopsis-based prompt:', fallbackPrompt)
+            return generateWithPrompt(fallbackPrompt, true)
+          }
+          
+          // Check for content policy violations (on retry or no synopsis available)
+          if (errorMessage.toLowerCase().includes('content policy') || 
+              errorMessage.toLowerCase().includes('safety') ||
+              errorMessage.toLowerCase().includes('content_filter')) {
+            throw new Error('Content may contain material that cannot be generated. Please modify your treatment content.')
+          }
+          
+          // Check for API key errors
+          if (errorMessage.toLowerCase().includes('api key') || 
+              errorMessage.toLowerCase().includes('authentication') ||
+              errorMessage.toLowerCase().includes('unauthorized') ||
+              response.status === 401) {
+            throw new Error('API key error. Please check your OpenAI API key in Settings → AI Settings.')
+          }
+          
+          throw new Error(`Image generation failed: ${errorMessage}`)
+        }
+
+        return response
+      }
+
+      // Get a brief summary from synopsis, logline, or prompt (prioritize logline)
+      let contentSummary = ''
+      if (treatment.logline) {
+        // Logline is perfect for a movie cover - it's already concise
+        contentSummary = treatment.logline
+      } else if (treatment.synopsis) {
+        // Use first sentence or first 100 characters of synopsis
+        const cleaned = treatment.synopsis
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+        const firstSentence = cleaned.split(/[.!?]/)[0]
+        contentSummary = (firstSentence && firstSentence.length > 0 && firstSentence.length < 150) 
+          ? firstSentence 
+          : cleaned.substring(0, 150)
+      } else if (treatment.prompt) {
+        // Use first 150 characters of prompt
+        contentSummary = treatment.prompt
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, 150)
+      }
+
+      // Build initial prompt
+      const movieCoverPrompt = buildPrompt(contentSummary)
+      console.log('Generating movie cover with prompt:', movieCoverPrompt)
+
+      // Generate image (with automatic retry on content policy violations)
+      const response = await generateWithPrompt(movieCoverPrompt)
+
+      const data = await response.json()
+      const imageUrl = data.imageUrl
+
+      if (imageUrl) {
+        // Upload to Supabase storage
+        try {
+          const fileName = `treatment-cover-${treatment.id}-${Date.now()}`
+          const supabaseUrl = await uploadGeneratedImageToStorage(imageUrl, fileName)
+          
+          // Update treatment with new cover
+          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+            cover_image_url: supabaseUrl,
+          })
+          
+          setTreatment(updatedTreatment)
+          setGeneratedCoverUrl(supabaseUrl)
+          
+          toast({
+            title: "Movie Cover Generated!",
+            description: `Cover generated and saved using ${normalizedService.toUpperCase()}`,
+          })
+        } catch (uploadError) {
+          console.error('Failed to upload cover to Supabase:', uploadError)
+          // Still set the temporary URL so user can see the generated image
+          setGeneratedCoverUrl(imageUrl)
+          toast({
+            title: "Cover Generated (Upload Failed)",
+            description: "Cover generated but failed to upload to storage. Please try again.",
+            variant: "destructive",
+          })
+        }
+      } else {
+        throw new Error('No image URL received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI cover:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      // Show appropriate error message based on error type
+      if (errorMessage.includes('temporarily unavailable')) {
+        toast({
+          title: "Server Temporarily Unavailable",
+          description: "OpenAI's servers are experiencing issues. Please try again in a few moments.",
+          variant: "destructive",
+        })
+      } else if (errorMessage.includes('API key')) {
+        toast({
+          title: "API Key Error",
+          description: errorMessage,
+          variant: "destructive",
+        })
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: errorMessage,
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setIsGeneratingCover(false)
+    }
+  }
+
+  // Handle cover image upload
+  const handleCoverUpload = async (file: File) => {
+    if (!treatment || !user || !userId) return
+
+    try {
+      setIsGeneratingCover(true)
+      
+      // Generate unique filename
+      const timestamp = Date.now()
+      const fileExtension = file.name.split('.').pop() || 'png'
+      const safeFileName = sanitizeFilename(file.name)
+      const fileName = `treatment-cover-${treatment.id}-${timestamp}.${fileExtension}`
+      const filePath = `${userId}/images/${fileName}`
+      
+      // Upload to Supabase storage
+      const supabase = getSupabaseClient()
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('cinema_files')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+          contentType: file.type || 'image/png'
+        })
+
+      if (uploadError) {
+        console.error('Supabase upload error:', uploadError)
+        throw new Error(`Failed to upload image: ${uploadError.message}`)
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from('cinema_files')
+        .getPublicUrl(filePath)
+
+      if (urlData?.publicUrl) {
+        // Update treatment with new cover
+        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+          cover_image_url: urlData.publicUrl,
+        })
+        
+        setTreatment(updatedTreatment)
+        setIsEditingCover(false)
+        
+        toast({
+          title: "Cover Updated!",
+          description: "Cover image has been uploaded successfully.",
+        })
+      } else {
+        throw new Error('Failed to get public URL')
+      }
+    } catch (error) {
+      console.error('Error uploading cover:', error)
+      toast({
+        title: "Upload Failed",
+        description: error instanceof Error ? error.message : "Failed to upload cover image. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingCover(false)
+    }
+  }
+
+  // Handle cover URL update (for manual URL entry)
+  const handleCoverUrlSave = async (url: string) => {
+    if (!treatment) return
+
+    try {
+      setIsGeneratingCover(true)
+      const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+        cover_image_url: url,
+      })
+      
+      setTreatment(updatedTreatment)
+      setIsEditingCover(false)
+      
+      toast({
+        title: "Cover Updated!",
+        description: "Cover image has been updated successfully.",
+      })
+    } catch (error) {
+      console.error('Error updating cover URL:', error)
+      toast({
+        title: "Update Failed",
+        description: "Failed to update cover image.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingCover(false)
+    }
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'draft': return 'bg-gray-100 text-gray-800'
@@ -567,9 +1240,9 @@ Synopsis (2-3 paragraphs only):`
               {treatment.project_id && movie && (
                 <div className="mt-2">
                   <Button variant="outline" size="sm" asChild>
-                    <Link href={`/treatments/movie/${movie.id}`}>
+                    <Link href={`/screenplay/${movie.id}`}>
                       <Eye className="h-4 w-4 mr-2" />
-                      View Movie Project
+                      View Screenplay
                     </Link>
                   </Button>
                 </div>
@@ -594,9 +1267,114 @@ Synopsis (2-3 paragraphs only):`
         </div>
 
         {/* Cover Image */}
-        {treatment.cover_image_url && (
           <Card className="mb-8 overflow-hidden">
-            <div className="relative h-64 md:h-80 bg-muted">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2">
+                <ImageIcon className="h-5 w-5" />
+                Cover Image
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                {!isEditingCover ? (
+                  <>
+                    {/* Quick Generate AI Button */}
+                    {(treatment.synopsis || treatment.prompt || treatment.logline || treatment.title) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={generateQuickAICover}
+                        disabled={isGeneratingCover || !aiSettingsLoaded}
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      >
+                        {isGeneratingCover ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="h-4 w-4 mr-2" />
+                            Quick Generate AI
+                          </>
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsEditingCover(true)}
+                    >
+                      <Edit className="h-4 w-4 mr-2" />
+                      {treatment.cover_image_url ? 'Edit' : 'Add Cover'}
+                    </Button>
+                  </>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setIsEditingCover(false)
+                        setGeneratedCoverUrl('')
+                      }}
+                    >
+                      <X className="h-4 w-4 mr-2" />
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {isEditingCover ? (
+              <div className="space-y-4">
+                {/* File Upload */}
+                <div>
+                  <Label htmlFor="cover-upload">Upload Image</Label>
+                  <Input
+                    id="cover-upload"
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) {
+                        handleCoverUpload(file)
+                      }
+                    }}
+                    disabled={isGeneratingCover}
+                    className="mt-2"
+                  />
+                </div>
+                {/* URL Input */}
+                <div>
+                  <Label htmlFor="cover-url">Or Enter Image URL</Label>
+                  <div className="flex gap-2 mt-2">
+                    <Input
+                      id="cover-url"
+                      type="url"
+                      placeholder="https://example.com/image.jpg"
+                      onChange={(e) => setGeneratedCoverUrl(e.target.value)}
+                      disabled={isGeneratingCover}
+                    />
+                    <Button
+                      onClick={() => {
+                        if (generatedCoverUrl) {
+                          handleCoverUrlSave(generatedCoverUrl)
+                        }
+                      }}
+                      disabled={isGeneratingCover || !generatedCoverUrl}
+                    >
+                      <Save className="h-4 w-4 mr-2" />
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {treatment.cover_image_url ? (
+                  <div className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden">
               <img
                 src={treatment.cover_image_url}
                 alt={`${treatment.title} cover`}
@@ -614,8 +1392,19 @@ Synopsis (2-3 paragraphs only):`
                 </div>
               </div>
             </div>
+                ) : (
+                  <div className="border-2 border-dashed border-muted rounded-lg p-12 text-center">
+                    <ImageIcon className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-muted-foreground mb-2">No cover image</p>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Add a cover image or generate one with AI
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </CardContent>
           </Card>
-        )}
 
         {/* Main Content */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -729,6 +1518,104 @@ Synopsis (2-3 paragraphs only):`
                 </div>
               </CardContent>
             </Card>
+
+            {/* Script from Movie (if available) - Collapsible */}
+            {treatment.project_id && (
+              <Collapsible open={isScriptExpanded} onOpenChange={setIsScriptExpanded}>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CollapsibleTrigger className="w-full">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {isScriptExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <CardTitle className="flex items-center gap-2 text-base">
+                            <FileText className="h-4 w-4 text-blue-500" />
+                            Script from Movie
+                          </CardTitle>
+                        </div>
+                        {!treatment.prompt && scriptContent && !isLoadingScript && (
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              generateTreatmentFromScript()
+                            }}
+                            disabled={isGeneratingTreatmentFromScript || !aiSettingsLoaded || !scriptContent}
+                            className="bg-purple-500 hover:bg-purple-600 text-white"
+                          >
+                            {isGeneratingTreatmentFromScript ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Generating...
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-4 w-4 mr-2" />
+                                Generate Treatment
+                              </>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </CollapsibleTrigger>
+                    <CardDescription className="pt-1 pl-6">
+                      {scriptContent 
+                        ? "Script content from the linked movie project"
+                        : isLoadingScript 
+                        ? "Fetching script content..."
+                        : "Click to view script from linked movie project"}
+                    </CardDescription>
+                  </CardHeader>
+                  <CollapsibleContent>
+                    <CardContent>
+                      <div className="space-y-4">
+                        {isLoadingScript ? (
+                          <div className="text-center py-8">
+                            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
+                            <p className="text-muted-foreground">Loading script from movie project...</p>
+                          </div>
+                        ) : scriptContent ? (
+                          <>
+                            <div className="bg-muted/50 rounded-lg p-4 max-h-96 overflow-y-auto">
+                              <pre className="text-sm whitespace-pre-wrap font-mono text-muted-foreground">
+                                {scriptContent.length > 2000 
+                                  ? scriptContent.substring(0, 2000) + '\n\n... (script truncated for display)'
+                                  : scriptContent}
+                              </pre>
+                            </div>
+                            {scriptContent.length > 2000 && (
+                              <p className="text-xs text-muted-foreground text-center">
+                                Script preview (showing first 2000 characters). Full script will be used for treatment generation.
+                              </p>
+                            )}
+                            {!treatment.prompt && (
+                              <div className="border-t pt-4">
+                                <p className="text-sm text-muted-foreground mb-2">
+                                  No treatment document exists yet. Click "Generate Treatment" above to create one from this script.
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
+                            <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                            <p className="text-muted-foreground mb-2">No script found</p>
+                            <p className="text-sm text-muted-foreground">
+                              No script assets found for this movie project. Upload a script to the movie project first.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
+            )}
 
             {/* Treatment (Full Document) */}
             <Card>

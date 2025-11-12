@@ -1569,14 +1569,14 @@ export default function MoviesPage() {
                       Timeline
                     </Button>
                   </Link>
-                  <Link href={`/treatments/movie/${movie.id}`}>
+                  <Link href={`/screenplay/${movie.id}`}>
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
+                      className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
                     >
                       <FileText className="mr-2 h-3.5 w-3.5" />
-                      Treatment
+                      Screenplay
                     </Button>
                   </Link>
                   <Link href={`/ai-studio?project=${movie.id}`}>

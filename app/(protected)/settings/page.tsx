@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
-import { LogOut, User, Key, Save, Settings, Bot, Lock, Unlock, Shield, Sparkles, Cog } from 'lucide-react'
+import { LogOut, User, Key, Save, Settings, Bot, Lock, Unlock, Shield, Sparkles, Cog, CreditCard, Zap } from 'lucide-react'
 import Link from 'next/link'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 
@@ -467,6 +467,32 @@ export default function SettingsPage() {
                 <Link href="/preferences" className="flex items-center gap-2">
                   <Settings className="h-4 w-4" />
                   Manage Preferences
+                </Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Plans and Credits Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5" />
+              Plans and Credits
+            </CardTitle>
+            <CardDescription>
+              Manage your subscription, upgrade or downgrade plans, and purchase credits
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                View your current plan, manage your subscription, upgrade or downgrade, and purchase additional credits for unlimited usage.
+              </p>
+              <Button asChild className="w-full sm:w-auto gradient-button text-white">
+                <Link href="/settings/plans-credits" className="flex items-center gap-2">
+                  <Zap className="h-4 w-4" />
+                  Manage Plans & Credits
                 </Link>
               </Button>
             </div>

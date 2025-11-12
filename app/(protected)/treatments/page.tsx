@@ -993,8 +993,8 @@ export default function TreatmentsPage() {
     try {
       // Check if treatment is already linked to a movie
       if (treatment.project_id) {
-        // Navigate to the existing movie treatment page
-        router.push(`/treatments/movie/${treatment.project_id}`)
+        // Navigate to the screenplay page for this movie
+        router.push(`/screenplay/${treatment.project_id}`)
         toast({
           title: "Already Linked",
           description: "This treatment is already linked to a movie project",
@@ -1032,8 +1032,8 @@ export default function TreatmentsPage() {
         description: `Treatment "${treatment.title}" converted to movie and linked successfully!`,
       })
 
-      // Navigate to the movie treatment page
-      router.push(`/treatments/movie/${movie.id}`)
+      // Navigate to the screenplay page for the new movie
+      router.push(`/screenplay/${movie.id}`)
     } catch (error) {
       console.error('Error converting treatment to movie:', error)
       toast({
@@ -2185,6 +2185,19 @@ export default function TreatmentsPage() {
                   
                   {/* Convert to Movie Button */}
                   <div className="mt-2">
+                    {treatment.project_id ? (
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white"
+                        asChild
+                      >
+                        <Link href={`/screenplay/${treatment.project_id}`}>
+                          <Film className="h-4 w-4 mr-1" />
+                          Go to Screenplay
+                        </Link>
+                      </Button>
+                    ) : (
                     <Button 
                       variant="default" 
                       size="sm" 
@@ -2192,8 +2205,9 @@ export default function TreatmentsPage() {
                       onClick={() => convertTreatmentToMovie(treatment)}
                     >
                       <Film className="h-4 w-4 mr-1" />
-                      {treatment.project_id ? 'Go to Movie' : 'Convert to Movie'}
+                        Convert to Movie
                     </Button>
+                    )}
                   </div>
                   
                   {/* Download Cover Button */}

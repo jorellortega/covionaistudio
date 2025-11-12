@@ -1218,18 +1218,18 @@ IMPORTANT: Do not duplicate any locked sections. Each locked section should appe
                       </div>
                     </CardHeader>
                     <CardContent>
-                      <div className="bg-muted/20 p-4 rounded-lg border border-border mb-4">
+                      <div className="mb-4">
                         {(() => {
                           const activeScript = assetsByType[activeContentType].find(s => s.id === activeScriptId) || assetsByType[activeContentType][0]
                           
                           if (inlineEditing?.assetId === activeScript.id && inlineEditing.field === 'content') {
                             return (
-                              <div className="space-y-3">
-                                <div className="flex items-center justify-between">
+                              <div className="space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                   <Label className="text-sm font-medium text-muted-foreground">
                                     Editing Content
                                   </Label>
-                                  <div className="text-xs text-blue-400">
+                                  <div className="text-xs text-blue-400 hidden sm:block">
                                     💡 Select text to lock, then use AI to generate around locked sections
                                   </div>
                                   <div className="flex gap-2">
@@ -1474,12 +1474,14 @@ IMPORTANT: Do not duplicate any locked sections. Each locked section should appe
                           
                           return (
                             <div className="group relative">
-                              <pre className="text-sm text-foreground whitespace-pre-wrap font-mono">
-                                {(() => {
-                                  const activeScript = assetsByType[activeContentType].find(s => s.id === activeScriptId) || assetsByType[activeContentType][0]
-                                  return activeScript.content || 'No content available'
-                                })()}
-                              </pre>
+                              <div className="bg-muted/20 rounded-lg border border-border overflow-hidden">
+                                <pre className="text-sm text-foreground whitespace-pre-wrap font-mono p-6 leading-7 overflow-x-auto max-h-[70vh] overflow-y-auto">
+                                  {(() => {
+                                    const activeScript = assetsByType[activeContentType].find(s => s.id === activeScriptId) || assetsByType[activeContentType][0]
+                                    return activeScript.content || 'No content available'
+                                  })()}
+                                </pre>
+                              </div>
                               <Button
                                 size="sm"
                                 variant="ghost"
@@ -1487,7 +1489,7 @@ IMPORTANT: Do not duplicate any locked sections. Each locked section should appe
                                   const activeScript = assetsByType[activeContentType].find(s => s.id === activeScriptId) || assetsByType[activeContentType][0]
                                   startInlineEditing(activeScript.id, 'content', activeScript.content || '')
                                 }}
-                                className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-background/80 backdrop-blur-sm"
                               >
                                 <Edit className="h-4 w-4 mr-1" />
                                 Edit

@@ -996,6 +996,22 @@ function ScenePageClient({ id }: { id: string }) {
         
         {/* Action Buttons */}
         <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-4 sm:mb-6">
+          {/* Screenplay Button - Only show if projectId is available */}
+          {projectId && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+              asChild
+            >
+              <Link href={`/screenplay/${projectId}`}>
+                <FileText className="h-4 w-4 mr-2" />
+                <span className="hidden sm:inline">View Screenplay</span>
+                <span className="sm:hidden">Screenplay</span>
+              </Link>
+            </Button>
+          )}
+          
           {/* Create New Script Version */}
           {assets.filter(a => a.content_type === 'script').length > 0 && (
             <Button
