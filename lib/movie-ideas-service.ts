@@ -11,6 +11,7 @@ export interface MovieIdea {
   co_creators?: string[]
   original_prompt?: string
   prompt: string
+  synopsis?: string // Brief synopsis (2-3 paragraphs) for use in treatments
   status: "concept" | "development" | "completed"
   created_at: string
   updated_at: string
@@ -25,6 +26,7 @@ export interface CreateMovieIdeaData {
   co_creators?: string[]
   original_prompt?: string
   prompt?: string
+  synopsis?: string // Brief synopsis (2-3 paragraphs) for use in treatments
   status?: "concept" | "development" | "completed"
 }
 
@@ -37,6 +39,7 @@ export interface UpdateMovieIdeaData {
   co_creators?: string[]
   original_prompt?: string
   prompt?: string
+  synopsis?: string // Brief synopsis (2-3 paragraphs) for use in treatments
   status?: "concept" | "development" | "completed"
 }
 

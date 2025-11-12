@@ -23,6 +23,9 @@ import { getSupabaseClient } from '@/lib/supabase'
 import { sanitizeFilename } from '@/lib/utils'
 import { AssetService, type Asset } from '@/lib/asset-service'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneData } from '@/lib/treatment-scenes-service'
+import { TimelineService } from '@/lib/timeline-service'
+import { OpenAIService } from '@/lib/ai-services'
 
 export default function TreatmentDetailPage() {
   const { id } = useParams()
@@ -64,12 +67,27 @@ export default function TreatmentDetailPage() {
   const [isLoadingScript, setIsLoadingScript] = useState(false)
   const [isGeneratingTreatmentFromScript, setIsGeneratingTreatmentFromScript] = useState(false)
   const [isScriptExpanded, setIsScriptExpanded] = useState(false)
+  
+  // Treatment scenes states
+  const [treatmentScenes, setTreatmentScenes] = useState<TreatmentScene[]>([])
+  const [isLoadingScenes, setIsLoadingScenes] = useState(false)
+  const [isGeneratingScenes, setIsGeneratingScenes] = useState(false)
+  const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
+  const [editingScene, setEditingScene] = useState<Partial<TreatmentScene>>({})
+  const [isSavingScene, setIsSavingScene] = useState(false)
+  const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
 
   useEffect(() => {
     if (id) {
       loadTreatment(id as string)
     }
   }, [id])
+
+  useEffect(() => {
+    if (treatment?.id) {
+      loadTreatmentScenes(treatment.id)
+    }
+  }, [treatment?.id])
 
   // Load AI settings
   useEffect(() => {
@@ -1126,6 +1144,915 @@ Synopsis (2-3 paragraphs only):`
   }
 
   // Handle cover URL update (for manual URL entry)
+  // Load treatment scenes
+  const loadTreatmentScenes = async (treatmentId: string) => {
+    if (!ready || !userId) return
+    
+    try {
+      setIsLoadingScenes(true)
+      const scenes = await TreatmentScenesService.getTreatmentScenes(treatmentId)
+      setTreatmentScenes(scenes)
+    } catch (error) {
+      console.error('Error loading treatment scenes:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load scenes",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingScenes(false)
+    }
+  }
+
+  // Generate scenes from treatment using AI
+  const generateScenesFromTreatment = async () => {
+    if (!treatment || !ready || !userId) return
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings in Settings → AI Settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    try {
+      setIsGeneratingScenes(true)
+
+      const treatmentContent = treatment.prompt || treatment.synopsis || treatment.logline || ''
+      const contentForPrompt = treatmentContent.length > 6000 
+        ? treatmentContent.substring(0, 6000) + '...'
+        : treatmentContent
+
+      const aiPrompt = `Based on the following movie treatment, break it down into individual scene titles.
+
+REQUIREMENTS:
+- Analyze the treatment and create scene titles that naturally cover all the story beats
+- Create as many scenes as needed to properly break down the story - let the content determine the number
+- Each scene should have:
+  * Scene number (e.g., "1", "2", "3")
+  * Name/title (brief, descriptive, 2-5 words)
+
+OUTPUT FORMAT: Return a JSON array of scenes. Each scene should be an object with ONLY these fields:
+{
+  "scene_number": "1",
+  "name": "Opening Scene"
+}
+
+Treatment content:
+${contentForPrompt}
+
+Return ONLY the JSON array, no other text:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'scenes',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate scenes')
+      }
+
+      const data = await response.json()
+      let scenes: any[] = []
+
+      // Try to parse JSON from response
+      try {
+        let jsonText = data.text || data.response || data.content || ''
+        
+        // Remove markdown code blocks if present
+        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+        
+        // Try to extract all complete JSON objects from the array (handles truncated responses)
+        const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+        const objectMatches = jsonText.match(objectPattern)
+        
+        if (objectMatches && objectMatches.length > 0) {
+          // Try to parse each object individually
+          scenes = []
+          for (const objStr of objectMatches) {
+            try {
+              const parsedObj = JSON.parse(objStr)
+              // Validate it has required fields
+              if (parsedObj && (parsedObj.name || parsedObj.scene_number || parsedObj.description)) {
+                scenes.push(parsedObj)
+              }
+            } catch (objError) {
+              // Skip invalid objects
+              console.warn('Skipping invalid scene object:', objError)
+            }
+          }
+          
+          if (scenes.length > 0) {
+            // Successfully extracted scenes from individual objects
+            console.log(`Extracted ${scenes.length} scenes from partial JSON response`)
+          } else {
+            throw new Error('No valid scene objects found')
+          }
+        } else {
+          // Try to extract JSON array (complete or partial)
+          let jsonMatch = jsonText.match(/\[[\s\S]*/)
+          if (jsonMatch) {
+            let arrayText = jsonMatch[0]
+            
+            // If array is incomplete, try to close it
+            if (!arrayText.endsWith(']')) {
+              // Find the last complete object and close the array
+              const lastCompleteObj = arrayText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)
+              if (lastCompleteObj && lastCompleteObj.length > 0) {
+                // Reconstruct array with only complete objects
+                arrayText = '[' + lastCompleteObj.join(',') + ']'
+              } else {
+                arrayText = arrayText + ']'
+              }
+            }
+            
+            try {
+              scenes = JSON.parse(arrayText)
+            } catch (arrayError) {
+              // If array parsing fails, try extracting individual objects
+              const objects = jsonText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) || []
+              scenes = objects.map(obj => {
+                try {
+                  return JSON.parse(obj)
+                } catch {
+                  return null
+                }
+              }).filter(Boolean)
+            }
+          } else {
+            // Try to find single JSON object and wrap in array
+            const objMatch = jsonText.match(/\{[\s\S]*\}/)
+            if (objMatch) {
+              scenes = [JSON.parse(objMatch[0])]
+            } else {
+              // Try parsing the whole text
+              scenes = JSON.parse(jsonText)
+            }
+          }
+        }
+        
+        // Ensure scenes is an array
+        if (!Array.isArray(scenes)) {
+          scenes = [scenes]
+        }
+        
+        // Filter out any null or invalid scenes
+        scenes = scenes.filter(s => s && (s.name || s.scene_number || s.description))
+        
+      } catch (parseError) {
+        console.error('Error parsing scenes JSON:', parseError)
+        console.error('Raw response text:', data.text || data.response || data.content)
+        
+        // Try to extract scenes manually from text using regex
+        try {
+          const text = data.text || data.response || data.content || ''
+          
+          // Extract individual JSON objects even if array is incomplete
+          const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+          const objectMatches = text.match(objectPattern)
+          
+          if (objectMatches && objectMatches.length > 0) {
+            scenes = []
+            for (const objStr of objectMatches) {
+              try {
+                const parsed = JSON.parse(objStr)
+                if (parsed && (parsed.name || parsed.scene_number || parsed.description)) {
+                  scenes.push(parsed)
+                }
+              } catch {
+                // Try to extract fields manually
+                const sceneNum = objStr.match(/"scene_number"\s*:\s*"([^"]+)"/)?.[1] || 
+                               objStr.match(/"scene_number"\s*:\s*(\d+)/)?.[1] ||
+                               String(scenes.length + 1)
+                const name = objStr.match(/"name"\s*:\s*"([^"]+)"/)?.[1] || `Scene ${sceneNum}`
+                const desc = objStr.match(/"description"\s*:\s*"([^"]]+)"/)?.[1] || ''
+                const location = objStr.match(/"location"\s*:\s*"([^"]+)"/)?.[1] || ''
+                const shotType = objStr.match(/"shot_type"\s*:\s*"([^"]+)"/)?.[1] || ''
+                const mood = objStr.match(/"mood"\s*:\s*"([^"]+)"/)?.[1] || ''
+                const notes = objStr.match(/"notes"\s*:\s*"([^"]]+)"/)?.[1] || ''
+                
+                // Extract characters array
+                const charsMatch = objStr.match(/"characters"\s*:\s*\[([^\]]+)\]/)
+                let characters: string[] = []
+                if (charsMatch) {
+                  characters = charsMatch[1]
+                    .split(',')
+                    .map(c => c.trim().replace(/"/g, ''))
+                    .filter(Boolean)
+                }
+                
+                scenes.push({
+                  scene_number: sceneNum,
+                  name: name,
+                  description: desc,
+                  location: location,
+                  characters: characters,
+                  shot_type: shotType,
+                  mood: mood,
+                  notes: notes,
+                })
+              }
+            }
+            
+            if (scenes.length > 0) {
+              console.log(`Extracted ${scenes.length} scenes using fallback parser`)
+            } else {
+              throw new Error('Could not extract scenes from response')
+            }
+          } else {
+            throw new Error('Could not extract scenes from response')
+          }
+        } catch (fallbackError) {
+          console.error('Fallback parsing also failed:', fallbackError)
+          toast({
+            title: "Error",
+            description: `Failed to parse generated scenes. ${scenes.length > 0 ? `However, ${scenes.length} scenes were extracted.` : 'Please try again.'}`,
+            variant: "destructive",
+          })
+          if (scenes.length === 0) {
+            return
+          }
+        }
+      }
+
+      // Create treatment scenes (just titles for now)
+      const sceneData: CreateTreatmentSceneData[] = scenes.map((scene, index) => ({
+        treatment_id: treatment.id,
+        name: scene.name || `Scene ${scene.scene_number || index + 1}`,
+        description: scene.description || '', // Will be empty initially
+        scene_number: scene.scene_number || String(index + 1),
+        location: scene.location || '',
+        characters: Array.isArray(scene.characters) ? scene.characters : [],
+        shot_type: scene.shot_type || '',
+        mood: scene.mood || '',
+        notes: scene.notes || '',
+        status: 'draft',
+        content: scene.description || '',
+        order_index: index,
+      }))
+
+      const createdScenes = await TreatmentScenesService.bulkCreateTreatmentScenes(sceneData)
+      setTreatmentScenes([...treatmentScenes, ...createdScenes])
+
+      toast({
+        title: "Success",
+        description: `Generated ${createdScenes.length} scenes from treatment`,
+      })
+    } catch (error) {
+      console.error('Error generating scenes:', error)
+      toast({
+        title: "Error",
+        description: "Failed to generate scenes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingScenes(false)
+    }
+  }
+
+  // Start editing a scene
+  const handleStartEditScene = (scene: TreatmentScene) => {
+    setEditingSceneId(scene.id)
+    setEditingScene({
+      name: scene.name,
+      description: scene.description,
+      scene_number: scene.scene_number,
+      location: scene.location,
+      characters: scene.characters,
+      shot_type: scene.shot_type,
+      mood: scene.mood,
+      notes: scene.notes,
+      status: scene.status,
+      content: scene.content,
+    })
+  }
+
+  // Cancel editing
+  const handleCancelEditScene = () => {
+    setEditingSceneId(null)
+    setEditingScene({})
+  }
+
+  // Save edited scene
+  const handleSaveScene = async () => {
+    if (!editingSceneId) return
+
+    try {
+      setIsSavingScene(true)
+      const updatedScene = await TreatmentScenesService.updateTreatmentScene(editingSceneId, editingScene)
+      setTreatmentScenes(treatmentScenes.map(s => s.id === editingSceneId ? updatedScene : s))
+      setEditingSceneId(null)
+      setEditingScene({})
+      
+      toast({
+        title: "Success",
+        description: "Scene updated successfully",
+      })
+    } catch (error) {
+      console.error('Error updating scene:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update scene",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingScene(false)
+    }
+  }
+
+  // Generate full details for all scenes at once
+  const generateAllSceneDetails = async () => {
+    if (!treatment || !ready || !userId || treatmentScenes.length === 0) return
+
+    // Filter to only scenes that are missing details (empty description, location, etc.)
+    const scenesNeedingDetails = treatmentScenes.filter(scene => {
+      const hasDetails = scene.description?.trim() && 
+                        scene.location?.trim() && 
+                        scene.characters && scene.characters.length > 0
+      return !hasDetails
+    })
+
+    if (scenesNeedingDetails.length === 0) {
+      toast({
+        title: "All Scenes Complete",
+        description: "All scenes already have details. Use individual scene regeneration to update specific scenes.",
+      })
+      return
+    }
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    try {
+      setIsGeneratingScenes(true)
+
+      const treatmentContext = treatment.prompt || treatment.synopsis || ''
+      const contextForPrompt = treatmentContext.length > 3000 
+        ? treatmentContext.substring(0, 3000) + '...'
+        : treatmentContext
+
+      // Create a list of scene titles that need details
+      const sceneTitles = scenesNeedingDetails.map(s => `Scene ${s.scene_number}: ${s.name}`).join('\n')
+
+      const aiPrompt = `Based on the following movie treatment and scene titles, generate full details for each scene.
+
+TREATMENT CONTEXT:
+${contextForPrompt}
+
+SCENE TITLES (${scenesNeedingDetails.length} scenes need details):
+${sceneTitles}
+
+REQUIREMENTS:
+- For each scene listed above, provide:
+  * Description (2-4 sentences describing what happens)
+  * Location (where the scene takes place)
+  * Characters (list of main characters in the scene)
+  * Shot type (e.g., "Wide", "Close-up", "Medium", "Two-shot")
+  * Mood/tone (e.g., "Tense", "Comedic", "Dramatic", "Action-packed")
+  * Notes (any important production details)
+
+OUTPUT FORMAT: Return a JSON array. Each scene should match the scene numbers above and have these fields:
+{
+  "scene_number": "1",
+  "description": "Detailed description...",
+  "location": "Location name",
+  "characters": ["Character 1", "Character 2"],
+  "shot_type": "Shot type",
+  "mood": "Mood/tone",
+  "notes": "Production notes"
+}
+
+IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, no other text:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'scenes',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate scene details')
+      }
+
+      const data = await response.json()
+      let sceneDetails: any[] = []
+
+      // Parse the response (same logic as generateScenesFromTreatment)
+      try {
+        let jsonText = data.text || data.response || data.content || ''
+        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+        
+        const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+        const objectMatches = jsonText.match(objectPattern)
+        
+        if (objectMatches && objectMatches.length > 0) {
+          sceneDetails = []
+          for (const objStr of objectMatches) {
+            try {
+              const parsedObj = JSON.parse(objStr)
+              if (parsedObj && parsedObj.scene_number) {
+                sceneDetails.push(parsedObj)
+              }
+            } catch (objError) {
+              console.warn('Skipping invalid scene detail object:', objError)
+            }
+          }
+        }
+      } catch (parseError) {
+        console.error('Error parsing scene details JSON:', parseError)
+        toast({
+          title: "Error",
+          description: "Failed to parse generated scene details. Please try generating individually.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      // Update only scenes that need details (don't overwrite existing)
+      const updatePromises = scenesNeedingDetails.map(async (scene) => {
+        const details = sceneDetails.find(d => d.scene_number === scene.scene_number || d.scene_number === String(scene.scene_number))
+        if (details) {
+          try {
+            // Only update fields that are empty, preserve existing data
+            const updates: any = {}
+            if (!scene.description?.trim() && details.description) {
+              updates.description = details.description
+              updates.content = details.description
+            }
+            if (!scene.location?.trim() && details.location) {
+              updates.location = details.location
+            }
+            if ((!scene.characters || scene.characters.length === 0) && details.characters && details.characters.length > 0) {
+              updates.characters = details.characters
+            }
+            if (!scene.shot_type?.trim() && details.shot_type) {
+              updates.shot_type = details.shot_type
+            }
+            if (!scene.mood?.trim() && details.mood) {
+              updates.mood = details.mood
+            }
+            if (!scene.notes?.trim() && details.notes) {
+              updates.notes = details.notes
+            }
+
+            // Only update if there are changes
+            if (Object.keys(updates).length > 0) {
+              return await TreatmentScenesService.updateTreatmentScene(scene.id, updates)
+            }
+            return scene
+          } catch (error) {
+            console.error(`Error updating scene ${scene.id}:`, error)
+            return scene
+          }
+        }
+        return scene
+      })
+
+      const updatedScenes = await Promise.all(updatePromises)
+      
+      // Merge updated scenes back into full list
+      const updatedScenesMap = new Map(updatedScenes.map(s => [s.id, s]))
+      const finalScenes = treatmentScenes.map(scene => updatedScenesMap.get(scene.id) || scene)
+      setTreatmentScenes(finalScenes)
+
+      const updatedCount = updatedScenes.filter((s, idx) => {
+        const original = scenesNeedingDetails[idx]
+        return s.description?.trim() !== original.description?.trim() ||
+               s.location?.trim() !== original.location?.trim() ||
+               (s.characters?.length || 0) > (original.characters?.length || 0)
+      }).length
+
+      const skippedCount = scenesNeedingDetails.length - updatedCount
+
+      toast({
+        title: "Success",
+        description: `Generated details for ${updatedCount} scene${updatedCount !== 1 ? 's' : ''}${skippedCount > 0 ? `. ${skippedCount} scene${skippedCount !== 1 ? 's' : ''} still need details - run again to continue.` : ''}`,
+      })
+    } catch (error) {
+      console.error('Error generating scene details:', error)
+      toast({
+        title: "Error",
+        description: "Failed to generate scene details. Please try generating individually.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingScenes(false)
+    }
+  }
+
+  // Regenerate a single scene with AI
+  const regenerateSceneWithAI = async (scene: TreatmentScene) => {
+    if (!treatment || !ready || !userId) return
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    try {
+      setIsRegeneratingScene(scene.id)
+
+      const treatmentContext = treatment.prompt || treatment.synopsis || ''
+      const contextForPrompt = treatmentContext.length > 2000 
+        ? treatmentContext.substring(0, 2000) + '...'
+        : treatmentContext
+
+      const aiPrompt = `Based on the following movie treatment, regenerate this scene with more detail and depth.
+
+TREATMENT CONTEXT:
+${contextForPrompt}
+
+CURRENT SCENE:
+- Scene Number: ${scene.scene_number || 'N/A'}
+- Name: ${scene.name}
+- Description: ${scene.description || 'N/A'}
+- Location: ${scene.location || 'N/A'}
+- Characters: ${scene.characters?.join(', ') || 'N/A'}
+
+REQUIREMENTS:
+- Keep the same scene number and general concept
+- Expand the description to 3-5 sentences with more detail
+- Enhance location description if needed
+- Add or refine characters list
+- Suggest appropriate shot type and mood
+- Add production notes if relevant
+
+OUTPUT FORMAT: Return a JSON object with these fields:
+{
+  "name": "Scene name",
+  "description": "Detailed description...",
+  "location": "Location name",
+  "characters": ["Character 1", "Character 2"],
+  "shot_type": "Shot type",
+  "mood": "Mood/tone",
+  "notes": "Production notes"
+}
+
+Return ONLY the JSON object, no other text:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'scene',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to regenerate scene')
+      }
+
+      const data = await response.json()
+      let regeneratedScene: any = {}
+
+      try {
+        let jsonText = data.text || data.response || data.content || ''
+        
+        // Remove markdown code blocks if present
+        jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+        
+        // Try to extract JSON object
+        const jsonMatch = jsonText.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          regeneratedScene = JSON.parse(jsonMatch[0])
+        } else {
+          // Try parsing the whole text
+          regeneratedScene = JSON.parse(jsonText)
+        }
+      } catch (parseError) {
+        console.error('Error parsing regenerated scene JSON:', parseError)
+        console.error('Raw response text:', data.text || data.response || data.content)
+        
+        toast({
+          title: "Error",
+          description: "Failed to parse regenerated scene. The AI response format was unexpected. Please try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const updatedScene = await TreatmentScenesService.updateTreatmentScene(scene.id, {
+        name: regeneratedScene.name || scene.name,
+        description: regeneratedScene.description || scene.description,
+        location: regeneratedScene.location || scene.location,
+        characters: regeneratedScene.characters || scene.characters,
+        shot_type: regeneratedScene.shot_type || scene.shot_type,
+        mood: regeneratedScene.mood || scene.mood,
+        notes: regeneratedScene.notes || scene.notes,
+        content: regeneratedScene.description || scene.content,
+      })
+
+      setTreatmentScenes(treatmentScenes.map(s => s.id === scene.id ? updatedScene : s))
+
+      toast({
+        title: "Success",
+        description: "Scene regenerated successfully",
+      })
+    } catch (error) {
+      console.error('Error regenerating scene:', error)
+      toast({
+        title: "Error",
+        description: "Failed to regenerate scene. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsRegeneratingScene(null)
+    }
+  }
+
+  // Delete a scene
+  const handleDeleteScene = async (sceneId: string) => {
+    try {
+      await TreatmentScenesService.deleteTreatmentScene(sceneId)
+      setTreatmentScenes(treatmentScenes.filter(s => s.id !== sceneId))
+      toast({
+        title: "Success",
+        description: "Scene deleted successfully",
+      })
+    } catch (error) {
+      console.error('Error deleting scene:', error)
+      toast({
+        title: "Error",
+        description: "Failed to delete scene",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Push a single scene to timeline
+  const pushSceneToTimeline = async (scene: TreatmentScene, movieId: string) => {
+    if (!treatment || !treatment.project_id) {
+      toast({
+        title: "Error",
+        description: "Treatment must be linked to a movie project first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Get or create timeline for the movie
+      let timeline
+      try {
+        const { data: timelines, error: timelineError } = await getSupabaseClient()
+          .from('timelines')
+          .select('*')
+          .eq('project_id', movieId)
+          .eq('user_id', userId)
+          .limit(1)
+        
+        if (!timelineError && timelines && timelines.length > 0) {
+          timeline = timelines[0]
+        } else {
+          timeline = await TimelineService.createTimelineForMovie(movieId, {
+            name: `${treatment.title} Timeline`,
+            description: `Timeline for ${treatment.title}`,
+          })
+        }
+      } catch (error) {
+        timeline = await TimelineService.createTimelineForMovie(movieId, {
+          name: `${treatment.title} Timeline`,
+          description: `Timeline for ${treatment.title}`,
+        })
+      }
+
+      if (!timeline) {
+        throw new Error('Failed to get or create timeline')
+      }
+
+      // Get existing scenes to calculate start time
+      const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
+      const lastScene = existingScenes[existingScenes.length - 1]
+      const startTimeSeconds = lastScene 
+        ? lastScene.start_time_seconds + lastScene.duration_seconds 
+        : 0
+
+      const durationSeconds = 60 // Default 1 minute per scene
+      
+      const sceneData = {
+        timeline_id: timeline.id,
+        name: scene.name,
+        description: scene.description || '',
+        start_time_seconds: startTimeSeconds,
+        duration_seconds: durationSeconds,
+        scene_type: 'video' as const,
+        content_url: '',
+        metadata: {
+          sceneNumber: scene.scene_number || '',
+          location: scene.location || '',
+          characters: scene.characters || [],
+          shotType: scene.shot_type || '',
+          mood: scene.mood || '',
+          notes: scene.notes || '',
+          status: scene.status || 'Planning',
+        }
+      }
+
+      await TimelineService.createScene(sceneData)
+
+      toast({
+        title: "Success",
+        description: `Scene "${scene.name}" added to timeline`,
+      })
+    } catch (error) {
+      console.error('Error pushing scene to timeline:', error)
+      toast({
+        title: "Error",
+        description: "Failed to add scene to timeline. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Push scenes to timeline
+  const pushScenesToTimeline = async (movieId: string) => {
+    if (!treatment || !treatment.project_id) {
+      toast({
+        title: "Error",
+        description: "Treatment must be linked to a movie project first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (treatmentScenes.length === 0) {
+      toast({
+        title: "No Scenes",
+        description: "No scenes to push to timeline",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Get or create timeline for the movie
+      let timeline
+      try {
+        // Try to get existing timeline
+        const { data: timelines, error: timelineError } = await getSupabaseClient()
+          .from('timelines')
+          .select('*')
+          .eq('project_id', movieId)
+          .eq('user_id', userId)
+          .limit(1)
+        
+        if (!timelineError && timelines && timelines.length > 0) {
+          timeline = timelines[0]
+        } else {
+          // Timeline doesn't exist, create it
+          timeline = await TimelineService.createTimelineForMovie(movieId, {
+            name: `${treatment.title} Timeline`,
+            description: `Timeline for ${treatment.title}`,
+          })
+        }
+      } catch (error) {
+        // If error, try to create timeline
+        timeline = await TimelineService.createTimelineForMovie(movieId, {
+          name: `${treatment.title} Timeline`,
+          description: `Timeline for ${treatment.title}`,
+        })
+      }
+
+      if (!timeline) {
+        throw new Error('Failed to get or create timeline')
+      }
+
+      // Get existing scenes to calculate start time
+      const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
+      const lastScene = existingScenes[existingScenes.length - 1]
+      let startTimeSeconds = lastScene 
+        ? lastScene.start_time_seconds + lastScene.duration_seconds 
+        : 0
+
+      // Convert treatment scenes to timeline scenes
+      const timelineScenes = []
+      for (const treatmentScene of treatmentScenes) {
+        const durationSeconds = 60 // Default 1 minute per scene, can be adjusted
+        
+        const sceneData = {
+          timeline_id: timeline.id,
+          name: treatmentScene.name,
+          description: treatmentScene.description || '',
+          start_time_seconds: startTimeSeconds,
+          duration_seconds: durationSeconds,
+          scene_type: 'video' as const,
+          content_url: '',
+          metadata: {
+            sceneNumber: treatmentScene.scene_number || '',
+            location: treatmentScene.location || '',
+            characters: treatmentScene.characters || [],
+            shotType: treatmentScene.shot_type || '',
+            mood: treatmentScene.mood || '',
+            notes: treatmentScene.notes || '',
+            status: treatmentScene.status || 'Planning',
+          }
+        }
+
+        const createdScene = await TimelineService.createScene(sceneData)
+        timelineScenes.push(createdScene)
+        startTimeSeconds += durationSeconds
+      }
+
+      toast({
+        title: "Success",
+        description: `Pushed ${timelineScenes.length} scenes to timeline`,
+      })
+
+      // Navigate to timeline
+      router.push(`/timeline?movie=${movieId}`)
+    } catch (error) {
+      console.error('Error pushing scenes to timeline:', error)
+      toast({
+        title: "Error",
+        description: "Failed to push scenes to timeline. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const handleCoverUrlSave = async (url: string) => {
     if (!treatment) return
 
@@ -1410,7 +2337,32 @@ Synopsis (2-3 paragraphs only):`
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column - Main Content */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Synopsis */}
+            {/* Synopsis - Only show if it's different from treatment prompt */}
+            {(() => {
+              // Check if synopsis and prompt are the same or very similar
+              const synopsisText = treatment.synopsis?.trim() || ''
+              const promptText = treatment.prompt?.trim() || ''
+              
+              // Only hide if they are exactly the same or synopsis is empty
+              // Don't hide if synopsis is just similar - they should be separate
+              const areIdentical = synopsisText && promptText && synopsisText === promptText
+              
+              console.log('📋 Treatment display check:', {
+                hasSynopsis: !!synopsisText,
+                synopsisLength: synopsisText.length,
+                hasPrompt: !!promptText,
+                promptLength: promptText.length,
+                areIdentical,
+                synopsisPreview: synopsisText.substring(0, 100),
+                promptPreview: promptText.substring(0, 100)
+              })
+              
+              // Only show synopsis if it exists and is not identical to prompt
+              if (!synopsisText || areIdentical) {
+                return null
+              }
+              
+              return (
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -1518,6 +2470,8 @@ Synopsis (2-3 paragraphs only):`
                 </div>
               </CardContent>
             </Card>
+              )
+            })()}
 
             {/* Script from Movie (if available) - Collapsible */}
             {treatment.project_id && (
@@ -1979,6 +2933,292 @@ Synopsis (2-3 paragraphs only):`
                 </CardContent>
               </Card>
             )}
+
+            {/* Treatment Scenes */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Film className="h-5 w-5 text-purple-500" />
+                      Scenes
+                    </CardTitle>
+                    <CardDescription>
+                      Break down your treatment into individual scenes
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {treatmentScenes.length > 0 && treatment.project_id && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => pushScenesToTimeline(treatment.project_id!)}
+                        className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                      >
+                        <Film className="h-4 w-4 mr-2" />
+                        Push to Timeline
+                      </Button>
+                    )}
+                    {treatmentScenes.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={generateAllSceneDetails}
+                        disabled={isGeneratingScenes || !aiSettingsLoaded}
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        title="Generate full details (description, location, etc.) for all scenes"
+                      >
+                        {isGeneratingScenes ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-4 w-4 mr-2" />
+                            Generate All Details
+                          </>
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={generateScenesFromTreatment}
+                      disabled={isGeneratingScenes || !aiSettingsLoaded}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                    >
+                      {isGeneratingScenes ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4 mr-2" />
+                          Generate Scene Titles
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {isLoadingScenes ? (
+                  <div className="text-center py-8">
+                    <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-muted-foreground">Loading scenes...</p>
+                  </div>
+                ) : treatmentScenes.length === 0 ? (
+                  <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
+                    <Film className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                    <p className="text-muted-foreground mb-2">No scenes yet</p>
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Click "Generate Scenes" to automatically break down your treatment into scenes
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {treatmentScenes.map((scene) => (
+                      <Card key={scene.id} className="border-border">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Badge variant="outline" className="text-xs">
+                                  Scene {scene.scene_number || 'N/A'}
+                                </Badge>
+                                {scene.status && (
+                                  <Badge variant="outline" className="text-xs">
+                                    {scene.status}
+                                  </Badge>
+                                )}
+                              </div>
+                              {editingSceneId === scene.id ? (
+                                <Input
+                                  value={editingScene.name || ''}
+                                  onChange={(e) => setEditingScene({ ...editingScene, name: e.target.value })}
+                                  className="mb-2"
+                                  placeholder="Scene name"
+                                />
+                              ) : (
+                                <CardTitle className="text-lg">{scene.name}</CardTitle>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {editingSceneId === scene.id ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={handleSaveScene}
+                                    disabled={isSavingScene}
+                                  >
+                                    {isSavingScene ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Save className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={handleCancelEditScene}
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              ) : (
+                                <>
+                                  {treatment.project_id && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => pushSceneToTimeline(scene, treatment.project_id!)}
+                                      className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                      title="Send this scene to timeline"
+                                    >
+                                      <Film className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => regenerateSceneWithAI(scene)}
+                                    disabled={isRegeneratingScene === scene.id || !aiSettingsLoaded}
+                                    title="Regenerate scene with AI"
+                                  >
+                                    {isRegeneratingScene === scene.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleStartEditScene(scene)}
+                                  >
+                                    <Edit className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleDeleteScene(scene.id)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {editingSceneId === scene.id ? (
+                            <>
+                              <div>
+                                <Label>Description</Label>
+                                <Textarea
+                                  value={editingScene.description || ''}
+                                  onChange={(e) => setEditingScene({ ...editingScene, description: e.target.value })}
+                                  rows={3}
+                                  placeholder="Scene description"
+                                />
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                  <Label>Location</Label>
+                                  <Input
+                                    value={editingScene.location || ''}
+                                    onChange={(e) => setEditingScene({ ...editingScene, location: e.target.value })}
+                                    placeholder="Location"
+                                  />
+                                </div>
+                                <div>
+                                  <Label>Shot Type</Label>
+                                  <Input
+                                    value={editingScene.shot_type || ''}
+                                    onChange={(e) => setEditingScene({ ...editingScene, shot_type: e.target.value })}
+                                    placeholder="Shot type"
+                                  />
+                                </div>
+                              </div>
+                              <div>
+                                <Label>Characters (comma-separated)</Label>
+                                <Input
+                                  value={editingScene.characters?.join(', ') || ''}
+                                  onChange={(e) => setEditingScene({ 
+                                    ...editingScene, 
+                                    characters: e.target.value.split(',').map(c => c.trim()).filter(Boolean)
+                                  })}
+                                  placeholder="Character 1, Character 2"
+                                />
+                              </div>
+                              <div>
+                                <Label>Mood</Label>
+                                <Input
+                                  value={editingScene.mood || ''}
+                                  onChange={(e) => setEditingScene({ ...editingScene, mood: e.target.value })}
+                                  placeholder="Mood/tone"
+                                />
+                              </div>
+                              <div>
+                                <Label>Notes</Label>
+                                <Textarea
+                                  value={editingScene.notes || ''}
+                                  onChange={(e) => setEditingScene({ ...editingScene, notes: e.target.value })}
+                                  rows={2}
+                                  placeholder="Production notes"
+                                />
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              {scene.description && (
+                                <p className="text-sm text-muted-foreground">{scene.description}</p>
+                              )}
+                              <div className="grid grid-cols-2 gap-4 text-sm">
+                                {scene.location && (
+                                  <div>
+                                    <span className="font-medium">Location: </span>
+                                    <span className="text-muted-foreground">{scene.location}</span>
+                                  </div>
+                                )}
+                                {scene.shot_type && (
+                                  <div>
+                                    <span className="font-medium">Shot: </span>
+                                    <span className="text-muted-foreground">{scene.shot_type}</span>
+                                  </div>
+                                )}
+                                {scene.characters && scene.characters.length > 0 && (
+                                  <div>
+                                    <span className="font-medium">Characters: </span>
+                                    <span className="text-muted-foreground">{scene.characters.join(', ')}</span>
+                                  </div>
+                                )}
+                                {scene.mood && (
+                                  <div>
+                                    <span className="font-medium">Mood: </span>
+                                    <span className="text-muted-foreground">{scene.mood}</span>
+                                  </div>
+                                )}
+                              </div>
+                              {scene.notes && (
+                                <div className="pt-2 border-t">
+                                  <p className="text-xs text-muted-foreground">
+                                    <span className="font-medium">Notes: </span>
+                                    {scene.notes}
+                                  </p>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
 
             {/* Visual References */}
             {treatment.visual_references && (

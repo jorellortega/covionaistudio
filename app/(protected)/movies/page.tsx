@@ -47,6 +47,9 @@ import { useToast } from "@/hooks/use-toast"
 import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import { IdeaImagesService } from "@/lib/idea-images-service"
+import { MovieIdeasService } from "@/lib/movie-ideas-service"
+import { AssetService } from "@/lib/asset-service"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -67,6 +70,7 @@ export default function MoviesPage() {
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [movieTreatmentMap, setMovieTreatmentMap] = useState<Record<string, string>>({}) // movieId -> treatmentId
+  const [movieCoverImages, setMovieCoverImages] = useState<Record<string, string>>({}) // movieId -> coverImageUrl
   const [creatingTreatmentForMovieId, setCreatingTreatmentForMovieId] = useState<string | null>(null)
   const router = useRouter()
   const [newMovie, setNewMovie] = useState<CreateMovieData>({
@@ -202,6 +206,12 @@ export default function MoviesPage() {
   const loadMovies = async () => {
     console.log('🎬 Movies Page - loadMovies() - Starting...')
     
+    if (!userId) {
+      console.log('🎬 Movies Page - No userId, skipping loadMovies')
+      setLoading(false)
+      return
+    }
+    
     try {
       console.log('🎬 Movies Page - Setting loading to true...')
       setLoading(true)
@@ -218,24 +228,86 @@ export default function MoviesPage() {
       setMovies(moviesData)
       console.log('🎬 Movies Page - Movies state updated successfully')
       
-      // Fetch treatments for each movie
+      // Fetch treatments and cover images for each movie
       const treatmentMap: Record<string, string> = {}
+      const coverImageMap: Record<string, string> = {}
+      
       for (const movie of moviesData) {
         try {
+          // 1. Check treatment for cover image (highest priority)
           const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
           if (treatment) {
             treatmentMap[movie.id] = treatment.id
             console.log(`✅ Movies Page - Found treatment ${treatment.id} for movie ${movie.id} (${movie.name})`)
+            
+            // Get cover image from treatment if available
+            if (treatment.cover_image_url) {
+              coverImageMap[movie.id] = treatment.cover_image_url
+              console.log(`🖼️ Movies Page - Found cover image from treatment for movie ${movie.id}`)
+            }
           } else {
             console.log(`⚠️ Movies Page - No treatment found for movie ${movie.id} (${movie.name})`)
           }
+          
+          // 2. If no treatment cover, check assets (project-level image assets)
+          if (!coverImageMap[movie.id]) {
+            try {
+              const assets = await AssetService.getAssetsForProject(movie.id)
+              const imageAssets = assets.filter(a => 
+                a.content_type === 'image' && 
+                a.is_latest_version && 
+                a.content_url
+              )
+              
+              if (imageAssets.length > 0) {
+                // Get the most recent image asset
+                imageAssets.sort((a, b) => 
+                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+                )
+                coverImageMap[movie.id] = imageAssets[0].content_url!
+                console.log(`🖼️ Movies Page - Found cover image from assets for movie ${movie.id}`)
+              }
+            } catch (assetError) {
+              console.error(`❌ Movies Page - Error fetching assets for movie ${movie.id}:`, assetError)
+            }
+          }
+          
+          // 3. If still no cover, check ideas (match by title)
+          if (!coverImageMap[movie.id]) {
+            try {
+              const ideas = await MovieIdeasService.getUserIdeas(userId)
+              const matchingIdea = ideas.find(idea => 
+                idea.title.toLowerCase().trim() === movie.name.toLowerCase().trim()
+              )
+              
+              if (matchingIdea) {
+                const ideaImages = await IdeaImagesService.getIdeaImages(matchingIdea.id)
+                // Filter for image files (jpg, jpeg, png, gif, webp, svg)
+                const imageFiles = ideaImages.filter(img => 
+                  img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)
+                )
+                
+                if (imageFiles.length > 0) {
+                  // Get the first (most recent) image
+                  coverImageMap[movie.id] = imageFiles[0].image_url
+                  console.log(`🖼️ Movies Page - Found cover image from idea for movie ${movie.id}`)
+                }
+              }
+            } catch (ideaError) {
+              console.error(`❌ Movies Page - Error fetching idea images for movie ${movie.id}:`, ideaError)
+            }
+          }
+          
         } catch (error) {
-          console.error(`❌ Movies Page - Error fetching treatment for movie ${movie.id} (${movie.name}):`, error)
+          console.error(`❌ Movies Page - Error processing movie ${movie.id} (${movie.name}):`, error)
           // Continue with other movies even if one fails
         }
       }
+      
       console.log(`🎬 Movies Page - Treatment map:`, treatmentMap)
+      console.log(`🖼️ Movies Page - Cover images map:`, coverImageMap)
       setMovieTreatmentMap(treatmentMap)
+      setMovieCoverImages(coverImageMap)
       
       // Show success message
       if (moviesData.length > 0) {
@@ -1441,9 +1513,16 @@ export default function MoviesPage() {
                 >
                   <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
                     <img
-                      src={movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                      src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
                       alt={movie.name}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      onError={(e) => {
+                        // Fallback to placeholder if image fails to load
+                        const target = e.target as HTMLImageElement
+                        if (target.src !== "/placeholder.svg?height=300&width=200") {
+                          target.src = "/placeholder.svg?height=300&width=200"
+                        }
+                      }}
                     />
                   </div>
                 </Link>

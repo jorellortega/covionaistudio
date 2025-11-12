@@ -49,6 +49,7 @@ export default function IdeasPage() {
   
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<any>({})
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
   const [userName, setUserName] = useState<string>("")
   const [isLoadingAI, setIsLoadingAI] = useState(false)
@@ -112,7 +113,9 @@ export default function IdeasPage() {
   const [coCreators, setCoCreators] = useState<string[]>([])
   const [originalPrompt, setOriginalPrompt] = useState("")
   const [prompt, setPrompt] = useState("")
+  const [synopsis, setSynopsis] = useState("")
   const [status, setStatus] = useState<"concept" | "development" | "completed">("concept")
+  const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false)
 
   // Movie conversion state
   const [showMovieDialog, setShowMovieDialog] = useState(false)
@@ -167,6 +170,125 @@ export default function IdeasPage() {
     }
   }
 
+  // Generate synopsis from prompt/description using AI
+  const generateSynopsis = async (): Promise<string | null> => {
+    if (!ready || !user || !userId) {
+      return null
+    }
+
+    // Get content to generate synopsis from (prioritize prompt, then description)
+    const sourceText = prompt.trim() || description.trim()
+    if (!sourceText) {
+      return null
+    }
+
+    // Check AI settings
+    if (!aiSettingsLoaded || !aiSettings.scripts) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return null
+    }
+
+    // Get selected AI service
+    const scriptsSetting = aiSettings.scripts
+    const serviceToUse = scriptsSetting.is_locked && scriptsSetting.locked_model
+      ? scriptsSetting.locked_model
+      : scriptsSetting.selected_model || 'gpt-4o-mini'
+
+    // Normalize service name
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    if (normalizedService === 'google') {
+      toast({
+        title: "Service Not Available",
+        description: "Google Gemini is not currently configured. Please use OpenAI or Anthropic.",
+        variant: "destructive",
+      })
+      return null
+    }
+
+    try {
+      setIsGeneratingSynopsis(true)
+
+      // Clean the text
+      const cleanedText = sourceText
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/__/g, '')
+        .replace(/`/g, '')
+        .replace(/#{1,6}\s+/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+
+      // Limit to first 2000 characters
+      const contentForPrompt = cleanedText.length > 2000 
+        ? cleanedText.substring(0, 2000) + '...'
+        : cleanedText
+
+      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie idea.
+
+REQUIREMENTS:
+- Summarize the MAIN STORY in 2-3 paragraphs only
+- Focus on: who is the protagonist, what is their goal, what is the central conflict
+- Write in third person, present tense
+- Engaging and cinematic tone
+- NO markdown formatting
+- NO scene breakdowns
+- NO character backstories
+- NO production details
+- NO plot expansion - just summarize what's already there
+
+CRITICAL: This is a SYNOPSIS (brief summary), NOT a full treatment. Keep it short and focused.
+
+Movie idea content:
+${contentForPrompt}
+
+Synopsis (2-3 paragraphs only):`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'synopsis',
+          service: normalizedService,
+          apiKey: 'configured',
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate synopsis')
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.text) {
+        return result.text.trim()
+      } else {
+        throw new Error('No synopsis text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI synopsis:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate synopsis'
+      toast({
+        title: "Synopsis Generation Failed",
+        description: `Could not generate synopsis: ${errorMessage}. You can still save without a synopsis.`,
+        variant: "destructive",
+      })
+      return null
+    } finally {
+      setIsGeneratingSynopsis(false)
+    }
+  }
+
   const saveIdea = async () => {
     if (!ready || !title.trim() || !description.trim() || !mainCreator.trim()) {
       toast({
@@ -178,6 +300,20 @@ export default function IdeasPage() {
     }
 
     try {
+      // If synopsis is empty, generate it automatically
+      let finalSynopsis = synopsis.trim()
+      if (!finalSynopsis && (prompt.trim() || description.trim())) {
+        toast({
+          title: "Generating Synopsis",
+          description: "Auto-generating synopsis from your content...",
+        })
+        const generatedSynopsis = await generateSynopsis()
+        if (generatedSynopsis) {
+          finalSynopsis = generatedSynopsis
+          setSynopsis(generatedSynopsis) // Update the field so user can see it
+        }
+      }
+
       const ideaData = {
         user_id: userId,
         title: title.trim(),
@@ -189,6 +325,7 @@ export default function IdeasPage() {
         co_creators: coCreators,
         original_prompt: originalPrompt.trim(),
         prompt: prompt.trim(),
+        synopsis: finalSynopsis,
         status,
         updated_at: new Date().toISOString()
       }
@@ -298,6 +435,7 @@ export default function IdeasPage() {
     setCoCreators(idea.co_creators || [])
     setOriginalPrompt(idea.original_prompt || "")
     setPrompt(idea.prompt)
+    setSynopsis(idea.synopsis || "")
     setStatus(idea.status)
     setShowAddDialog(true)
   }
@@ -313,6 +451,7 @@ export default function IdeasPage() {
     setCoCreators([])
     setOriginalPrompt("")
     setPrompt("")
+    setSynopsis("")
     setStatus("concept")
     setPendingImageData(null) // Clear pending image data
   }
@@ -367,18 +506,40 @@ export default function IdeasPage() {
     }
 
     try {
+      // Refresh the idea from database to ensure we have the latest data including synopsis
+      const freshIdea = await MovieIdeasService.getMovieIdea(idea.id)
+      if (!freshIdea) {
+        toast({
+          title: "Error",
+          description: "Idea not found",
+          variant: "destructive",
+        })
+        return
+      }
+      
       // Use first genre from genres array, or fallback to legacy genre field
-      const firstGenre = (idea.genres && idea.genres.length > 0) 
-        ? idea.genres[0] 
-        : (idea.genre || "Unspecified")
+      const firstGenre = (freshIdea.genres && freshIdea.genres.length > 0) 
+        ? freshIdea.genres[0] 
+        : (freshIdea.genre || "Unspecified")
       
-      // Create synopsis from prompt (full content) if available, otherwise use description
-      // Extract a meaningful synopsis from the full prompt content
-      let synopsis = idea.description || 'No description available'
+      // Use idea's synopsis if it exists, otherwise generate from prompt
+      console.log('🎬 Converting idea to treatment:', {
+        ideaId: freshIdea.id,
+        hasSynopsis: !!freshIdea.synopsis,
+        synopsisLength: freshIdea.synopsis?.length || 0,
+        synopsisPreview: freshIdea.synopsis?.substring(0, 100) || 'none',
+        hasPrompt: !!freshIdea.prompt,
+        promptLength: freshIdea.prompt?.length || 0
+      })
       
-      // If prompt exists and is longer than description, use it to create a better synopsis
-      if (idea.prompt && idea.prompt.trim()) {
-        const promptText = idea.prompt.trim()
+      // Use idea's synopsis if it exists and is not empty
+      let synopsis = (freshIdea.synopsis && freshIdea.synopsis.trim()) 
+        ? freshIdea.synopsis.trim() 
+        : null
+      
+      // If no synopsis exists, try to extract one from prompt
+      if (!synopsis && freshIdea.prompt && freshIdea.prompt.trim()) {
+        const promptText = freshIdea.prompt.trim()
         // Remove markdown formatting
         const cleanedPrompt = promptText
           .replace(/\*\*/g, '')
@@ -414,10 +575,15 @@ export default function IdeasPage() {
         }
       }
       
+      // Fallback to description if still no synopsis
+      if (!synopsis || !synopsis.trim()) {
+        synopsis = freshIdea.description || 'No description available'
+      }
+      
       // Extract logline from prompt or description (first sentence or first 200 chars)
-      let logline = idea.description || ''
-      if (idea.prompt && idea.prompt.trim()) {
-        const promptText = idea.prompt.trim()
+      let logline = freshIdea.description || ''
+      if (freshIdea.prompt && freshIdea.prompt.trim()) {
+        const promptText = freshIdea.prompt.trim()
         // Remove markdown
         const cleanedPrompt = promptText
           .replace(/\*\*/g, '')
@@ -441,20 +607,20 @@ export default function IdeasPage() {
             logline = excerpt + '...'
           }
         }
-      } else if (idea.description && idea.description.length > 200) {
+      } else if (freshIdea.description && freshIdea.description.length > 200) {
         // If description is long, extract first sentence or first 200 chars
-        const firstSentenceMatch = idea.description.match(/^[^.!?]+[.!?]/)
+        const firstSentenceMatch = freshIdea.description.match(/^[^.!?]+[.!?]/)
         if (firstSentenceMatch && firstSentenceMatch[0].length <= 250) {
           logline = firstSentenceMatch[0].trim()
         } else {
-          logline = idea.description.substring(0, 200).trim() + (idea.description.length > 200 ? '...' : '')
+          logline = freshIdea.description.substring(0, 200).trim() + (freshIdea.description.length > 200 ? '...' : '')
         }
       }
 
       // Fetch idea images to get the cover image
       let coverImageUrl: string | undefined = undefined
       try {
-        const ideaImages = await IdeaImagesService.getIdeaImages(idea.id)
+        const ideaImages = await IdeaImagesService.getIdeaImages(freshIdea.id)
         // Get the first image (most recent) as cover image
         // Filter for image files (jpg, jpeg, png, gif, webp, svg)
         const imageFiles = ideaImages.filter(img => 
@@ -469,24 +635,42 @@ export default function IdeasPage() {
         // Continue without cover image if there's an error
       }
 
+      // Ensure synopsis is a string (not null)
+      const finalSynopsis = synopsis && synopsis.trim() ? synopsis.trim() : undefined
+      
       // Create treatment data from idea
       const treatmentData: CreateTreatmentData = {
-        title: idea.title,
+        title: freshIdea.title,
         genre: firstGenre,
         status: 'draft',
-        synopsis: synopsis, // Extended synopsis from prompt (up to 800 chars, 2-3 paragraphs)
-        prompt: idea.prompt || undefined, // Full treatment document (like ideas.prompt)
-        logline: logline || idea.description || '', // Extracted logline (first sentence or excerpt from prompt)
-        notes: idea.original_prompt || undefined, // Use original prompt as notes if available
+        synopsis: finalSynopsis, // Use idea's synopsis if available, otherwise generated
+        prompt: freshIdea.prompt || undefined, // Full treatment document (like ideas.prompt)
+        logline: logline || freshIdea.description || '', // Extracted logline (first sentence or excerpt from prompt)
+        notes: freshIdea.original_prompt || undefined, // Use original prompt as notes if available
         cover_image_url: coverImageUrl, // Set cover image if available
       }
 
+      console.log('🎬 Creating treatment with data:', {
+        title: treatmentData.title,
+        hasSynopsis: !!treatmentData.synopsis,
+        synopsisLength: treatmentData.synopsis?.length || 0,
+        synopsisPreview: treatmentData.synopsis?.substring(0, 100) || 'none',
+        hasPrompt: !!treatmentData.prompt,
+        promptLength: treatmentData.prompt?.length || 0
+      })
+
       // Create the treatment
       const treatment = await TreatmentsService.createTreatment(treatmentData)
+      
+      console.log('🎬 Treatment created:', {
+        id: treatment.id,
+        hasSynopsis: !!treatment.synopsis,
+        synopsisLength: treatment.synopsis?.length || 0
+      })
 
       toast({
         title: "Success!",
-        description: `Idea "${idea.title}" converted to treatment successfully!`,
+        description: `Idea "${freshIdea.title}" converted to treatment successfully!`,
       })
 
       // Navigate to treatments page
@@ -822,8 +1006,10 @@ export default function IdeasPage() {
         return acc
       }, {} as any)
       setAiSettings(settingsMap)
+      setAiSettingsLoaded(true)
     } catch (error) {
       console.error('Error fetching AI settings:', error)
+      setAiSettingsLoaded(true) // Set to true even on error to prevent blocking
     }
   }
 
@@ -2043,6 +2229,23 @@ export default function IdeasPage() {
                 </div>
                 
                 <div>
+                  <Label htmlFor="synopsis">Synopsis</Label>
+                  <Textarea
+                    id="synopsis"
+                    value={synopsis}
+                    onChange={(e) => setSynopsis(e.target.value)}
+                    placeholder="Brief synopsis (2-3 paragraphs) - will be used when converting to treatment. Leave empty to auto-generate on save."
+                    rows={4}
+                  />
+                  <p className="text-sm text-muted-foreground mt-1">
+                    A brief synopsis (2-3 paragraphs) that will be used when converting this idea to a treatment. 
+                    {!synopsis.trim() && (prompt.trim() || description.trim()) && (
+                      <span className="text-blue-400"> If left empty, a synopsis will be auto-generated from your content when you save.</span>
+                    )}
+                  </p>
+                </div>
+                
+                <div>
                   <Label htmlFor="original-prompt">Original Prompt/Idea</Label>
                   <Textarea
                     id="original-prompt"
@@ -2086,12 +2289,21 @@ export default function IdeasPage() {
               </div>
               
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+                <Button variant="outline" onClick={() => setShowAddDialog(false)} disabled={isGeneratingSynopsis}>
                   Cancel
                 </Button>
-                <Button onClick={saveIdea} className="flex items-center gap-2">
-                  <Save className="h-4 w-4" />
-                  {editingIdea ? "Update" : "Save"} Idea
+                <Button onClick={saveIdea} className="flex items-center gap-2" disabled={isGeneratingSynopsis}>
+                  {isGeneratingSynopsis ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Generating Synopsis...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4" />
+                      {editingIdea ? "Update" : "Save"} Idea
+                    </>
+                  )}
                 </Button>
               </div>
             </DialogContent>
