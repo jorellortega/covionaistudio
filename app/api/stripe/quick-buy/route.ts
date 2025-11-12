@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-12-18.acacia',
-})
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set')
+  }
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2024-12-18.acacia',
+  })
+}
 
 const CREDIT_RATE = 500 // $1 = 500 credits
 
@@ -28,6 +33,7 @@ export async function POST(request: NextRequest) {
     const amountInCents = Math.round(parseFloat(amount) * 100)
 
     // Create payment intent
+    const stripe = getStripe()
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: 'usd',

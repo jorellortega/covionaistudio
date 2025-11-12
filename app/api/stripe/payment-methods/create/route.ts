@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-12-18.acacia',
-})
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set')
+  }
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2024-12-18.acacia',
+  })
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,10 +48,11 @@ export async function POST(request: NextRequest) {
     // }
 
     // For now, create a customer each time (you should implement the above)
+    const stripe = getStripe()
     const customer = await stripe.customers.create({
       metadata: { userId },
     })
-    customerId = customer.id
+      customerId = customer.id
 
     // Attach payment method to customer
     await stripe.paymentMethods.attach(paymentMethodId, {

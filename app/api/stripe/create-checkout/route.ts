@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-12-18.acacia',
-})
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set')
+  }
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2024-12-18.acacia',
+  })
+}
 
 const plans = {
   solo: { priceId: process.env.STRIPE_PRICE_SOLO!, name: 'Solo', amount: 1900 },
@@ -84,6 +89,7 @@ export async function POST(request: NextRequest) {
       let customerId: string
       // TODO: Get customer from database
       // For now, create a new customer (you should store this in your database)
+      const stripe = getStripe()
       const customer = await stripe.customers.create({
         metadata: { userId },
       })
@@ -134,6 +140,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Create checkout session for subscription
+      const stripe = getStripe()
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         payment_method_types: ['card'],

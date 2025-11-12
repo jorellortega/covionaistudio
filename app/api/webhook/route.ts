@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
 import { headers } from 'next/headers'
 
-// Initialize Stripe with secret key
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2024-12-18.acacia',
-})
+function getStripe() {
+  if (!process.env.STRIPE_SECRET_KEY) {
+    throw new Error('STRIPE_SECRET_KEY is not set')
+  }
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2024-12-18.acacia',
+  })
+}
 
 // This is your Stripe webhook secret for local development
 // Get this from: stripe listen --print-secret
@@ -29,6 +33,7 @@ export async function POST(request: NextRequest) {
 
     try {
       // Verify the webhook signature
+      const stripe = getStripe()
       event = stripe.webhooks.constructEvent(
         body,
         signature,
