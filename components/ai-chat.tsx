@@ -37,6 +37,13 @@ export function AIChat({ className }: AIChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Also scroll when loading state changes (e.g., assistant is typing)
+  useEffect(() => {
+    if (isLoading) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [isLoading])
+
   const handleSend = async () => {
     if (!input.trim() || isLoading) return
 
@@ -225,7 +232,7 @@ export function AIChat({ className }: AIChatProps) {
           )}
         </div>
       </CardHeader>
-      <CardContent className="flex-1 flex flex-col p-0">
+      <CardContent className="flex-1 flex flex-col p-0 min-h-0">
         <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((message, index) => (

@@ -175,6 +175,42 @@ export default function DashboardPage() {
         <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
 
+      {/* Ideas Card - Prominent at Top */}
+      <div className="mb-8">
+        <Link href="/ideas">
+          <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer border-2 border-yellow-500/30 bg-gradient-to-br from-yellow-500/10 via-yellow-400/5 to-transparent shadow-lg shadow-yellow-500/20">
+            <CardHeader className="pb-6">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-4">
+                  <div className="p-4 rounded-xl bg-gradient-to-br from-yellow-500 to-yellow-600 shadow-lg shadow-yellow-500/50 group-hover:scale-110 transition-transform">
+                    <Lightbulb className="h-8 w-8 text-white" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-3xl font-bold bg-gradient-to-r from-yellow-500 to-yellow-600 bg-clip-text text-transparent group-hover:from-yellow-400 group-hover:to-yellow-500 transition-all">
+                      Create Your Idea
+                    </CardTitle>
+                    <CardDescription className="text-base mt-2 text-muted-foreground">
+                      Capture creative sparks and turn them into movie concepts
+                    </CardDescription>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="text-4xl font-bold text-yellow-500">{ideasCount}</span>
+                  <span className="text-sm text-muted-foreground">Ideas</span>
+                  <ArrowRight className="h-6 w-6 text-yellow-500 group-hover:translate-x-1 transition-transform" />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-2 text-yellow-600 font-medium">
+                <Plus className="h-5 w-5" />
+                <span>Start creating your next big idea</span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+      </div>
+
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
         <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
@@ -228,24 +264,6 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-600">8</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-600 transition-colors" />
-              </div>
-            </CardContent>
-          </Link>
-        </Card>
-
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/ideas">
-            <CardHeader className="pb-4">
-              <div className="p-3 rounded-lg bg-yellow-500/10 w-fit group-hover:bg-yellow-500/20 transition-colors">
-                <Lightbulb className="h-6 w-6 text-yellow-500" />
-              </div>
-              <CardTitle className="text-lg group-hover:text-yellow-500 transition-colors">Ideas</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">Capture creative sparks</CardDescription>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-yellow-500">{ideasCount}</span>
-                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-yellow-500 transition-colors" />
               </div>
             </CardContent>
           </Link>

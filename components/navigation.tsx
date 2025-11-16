@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Film, Sparkles, FolderOpen, Bot, Video, Settings, FileText, Image as ImageIcon, Home, Lightbulb, Palette, PenTool, Users } from "lucide-react"
+import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 
 const fullNavigation = [
@@ -14,6 +15,7 @@ const fullNavigation = [
   { name: "Assets", href: "/assets", icon: FolderOpen },
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
   { name: "Visual Dev", href: "/visdev", icon: Palette },
+  { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
   { name: "Writers", href: "/writers-page", icon: PenTool },
   { name: "AI Studio", href: "/ai-studio", icon: Bot },
 ]
@@ -24,6 +26,7 @@ const mobileNavigation = [
   { name: "Ideas", href: "/ideas", icon: Lightbulb },
   { name: "Writers", href: "/writers-page", icon: PenTool },
   { name: "Visual Dev", href: "/visdev", icon: Palette },
+  { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
   { name: "Settings", href: "/settings", icon: Settings },
 ]
 

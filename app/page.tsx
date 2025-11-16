@@ -89,7 +89,101 @@ export default function HomePage() {
             <AIChat />
           </div>
         </section>
+
+        {/* Promo Section (refined, fewer buttons, stronger narrative) */}
+        <section className="container mx-auto px-4 sm:px-6 pb-24">
+          <div className="max-w-6xl mx-auto">
+            {/* Visual banner */}
+            <div className="relative overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-blue-600/10 via-purple-600/10 to-cyan-600/10">
+              <div className="absolute inset-0 opacity-[0.15] pointer-events-none"
+                   style={{ backgroundImage: 'radial-gradient(circle at 20% 20%, rgba(59,130,246,0.35) 0, transparent 40%), radial-gradient(circle at 80% 30%, rgba(168,85,247,0.35) 0, transparent 45%), radial-gradient(circle at 50% 80%, rgba(34,211,238,0.35) 0, transparent 50%)' }} />
+              <div className="relative p-8 sm:p-12 lg:p-16">
+                <h3 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight mb-4">
+                  From Idea to Screen — in One Workspace
+                </h3>
+                <p className="text-sm sm:text-base lg:text-lg text-muted-foreground max-w-3xl mb-6">
+                  Draft stories with AI, shape the look with mood boards, organize scenes on a cinematic timeline, and keep assets in sync. Purpose-built for filmmakers.
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <Link href="/signup">
+                    <Button className="gradient-button neon-glow text-white">Start Free</Button>
+                  </Link>
+                  <Link href="/timeline">
+                    <Button variant="secondary">Explore Timeline</Button>
+                  </Link>
+                </div>
+              </div>
+            </div>
+
+            {/* Cinematic strip (auto-scroll) */}
+            <div className="mt-6 overflow-hidden rounded-xl border border-border/50 bg-background/50">
+              <div className="whitespace-nowrap will-change-transform marquee-track">
+                <div className="inline-flex gap-4 px-4 py-3">
+                  <img src="/quantum-heist-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/cyberpunk-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/classical-music-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/digital-horror-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/abstract-geometric-scene.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/placeholder.jpg" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                </div>
+                <div className="inline-flex gap-4 px-4 py-3">
+                  <img src="/quantum-heist-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/cyberpunk-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/classical-music-movie-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/digital-horror-poster.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/abstract-geometric-scene.png" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                  <img src="/placeholder.jpg" alt="Frame" className="h-20 w-auto rounded-md border border-border/40" />
+                </div>
+              </div>
+            </div>
+
+            {/* Three pillars */}
+            <div className="grid gap-6 mt-10 sm:grid-cols-3 relative">
+              {/* connector line */}
+              <div className="hidden sm:block absolute left-1/2 -translate-x-1/2 top-8 w-[80%] h-px bg-gradient-to-r from-transparent via-border to-transparent" />
+              <div className="rounded-xl border border-border/60 p-6 bg-background/60 backdrop-blur">
+                <div className="text-sm uppercase tracking-wide text-muted-foreground mb-2">01</div>
+                <h4 className="text-lg font-semibold mb-2">Write & Plan</h4>
+                <p className="text-sm text-muted-foreground">
+                  Turn ideas into polished treatments and scenes. Keep everything structured, trackable, and ready for production.
+                </p>
+              </div>
+              <div className="rounded-xl border border-border/60 p-6 bg-background/60 backdrop-blur">
+                <div className="text-sm uppercase tracking-wide text-muted-foreground mb-2">02</div>
+                <h4 className="text-lg font-semibold mb-2">Visualize the Mood</h4>
+                <p className="text-sm text-muted-foreground">
+                  Explore cohesive looks with context-aware prompts from your treatment, scene, or shot. Collect references and keep them tied to the work.
+                </p>
+              </div>
+              <div className="rounded-xl border border-border/60 p-6 bg-background/60 backdrop-blur">
+                <div className="text-sm uppercase tracking-wide text-muted-foreground mb-2">03</div>
+                <h4 className="text-lg font-semibold mb-2">Build the Timeline</h4>
+                <p className="text-sm text-muted-foreground">
+                  Arrange scenes, iterate quickly, and keep production moving with a clean cinematic view that’s easy to share.
+                </p>
+              </div>
+            </div>
+
+            {/* Sub-features as inline list instead of buttons */}
+            <div className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm text-muted-foreground">
+              <div className="rounded-lg border border-border/50 px-4 py-3 bg-background/60">From concept to scenes—one continuous flow</div>
+              <div className="rounded-lg border border-border/50 px-4 py-3 bg-background/60">Mood boards at film, scene, and shot level</div>
+              <div className="rounded-lg border border-border/50 px-4 py-3 bg-background/60">All visuals organized in a single library</div>
+              <div className="rounded-lg border border-border/50 px-4 py-3 bg-background/60">One‑click look exploration from your script</div>
+            </div>
+          </div>
+        </section>
       </main>
+      <style jsx>{`
+        .marquee-track {
+          display: inline-block;
+          animation: marquee 28s linear infinite;
+        }
+        @keyframes marquee {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+      `}</style>
 
       {/* Footer */}
       <footer className="border-t border-border bg-background/50">

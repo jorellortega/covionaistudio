@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -23,7 +23,9 @@ import { getSupabaseClient } from '@/lib/supabase'
 import { sanitizeFilename } from '@/lib/utils'
 import { AssetService, type Asset } from '@/lib/asset-service'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneData } from '@/lib/treatment-scenes-service'
+import { CastingService, type CastingSetting } from '@/lib/casting-service'
 import { TimelineService } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
 
@@ -42,6 +44,8 @@ export default function TreatmentDetailPage() {
     target_audience: '',
     estimated_budget: '',
     estimated_duration: '',
+    status: 'draft',
+    genre: '',
   })
   const [isSavingTreatment, setIsSavingTreatment] = useState(false)
   const [isEditingSynopsis, setIsEditingSynopsis] = useState(false)
@@ -51,6 +55,8 @@ export default function TreatmentDetailPage() {
   const [editingPrompt, setEditingPrompt] = useState('')
   const [isSavingPrompt, setIsSavingPrompt] = useState(false)
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false)
+  const [isGeneratingLogline, setIsGeneratingLogline] = useState(false)
+  const [isGeneratingTreatment, setIsGeneratingTreatment] = useState(false)
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [selectedScriptAIService, setSelectedScriptAIService] = useState<string>('')
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
@@ -76,6 +82,12 @@ export default function TreatmentDetailPage() {
   const [editingScene, setEditingScene] = useState<Partial<TreatmentScene>>({})
   const [isSavingScene, setIsSavingScene] = useState(false)
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
+  const [isClearingScenes, setIsClearingScenes] = useState(false)
+  // Characters and casting states
+  const [castingSettings, setCastingSettings] = useState<CastingSetting | null>(null)
+  const [charactersFilter, setCharactersFilter] = useState<string>("")
+  const [newCharacterRole, setNewCharacterRole] = useState<string>("")
+  const [isSyncingRoles, setIsSyncingRoles] = useState(false)
 
   useEffect(() => {
     if (id) {
@@ -88,6 +100,23 @@ export default function TreatmentDetailPage() {
       loadTreatmentScenes(treatment.id)
     }
   }, [treatment?.id])
+
+  // Load casting settings when project_id available
+  useEffect(() => {
+    const loadCasting = async () => {
+      if (!treatment?.project_id) {
+        setCastingSettings(null)
+        return
+      }
+      try {
+        const settings = await CastingService.getCastingSettings(treatment.project_id)
+        setCastingSettings(settings)
+      } catch (e) {
+        console.error('Failed loading casting settings:', e)
+      }
+    }
+    loadCasting()
+  }, [treatment?.project_id])
 
   // Load AI settings
   useEffect(() => {
@@ -139,6 +168,36 @@ export default function TreatmentDetailPage() {
   const isScriptsTabLocked = () => {
     const setting = aiSettings.find(s => s.tab_type === 'scripts')
     return setting?.is_locked || false
+  }
+
+  // Clear all treatment scenes
+  const clearAllScenes = async () => {
+    if (!treatment) return
+    if (treatmentScenes.length === 0) return
+    if (!confirm('Are you sure you want to delete ALL scenes for this treatment? This cannot be undone.')) {
+      return
+    }
+    try {
+      setIsClearingScenes(true)
+      // Delete sequentially to avoid DB rate limits; still fast for typical counts
+      for (const scene of treatmentScenes) {
+        await TreatmentScenesService.deleteTreatmentScene(scene.id)
+      }
+      setTreatmentScenes([])
+      toast({
+        title: "Scenes Cleared",
+        description: "All treatment scenes have been deleted.",
+      })
+    } catch (error) {
+      console.error('Failed to clear scenes:', error)
+      toast({
+        title: "Error",
+        description: "Failed to clear scenes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsClearingScenes(false)
+    }
   }
 
   const getScriptsTabLockedModel = () => {
@@ -503,6 +562,8 @@ Treatment:`
       target_audience: treatment.target_audience || '',
       estimated_budget: treatment.estimated_budget || '',
       estimated_duration: treatment.estimated_duration || '',
+      status: (treatment.status as any) || 'draft',
+      genre: treatment.genre || '',
     })
     setIsEditingTreatment(true)
   }
@@ -513,6 +574,8 @@ Treatment:`
       target_audience: '',
       estimated_budget: '',
       estimated_duration: '',
+      status: 'draft',
+      genre: '',
     })
   }
 
@@ -525,6 +588,8 @@ Treatment:`
         target_audience: editingTreatmentData.target_audience || undefined,
         estimated_budget: editingTreatmentData.estimated_budget || undefined,
         estimated_duration: editingTreatmentData.estimated_duration || undefined,
+        status: (editingTreatmentData.status as any) || undefined,
+        genre: editingTreatmentData.genre || undefined,
       })
       
       setTreatment(updatedTreatment)
@@ -801,6 +866,171 @@ Synopsis (2-3 paragraphs only):`
     }
   }
 
+  // Generate AI Logline from treatment content
+  const generateAILogline = async () => {
+    if (isGeneratingLogline) return
+    
+    if (!treatment) {
+      toast({
+        title: "Error",
+        description: "Treatment not loaded",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Check if treatment has content to generate from
+    const treatmentContent = treatment.prompt || treatment.synopsis || treatment.title
+    if (!treatmentContent || !treatmentContent.trim()) {
+      toast({
+        title: "Missing Content",
+        description: "Treatment needs content (prompt, synopsis, or title) to generate a logline.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!user || !userId) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating a logline.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Use locked model if available, otherwise use selected service
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings in Settings → AI Settings. You need to set up an OpenAI or Anthropic API key.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Normalize service name
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             serviceToUse.toLowerCase().includes('gemini') || serviceToUse.toLowerCase().includes('google') ? 'google' : 
+                             'openai' // Default to OpenAI
+
+    if (normalizedService === 'google') {
+      toast({
+        title: "Service Not Available",
+        description: "Google Gemini is not currently configured. Please use OpenAI or Anthropic.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingLogline(true)
+
+      // Build content source
+      const sourceText = treatment.prompt || treatment.synopsis || treatment.title || ''
+      const cleanedText = sourceText
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/__/g, '')
+        .replace(/`/g, '')
+        .replace(/#{1,6}\s+/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+
+      const contentForPrompt = cleanedText.length > 1200 
+        ? cleanedText.substring(0, 1200) + '...'
+        : cleanedText
+
+      const aiPrompt = `Write a single-sentence movie logline based on the following treatment content.
+
+REQUIREMENTS:
+- Exactly 1 sentence, 20-35 words
+- Clearly state protagonist, goal, central conflict/stakes
+- Present tense, cinematic, concise
+- No character names unless iconic; use roles (e.g., "a cynical detective")
+- No markdown, no quotes, no extra commentary
+
+Treatment content:
+${contentForPrompt}
+
+Logline (one sentence only):`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'logline',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate logline')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.text) {
+        const newLogline = result.text.trim().replace(/^"|"$/g, '')
+        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+          logline: newLogline,
+        })
+
+        setTreatment(updatedTreatment)
+        
+        toast({
+          title: "Logline Generated!",
+          description: "AI has generated a new logline.",
+        })
+      } else {
+        throw new Error('No logline text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI logline:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      if (errorMessage.includes('API key not configured') || errorMessage.includes('API key')) {
+        toast({
+          title: "API Key Required",
+          description: "Please set up your OpenAI or Anthropic API key in Settings → AI Settings. Click here to go to settings.",
+          variant: "destructive",
+        })
+        setTimeout(() => {
+          if (confirm('Would you like to go to AI Settings to configure your API key?')) {
+            router.push('/settings-ai')
+          }
+        }, 1000)
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: `Failed to generate logline: ${errorMessage}`,
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setIsGeneratingLogline(false)
+    }
+  }
+
   // Upload generated image to Supabase storage
   const uploadGeneratedImageToStorage = async (imageUrl: string, fileName: string): Promise<string> => {
     try {
@@ -835,6 +1065,159 @@ Synopsis (2-3 paragraphs only):`
     } catch (error) {
       console.error('Error uploading treatment cover to Supabase:', error)
       throw error
+    }
+  }
+
+  // Generate AI Treatment (full document) from existing content
+  const generateAITreatment = async () => {
+    if (isGeneratingTreatment) return
+    
+    if (!treatment) {
+      toast({
+        title: "Error",
+        description: "Treatment not loaded",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Use synopsis/logline/title as seed content. If a prompt exists, prefer that as input to improve result.
+    const sourceContent = treatment.prompt || treatment.synopsis || treatment.logline || treatment.title
+    if (!sourceContent || !sourceContent.trim()) {
+      toast({
+        title: "Missing Content",
+        description: "Need at least a title, logline, synopsis, or existing treatment to generate.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!user || !userId) {
+      toast({
+        title: "User Not Loaded",
+        description: "Please wait for user profile to load before generating a treatment.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Configure OpenAI or Anthropic in Settings → AI Settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             serviceToUse.toLowerCase().includes('gemini') || serviceToUse.toLowerCase().includes('google') ? 'google' : 
+                             'openai'
+
+    if (normalizedService === 'google') {
+      toast({
+        title: "Service Not Available",
+        description: "Google Gemini is not currently configured. Please use OpenAI or Anthropic.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingTreatment(true)
+
+      const cleaned = sourceContent
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/__/g, '')
+        .replace(/`/g, '')
+        .replace(/#{1,6}\s+/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+
+      const seed = cleaned.length > 4000 ? cleaned.substring(0, 4000) + '...' : cleaned
+
+      const aiPrompt = `Write a professional film treatment based on the material below.
+
+REQUIREMENTS:
+- Length: 700-1200 words, 6-10 concise paragraphs
+- Clear beginning, middle, end; strong arc and escalating stakes
+- Third person, present tense; cinematic yet efficient prose
+- Introduce protagonist(s), core conflict, antagonist or opposing force
+- Focus on the spine of the story; avoid dialog, shot lists, and scene numbers
+- No markdown formatting
+
+Source material:
+${seed}
+
+Write the treatment now:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'treatment',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate treatment')
+      }
+
+      const result = await response.json()
+      if (result.success && result.text) {
+        const newTreatment = result.text.trim()
+        const updated = await TreatmentsService.updateTreatment(treatment.id, { prompt: newTreatment })
+        setTreatment(updated)
+        toast({
+          title: "Treatment Generated!",
+          description: "AI created a new full treatment document.",
+        })
+      } else {
+        throw new Error('No treatment text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI treatment:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      if (errorMessage.includes('API key')) {
+        toast({
+          title: "API Key Required",
+          description: "Please set up your OpenAI or Anthropic API key in Settings → AI Settings. Click here to go to settings.",
+          variant: "destructive",
+        })
+        setTimeout(() => {
+          if (confirm('Go to AI Settings to configure your API key?')) {
+            router.push('/settings-ai')
+          }
+        }, 1000)
+      } else {
+        toast({
+          title: "Generation Failed",
+          description: `Failed to generate treatment: ${errorMessage}`,
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setIsGeneratingTreatment(false)
     }
   }
 
@@ -1694,6 +2077,87 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       })
     } finally {
       setIsGeneratingScenes(false)
+    }
+  }
+
+  // ===== Characters aggregation from treatment scenes and casting sync =====
+  const detectedCharacters = (() => {
+    const set = new Set<string>()
+    const counts = new Map<string, number>()
+    for (const s of treatmentScenes) {
+      const names = s.characters || []
+      for (const raw of names) {
+        const name = (raw || "").trim()
+        if (!name) continue
+        set.add(name)
+        counts.set(name, (counts.get(name) || 0) + 1)
+      }
+    }
+    const list = Array.from(set.values()).map((name) => ({
+      name,
+      count: counts.get(name) || 0,
+    }))
+    return list
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .filter((c) => (charactersFilter ? c.name.toLowerCase().includes(charactersFilter.toLowerCase()) : true))
+  })()
+
+  const rolesAvailable = (() => {
+    const roles = castingSettings?.roles_available || []
+    return roles
+      .slice()
+      .sort((a, b) => a.localeCompare(b))
+      .filter((r) => (charactersFilter ? r.toLowerCase().includes(charactersFilter.toLowerCase()) : true))
+  })()
+
+  const missingInRoles = (() => {
+    const roles = new Set((castingSettings?.roles_available || []).map((r) => r.toLowerCase()))
+    return detectedCharacters
+      .filter((c) => !roles.has(c.name.toLowerCase()))
+      .map((c) => c.name)
+  })()
+
+  const addRole = async (name: string) => {
+    if (!treatment?.project_id || !name.trim()) return
+    setIsSyncingRoles(true)
+    try {
+      const current = castingSettings?.roles_available || []
+      if (current.some((r) => r.toLowerCase() === name.trim().toLowerCase())) {
+        toast({ title: "Already Added", description: `"${name}" is already in casting roles.` })
+        return
+      }
+      const next = [...current, name.trim()]
+      const updated = await CastingService.upsertCastingSettings(treatment.project_id, { roles_available: next })
+      setCastingSettings(updated)
+      toast({ title: "Role Added", description: `"${name}" added to casting roles.` })
+    } catch (err) {
+      console.error("Failed adding role:", err)
+      toast({ title: "Error", description: "Failed to add role.", variant: "destructive" })
+    } finally {
+      setIsSyncingRoles(false)
+    }
+  }
+
+  const addNewCharacterAsRole = async () => {
+    if (!newCharacterRole.trim()) return
+    await addRole(newCharacterRole.trim())
+    setNewCharacterRole("")
+  }
+
+  const syncAllMissingToRoles = async () => {
+    if (!treatment?.project_id || missingInRoles.length === 0) return
+    setIsSyncingRoles(true)
+    try {
+      const current = castingSettings?.roles_available || []
+      const merged = Array.from(new Set([...current, ...missingInRoles].map((r) => r.trim())).values())
+      const updated = await CastingService.upsertCastingSettings(treatment.project_id, { roles_available: merged })
+      setCastingSettings(updated)
+      toast({ title: "Synced", description: "All detected characters synced to casting roles." })
+    } catch (err) {
+      console.error("Failed syncing roles:", err)
+      toast({ title: "Error", description: "Failed to sync roles.", variant: "destructive" })
+    } finally {
+      setIsSyncingRoles(false)
     }
   }
 
@@ -2601,6 +3065,29 @@ Return ONLY the JSON object, no other text:`
                             Listen
                           </Button>
                         )}
+                        {/* AI Regenerate Button */}
+                        {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={generateAITreatment}
+                            disabled={isGeneratingTreatment || !aiSettingsLoaded}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            title="Generate a new full treatment using AI from existing content"
+                          >
+                            {isGeneratingTreatment ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Generating...
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-4 w-4 mr-2" />
+                                AI Regenerate
+                              </>
+                            )}
+                          </Button>
+                        )}
                         <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
                           <Edit className="h-4 w-4 mr-2" />
                           {treatment.prompt ? 'Edit' : 'Add Treatment'}
@@ -2762,13 +3249,41 @@ Return ONLY the JSON object, no other text:`
                   <div className="flex items-center gap-4 pt-4 border-t">
                     <div>
                       <p className="text-sm font-medium mb-1">Status</p>
-                      <Badge className={getStatusColor(treatment.status)}>
-                        {treatment.status.replace('-', ' ')}
-                      </Badge>
+                      {isEditingTreatment ? (
+                        <div className="pl-0 ml-0">
+                          <Select
+                            value={editingTreatmentData.status}
+                            onValueChange={(val) => setEditingTreatmentData(prev => ({ ...prev, status: val as any }))}
+                          >
+                            <SelectTrigger className="ml-0">
+                              <SelectValue placeholder="Select status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="draft">Draft</SelectItem>
+                              <SelectItem value="in-progress">In Progress</SelectItem>
+                              <SelectItem value="completed">Completed</SelectItem>
+                              <SelectItem value="archived">Archived</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : (
+                        <Badge className={getStatusColor(treatment.status)}>
+                          {treatment.status.replace('-', ' ')}
+                        </Badge>
+                      )}
                     </div>
                     <div>
                       <p className="text-sm font-medium mb-1">Genre</p>
-                      <Badge variant="outline">{treatment.genre}</Badge>
+                      {isEditingTreatment ? (
+                        <Input
+                          value={editingTreatmentData.genre}
+                          onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, genre: e.target.value }))}
+                          placeholder="e.g., Sci-Fi"
+                          className="ml-0"
+                        />
+                      ) : (
+                        <Badge variant="outline">{treatment.genre}</Badge>
+                      )}
                     </div>
                     {treatment.project_id && movie && (
                       <div>
@@ -2811,21 +3326,44 @@ Return ONLY the JSON object, no other text:`
                       <CardTitle>Logline</CardTitle>
                       <CardDescription>One-sentence summary</CardDescription>
                     </div>
-                    {/* Quick Listen Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                      onClick={() => {
-                        const ttsElement = document.querySelector('[data-tts-logline]')
-                        if (ttsElement) {
-                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        }
-                      }}
-                    >
-                      <Volume2 className="h-4 w-4 mr-2" />
-                      Listen
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {/* Quick Listen Button */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        onClick={() => {
+                          const ttsElement = document.querySelector('[data-tts-logline]')
+                          if (ttsElement) {
+                            ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                          }
+                        }}
+                      >
+                        <Volume2 className="h-4 w-4 mr-2" />
+                        Listen
+                      </Button>
+                      {/* AI Regenerate Button */}
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={generateAILogline}
+                        disabled={isGeneratingLogline || !aiSettingsLoaded}
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        title="Generate a new logline from treatment content using AI"
+                      >
+                        {isGeneratingLogline ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-4 w-4 mr-2" />
+                            AI Regenerate
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -2934,6 +3472,150 @@ Return ONLY the JSON object, no other text:`
               </Card>
             )}
 
+            {/* Characters & Casting Integration */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Users className="h-5 w-5 text-purple-500" />
+                      Characters
+                    </CardTitle>
+                    <CardDescription>
+                      Aggregate characters from treatment scenes and sync with casting roles.
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      placeholder="Filter characters/roles..."
+                      value={charactersFilter}
+                      onChange={(e) => setCharactersFilter(e.target.value)}
+                      className="h-8 bg-input border-border"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={missingInRoles.length === 0 || isSyncingRoles || !treatment?.project_id}
+                      onClick={syncAllMissingToRoles}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                    >
+                      {isSyncingRoles ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Sync All To Casting
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div>
+                    <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <ListFilter className="h-4 w-4" />
+                      Detected Characters ({detectedCharacters.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {detectedCharacters.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No characters found in scenes.</div>
+                      ) : (
+                        detectedCharacters.map((c) => {
+                          const alreadyRole = (castingSettings?.roles_available || []).some(
+                            (r) => r.toLowerCase() === c.name.toLowerCase(),
+                          )
+                          return (
+                            <div key={c.name} className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline">{c.count}</Badge>
+                                <span>{c.name}</span>
+                              </div>
+                              {alreadyRole ? (
+                                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+                                  In Casting
+                                </Badge>
+                              ) : (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => addRole(c.name)}
+                                  disabled={isSyncingRoles || !treatment?.project_id}
+                                  className="gap-2"
+                                >
+                                  <Plus className="h-4 w-4" />
+                                  Add to Casting
+                                </Button>
+                              )}
+                            </div>
+                          )
+                        })
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium mb-2">Casting Roles ({rolesAvailable.length})</h3>
+                    <div className="flex items-end gap-2 mb-3">
+                      <div className="flex-1">
+                        <Label htmlFor="add-role">Add role</Label>
+                        <Input
+                          id="add-role"
+                          placeholder="e.g., Protagonist, Detective Jane"
+                          value={newCharacterRole}
+                          onChange={(e) => setNewCharacterRole(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault()
+                              addNewCharacterAsRole()
+                            }
+                          }}
+                          className="bg-input border-border"
+                        />
+                      </div>
+                      <Button
+                        onClick={addNewCharacterAsRole}
+                        disabled={!newCharacterRole.trim() || isSyncingRoles || !treatment?.project_id}
+                        className="gap-2"
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      {rolesAvailable.length === 0 ? (
+                        <div className="text-sm text-muted-foreground">No casting roles yet.</div>
+                      ) : (
+                        rolesAvailable.map((role) => (
+                          <div key={role} className="flex items-center justify-between">
+                            <span>{role}</span>
+                            <Badge variant="outline">Role</Badge>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    {treatment?.project_id && (
+                      <div className="pt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                        <Link href={`/casting/${treatment.project_id}`}>
+                          <Button variant="outline" className="w-full">
+                            Open Casting
+                          </Button>
+                        </Link>
+                        <Link href={`/characters?movie=${treatment.project_id}`}>
+                          <Button variant="outline" className="w-full">
+                            Open Characters
+                          </Button>
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
             {/* Treatment Scenes */}
             <Card>
               <CardHeader>
@@ -3000,6 +3682,28 @@ Return ONLY the JSON object, no other text:`
                         </>
                       )}
                     </Button>
+                    {treatmentScenes.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={clearAllScenes}
+                        disabled={isClearingScenes}
+                        className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                        title="Delete all scenes for this treatment"
+                      >
+                        {isClearingScenes ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Clearing...
+                          </>
+                        ) : (
+                          <>
+                            <Trash2 className="h-4 w-4 mr-2" />
+                            Clear Scenes
+                          </>
+                        )}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>

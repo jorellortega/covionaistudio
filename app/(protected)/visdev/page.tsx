@@ -21,7 +21,9 @@ import { AssetService, CreateAssetData } from '@/lib/asset-service'
 import { PreferencesService } from '@/lib/preferences-service'
 import { SavedPromptsService } from '@/lib/saved-prompts-service'
 import Header from '@/components/header'
-import { Loader2, Eye, EyeOff, Edit3, CheckCircle } from 'lucide-react'
+import { Loader2, Eye, EyeOff, Edit3, CheckCircle, Users } from 'lucide-react'
+import Link from 'next/link'
+import { CharactersService, type Character } from '@/lib/characters-service'
 
 interface VisualDevelopmentItem {
   id: string
@@ -72,6 +74,8 @@ export default function VisualDevelopmentPage() {
   const [selectedScene, setSelectedScene] = useState<string>("movie")
   const [movies, setMovies] = useState<Movie[]>([])
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [promptTitle, setPromptTitle] = useState('')
   const [selectedStyle, setSelectedStyle] = useState('none')
@@ -99,6 +103,7 @@ export default function VisualDevelopmentPage() {
   const [selectedPromptId, setSelectedPromptId] = useState('none')
   const [hidePromptText, setHidePromptText] = useState(false)
   const [userRole, setUserRole] = useState<string | null>(null)
+  const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null)
   
   // Edit prompt state
   const [editingPrompt, setEditingPrompt] = useState<SavedPrompt | null>(null)
@@ -156,9 +161,11 @@ export default function VisualDevelopmentPage() {
     if (selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
       loadScenes(selectedProject)
       setSelectedScene("movie") // Reset scene selection when project changes
+      loadCharactersForProject(selectedProject)
     } else {
       setScenes([])
       setSelectedScene("movie")
+      setCharacters([])
     }
     
     // Reload prompts when project changes to show appropriate prompts
@@ -325,6 +332,24 @@ export default function VisualDevelopmentPage() {
     } catch (error) {
       console.error('Error loading scenes:', error)
       setScenes([])
+    }
+  }
+
+  const loadCharactersForProject = async (movieId: string) => {
+    try {
+      if (!user || !movieId || movieId === 'all' || movieId === 'free') {
+        setCharacters([])
+        return
+      }
+      setIsLoadingCharacters(true)
+      const list = await CharactersService.getCharacters(movieId)
+      setCharacters(list)
+      console.log('Loaded characters for project:', movieId, 'Count:', list.length)
+    } catch (error) {
+      console.error('Error loading characters:', error)
+      setCharacters([])
+    } finally {
+      setIsLoadingCharacters(false)
     }
   }
 
@@ -1780,6 +1805,61 @@ export default function VisualDevelopmentPage() {
                 Design how characters look, dress, move, and express emotions. Generate character concepts, 
                 expressions, poses, and costume variations.
               </p>
+            </div>
+            {/* Characters quick actions + Existing list */}
+            <div className="max-w-6xl mx-auto w-full">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-muted-foreground">
+                  Characters {selectedCharacterId ? <span className="ml-2 text-xs text-primary">(Selected)</span> : null}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' && (
+                    <span className="text-xs text-muted-foreground">
+                      {isLoadingCharacters ? 'Loading…' : `${characters.length} found`}
+                    </span>
+                  )}
+                  <Link href={selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? `/characters?movie=${selectedProject}` : '/characters'}>
+                    <Button className="gradient-button neon-glow text-white h-8 px-3">
+                      <Users className="h-4 w-4 mr-2" />
+                      Manage Characters
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+              {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? (
+                <div className="flex flex-wrap gap-2">
+                  {isLoadingCharacters ? (
+                    <Badge variant="secondary">Loading…</Badge>
+                  ) : characters.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No characters yet for this project.</span>
+                  ) : (
+                    characters.map((c) => {
+                      const isSelected = selectedCharacterId === c.id
+                      return (
+                        <Button
+                          key={c.id}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
+                          onClick={() => {
+                            setSelectedCharacterId(c.id)
+                            const desc = c.description ? ` — ${c.description}` : ''
+                            setPrompt(`${c.name}${desc}`)
+                            setPromptTitle(`${c.name} concept`)
+                            toast({ title: "Character Selected", description: `Using ${c.name} in prompt` })
+                          }}
+                          title={c.description || c.name}
+                          aria-pressed={isSelected}
+                        >
+                          {c.name}
+                        </Button>
+                      )
+                    })
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Select a movie project to view its characters.</p>
+              )}
             </div>
             {getTabContent('character')}
           </TabsContent>

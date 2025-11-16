@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+// Replace collapsible genre picker with overlay popover
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Dialog,
@@ -108,7 +109,6 @@ export default function IdeasPage() {
   const [description, setDescription] = useState("")
   const [genre, setGenre] = useState("") // Legacy, kept for backward compatibility
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]) // New: array of genres
-  const [genresOpen, setGenresOpen] = useState(false) // Collapsible state for genres (default collapsed)
   const [mainCreator, setMainCreator] = useState("")
   const [coCreators, setCoCreators] = useState<string[]>([])
   const [originalPrompt, setOriginalPrompt] = useState("")
@@ -116,6 +116,7 @@ export default function IdeasPage() {
   const [synopsis, setSynopsis] = useState("")
   const [status, setStatus] = useState<"concept" | "development" | "completed">("concept")
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false)
+  const [generatingSynopsisForIdea, setGeneratingSynopsisForIdea] = useState<string | null>(null)
 
   // Movie conversion state
   const [showMovieDialog, setShowMovieDialog] = useState(false)
@@ -132,6 +133,18 @@ export default function IdeasPage() {
     writer: "",
     cowriters: []
   })
+
+  // Treatment conversion dialog state
+  const [showTreatmentDialog, setShowTreatmentDialog] = useState(false)
+  const [isSavingTreatment, setIsSavingTreatment] = useState(false)
+  const [isGeneratingTreatmentSynopsis, setIsGeneratingTreatmentSynopsis] = useState(false)
+  const [convertingIdeaForTreatment, setConvertingIdeaForTreatment] = useState<MovieIdea | null>(null)
+  const [treatmentTitle, setTreatmentTitle] = useState<string>("")
+  const [treatmentGenre, setTreatmentGenre] = useState<string>("")
+  const [treatmentLogline, setTreatmentLogline] = useState<string>("")
+  const [treatmentSynopsis, setTreatmentSynopsis] = useState<string>("")
+  const [treatmentPrompt, setTreatmentPrompt] = useState<string>("")
+  const [treatmentCoverImageUrl, setTreatmentCoverImageUrl] = useState<string | undefined>(undefined)
 
   const genres = [
     "Action", "Adventure", "Comedy", "Crime", "Drama", "Fantasy", 
@@ -167,6 +180,43 @@ export default function IdeasPage() {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const regenerateIdeaSynopsis = async (idea: MovieIdea) => {
+    if (!ready || !user || !userId) return
+    try {
+      setGeneratingSynopsisForIdea(idea.id)
+      const sourceText = (idea.prompt && idea.prompt.trim()) || (idea.description && idea.description.trim()) || ""
+      if (!sourceText) {
+        toast({
+          title: "No Content",
+          description: "This idea has no description or AI content to summarize.",
+          variant: "destructive",
+        })
+        return
+      }
+      const newSynopsis = await generateSynopsisForText(sourceText)
+      if (newSynopsis) {
+        await MovieIdeasService.updateIdea(idea.id, {
+          synopsis: newSynopsis,
+          updated_at: new Date().toISOString(),
+        })
+        toast({
+          title: "Synopsis Updated",
+          description: "A new synopsis was generated and saved.",
+        })
+        await fetchIdeas()
+      }
+    } catch (error) {
+      console.error('Error regenerating synopsis:', error)
+      toast({
+        title: "Error",
+        description: "Failed to generate synopsis for this idea.",
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingSynopsisForIdea(null)
     }
   }
 
@@ -289,6 +339,142 @@ Synopsis (2-3 paragraphs only):`
     }
   }
 
+  // Generate synopsis for arbitrary text (used in treatment dialog)
+  const generateSynopsisForText = async (sourceText: string): Promise<string | null> => {
+    if (!ready || !user || !userId) {
+      return null
+    }
+    const content = (sourceText || "").trim()
+    if (!content) return null
+    if (!aiSettingsLoaded || !aiSettings.scripts) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return null
+    }
+    const scriptsSetting = aiSettings.scripts
+    const serviceToUse = scriptsSetting.is_locked && scriptsSetting.locked_model
+      ? scriptsSetting.locked_model
+      : scriptsSetting.selected_model || 'gpt-4o-mini'
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+    try {
+      setIsGeneratingTreatmentSynopsis(true)
+      const cleanedText = content
+        .replace(/\*\*/g, '')
+        .replace(/\*/g, '')
+        .replace(/__/g, '')
+        .replace(/`/g, '')
+        .replace(/#{1,6}\s+/g, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+      const contentForPrompt = cleanedText.length > 2000 
+        ? cleanedText.substring(0, 2000) + '...'
+        : cleanedText
+      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie idea.\n\nREQUIREMENTS:\n- Summarize the MAIN STORY in 2-3 paragraphs only\n- Focus on: who is the protagonist, what is their goal, what is the central conflict\n- Write in third person, present tense\n- Engaging and cinematic tone\n- NO markdown formatting\n- NO scene breakdowns\n- NO character backstories\n- NO production details\n- NO plot expansion - just summarize what's already there\n\nCRITICAL: This is a SYNOPSIS (brief summary), NOT a full treatment. Keep it short and focused.\n\nMovie idea content:\n${contentForPrompt}\n\nSynopsis (2-3 paragraphs only):`
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'synopsis',
+          service: normalizedService,
+          apiKey: 'configured',
+        }),
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate synopsis')
+      }
+      const result = await response.json()
+      if (result.success && result.text) {
+        return result.text.trim()
+      } else {
+        throw new Error('No synopsis text received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate AI synopsis:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate synopsis'
+      toast({
+        title: "Synopsis Generation Failed",
+        description: `Could not generate synopsis: ${errorMessage}.`,
+        variant: "destructive",
+      })
+      return null
+    } finally {
+      setIsGeneratingTreatmentSynopsis(false)
+    }
+  }
+
+  const openTreatmentDialog = async (idea: MovieIdea) => {
+    setConvertingIdeaForTreatment(idea)
+    // Prefill draft fields from idea
+    const firstGenre = (idea.genres && idea.genres.length > 0) ? idea.genres[0] : (idea.genre || "Unspecified")
+    setTreatmentTitle(idea.title || "")
+    setTreatmentGenre(firstGenre)
+    // Simple logline default from description
+    const desc = idea.description || ""
+    const loglineDefault = desc.length > 200 ? (desc.substring(0, 200).trim() + '...') : desc
+    setTreatmentLogline(loglineDefault)
+    setTreatmentSynopsis((idea.synopsis || "").trim())
+    setTreatmentPrompt(idea.prompt || "")
+    // Cover image will be resolved on save if needed (optional)
+    setTreatmentCoverImageUrl(undefined)
+    setShowTreatmentDialog(true)
+  }
+
+  const saveTreatmentFromDialog = async () => {
+    if (!user || !userId || !convertingIdeaForTreatment) return
+    try {
+      setIsSavingTreatment(true)
+      // Resolve cover image from idea images if not set
+      let coverImageUrl = treatmentCoverImageUrl
+      if (!coverImageUrl) {
+        try {
+          const ideaImages = await IdeaImagesService.getIdeaImages(convertingIdeaForTreatment.id)
+          const imageFiles = ideaImages.filter(img => img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i))
+          if (imageFiles.length > 0) {
+            coverImageUrl = imageFiles[0].image_url
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const treatmentData: CreateTreatmentData = {
+        title: treatmentTitle.trim() || convertingIdeaForTreatment.title,
+        genre: treatmentGenre || "Unspecified",
+        status: 'draft',
+        synopsis: treatmentSynopsis.trim() ? treatmentSynopsis.trim() : undefined,
+        prompt: treatmentPrompt.trim() ? treatmentPrompt.trim() : undefined,
+        logline: treatmentLogline.trim() || convertingIdeaForTreatment.description || '',
+        notes: convertingIdeaForTreatment.original_prompt || undefined,
+        cover_image_url: coverImageUrl,
+      }
+      const treatment = await TreatmentsService.createTreatment(treatmentData)
+      toast({
+        title: "Success!",
+        description: `Idea "${treatmentData.title}" converted to treatment successfully!`,
+      })
+      setShowTreatmentDialog(false)
+      setConvertingIdeaForTreatment(null)
+      router.push('/treatments')
+    } catch (error) {
+      console.error('Error creating treatment from dialog:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create treatment",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingTreatment(false)
+    }
+  }
+
   const saveIdea = async () => {
     if (!ready || !title.trim() || !description.trim() || !mainCreator.trim()) {
       toast({
@@ -300,19 +486,8 @@ Synopsis (2-3 paragraphs only):`
     }
 
     try {
-      // If synopsis is empty, generate it automatically
-      let finalSynopsis = synopsis.trim()
-      if (!finalSynopsis && (prompt.trim() || description.trim())) {
-        toast({
-          title: "Generating Synopsis",
-          description: "Auto-generating synopsis from your content...",
-        })
-        const generatedSynopsis = await generateSynopsis()
-        if (generatedSynopsis) {
-          finalSynopsis = generatedSynopsis
-          setSynopsis(generatedSynopsis) // Update the field so user can see it
-        }
-      }
+      // Do NOT auto-generate synopsis; use whatever user provided
+      const finalSynopsis = synopsis.trim()
 
       const ideaData = {
         user_id: userId,
@@ -446,7 +621,6 @@ Synopsis (2-3 paragraphs only):`
     setDescription("")
     setGenre("")
     setSelectedGenres([])
-    setGenresOpen(false) // Reset to collapsed state
     setMainCreator("")
     setCoCreators([])
     setOriginalPrompt("")
@@ -2077,112 +2251,73 @@ Synopsis (2-3 paragraphs only):`
                     />
                   </div>
                   <div>
-                    <Collapsible open={genresOpen} onOpenChange={setGenresOpen}>
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <Label htmlFor="genres">Genres</Label>
-                          <CollapsibleTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2"
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="genres">Genres</Label>
+                    </div>
+                    {selectedGenres.length > 0 && (
+                      <div className="flex flex-wrap gap-2 py-2">
+                        {selectedGenres.map((g) => (
+                          <Badge 
+                            key={g} 
+                            variant="secondary" 
+                            className="flex items-center gap-1"
+                          >
+                            {g}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = selectedGenres.filter(genre => genre !== g)
+                                setSelectedGenres(next)
+                                if (selectedGenres[0] === g) setGenre(next[0] || "")
+                              }}
+                              className="ml-1 hover:text-destructive focus:outline-none"
+                              aria-label={`Remove ${g}`}
                             >
-                              {genresOpen ? (
-                                <>
-                                  <ChevronUp className="h-3 w-3 mr-1" />
-                                  Collapse
-                                </>
-                              ) : (
-                                <>
-                                  <ChevronDown className="h-3 w-3 mr-1" />
-                                  Expand
-                                </>
-                              )}
-                            </Button>
-                          </CollapsibleTrigger>
-                        </div>
-                        
-                        {/* Selected genres displayed as badges */}
-                        {selectedGenres.length > 0 && (
-                          <div className="flex flex-wrap gap-2 pb-2">
-                            {selectedGenres.map((g) => (
-                              <Badge 
-                                key={g} 
-                                variant="secondary" 
-                                className="flex items-center gap-1"
-                              >
-                                {g}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedGenres(selectedGenres.filter(genre => genre !== g))
-                                    // Update legacy genre field if this was the first genre
-                                    if (selectedGenres.length === 1) {
-                                      setGenre("")
-                                    } else if (selectedGenres[0] === g && selectedGenres.length > 1) {
-                                      setGenre(selectedGenres[1])
-                                    }
-                                  }}
-                                  className="ml-1 hover:text-destructive focus:outline-none"
-                                  aria-label={`Remove ${g}`}
-                                >
-                                  ×
-                                </button>
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                        
-                        {/* Genre selection with checkboxes - Collapsible */}
-                        <CollapsibleContent>
-                          <div className="border rounded-md p-3 max-h-48 overflow-y-auto">
-                            <div className="grid grid-cols-2 gap-3">
-                              {genres.map((g) => {
-                                const isSelected = selectedGenres.includes(g)
-                                return (
-                                  <div key={g} className="flex items-center space-x-2">
-                                    <Checkbox
-                                      id={`genre-${g}`}
-                                      checked={isSelected}
-                                      onCheckedChange={(checked) => {
-                                        if (checked) {
-                                          // Add genre
-                                          const newGenres = [...selectedGenres, g]
-                                          setSelectedGenres(newGenres)
-                                          // Update legacy genre field to first genre for backward compatibility
-                                          if (selectedGenres.length === 0) {
-                                            setGenre(g)
-                                          }
-                                        } else {
-                                          // Remove genre
-                                          const newGenres = selectedGenres.filter(genre => genre !== g)
-                                          setSelectedGenres(newGenres)
-                                          // Update legacy genre field
-                                          if (newGenres.length === 0) {
-                                            setGenre("")
-                                          } else if (selectedGenres[0] === g) {
-                                            setGenre(newGenres[0])
-                                          }
-                                        }
-                                      }}
-                                    />
-                                    <label
-                                      htmlFor={`genre-${g}`}
-                                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
-                                    >
-                                      {g}
-                                    </label>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-2">
-                            Select one or more genres
-                          </p>
-                        </CollapsibleContent>
+                              ×
+                            </button>
+                          </Badge>
+                        ))}
                       </div>
-                    </Collapsible>
+                    )}
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" size="sm" className="h-8">
+                          Select Genres
+                          <ChevronDown className="h-3 w-3 ml-2" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-64 p-3">
+                        <div className="max-h-56 overflow-y-auto">
+                          <div className="grid grid-cols-1 gap-2">
+                            {genres.map((g) => {
+                              const isSelected = selectedGenres.includes(g)
+                              return (
+                                <div key={g} className="flex items-center space-x-2">
+                                  <Checkbox
+                                    id={`genre-${g}`}
+                                    checked={isSelected}
+                                    onCheckedChange={(checked) => {
+                                      if (checked) {
+                                        const next = [...selectedGenres, g]
+                                        setSelectedGenres(next)
+                                        if (selectedGenres.length === 0) setGenre(g)
+                                      } else {
+                                        const next = selectedGenres.filter(item => item !== g)
+                                        setSelectedGenres(next)
+                                        if (selectedGenres[0] === g) setGenre(next[0] || "")
+                                      }
+                                    }}
+                                  />
+                                  <label htmlFor={`genre-${g}`} className="text-sm leading-none">
+                                    {g}
+                                  </label>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 </div>
                 
@@ -2234,29 +2369,58 @@ Synopsis (2-3 paragraphs only):`
                     id="synopsis"
                     value={synopsis}
                     onChange={(e) => setSynopsis(e.target.value)}
-                    placeholder="Brief synopsis (2-3 paragraphs) - will be used when converting to treatment. Leave empty to auto-generate on save."
+                    placeholder="Brief synopsis (2-3 paragraphs) - used when converting to a treatment."
                     rows={4}
                   />
                   <p className="text-sm text-muted-foreground mt-1">
-                    A brief synopsis (2-3 paragraphs) that will be used when converting this idea to a treatment. 
-                    {!synopsis.trim() && (prompt.trim() || description.trim()) && (
-                      <span className="text-blue-400"> If left empty, a synopsis will be auto-generated from your content when you save.</span>
-                    )}
+                    A brief synopsis (2-3 paragraphs) that will be used when converting this idea to a treatment.
                   </p>
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        const text = (prompt.trim() || description.trim())
+                        if (!text) {
+                          toast({
+                            title: "No Content",
+                            description: "Add a description or AI content first to generate a synopsis.",
+                            variant: "destructive",
+                          })
+                          return
+                        }
+                        const s = await generateSynopsis()
+                        if (s) setSynopsis(s)
+                      }}
+                      disabled={isGeneratingSynopsis}
+                      className="h-8"
+                    >
+                      {isGeneratingSynopsis ? "Generating..." : "Generate Synopsis with AI"}
+                    </Button>
+                  </div>
                 </div>
                 
                 <div>
-                  <Label htmlFor="original-prompt">Original Prompt/Idea</Label>
-                  <Textarea
-                    id="original-prompt"
-                    value={originalPrompt}
-                    onChange={(e) => setOriginalPrompt(e.target.value)}
-                    placeholder="Your original movie idea or prompt..."
-                    rows={3}
-                  />
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Your initial creative spark or prompt that started this idea
-                  </p>
+                  <Label htmlFor="original-prompt" className="mr-2">Original Prompt/Idea</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button type="button" variant="outline" size="sm" className="h-8">
+                        View
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[520px] p-3">
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">Read-only original idea</p>
+                        <Textarea
+                          value={originalPrompt}
+                          readOnly
+                          rows={8}
+                          className="font-mono text-xs"
+                        />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
                 </div>
                 
                 <div>
@@ -2435,6 +2599,25 @@ Synopsis (2-3 paragraphs only):`
                           onClick={(e) => {
                             e.preventDefault()
                             e.stopPropagation()
+                            regenerateIdeaSynopsis(idea)
+                          }}
+                          disabled={generatingSynopsisForIdea === idea.id}
+                          className="h-7 px-2 text-xs flex-shrink-0"
+                          title="Generate/Regenerate Synopsis with AI"
+                        >
+                          {generatingSynopsisForIdea === idea.id ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Wand2 className="h-3 w-3 mr-1" />
+                          )}
+                          Synopsis
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
                             generateQuickCover(idea)
                           }}
                           disabled={generatingCoverForIdea === idea.id}
@@ -2466,7 +2649,7 @@ Synopsis (2-3 paragraphs only):`
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => convertIdeaToTreatment(idea)}
+                          onClick={() => openTreatmentDialog(idea)}
                           className="h-7 px-2 text-xs flex-shrink-0"
                           title="Convert to Treatment"
                         >
@@ -2514,6 +2697,14 @@ Synopsis (2-3 paragraphs only):`
                       </div>
                     </CardHeader>
                     <CardContent className="px-4 pb-4 pt-0">
+                      {/* Synopsis snippet */}
+                      {idea.synopsis && idea.synopsis.trim() && (
+                        <div className="mb-3">
+                          <p className="text-sm text-muted-foreground line-clamp-3">
+                            {idea.synopsis}
+                          </p>
+                        </div>
+                      )}
                       {/* Prominent Image Display */}
                       {ideaImages[idea.id] && ideaImages[idea.id].filter(url => url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)).length > 0 && (
                         <div className="mb-4">
@@ -2779,7 +2970,14 @@ Synopsis (2-3 paragraphs only):`
                   </CardHeader>
                   <CardContent>
                     <div className="bg-muted p-4 rounded-md max-h-[600px] overflow-y-auto">
-                      <pre className="whitespace-pre-wrap text-sm font-sans">{aiResponse}</pre>
+                      <Textarea
+                        id="ai-response-editor"
+                        value={aiResponse}
+                        onChange={(e) => setAiResponse(e.target.value)}
+                        rows={16}
+                        className="font-mono text-sm min-h-[320px]"
+                        placeholder="Your generated script will appear here. You can edit it freely before saving."
+                      />
                     </div>
                     <div className="flex gap-2 mt-4 flex-wrap">
                       <Button 
@@ -3192,6 +3390,111 @@ Synopsis (2-3 paragraphs only):`
         </DialogContent>
       </Dialog>
 
+      {/* Treatment Conversion Dialog */}
+      <Dialog open={showTreatmentDialog} onOpenChange={setShowTreatmentDialog}>
+        <DialogContent className="cinema-card border-border max-h-[90vh] max-w-2xl flex flex-col">
+          <DialogHeader className="flex-shrink-0">
+            <DialogTitle className="text-foreground">Convert Idea to Treatment</DialogTitle>
+            <DialogDescription>
+              Edit the fields below. You can generate a synopsis with AI before saving.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2 overflow-y-auto">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="treatment-title">Title</Label>
+                <Input
+                  id="treatment-title"
+                  value={treatmentTitle}
+                  onChange={(e) => setTreatmentTitle(e.target.value)}
+                  placeholder="Treatment title"
+                />
+              </div>
+              <div>
+                <Label htmlFor="treatment-genre">Genre</Label>
+                <Input
+                  id="treatment-genre"
+                  value={treatmentGenre}
+                  onChange={(e) => setTreatmentGenre(e.target.value)}
+                  placeholder="Genre"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="treatment-logline">Logline</Label>
+              <Textarea
+                id="treatment-logline"
+                value={treatmentLogline}
+                onChange={(e) => setTreatmentLogline(e.target.value)}
+                placeholder="One-sentence summary of the story"
+                rows={2}
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="treatment-synopsis">Synopsis</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const base = (treatmentPrompt.trim() || convertingIdeaForTreatment?.description || "")
+                    if (!base) {
+                      toast({
+                        title: "No Content",
+                        description: "Add content first (AI content or description) to generate a synopsis.",
+                        variant: "destructive",
+                      })
+                      return
+                    }
+                    const s = await generateSynopsisForText(base)
+                    if (s) setTreatmentSynopsis(s)
+                  }}
+                  disabled={isGeneratingTreatmentSynopsis}
+                  className="h-8"
+                >
+                  {isGeneratingTreatmentSynopsis ? "Generating..." : "Generate with AI"}
+                </Button>
+              </div>
+              <Textarea
+                id="treatment-synopsis"
+                value={treatmentSynopsis}
+                onChange={(e) => setTreatmentSynopsis(e.target.value)}
+                placeholder="2-3 paragraphs describing the story (editable)"
+                rows={5}
+              />
+            </div>
+            <div>
+              <Label htmlFor="treatment-prompt">Full Content (optional)</Label>
+              <Textarea
+                id="treatment-prompt"
+                value={treatmentPrompt}
+                onChange={(e) => setTreatmentPrompt(e.target.value)}
+                placeholder="Optional: paste any longer content to carry into the treatment"
+                rows={4}
+              />
+            </div>
+          </div>
+          <DialogFooter className="flex-shrink-0">
+            <Button variant="outline" onClick={() => setShowTreatmentDialog(false)} disabled={isSavingTreatment || isGeneratingTreatmentSynopsis}>
+              Cancel
+            </Button>
+            <Button onClick={saveTreatmentFromDialog} className="flex items-center gap-2" disabled={isSavingTreatment || isGeneratingTreatmentSynopsis}>
+              {isSavingTreatment ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  Save Treatment
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {/* Import Dialog */}
       <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">

@@ -1688,6 +1688,15 @@ export default function MoviesPage() {
                       Casting
                     </Button>
                   </Link>
+                  <Link href={`/characters?movie=${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
+                    >
+                      Characters
+                    </Button>
+                  </Link>
                 </div>
               </CardContent>
             </Card>

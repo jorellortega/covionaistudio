@@ -2241,7 +2241,15 @@ export default function TimelinePage() {
                                         >
                                           {scene.metadata.status || "Planning"}
                                         </Badge>
-
+                                        <Link
+                                          href={`/mood-boards?scope=scene&targetId=${scene.id}`}
+                                          className="ml-2"
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          <Badge variant="outline" className="text-xs hover:bg-primary/10">
+                                            Mood Board
+                                          </Badge>
+                                        </Link>
                                       </div>
                                     </div>
                                     <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>

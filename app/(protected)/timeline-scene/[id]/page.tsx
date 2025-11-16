@@ -1231,6 +1231,17 @@ function ScenePageClient({ id }: { id: string }) {
           </Card>
         </div>
 
+        {/* Quick Actions */}
+        <div className="flex items-center justify-end">
+          <a
+            href={`/mood-boards?scope=scene&targetId=${id}`}
+            className="text-sm underline text-primary hover:text-primary/80"
+            target="_self"
+          >
+            Open Mood Boards for this Scene
+          </a>
+        </div>
+
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
           <TabsList className="bg-card border-primary/20 flex-wrap">
