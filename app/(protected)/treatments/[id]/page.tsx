@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -26,7 +26,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneData } from '@/lib/treatment-scenes-service'
 import { CastingService, type CastingSetting } from '@/lib/casting-service'
-import { TimelineService } from '@/lib/timeline-service'
+import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
 
 export default function TreatmentDetailPage() {
@@ -66,13 +66,28 @@ export default function TreatmentDetailPage() {
   const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const [generatedCoverUrl, setGeneratedCoverUrl] = useState<string>('')
   const [selectedAIService, setSelectedAIService] = useState<string>('dalle')
+  const [coverImageAssets, setCoverImageAssets] = useState<Asset[]>([])
+  const [currentCoverIndex, setCurrentCoverIndex] = useState(0)
+  const [isLoadingCoverAssets, setIsLoadingCoverAssets] = useState(false)
+  const [isSettingDefaultCover, setIsSettingDefaultCover] = useState(false)
+  const [isSlideshowPaused, setIsSlideshowPaused] = useState(false)
+  const [isDeletingCover, setIsDeletingCover] = useState(false)
   
   // Script assets states
   const [scriptAssets, setScriptAssets] = useState<Asset[]>([])
   const [scriptContent, setScriptContent] = useState<string>('')
   const [isLoadingScript, setIsLoadingScript] = useState(false)
   const [isGeneratingTreatmentFromScript, setIsGeneratingTreatmentFromScript] = useState(false)
+  // Default to collapsed - user can expand to view script
   const [isScriptExpanded, setIsScriptExpanded] = useState(false)
+  // Default to collapsed - user can expand to view treatment document
+  const [isTreatmentExpanded, setIsTreatmentExpanded] = useState(false)
+  // Default to collapsed - user can expand to view scenes
+  const [isScenesExpanded, setIsScenesExpanded] = useState(false)
+  // Default to collapsed - user can expand to view characters
+  const [isCharactersExpanded, setIsCharactersExpanded] = useState(false)
+  // Default to collapsed - user can expand to view project details
+  const [isTreatmentDetailsExpanded, setIsTreatmentDetailsExpanded] = useState(false)
   
   // Treatment scenes states
   const [treatmentScenes, setTreatmentScenes] = useState<TreatmentScene[]>([])
@@ -97,9 +112,92 @@ export default function TreatmentDetailPage() {
 
   useEffect(() => {
     if (treatment?.id) {
-      loadTreatmentScenes(treatment.id)
+      // Load scenes from timeline if treatment is linked to a project, otherwise show empty
+      if (treatment.project_id) {
+        loadTimelineScenes(treatment.project_id)
+      } else {
+        setTreatmentScenes([])
+        setIsLoadingScenes(false)
+      }
     }
-  }, [treatment?.id])
+  }, [treatment?.id, treatment?.project_id])
+
+  // Load cover image assets when treatment is loaded
+  useEffect(() => {
+    const loadCoverAssets = async () => {
+      if (!treatment?.id || !ready) {
+        setCoverImageAssets([])
+        return
+      }
+      
+      try {
+        setIsLoadingCoverAssets(true)
+        let assets: Asset[] = []
+        
+        // Try to fetch by project_id first (if treatment is linked to a movie)
+        if (treatment.project_id) {
+          assets = await AssetService.getCoverImageAssets(treatment.project_id)
+        }
+        
+        // Also fetch by treatment_id (for standalone treatments or treatment-specific assets)
+        const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+        
+        // Merge assets, avoiding duplicates
+        const assetMap = new Map<string, Asset>()
+        assets.forEach(asset => assetMap.set(asset.id, asset))
+        treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+        
+        const mergedAssets = Array.from(assetMap.values())
+        
+        // Sort merged assets: default cover first, then by created date
+        mergedAssets.sort((a, b) => {
+          if (a.is_default_cover && !b.is_default_cover) return -1
+          if (!a.is_default_cover && b.is_default_cover) return 1
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+        
+        setCoverImageAssets(mergedAssets)
+        
+        // Find the default cover index
+        const defaultIndex = mergedAssets.findIndex(a => a.is_default_cover)
+        if (defaultIndex >= 0) {
+          setCurrentCoverIndex(defaultIndex)
+          setIsSlideshowPaused(true) // Pause slideshow when default cover exists
+        } else if (mergedAssets.length > 0) {
+          setCurrentCoverIndex(0)
+          setIsSlideshowPaused(false) // Allow auto-play when no default cover
+        }
+      } catch (error) {
+        console.error('Error loading cover assets:', error)
+        setCoverImageAssets([])
+      } finally {
+        setIsLoadingCoverAssets(false)
+      }
+    }
+    
+    loadCoverAssets()
+  }, [treatment?.id, treatment?.project_id, ready])
+
+  // Auto-play slideshow when there's no default cover
+  useEffect(() => {
+    // Only auto-play if:
+    // 1. There are multiple cover images
+    // 2. No default cover is set
+    // 3. Slideshow is not paused (user interaction)
+    const hasDefaultCover = coverImageAssets.some(asset => asset.is_default_cover)
+    const shouldAutoPlay = coverImageAssets.length > 1 && !hasDefaultCover && !isSlideshowPaused
+
+    if (!shouldAutoPlay) {
+      return
+    }
+
+    // Auto-cycle through covers every 6 seconds
+    const interval = setInterval(() => {
+      setCurrentCoverIndex((prev) => (prev + 1) % coverImageAssets.length)
+    }, 6000)
+
+    return () => clearInterval(interval)
+  }, [coverImageAssets, isSlideshowPaused])
 
   // Load casting settings when project_id available
   useEffect(() => {
@@ -170,23 +268,23 @@ export default function TreatmentDetailPage() {
     return setting?.is_locked || false
   }
 
-  // Clear all treatment scenes
+  // Clear all scenes (deletes from timeline scenes directly)
   const clearAllScenes = async () => {
     if (!treatment) return
     if (treatmentScenes.length === 0) return
-    if (!confirm('Are you sure you want to delete ALL scenes for this treatment? This cannot be undone.')) {
+    if (!confirm('Are you sure you want to delete ALL scenes from this timeline? This cannot be undone.')) {
       return
     }
     try {
       setIsClearingScenes(true)
       // Delete sequentially to avoid DB rate limits; still fast for typical counts
       for (const scene of treatmentScenes) {
-        await TreatmentScenesService.deleteTreatmentScene(scene.id)
+        await TimelineService.deleteScene(scene.id)
       }
       setTreatmentScenes([])
       toast({
         title: "Scenes Cleared",
-        description: "All treatment scenes have been deleted.",
+        description: "All timeline scenes have been deleted.",
       })
     } catch (error) {
       console.error('Failed to clear scenes:', error)
@@ -1418,6 +1516,65 @@ Write the treatment now:`
           setTreatment(updatedTreatment)
           setGeneratedCoverUrl(supabaseUrl)
           
+          // Create asset record for the cover image
+          try {
+            const assetData = {
+              project_id: treatment.project_id || null,
+              treatment_id: treatment.id, // Link to treatment
+              scene_id: null, // Treatment covers are project/treatment-level, not scene-level
+              title: `Treatment Cover - ${treatment.title} - ${new Date().toLocaleDateString()}`,
+              content_type: 'image' as const,
+              content: '', // No text content for images
+              content_url: supabaseUrl,
+              prompt: movieCoverPrompt,
+              model: normalizedService,
+              generation_settings: {
+                service: normalizedService,
+                prompt: movieCoverPrompt,
+                timestamp: new Date().toISOString(),
+              },
+              metadata: {
+                generated_at: new Date().toISOString(),
+                source: 'treatment_page_cover_generation',
+                treatment_title: treatment.title,
+                is_treatment_cover: true,
+              }
+            }
+
+            await AssetService.createAsset(assetData)
+            
+            // Reload cover assets to show the new one
+            let assets: Asset[] = []
+            if (treatment.project_id) {
+              assets = await AssetService.getCoverImageAssets(treatment.project_id)
+            }
+            const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+            
+            const assetMap = new Map<string, Asset>()
+            assets.forEach(asset => assetMap.set(asset.id, asset))
+            treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+            const mergedAssets = Array.from(assetMap.values())
+            mergedAssets.sort((a, b) => {
+              if (a.is_default_cover && !b.is_default_cover) return -1
+              if (!a.is_default_cover && b.is_default_cover) return 1
+              return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            })
+            setCoverImageAssets(mergedAssets)
+            if (mergedAssets.length > 0) {
+              setCurrentCoverIndex(0) // Show the newly generated cover
+              // Check if there's a default cover and pause slideshow if so
+              const hasDefaultCover = mergedAssets.some(asset => asset.is_default_cover)
+              if (hasDefaultCover) {
+                setIsSlideshowPaused(true)
+              } else {
+                setIsSlideshowPaused(false) // Resume auto-play if no default
+              }
+            }
+          } catch (assetError) {
+            console.error('Failed to create asset record for cover:', assetError)
+            // Don't fail the whole operation if asset creation fails
+          }
+          
           toast({
             title: "Movie Cover Generated!",
             description: `Cover generated and saved using ${normalizedService.toUpperCase()}`,
@@ -1528,15 +1685,57 @@ Write the treatment now:`
 
   // Handle cover URL update (for manual URL entry)
   // Load treatment scenes
-  const loadTreatmentScenes = async (treatmentId: string) => {
-    if (!ready || !userId) return
+  // Load timeline scenes (shared scenes - same as timeline and screenplay pages)
+  const loadTimelineScenes = async (projectId: string) => {
+    if (!ready || !userId || !projectId) {
+      setTreatmentScenes([])
+      setIsLoadingScenes(false)
+      return
+    }
     
     try {
       setIsLoadingScenes(true)
-      const scenes = await TreatmentScenesService.getTreatmentScenes(treatmentId)
-      setTreatmentScenes(scenes)
+      
+      // Get or create timeline for the project
+      let timeline = await TimelineService.getTimelineForMovie(projectId)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(projectId, {
+          name: `${movie?.name || treatment?.title || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || treatment?.title || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
+      
+      // Load scenes from timeline (same as timeline and screenplay pages use)
+      const scenes = await TimelineService.getScenesForTimeline(timeline.id)
+      
+      // Convert timeline scenes to treatment scene format for display
+      const treatmentScenesData = scenes.map(scene => ({
+        id: scene.id,
+        treatment_id: treatment?.id || null,
+        user_id: userId!,
+        name: scene.name,
+        description: scene.metadata?.description || scene.description || '',
+        scene_number: scene.metadata?.sceneNumber || '',
+        location: scene.metadata?.location || '',
+        characters: scene.metadata?.characters || [],
+        shot_type: scene.metadata?.shotType || '',
+        mood: scene.metadata?.mood || '',
+        notes: scene.metadata?.notes || '',
+        status: scene.metadata?.status || 'Planning',
+        content: scene.description || '',
+        metadata: scene.metadata || {},
+        order_index: scene.order_index || 0,
+        created_at: scene.created_at,
+        updated_at: scene.updated_at,
+      }))
+      
+      setTreatmentScenes(treatmentScenesData as any)
     } catch (error) {
-      console.error('Error loading treatment scenes:', error)
+      console.error('Error loading timeline scenes:', error)
       toast({
         title: "Error",
         description: "Failed to load scenes",
@@ -1580,9 +1779,8 @@ Write the treatment now:`
       setIsGeneratingScenes(true)
 
       const treatmentContent = treatment.prompt || treatment.synopsis || treatment.logline || ''
-      const contentForPrompt = treatmentContent.length > 6000 
-        ? treatmentContent.substring(0, 6000) + '...'
-        : treatmentContent
+      // Use full treatment content - no truncation to allow unlimited scene generation
+      const contentForPrompt = treatmentContent
 
       const aiPrompt = `Based on the following movie treatment, break it down into individual scene titles.
 
@@ -1785,24 +1983,99 @@ Return ONLY the JSON array, no other text:`
         }
       }
 
-      // Create treatment scenes (just titles for now)
-      const sceneData: CreateTreatmentSceneData[] = scenes.map((scene, index) => ({
-        treatment_id: treatment.id,
-        name: scene.name || `Scene ${scene.scene_number || index + 1}`,
-        description: scene.description || '', // Will be empty initially
-        scene_number: scene.scene_number || String(index + 1),
-        location: scene.location || '',
-        characters: Array.isArray(scene.characters) ? scene.characters : [],
-        shot_type: scene.shot_type || '',
-        mood: scene.mood || '',
-        notes: scene.notes || '',
-        status: 'draft',
-        content: scene.description || '',
-        order_index: index,
-      }))
+      // Create scenes directly in timeline (shared scenes table)
+      // Need project_id to create timeline scenes
+      if (!treatment.project_id) {
+        toast({
+          title: "Treatment Not Linked",
+          description: "This treatment must be linked to a movie project to create scenes. Please link it to a movie first.",
+          variant: "destructive",
+        })
+        return
+      }
 
-      const createdScenes = await TreatmentScenesService.bulkCreateTreatmentScenes(sceneData)
-      setTreatmentScenes([...treatmentScenes, ...createdScenes])
+      // Get or create timeline for the project
+      let timeline = await TimelineService.getTimelineForMovie(treatment.project_id)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(treatment.project_id, {
+          name: `${movie?.name || treatment?.title || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || treatment?.title || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
+
+      // Get existing timeline scenes to calculate start times and check for duplicates
+      const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
+      let lastEndTime = existingScenes.length > 0
+        ? existingScenes[existingScenes.length - 1].start_time_seconds + existingScenes[existingScenes.length - 1].duration_seconds
+        : 0
+
+      // Create scenes directly in timeline (shared scenes table)
+      const createdScenes = []
+      for (const scene of scenes) {
+        const sceneNumber = scene.scene_number || String(scenes.indexOf(scene) + 1)
+        
+        // Check if scene with this number already exists
+        const existingScene = existingScenes.find(s => 
+          s.metadata?.sceneNumber === sceneNumber
+        )
+
+        if (!existingScene) {
+          const durationSeconds = 60 // Default 1 minute per scene
+          const sceneData: CreateSceneData = {
+            timeline_id: timeline.id,
+            name: scene.name || `Scene ${sceneNumber}`,
+            description: scene.description || '',
+            start_time_seconds: lastEndTime,
+            duration_seconds: durationSeconds,
+            scene_type: 'video',
+            content_url: '',
+            metadata: {
+              sceneNumber: sceneNumber,
+              location: scene.location || '',
+              characters: Array.isArray(scene.characters) ? scene.characters : [],
+              shotType: scene.shot_type || '',
+              mood: scene.mood || '',
+              notes: scene.notes || '',
+              status: 'draft',
+            }
+          }
+
+          const createdScene = await TimelineService.createScene(sceneData)
+          
+          // Convert to treatment scene format for local state
+          const treatmentSceneData = {
+            id: createdScene.id,
+            treatment_id: treatment.id,
+            user_id: userId!,
+            name: createdScene.name,
+            description: createdScene.metadata?.description || createdScene.description || '',
+            scene_number: createdScene.metadata?.sceneNumber || '',
+            location: createdScene.metadata?.location || '',
+            characters: createdScene.metadata?.characters || [],
+            shot_type: createdScene.metadata?.shotType || '',
+            mood: createdScene.metadata?.mood || '',
+            notes: createdScene.metadata?.notes || '',
+            status: createdScene.metadata?.status || 'Planning',
+            content: createdScene.description || '',
+            metadata: createdScene.metadata || {},
+            order_index: createdScene.order_index || 0,
+            created_at: createdScene.created_at,
+            updated_at: createdScene.updated_at,
+          }
+          
+          createdScenes.push(treatmentSceneData)
+          lastEndTime += durationSeconds
+        }
+      }
+
+      setTreatmentScenes([...treatmentScenes, ...createdScenes as any])
+      
+      // Expand the scenes card to show the generated scenes
+      setIsScenesExpanded(true)
 
       toast({
         title: "Success",
@@ -1843,14 +2116,52 @@ Return ONLY the JSON array, no other text:`
     setEditingScene({})
   }
 
-  // Save edited scene
+  // Save edited scene (updates timeline scene directly)
   const handleSaveScene = async () => {
-    if (!editingSceneId) return
+    if (!editingSceneId || !treatment?.project_id) return
 
     try {
       setIsSavingScene(true)
-      const updatedScene = await TreatmentScenesService.updateTreatmentScene(editingSceneId, editingScene)
-      setTreatmentScenes(treatmentScenes.map(s => s.id === editingSceneId ? updatedScene : s))
+      
+      // Update the scene in timeline directly
+      const sceneUpdate: Partial<CreateSceneData> = {
+        name: editingScene.name,
+        description: editingScene.description || '',
+        metadata: {
+          sceneNumber: editingScene.scene_number || '',
+          location: editingScene.location || '',
+          characters: editingScene.characters || [],
+          shotType: editingScene.shot_type || '',
+          mood: editingScene.mood || '',
+          notes: editingScene.notes || '',
+          status: editingScene.status || 'Planning',
+        }
+      }
+
+      const updatedScene = await TimelineService.updateScene(editingSceneId, sceneUpdate)
+      
+      // Convert back to treatment scene format for local state
+      const updatedTreatmentScene = {
+        id: updatedScene.id,
+        treatment_id: treatment.id,
+        user_id: userId!,
+        name: updatedScene.name,
+        description: updatedScene.metadata?.description || updatedScene.description || '',
+        scene_number: updatedScene.metadata?.sceneNumber || '',
+        location: updatedScene.metadata?.location || '',
+        characters: updatedScene.metadata?.characters || [],
+        shot_type: updatedScene.metadata?.shotType || '',
+        mood: updatedScene.metadata?.mood || '',
+        notes: updatedScene.metadata?.notes || '',
+        status: updatedScene.metadata?.status || 'Planning',
+        content: updatedScene.description || '',
+        metadata: updatedScene.metadata || {},
+        order_index: updatedScene.order_index || 0,
+        created_at: updatedScene.created_at,
+        updated_at: updatedScene.updated_at,
+      }
+      
+      setTreatmentScenes(treatmentScenes.map(s => s.id === editingSceneId ? updatedTreatmentScene as any : s))
       setEditingSceneId(null)
       setEditingScene({})
       
@@ -1939,7 +2250,7 @@ REQUIREMENTS:
   * Description (2-4 sentences describing what happens)
   * Location (where the scene takes place)
   * Characters (list of main characters in the scene)
-  * Shot type (e.g., "Wide", "Close-up", "Medium", "Two-shot")
+  * Scene setting: Specify as "Interior" or "Exterior" followed by "Daytime" or "Night" (e.g., "Interior Daytime", "Exterior Night", "Interior Night", "Exterior Daytime")
   * Mood/tone (e.g., "Tense", "Comedic", "Dramatic", "Action-packed")
   * Notes (any important production details)
 
@@ -1949,7 +2260,7 @@ OUTPUT FORMAT: Return a JSON array. Each scene should match the scene numbers ab
   "description": "Detailed description...",
   "location": "Location name",
   "characters": ["Character 1", "Character 2"],
-  "shot_type": "Shot type",
+  "shot_type": "Interior Daytime" or "Exterior Night" etc. (format: "Interior/Exterior" + "Daytime/Night"),
   "mood": "Mood/tone",
   "notes": "Production notes"
 }
@@ -2008,36 +2319,66 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         return
       }
 
-      // Update only scenes that need details (don't overwrite existing)
+      // Update only scenes that need details (don't overwrite existing) - update timeline scenes directly
       const updatePromises = scenesNeedingDetails.map(async (scene) => {
         const details = sceneDetails.find(d => d.scene_number === scene.scene_number || d.scene_number === String(scene.scene_number))
         if (details) {
           try {
             // Only update fields that are empty, preserve existing data
-            const updates: any = {}
+            const updates: Partial<CreateSceneData> = {
+              metadata: { ...scene.metadata }
+            }
+            
             if (!scene.description?.trim() && details.description) {
               updates.description = details.description
-              updates.content = details.description
             }
             if (!scene.location?.trim() && details.location) {
-              updates.location = details.location
+              updates.metadata!.location = details.location
             }
             if ((!scene.characters || scene.characters.length === 0) && details.characters && details.characters.length > 0) {
-              updates.characters = details.characters
+              updates.metadata!.characters = details.characters
             }
             if (!scene.shot_type?.trim() && details.shot_type) {
-              updates.shot_type = details.shot_type
+              updates.metadata!.shotType = details.shot_type
             }
             if (!scene.mood?.trim() && details.mood) {
-              updates.mood = details.mood
+              updates.metadata!.mood = details.mood
             }
             if (!scene.notes?.trim() && details.notes) {
-              updates.notes = details.notes
+              updates.metadata!.notes = details.notes
+            }
+
+            // Ensure we preserve existing metadata
+            updates.metadata = {
+              sceneNumber: scene.metadata?.sceneNumber || scene.scene_number || '',
+              status: scene.metadata?.status || scene.status || 'Planning',
+              ...updates.metadata,
             }
 
             // Only update if there are changes
-            if (Object.keys(updates).length > 0) {
-              return await TreatmentScenesService.updateTreatmentScene(scene.id, updates)
+            if (Object.keys(updates).length > 0 && (updates.description || Object.keys(updates.metadata || {}).length > 2)) {
+              const updatedScene = await TimelineService.updateScene(scene.id, updates)
+              
+              // Convert back to treatment scene format for local state
+              return {
+                id: updatedScene.id,
+                treatment_id: treatment.id,
+                user_id: userId!,
+                name: updatedScene.name,
+                description: updatedScene.metadata?.description || updatedScene.description || '',
+                scene_number: updatedScene.metadata?.sceneNumber || '',
+                location: updatedScene.metadata?.location || '',
+                characters: updatedScene.metadata?.characters || [],
+                shot_type: updatedScene.metadata?.shotType || '',
+                mood: updatedScene.metadata?.mood || '',
+                notes: updatedScene.metadata?.notes || '',
+                status: updatedScene.metadata?.status || 'Planning',
+                content: updatedScene.description || '',
+                metadata: updatedScene.metadata || {},
+                order_index: updatedScene.order_index || 0,
+                created_at: updatedScene.created_at,
+                updated_at: updatedScene.updated_at,
+              } as any
             }
             return scene
           } catch (error) {
@@ -2215,7 +2556,8 @@ REQUIREMENTS:
 - Expand the description to 3-5 sentences with more detail
 - Enhance location description if needed
 - Add or refine characters list
-- Suggest appropriate shot type and mood
+- Scene setting: Specify as "Interior" or "Exterior" followed by "Daytime" or "Night" (e.g., "Interior Daytime", "Exterior Night", "Interior Night", "Exterior Daytime")
+- Suggest appropriate mood/tone
 - Add production notes if relevant
 
 OUTPUT FORMAT: Return a JSON object with these fields:
@@ -2224,7 +2566,7 @@ OUTPUT FORMAT: Return a JSON object with these fields:
   "description": "Detailed description...",
   "location": "Location name",
   "characters": ["Character 1", "Character 2"],
-  "shot_type": "Shot type",
+  "shot_type": "Interior Daytime" or "Exterior Night" etc. (format: "Interior/Exterior" + "Daytime/Night"),
   "mood": "Mood/tone",
   "notes": "Production notes"
 }
@@ -2278,18 +2620,52 @@ Return ONLY the JSON object, no other text:`
         return
       }
 
-      const updatedScene = await TreatmentScenesService.updateTreatmentScene(scene.id, {
-        name: regeneratedScene.name || scene.name,
-        description: regeneratedScene.description || scene.description,
-        location: regeneratedScene.location || scene.location,
-        characters: regeneratedScene.characters || scene.characters,
-        shot_type: regeneratedScene.shot_type || scene.shot_type,
-        mood: regeneratedScene.mood || scene.mood,
-        notes: regeneratedScene.notes || scene.notes,
-        content: regeneratedScene.description || scene.content,
-      })
+      // Update timeline scene directly
+      const updates: Partial<CreateSceneData> = {
+        metadata: {
+          ...scene.metadata,
+          location: regeneratedScene.location || scene.location || '',
+          characters: regeneratedScene.characters || scene.characters || [],
+          shotType: regeneratedScene.shot_type || scene.shot_type || '',
+          mood: regeneratedScene.mood || scene.mood || '',
+          notes: regeneratedScene.notes || scene.notes || '',
+          sceneNumber: scene.metadata?.sceneNumber || scene.scene_number || '',
+          status: scene.metadata?.status || scene.status || 'Planning',
+        }
+      }
+      
+      if (regeneratedScene.description || scene.description) {
+        updates.description = regeneratedScene.description || scene.description || ''
+      }
+      
+      if (regeneratedScene.name || scene.name) {
+        updates.name = regeneratedScene.name || scene.name
+      }
 
-      setTreatmentScenes(treatmentScenes.map(s => s.id === scene.id ? updatedScene : s))
+      const updatedScene = await TimelineService.updateScene(scene.id, updates)
+      
+      // Convert back to treatment scene format for local state
+      const updatedTreatmentScene = {
+        id: updatedScene.id,
+        treatment_id: treatment.id,
+        user_id: userId!,
+        name: updatedScene.name,
+        description: updatedScene.metadata?.description || updatedScene.description || '',
+        scene_number: updatedScene.metadata?.sceneNumber || '',
+        location: updatedScene.metadata?.location || '',
+        characters: updatedScene.metadata?.characters || [],
+        shot_type: updatedScene.metadata?.shotType || '',
+        mood: updatedScene.metadata?.mood || '',
+        notes: updatedScene.metadata?.notes || '',
+        status: updatedScene.metadata?.status || 'Planning',
+        content: updatedScene.description || '',
+        metadata: updatedScene.metadata || {},
+        order_index: updatedScene.order_index || 0,
+        created_at: updatedScene.created_at,
+        updated_at: updatedScene.updated_at,
+      }
+
+      setTreatmentScenes(treatmentScenes.map(s => s.id === scene.id ? updatedTreatmentScene as any : s))
 
       toast({
         title: "Success",
@@ -2308,9 +2684,10 @@ Return ONLY the JSON object, no other text:`
   }
 
   // Delete a scene
+  // Delete a scene (deletes from timeline scenes directly)
   const handleDeleteScene = async (sceneId: string) => {
     try {
-      await TreatmentScenesService.deleteTreatmentScene(sceneId)
+      await TimelineService.deleteScene(sceneId)
       setTreatmentScenes(treatmentScenes.filter(s => s.id !== sceneId))
       toast({
         title: "Success",
@@ -2545,6 +2922,231 @@ Return ONLY the JSON object, no other text:`
     }
   }
 
+  // Set default cover and update treatment cover_image_url
+  const handleSetDefaultCover = async (assetId: string) => {
+    if (!treatment) return
+
+    try {
+      setIsSettingDefaultCover(true)
+      
+      // Set asset as default cover
+      const asset = await AssetService.setDefaultCover(assetId)
+      
+      // Update treatment cover_image_url to match the asset
+      if (asset.content_url) {
+        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+          cover_image_url: asset.content_url,
+        })
+        setTreatment(updatedTreatment)
+      }
+      
+      // Reload cover assets to reflect the change
+      let assets: Asset[] = []
+      if (treatment.project_id) {
+        assets = await AssetService.getCoverImageAssets(treatment.project_id)
+      }
+      const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+      
+      const assetMap = new Map<string, Asset>()
+      assets.forEach(asset => assetMap.set(asset.id, asset))
+      treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+      const mergedAssets = Array.from(assetMap.values())
+      mergedAssets.sort((a, b) => {
+        if (a.is_default_cover && !b.is_default_cover) return -1
+        if (!a.is_default_cover && b.is_default_cover) return 1
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+      
+      setCoverImageAssets(mergedAssets)
+      
+      const defaultIndex = mergedAssets.findIndex(a => a.is_default_cover)
+      if (defaultIndex >= 0) {
+        setCurrentCoverIndex(defaultIndex)
+      }
+      
+      // Pause slideshow when default cover is set
+      setIsSlideshowPaused(true)
+      
+      toast({
+        title: "Default Cover Set!",
+        description: "This cover is now set as the default for the project.",
+      })
+    } catch (error) {
+      console.error('Error setting default cover:', error)
+      toast({
+        title: "Failed to Set Default",
+        description: error instanceof Error ? error.message : "Failed to set default cover.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSettingDefaultCover(false)
+    }
+  }
+
+  // Unset default cover
+  const handleUnsetDefaultCover = async (assetId: string) => {
+    if (!treatment) return
+
+    try {
+      setIsSettingDefaultCover(true)
+      
+      // Unset asset as default cover
+      await AssetService.unsetDefaultCover(assetId)
+      
+      // Reload cover assets to reflect the change
+      let assets: Asset[] = []
+      if (treatment.project_id) {
+        assets = await AssetService.getCoverImageAssets(treatment.project_id)
+      }
+      const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+      
+      const assetMap = new Map<string, Asset>()
+      assets.forEach(asset => assetMap.set(asset.id, asset))
+      treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+      const mergedAssets = Array.from(assetMap.values())
+      mergedAssets.sort((a, b) => {
+        if (a.is_default_cover && !b.is_default_cover) return -1
+        if (!a.is_default_cover && b.is_default_cover) return 1
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+      
+      setCoverImageAssets(mergedAssets)
+      
+      // Resume slideshow when default cover is unset
+      setIsSlideshowPaused(false)
+      
+      toast({
+        title: "Default Cover Removed!",
+        description: "The default cover has been unset. Slideshow will resume.",
+      })
+    } catch (error) {
+      console.error('Error unsetting default cover:', error)
+      toast({
+        title: "Failed to Remove Default",
+        description: error instanceof Error ? error.message : "Failed to unset default cover.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSettingDefaultCover(false)
+    }
+  }
+
+  // Delete cover image
+  const handleDeleteCover = async (assetId: string) => {
+    if (!treatment) return
+    
+    const assetToDelete = coverImageAssets.find(a => a.id === assetId)
+    if (!assetToDelete) return
+
+    if (!confirm(`Are you sure you want to delete this cover image? This action cannot be undone.`)) {
+      return
+    }
+
+    try {
+      setIsDeletingCover(true)
+      
+      const wasDefaultCover = assetToDelete.is_default_cover
+      const deletedIndex = coverImageAssets.findIndex(a => a.id === assetId)
+      
+      // Delete the asset
+      await AssetService.deleteAsset(assetId)
+      
+      // If it was the default cover, update treatment cover_image_url
+      if (wasDefaultCover) {
+        // Find the next available cover or set to null
+        const remainingAssets = coverImageAssets.filter(a => a.id !== assetId)
+        if (remainingAssets.length > 0) {
+          // Set the first remaining asset as default
+          const newDefault = await AssetService.setDefaultCover(remainingAssets[0].id)
+          if (newDefault.content_url) {
+            const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+              cover_image_url: newDefault.content_url,
+            })
+            setTreatment(updatedTreatment)
+          }
+        } else {
+          // No more covers, clear treatment cover_image_url
+          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+            cover_image_url: null,
+          })
+          setTreatment(updatedTreatment)
+        }
+      }
+      
+      // Reload cover assets to reflect the change
+      let assets: Asset[] = []
+      if (treatment.project_id) {
+        assets = await AssetService.getCoverImageAssets(treatment.project_id)
+      }
+      const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+      
+      const assetMap = new Map<string, Asset>()
+      assets.forEach(asset => assetMap.set(asset.id, asset))
+      treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+      const mergedAssets = Array.from(assetMap.values())
+      mergedAssets.sort((a, b) => {
+        if (a.is_default_cover && !b.is_default_cover) return -1
+        if (!a.is_default_cover && b.is_default_cover) return 1
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+      
+      setCoverImageAssets(mergedAssets)
+      
+      // Adjust current index if needed
+      if (mergedAssets.length > 0) {
+        if (deletedIndex >= mergedAssets.length) {
+          setCurrentCoverIndex(mergedAssets.length - 1)
+        } else if (deletedIndex < currentCoverIndex) {
+          // Deleted item was before current, no change needed
+        } else {
+          // Deleted item was at or after current, stay at same index
+          setCurrentCoverIndex(Math.min(deletedIndex, mergedAssets.length - 1))
+        }
+        
+        const defaultIndex = mergedAssets.findIndex(a => a.is_default_cover)
+        if (defaultIndex >= 0) {
+          setCurrentCoverIndex(defaultIndex)
+        }
+      } else {
+        setCurrentCoverIndex(0)
+      }
+      
+      toast({
+        title: "Cover Deleted",
+        description: "The cover image has been deleted successfully.",
+      })
+    } catch (error) {
+      console.error('Error deleting cover:', error)
+      toast({
+        title: "Failed to Delete Cover",
+        description: error instanceof Error ? error.message : "Failed to delete cover image.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeletingCover(false)
+    }
+  }
+
+  // Navigate cover slideshow
+  const nextCover = () => {
+    if (coverImageAssets.length > 0) {
+      setIsSlideshowPaused(true) // Pause auto-play when user interacts
+      setCurrentCoverIndex((prev) => (prev + 1) % coverImageAssets.length)
+    }
+  }
+
+  const prevCover = () => {
+    if (coverImageAssets.length > 0) {
+      setIsSlideshowPaused(true) // Pause auto-play when user interacts
+      setCurrentCoverIndex((prev) => (prev - 1 + coverImageAssets.length) % coverImageAssets.length)
+    }
+  }
+
+  const handleThumbnailClick = (index: number) => {
+    setIsSlideshowPaused(true) // Pause auto-play when user clicks thumbnail
+    setCurrentCoverIndex(index)
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'draft': return 'bg-gray-100 text-gray-800'
@@ -2764,25 +3366,187 @@ Return ONLY the JSON object, no other text:`
               </div>
             ) : (
               <>
-                {treatment.cover_image_url ? (
-                  <div className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden">
-              <img
-                src={treatment.cover_image_url}
-                alt={`${treatment.title} cover`}
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                  target.nextElementSibling?.classList.remove('hidden');
-                }}
-              />
-              <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
-                <div className="text-center text-muted-foreground">
-                  <Film className="h-16 w-16 mx-auto mb-4" />
-                  <p className="text-lg">Cover Image</p>
-                </div>
-              </div>
-            </div>
+                {coverImageAssets.length > 0 ? (
+                  <div 
+                    className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden group"
+                    onMouseEnter={() => setIsSlideshowPaused(true)} // Pause on hover
+                    onMouseLeave={() => {
+                      // Resume only if there's no default cover
+                      const hasDefaultCover = coverImageAssets.some(asset => asset.is_default_cover)
+                      if (!hasDefaultCover) {
+                        setIsSlideshowPaused(false)
+                      }
+                    }}
+                  >
+                    {/* Slideshow Display */}
+                    {coverImageAssets[currentCoverIndex] && (
+                      <img
+                        src={coverImageAssets[currentCoverIndex].content_url || treatment.cover_image_url}
+                        alt={`${treatment.title} cover ${currentCoverIndex + 1}`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          target.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                    )}
+                    
+                    {/* Fallback for broken images */}
+                    <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
+                      <div className="text-center text-muted-foreground">
+                        <Film className="h-16 w-16 mx-auto mb-4" />
+                        <p className="text-lg">Cover Image</p>
+                      </div>
+                    </div>
+
+                    {/* Default Cover Badge - Clickable to unset */}
+                    {coverImageAssets[currentCoverIndex]?.is_default_cover && (
+                      <button
+                        onClick={() => handleUnsetDefaultCover(coverImageAssets[currentCoverIndex].id)}
+                        disabled={isSettingDefaultCover}
+                        className="absolute top-2 left-2 bg-yellow-500/90 hover:bg-yellow-500 text-yellow-950 px-2 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Click to remove default cover"
+                      >
+                        <Star className="h-3 w-3 fill-current" />
+                        Default Cover
+                      </button>
+                    )}
+
+                    {/* Navigation Arrows - Show when more than 1 image */}
+                    {coverImageAssets.length > 1 && (
+                      <>
+                        <button
+                          onClick={prevCover}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                          aria-label="Previous cover"
+                        >
+                          <ChevronLeft className="h-5 w-5" />
+                        </button>
+                        <button
+                          onClick={nextCover}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                          aria-label="Next cover"
+                        >
+                          <ChevronRight className="h-5 w-5" />
+                        </button>
+                      </>
+                    )}
+
+                    {/* Image Counter */}
+                    {coverImageAssets.length > 1 && (
+                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 text-white px-3 py-1 rounded-full text-xs">
+                        {currentCoverIndex + 1} / {coverImageAssets.length}
+                      </div>
+                    )}
+
+                    {/* Action Buttons - Show on hover */}
+                    {coverImageAssets[currentCoverIndex] && (
+                      <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {/* Set as Default Button - Show when not default */}
+                        {!coverImageAssets[currentCoverIndex].is_default_cover && (
+                          <button
+                            onClick={() => handleSetDefaultCover(coverImageAssets[currentCoverIndex].id)}
+                            disabled={isSettingDefaultCover || isDeletingCover}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 disabled:opacity-50"
+                          >
+                            {isSettingDefaultCover ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Setting...
+                              </>
+                            ) : (
+                              <>
+                                <Star className="h-3 w-3" />
+                                Set as Default
+                              </>
+                            )}
+                          </button>
+                        )}
+                        {/* Delete Button */}
+                        <button
+                          onClick={() => handleDeleteCover(coverImageAssets[currentCoverIndex].id)}
+                          disabled={isDeletingCover || isSettingDefaultCover}
+                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 disabled:opacity-50"
+                          title="Delete this cover image"
+                        >
+                          {isDeletingCover ? (
+                            <>
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="h-3 w-3" />
+                              Delete
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : treatment.cover_image_url ? (
+                  <div className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden group">
+                    <img
+                      src={treatment.cover_image_url}
+                      alt={`${treatment.title} cover`}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = 'none';
+                        target.nextElementSibling?.classList.remove('hidden');
+                      }}
+                    />
+                    <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
+                      <div className="text-center text-muted-foreground">
+                        <Film className="h-16 w-16 mx-auto mb-4" />
+                        <p className="text-lg">Cover Image</p>
+                      </div>
+                    </div>
+                    {/* Delete Button for direct cover_image_url */}
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Are you sure you want to delete this cover image? This action cannot be undone.')) {
+                          return
+                        }
+                        try {
+                          setIsDeletingCover(true)
+                          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+                            cover_image_url: null,
+                          })
+                          setTreatment(updatedTreatment)
+                          toast({
+                            title: "Cover Deleted",
+                            description: "The cover image has been deleted successfully.",
+                          })
+                        } catch (error) {
+                          console.error('Error deleting cover:', error)
+                          toast({
+                            title: "Failed to Delete Cover",
+                            description: error instanceof Error ? error.message : "Failed to delete cover image.",
+                            variant: "destructive",
+                          })
+                        } finally {
+                          setIsDeletingCover(false)
+                        }
+                      }}
+                      disabled={isDeletingCover}
+                      className="absolute bottom-2 right-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 disabled:opacity-50"
+                      title="Delete this cover image"
+                    >
+                      {isDeletingCover ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </>
+                      )}
+                    </button>
+                  </div>
                 ) : (
                   <div className="border-2 border-dashed border-muted rounded-lg p-12 text-center">
                     <ImageIcon className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
@@ -2790,6 +3554,39 @@ Return ONLY the JSON object, no other text:`
                     <p className="text-sm text-muted-foreground mb-4">
                       Add a cover image or generate one with AI
                     </p>
+                  </div>
+                )}
+
+                {/* Thumbnail Strip - Show when there are cover assets */}
+                {coverImageAssets.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      {coverImageAssets.length} {coverImageAssets.length === 1 ? 'cover' : 'covers'} available
+                    </p>
+                    <div className="flex gap-2 overflow-x-auto pb-2">
+                      {coverImageAssets.map((asset, index) => (
+                        <button
+                          key={asset.id}
+                          onClick={() => handleThumbnailClick(index)}
+                          className={`relative flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${
+                            index === currentCoverIndex
+                              ? 'border-blue-500 ring-2 ring-blue-500/50'
+                              : 'border-transparent hover:border-gray-400'
+                          }`}
+                        >
+                          <img
+                            src={asset.content_url || ''}
+                            alt={`Cover ${index + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                          {asset.is_default_cover && (
+                            <div className="absolute top-1 right-1 bg-yellow-500 rounded-full p-0.5">
+                              <Star className="h-2 w-2 fill-yellow-950 text-yellow-950" />
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </>
@@ -2837,24 +3634,6 @@ Return ONLY the JSON object, no other text:`
                   <div className="flex items-center gap-2">
                     {!isEditingSynopsis ? (
                       <>
-                        {/* Quick Listen Button */}
-                        {treatment.synopsis && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                            onClick={() => {
-                              // Scroll to the text-to-speech component
-                              const ttsElement = document.querySelector('[data-tts-synopsis]')
-                              if (ttsElement) {
-                                ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                              }
-                            }}
-                          >
-                            <Volume2 className="h-4 w-4 mr-2" />
-                            Listen
-                          </Button>
-                        )}
                         {/* AI Regenerate Button - Show when treatment has content */}
                         {(treatment.prompt || treatment.synopsis || treatment.logline) && (
                           <Button 
@@ -3035,157 +3814,164 @@ Return ONLY the JSON object, no other text:`
               </Collapsible>
             )}
 
-            {/* Treatment (Full Document) */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-blue-500" />
-                      Treatment
-                    </CardTitle>
-                    <CardDescription>Full treatment document - paste your complete treatment here (matches ideas.prompt field)</CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!isEditingPrompt ? (
-                      <>
-                        {treatment.prompt && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                            onClick={() => {
-                              const ttsElement = document.querySelector('[data-tts-prompt]')
-                              if (ttsElement) {
-                                ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                              }
-                            }}
-                          >
-                            <Volume2 className="h-4 w-4 mr-2" />
-                            Listen
-                          </Button>
-                        )}
-                        {/* AI Regenerate Button */}
-                        {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
-                          <Button 
-                            variant="outline" 
-                            size="sm" 
-                            onClick={generateAITreatment}
-                            disabled={isGeneratingTreatment || !aiSettingsLoaded}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                            title="Generate a new full treatment using AI from existing content"
-                          >
-                            {isGeneratingTreatment ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Generating...
-                              </>
-                            ) : (
-                              <>
-                                <Sparkles className="h-4 w-4 mr-2" />
-                                AI Regenerate
-                              </>
-                            )}
-                          </Button>
-                        )}
-                        <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
-                          <Edit className="h-4 w-4 mr-2" />
-                          {treatment.prompt ? 'Edit' : 'Add Treatment'}
-                        </Button>
-                      </>
-                    ) : (
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={handleCancelEditPrompt}>
-                          <X className="h-4 w-4 mr-2" />
-                          Cancel
-                        </Button>
-                        <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt}>
-                          <Save className="h-4 w-4 mr-2" />
-                          {isSavingPrompt ? 'Saving...' : 'Save'}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {isEditingPrompt ? (
-                    <Textarea
-                      value={editingPrompt}
-                      onChange={(e) => setEditingPrompt(e.target.value)}
-                      placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
-                      rows={25}
-                      className="text-base leading-relaxed font-mono min-h-[500px]"
-                    />
-                  ) : (
-                    <>
-                      {treatment.prompt ? (
-                        <div className="space-y-4">
-                          <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{treatment.prompt}</p>
-                          
-                          {/* Text to Speech Component */}
-                          <div data-tts-prompt>
-                            <TextToSpeech 
-                              text={treatment.prompt}
-                              title={`${treatment.title} - Treatment`}
-                              projectId={treatment.project_id}
-                              sceneId={null}
-                              treatmentId={treatment.id}
-                              className="mt-4"
-                            />
-                          </div>
-                        </div>
+            {/* Treatment (Full Document) - Collapsible */}
+            <Collapsible open={isTreatmentExpanded} onOpenChange={setIsTreatmentExpanded}>
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                      {isTreatmentExpanded ? (
+                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
                       ) : (
-                        <div className="text-center py-12 border-2 border-dashed border-muted rounded-lg">
-                          <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                          <p className="text-muted-foreground mb-2">No treatment document yet</p>
-                          <p className="text-sm text-muted-foreground mb-4">
-                            Click "Add Treatment" to paste your full treatment document
-                          </p>
-                          <Button variant="outline" onClick={handleStartEditPrompt}>
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <FileText className="h-5 w-5 text-blue-500" />
+                        Treatment
+                      </CardTitle>
+                    </CollapsibleTrigger>
+                    <div className="flex items-center gap-2">
+                      {!isEditingPrompt ? (
+                        <>
+                          {/* AI Regenerate Button */}
+                          {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={generateAITreatment}
+                              disabled={isGeneratingTreatment || !aiSettingsLoaded}
+                              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                              title="Generate a new full treatment using AI from existing content"
+                            >
+                              {isGeneratingTreatment ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                  Generating...
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-4 w-4 mr-2" />
+                                  AI Regenerate
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
                             <Edit className="h-4 w-4 mr-2" />
-                            Add Treatment
+                            {treatment.prompt ? 'Edit' : 'Add Treatment'}
+                          </Button>
+                        </>
+                      ) : (
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={handleCancelEditPrompt}>
+                              <X className="h-4 w-4 mr-2" />
+                              Cancel
+                            </Button>
+                            <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt}>
+                              <Save className="h-4 w-4 mr-2" />
+                              {isSavingPrompt ? 'Saving...' : 'Save'}
+                            </Button>
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                  <CardDescription className="pt-1 pl-6">
+                    Full treatment document - paste your complete treatment here (matches ideas.prompt field)
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {isEditingPrompt ? (
+                        <Textarea
+                          value={editingPrompt}
+                          onChange={(e) => setEditingPrompt(e.target.value)}
+                          placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
+                          rows={25}
+                          className="text-base leading-relaxed font-mono min-h-[500px]"
+                        />
+                      ) : (
+                        <>
+                          {treatment.prompt ? (
+                            <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{treatment.prompt}</p>
+                          ) : (
+                            <div className="text-center py-12 border-2 border-dashed border-muted rounded-lg">
+                              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                              <p className="text-muted-foreground mb-2">No treatment document yet</p>
+                              <p className="text-sm text-muted-foreground mb-4">
+                                Click "Add Treatment" to paste your full treatment document
+                              </p>
+                              <Button variant="outline" onClick={handleStartEditPrompt}>
+                                <Edit className="h-4 w-4 mr-2" />
+                                Add Treatment
+                              </Button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </CardContent>
+                </CollapsibleContent>
+                {/* Text to Speech Component - Always visible outside collapsible */}
+                {treatment.prompt && !isEditingPrompt && (
+                  <CardContent className="pt-0">
+                    <div data-tts-prompt>
+                      <TextToSpeech 
+                        text={treatment.prompt}
+                        title={`${treatment.title} - Treatment`}
+                        projectId={treatment.project_id}
+                        sceneId={null}
+                        treatmentId={treatment.id}
+                        className="mt-4"
+                      />
+                    </div>
+                  </CardContent>
+                )}
+              </Card>
+            </Collapsible>
+
+            {/* Project Details Card - Collapsible */}
+            <Collapsible open={isTreatmentDetailsExpanded} onOpenChange={setIsTreatmentDetailsExpanded}>
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                      {isTreatmentDetailsExpanded ? (
+                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <FileText className="h-5 w-5 text-purple-500" />
+                        Project Details
+                      </CardTitle>
+                    </CollapsibleTrigger>
+                    <div className="flex items-center gap-2">
+                      {!isEditingTreatment ? (
+                        <Button variant="outline" size="sm" onClick={handleStartEditTreatment}>
+                          <Edit className="h-4 w-4 mr-2" />
+                          Edit
+                        </Button>
+                      ) : (
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={handleCancelEditTreatment}>
+                            <X className="h-4 w-4 mr-2" />
+                            Cancel
+                          </Button>
+                          <Button variant="default" size="sm" onClick={handleSaveTreatment} disabled={isSavingTreatment}>
+                            <Save className="h-4 w-4 mr-2" />
+                            {isSavingTreatment ? 'Saving...' : 'Save'}
                           </Button>
                         </div>
                       )}
-                    </>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Treatment Details Card */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-purple-500" />
-                      Treatment Details
-                    </CardTitle>
-                    <CardDescription>Project information and metadata</CardDescription>
-                  </div>
-                  {!isEditingTreatment ? (
-                    <Button variant="outline" size="sm" onClick={handleStartEditTreatment}>
-                      <Edit className="h-4 w-4 mr-2" />
-                      Edit
-                    </Button>
-                  ) : (
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={handleCancelEditTreatment}>
-                        <X className="h-4 w-4 mr-2" />
-                        Cancel
-                      </Button>
-                      <Button variant="default" size="sm" onClick={handleSaveTreatment} disabled={isSavingTreatment}>
-                        <Save className="h-4 w-4 mr-2" />
-                        {isSavingTreatment ? 'Saving...' : 'Save'}
-                      </Button>
                     </div>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
+                  </div>
+                  <CardDescription className="pt-1 pl-6">
+                    Project information and metadata
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
                 <div className="space-y-6">
                   {/* Project Details */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -3314,8 +4100,10 @@ Return ONLY the JSON object, no other text:`
                     </div>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
 
             {/* Logline */}
             {treatment.logline && (
@@ -3327,21 +4115,6 @@ Return ONLY the JSON object, no other text:`
                       <CardDescription>One-sentence summary</CardDescription>
                     </div>
                     <div className="flex items-center gap-2">
-                      {/* Quick Listen Button */}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                        onClick={() => {
-                          const ttsElement = document.querySelector('[data-tts-logline]')
-                          if (ttsElement) {
-                            ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          }
-                        }}
-                      >
-                        <Volume2 className="h-4 w-4 mr-2" />
-                        Listen
-                      </Button>
                       {/* AI Regenerate Button */}
                       <Button 
                         variant="outline" 
@@ -3392,21 +4165,6 @@ Return ONLY the JSON object, no other text:`
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle>Characters</CardTitle>
-                    {/* Quick Listen Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                      onClick={() => {
-                        const ttsElement = document.querySelector('[data-tts-characters]')
-                        if (ttsElement) {
-                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        }
-                      }}
-                    >
-                      <Volume2 className="h-4 w-4 mr-2" />
-                      Listen
-                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -3435,21 +4193,6 @@ Return ONLY the JSON object, no other text:`
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle>Themes</CardTitle>
-                    {/* Quick Listen Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                      onClick={() => {
-                        const ttsElement = document.querySelector('[data-tts-themes]')
-                        if (ttsElement) {
-                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        }
-                      }}
-                    >
-                      <Volume2 className="h-4 w-4 mr-2" />
-                      Listen
-                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -3472,49 +4215,56 @@ Return ONLY the JSON object, no other text:`
               </Card>
             )}
 
-            {/* Characters & Casting Integration */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Users className="h-5 w-5 text-purple-500" />
-                      Characters
-                    </CardTitle>
-                    <CardDescription>
-                      Aggregate characters from treatment scenes and sync with casting roles.
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      placeholder="Filter characters/roles..."
-                      value={charactersFilter}
-                      onChange={(e) => setCharactersFilter(e.target.value)}
-                      className="h-8 bg-input border-border"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={missingInRoles.length === 0 || isSyncingRoles || !treatment?.project_id}
-                      onClick={syncAllMissingToRoles}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      {isSyncingRoles ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Syncing...
-                        </>
+            {/* Characters & Casting Integration - Collapsible */}
+            <Collapsible open={isCharactersExpanded} onOpenChange={setIsCharactersExpanded}>
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                      {isCharactersExpanded ? (
+                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
                       ) : (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                          Sync All To Casting
-                        </>
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
                       )}
-                    </Button>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Users className="h-5 w-5 text-purple-500" />
+                        Characters
+                      </CardTitle>
+                    </CollapsibleTrigger>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="Filter characters/roles..."
+                        value={charactersFilter}
+                        onChange={(e) => setCharactersFilter(e.target.value)}
+                        className="h-8 bg-input border-border"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={missingInRoles.length === 0 || isSyncingRoles || !treatment?.project_id}
+                        onClick={syncAllMissingToRoles}
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      >
+                        {isSyncingRoles ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Syncing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Sync All To Casting
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
+                  <CardDescription className="pt-1 pl-6">
+                    Aggregate characters from treatment scenes and sync with casting roles.
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <div>
                     <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
@@ -3613,42 +4363,67 @@ Return ONLY the JSON object, no other text:`
                     )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
 
-            {/* Treatment Scenes */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      <Film className="h-5 w-5 text-purple-500" />
-                      Scenes
-                    </CardTitle>
-                    <CardDescription>
-                      Break down your treatment into individual scenes
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {treatmentScenes.length > 0 && treatment.project_id && (
+            {/* Treatment Scenes - Collapsible */}
+            <Collapsible open={isScenesExpanded} onOpenChange={setIsScenesExpanded}>
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                      {isScenesExpanded ? (
+                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Film className="h-5 w-5 text-purple-500" />
+                        Scenes
+                      </CardTitle>
+                    </CollapsibleTrigger>
+                    <div className="flex items-center gap-2">
+                      {treatmentScenes.length > 0 && treatment.project_id && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => pushScenesToTimeline(treatment.project_id!)}
+                          className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                        >
+                          <Film className="h-4 w-4 mr-2" />
+                          Push to Timeline
+                        </Button>
+                      )}
+                      {treatmentScenes.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={generateAllSceneDetails}
+                          disabled={isGeneratingScenes || !aiSettingsLoaded}
+                          className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          title="Generate full details (description, location, etc.) for all scenes"
+                        >
+                          {isGeneratingScenes ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              Generate All Details
+                            </>
+                          )}
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => pushScenesToTimeline(treatment.project_id!)}
-                        className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                      >
-                        <Film className="h-4 w-4 mr-2" />
-                        Push to Timeline
-                      </Button>
-                    )}
-                    {treatmentScenes.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={generateAllSceneDetails}
+                        onClick={generateScenesFromTreatment}
                         disabled={isGeneratingScenes || !aiSettingsLoaded}
-                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                        title="Generate full details (description, location, etc.) for all scenes"
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                       >
                         {isGeneratingScenes ? (
                           <>
@@ -3658,56 +4433,40 @@ Return ONLY the JSON object, no other text:`
                         ) : (
                           <>
                             <Sparkles className="h-4 w-4 mr-2" />
-                            Generate All Details
+                            Generate Scene Titles
                           </>
                         )}
                       </Button>
-                    )}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={generateScenesFromTreatment}
-                      disabled={isGeneratingScenes || !aiSettingsLoaded}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      {isGeneratingScenes ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="h-4 w-4 mr-2" />
-                          Generate Scene Titles
-                        </>
+                      {treatmentScenes.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={clearAllScenes}
+                          disabled={isClearingScenes}
+                          className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          title="Delete all scenes for this treatment"
+                        >
+                          {isClearingScenes ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Clearing...
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Clear Scenes
+                            </>
+                          )}
+                        </Button>
                       )}
-                    </Button>
-                    {treatmentScenes.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={clearAllScenes}
-                        disabled={isClearingScenes}
-                        className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                        title="Delete all scenes for this treatment"
-                      >
-                        {isClearingScenes ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Clearing...
-                          </>
-                        ) : (
-                          <>
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Clear Scenes
-                          </>
-                        )}
-                      </Button>
-                    )}
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent>
+                  <CardDescription className="pt-1 pl-6">
+                    Break down your treatment into individual scenes
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
                 {isLoadingScenes ? (
                   <div className="text-center py-8">
                     <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
@@ -3773,6 +4532,15 @@ Return ONLY the JSON object, no other text:`
                                 </>
                               ) : (
                                 <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => router.push(`/timeline-scene/${scene.id}`)}
+                                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                    title="Open scene page"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
                                   {treatment.project_id && (
                                     <Button
                                       size="sm"
@@ -3838,11 +4606,11 @@ Return ONLY the JSON object, no other text:`
                                   />
                                 </div>
                                 <div>
-                                  <Label>Shot Type</Label>
+                                  <Label>Setting</Label>
                                   <Input
                                     value={editingScene.shot_type || ''}
                                     onChange={(e) => setEditingScene({ ...editingScene, shot_type: e.target.value })}
-                                    placeholder="Shot type"
+                                    placeholder="e.g., Interior Daytime, Exterior Night"
                                   />
                                 </div>
                               </div>
@@ -3889,7 +4657,7 @@ Return ONLY the JSON object, no other text:`
                                 )}
                                 {scene.shot_type && (
                                   <div>
-                                    <span className="font-medium">Shot: </span>
+                                    <span className="font-medium">Setting: </span>
                                     <span className="text-muted-foreground">{scene.shot_type}</span>
                                   </div>
                                 )}
@@ -3921,8 +4689,10 @@ Return ONLY the JSON object, no other text:`
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
 
             {/* Visual References */}
             {treatment.visual_references && (
@@ -3942,21 +4712,6 @@ Return ONLY the JSON object, no other text:`
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle>Notes</CardTitle>
-                    {/* Quick Listen Button */}
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                      onClick={() => {
-                        const ttsElement = document.querySelector('[data-tts-notes]')
-                        if (ttsElement) {
-                          ttsElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                        }
-                      }}
-                    >
-                      <Volume2 className="h-4 w-4 mr-2" />
-                      Listen
-                    </Button>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -3982,44 +4737,6 @@ Return ONLY the JSON object, no other text:`
 
           {/* Right Column - Details */}
           <div className="space-y-6">
-            {/* Project Details */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Project Details</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <Target className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Target Audience</p>
-                    <p className="text-sm text-muted-foreground">
-                      {treatment.target_audience || 'Not specified'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <DollarSign className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Estimated Budget</p>
-                    <p className="text-sm text-muted-foreground">
-                      {treatment.estimated_budget || 'Not specified'}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <Clock className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Estimated Duration</p>
-                    <p className="text-sm text-muted-foreground">
-                      {treatment.estimated_duration || 'Not specified'}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
             {/* Timeline */}
             <Card>
               <CardHeader>

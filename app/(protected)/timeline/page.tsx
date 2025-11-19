@@ -86,6 +86,7 @@ export default function TimelinePage() {
   const [uploadingSceneId, setUploadingSceneId] = useState<string | null>(null)
   const [isImageUploadOpen, setIsImageUploadOpen] = useState(false)
   const [selectedSceneForUpload, setSelectedSceneForUpload] = useState<SceneWithMetadata | null>(null)
+  const [isClearingScenes, setIsClearingScenes] = useState(false)
   
   // AI Image Generation states
   const [aiPrompt, setAiPrompt] = useState("")
@@ -541,6 +542,39 @@ export default function TimelinePage() {
         description: "Failed to delete scene. Please try again.",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleClearAllScenes = async () => {
+    if (!currentTimeline) return
+    if (scenes.length === 0) return
+    if (!confirm('Are you sure you want to delete ALL scenes from this timeline? This cannot be undone.')) {
+      return
+    }
+
+    try {
+      setIsClearingScenes(true)
+      // Delete all scenes sequentially
+      for (const scene of scenes) {
+        await TimelineService.deleteScene(scene.id)
+      }
+      
+      // Refresh scenes to clear the list
+      await refreshScenes()
+      
+      toast({
+        title: "Scenes Cleared",
+        description: "All timeline scenes have been deleted.",
+      })
+    } catch (error) {
+      console.error('Failed to clear scenes:', error)
+      toast({
+        title: "Error",
+        description: "Failed to clear scenes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsClearingScenes(false)
     }
   }
 
@@ -1686,8 +1720,29 @@ export default function TimelinePage() {
           </Card>
         </div>
 
-        {/* Add Scene Button */}
-        <div className="flex justify-center mb-8">
+        {/* Add Scene Button and Clear Scenes Button */}
+        <div className="flex justify-center gap-4 mb-8">
+          {scenes.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={handleClearAllScenes}
+              disabled={isClearingScenes}
+              className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+              title="Delete all scenes from this timeline"
+            >
+              {isClearingScenes ? (
+                <>
+                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                  Clearing...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-5 w-5 mr-2" />
+                  Clear All Scenes
+                </>
+              )}
+            </Button>
+          )}
           <Dialog 
             open={isAddSceneOpen} 
             onOpenChange={(open) => {
@@ -2241,15 +2296,18 @@ export default function TimelinePage() {
                                         >
                                           {scene.metadata.status || "Planning"}
                                         </Badge>
-                                        <Link
-                                          href={`/mood-boards?scope=scene&targetId=${scene.id}`}
+                                        <button
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            router.push(`/mood-boards?scope=scene&targetId=${scene.id}`)
+                                          }}
                                           className="ml-2"
-                                          onClick={(e) => e.stopPropagation()}
                                         >
                                           <Badge variant="outline" className="text-xs hover:bg-primary/10">
                                             Mood Board
                                           </Badge>
-                                        </Link>
+                                        </button>
                                       </div>
                                     </div>
                                     <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>

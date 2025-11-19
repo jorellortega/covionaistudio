@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
-    const { audioBlob, fileName, projectId, sceneId, treatmentId, userId } = await request.json()
+    const { audioBlob, fileName, audioTitle, projectId, sceneId, treatmentId, userId } = await request.json()
 
     if (!audioBlob || !fileName || !userId) {
       return NextResponse.json(
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
         scene_id: sceneId || null,
         treatment_id: treatmentId || null,
         user_id: userId,
-        title: fileName,
+        title: audioTitle || fileName.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()), // Use provided audioTitle or convert filename
         content_type: 'audio',
         content_url: urlData.publicUrl,
         prompt: `Text-to-speech generated audio for: ${fileName}`,

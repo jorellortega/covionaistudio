@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -44,6 +44,8 @@ import {
   Upload,
   Volume2,
   Download,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -178,6 +180,21 @@ function ScenePageClient({ id }: { id: string }) {
 
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
+  const [treatmentId, setTreatmentId] = useState<string | null>(null)
+  const [screenplayContent, setScreenplayContent] = useState<string | null>(null)
+  const [isGeneratingScreenplay, setIsGeneratingScreenplay] = useState(false)
+  
+  // Pagination states for screenplay
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [pages, setPages] = useState<string[]>([])
+  const [isEditingScreenplay, setIsEditingScreenplay] = useState(false)
+  const [editedPages, setEditedPages] = useState<Map<number, string>>(new Map())
+  const [savingScreenplay, setSavingScreenplay] = useState(false)
+  const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
+  
+  // Screenplay page number calculation (standard: ~55 lines per page)
+  const LINES_PER_PAGE = 55
 
   // Helper function to get timeline navigation URL
   // Note: projectId is actually the movie ID from the projects table
@@ -237,6 +254,28 @@ function ScenePageClient({ id }: { id: string }) {
             
             if (timeline && !error && mounted) {
               setProjectId(timeline.project_id)
+              
+              // Fetch treatment for this project
+              try {
+                const { data: treatment, error: treatmentError } = await getSupabaseClient()
+                  .from('treatments')
+                  .select('id')
+                  .eq('project_id', timeline.project_id)
+                  .order('updated_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+                
+                if (treatment && !treatmentError && mounted) {
+                  setTreatmentId(treatment.id)
+                }
+              } catch (treatmentError) {
+                console.error('Error fetching treatment:', treatmentError)
+              }
+              
+              // Load screenplay content if it exists
+              if (scene.screenplay_content && mounted) {
+                setScreenplayContent(scene.screenplay_content)
+              }
             }
           } catch (timelineError) {
 
@@ -267,6 +306,249 @@ function ScenePageClient({ id }: { id: string }) {
       mounted = false
     }
   }, [id, userId, ready])
+
+  // Calculate pages from screenplay content
+  useEffect(() => {
+    const content = screenplayContent || scene?.screenplay_content
+    if (!content) {
+      setPages([])
+      setTotalPages(1)
+      setCurrentPage(1)
+      return
+    }
+
+    const lines = content.split('\n')
+    const pageCount = Math.ceil(lines.length / LINES_PER_PAGE)
+    setTotalPages(pageCount)
+
+    // Split screenplay into pages
+    const pageArray: string[] = []
+    for (let i = 0; i < pageCount; i++) {
+      const startLine = i * LINES_PER_PAGE
+      const endLine = Math.min(startLine + LINES_PER_PAGE, lines.length)
+      const pageContent = lines.slice(startLine, endLine).join('\n')
+      pageArray.push(pageContent)
+    }
+
+    setPages(pageArray)
+    // Reset to page 1 when content changes
+    setCurrentPage(1)
+  }, [screenplayContent, scene?.screenplay_content])
+
+  // Go to specific page
+  const goToPage = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      // If editing, save current page edits before switching
+      if (isEditingScreenplay && screenplayTextareaRef.current) {
+        saveCurrentPageEdit(screenplayTextareaRef.current.value)
+      }
+      setCurrentPage(page)
+    }
+  }
+
+  // Get current page content
+  const getCurrentPageContent = () => {
+    if (isEditingScreenplay) {
+      return getCurrentPageEditContent()
+    }
+    const content = screenplayContent || scene?.screenplay_content
+    if (!content) return ''
+    if (pages.length > 0) {
+      return pages[currentPage - 1] || ''
+    }
+    return content
+  }
+
+  // Get current page edit content
+  const getCurrentPageEditContent = () => {
+    if (!isEditingScreenplay) return ""
+    return editedPages.get(currentPage) || pages[currentPage - 1] || ""
+  }
+
+  // Save current page edit
+  const saveCurrentPageEdit = (content: string) => {
+    if (!isEditingScreenplay) return
+    setEditedPages(prev => {
+      const newMap = new Map(prev)
+      newMap.set(currentPage, content)
+      return newMap
+    })
+  }
+
+  // Handle screenplay editing
+  const handleEditScreenplay = () => {
+    // Initialize editedPages with current pages
+    const initialPages = new Map<number, string>()
+    if (pages.length > 0) {
+      pages.forEach((pageContent, index) => {
+        initialPages.set(index + 1, pageContent)
+      })
+    } else {
+      // If no screenplay exists, start with one empty page
+      initialPages.set(1, "")
+      setTotalPages(1)
+      setCurrentPage(1)
+    }
+    setEditedPages(initialPages)
+    setIsEditingScreenplay(true)
+  }
+
+  const handleCancelEditScreenplay = () => {
+    setIsEditingScreenplay(false)
+    setEditedPages(new Map())
+  }
+
+  // Combine edited pages into full screenplay
+  const combineEditedPages = (): string => {
+    if (!isEditingScreenplay) {
+      return screenplayContent || scene?.screenplay_content || ''
+    }
+    
+    // Get the maximum page number
+    const maxPage = Math.max(
+      totalPages,
+      editedPages.size > 0 ? Math.max(...Array.from(editedPages.keys())) : 1
+    )
+    
+    const combinedPages: string[] = []
+    for (let i = 1; i <= maxPage; i++) {
+      // For the current page, check textarea first to get latest unsaved content
+      if (i === currentPage && screenplayTextareaRef.current) {
+        const textareaContent = screenplayTextareaRef.current.value
+        if (textareaContent !== undefined) {
+          combinedPages.push(textareaContent)
+          continue
+        }
+      }
+      
+      const editedContent = editedPages.get(i)
+      if (editedContent !== undefined) {
+        combinedPages.push(editedContent)
+      } else if (pages[i - 1] !== undefined) {
+        combinedPages.push(pages[i - 1])
+      } else {
+        combinedPages.push("")
+      }
+    }
+    
+    // Join pages with newline
+    return combinedPages.join('\n')
+  }
+
+  // Save screenplay
+  const handleSaveScreenplay = async () => {
+    if (!id || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setSavingScreenplay(true)
+
+      // Save current page content to state
+      if (isEditingScreenplay && screenplayTextareaRef.current) {
+        saveCurrentPageEdit(screenplayTextareaRef.current.value)
+      }
+
+      // Combine all edited pages into full screenplay
+      const combinedContent = combineEditedPages()
+
+      // Update scene's screenplay_content in database
+      const { error: updateError } = await getSupabaseClient()
+        .from('scenes')
+        .update({ screenplay_content: combinedContent })
+        .eq('id', id)
+        .eq('user_id', userId)
+
+      if (updateError) {
+        throw new Error(updateError.message || 'Failed to save screenplay')
+      }
+
+      // Update local state
+      setScreenplayContent(combinedContent)
+      setIsEditingScreenplay(false)
+      setEditedPages(new Map())
+
+      // Refresh scene data
+      const updatedScene = await TimelineService.getSceneById(id)
+      if (updatedScene) {
+        setScene(updatedScene)
+      }
+
+      toast({
+        title: "Screenplay Saved!",
+        description: "Your changes have been saved successfully.",
+      })
+    } catch (error) {
+      console.error('Error saving screenplay:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to save screenplay",
+        variant: "destructive",
+      })
+    } finally {
+      setSavingScreenplay(false)
+    }
+  }
+
+  // Delete screenplay
+  const handleDeleteScreenplay = async () => {
+    if (!id || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setSavingScreenplay(true)
+
+      // Delete screenplay_content from scene in database
+      const { error: updateError } = await getSupabaseClient()
+        .from('scenes')
+        .update({ screenplay_content: null })
+        .eq('id', id)
+        .eq('user_id', userId)
+
+      if (updateError) {
+        throw new Error(updateError.message || 'Failed to delete screenplay')
+      }
+
+      // Update local state
+      setScreenplayContent(null)
+      setIsEditingScreenplay(false)
+      setEditedPages(new Map())
+      setPages([])
+      setTotalPages(1)
+      setCurrentPage(1)
+
+      // Refresh scene data
+      const updatedScene = await TimelineService.getSceneById(id)
+      if (updatedScene) {
+        setScene(updatedScene)
+      }
+
+      toast({
+        title: "Screenplay Deleted!",
+        description: "The screenplay has been removed from this scene.",
+      })
+    } catch (error) {
+      console.error('Error deleting screenplay:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to delete screenplay",
+        variant: "destructive",
+      })
+    } finally {
+      setSavingScreenplay(false)
+    }
+  }
 
   // Cleanup function for inline editing
   useEffect(() => {
@@ -504,6 +786,84 @@ function ScenePageClient({ id }: { id: string }) {
       description: error,
       variant: "destructive",
     })
+  }
+
+  const generateScreenplay = async () => {
+    if (!id || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingScreenplay(true)
+
+      // Get AI settings
+      const aiSettings = await AISettingsService.getUserSettings(userId!)
+      const scriptsSetting = aiSettings.find(s => s.tab_type === 'scripts')
+      const lockedModel = scriptsSetting?.locked_model || 'ChatGPT'
+      
+      // Normalize service name for API
+      const normalizedService = lockedModel.toLowerCase().includes('gpt') || lockedModel.toLowerCase().includes('openai') || lockedModel.toLowerCase().includes('chatgpt')
+        ? 'openai'
+        : lockedModel.toLowerCase().includes('claude') || lockedModel.toLowerCase().includes('anthropic')
+        ? 'anthropic'
+        : 'openai'
+      
+      // Get model - use selected_model if available, otherwise default based on service
+      const modelToUse = scriptsSetting?.selected_model || 
+        (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
+      const response = await fetch('/api/scenes/generate-screenplay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sceneId: id,
+          treatmentId: treatmentId,
+          service: normalizedService,
+          model: modelToUse,
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate screenplay')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.screenplay) {
+        setScreenplayContent(result.screenplay)
+        
+        // Refresh scene data to get updated screenplay_content
+        const updatedScene = await TimelineService.getSceneById(id)
+        if (updatedScene) {
+          setScene(updatedScene)
+        }
+
+        toast({
+          title: "Screenplay Generated!",
+          description: "The screenplay has been generated and saved to this scene.",
+        })
+      } else {
+        throw new Error('No screenplay content returned')
+      }
+    } catch (error) {
+      console.error('Error generating screenplay:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate screenplay",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingScreenplay(false)
+    }
   }
 
   // Simple loading state
@@ -1233,13 +1593,22 @@ function ScenePageClient({ id }: { id: string }) {
 
         {/* Quick Actions */}
         <div className="flex items-center justify-end">
-          <a
-            href={`/mood-boards?scope=scene&targetId=${id}`}
-            className="text-sm underline text-primary hover:text-primary/80"
-            target="_self"
+          <Button
+            variant="outline"
+            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+            onClick={() => {
+              const params = new URLSearchParams({
+                scope: 'scene',
+                targetId: id,
+              })
+              if (projectId) {
+                params.set('projectId', projectId)
+              }
+              router.push(`/mood-boards?${params.toString()}`)
+            }}
           >
-            Open Mood Boards for this Scene
-          </a>
+            Scene Mood Board
+          </Button>
         </div>
 
         {/* Main Content Tabs */}
@@ -1358,6 +1727,26 @@ function ScenePageClient({ id }: { id: string }) {
                 >
                   <Plus className="h-4 w-4 mr-2" />
                   Generate Script
+                </Button>
+                
+                <Button
+                  size="lg"
+                  className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
+                  onClick={generateScreenplay}
+                  disabled={isGeneratingScreenplay || !treatmentId}
+                  title={!treatmentId ? "Treatment not found for this project" : "Generate screenplay from scene description and treatment"}
+                >
+                  {isGeneratingScreenplay ? (
+                    <>
+                      <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                      Generating Screenplay...
+                    </>
+                  ) : (
+                    <>
+                      <FileText className="h-5 w-5 mr-2" />
+                      Generate Screenplay
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
@@ -2524,6 +2913,284 @@ function ScenePageClient({ id }: { id: string }) {
                     </div>
                   </div>
                 </CardContent>
+              </Card>
+            )}
+            {/* Screenplay Section */}
+            {(screenplayContent || scene?.screenplay_content) && (
+              <Card className="bg-card border-purple-500/20 mt-6">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-xl font-bold text-purple-400">Screenplay Script</CardTitle>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Professional screenplay format generated from scene description and treatment
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {totalPages > 1 && !isEditingScreenplay && (
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="px-3 py-1">
+                            Page {currentPage} of {totalPages}
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage - 1)}
+                            disabled={currentPage === 1}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={totalPages}
+                            value={currentPage}
+                            onChange={(e) => {
+                              const page = parseInt(e.target.value)
+                              if (page && page >= 1 && page <= totalPages) {
+                                goToPage(page)
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                const page = parseInt((e.target as HTMLInputElement).value)
+                                if (page && page >= 1 && page <= totalPages) {
+                                  goToPage(page)
+                                }
+                              }
+                            }}
+                            className="w-20 text-center"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage + 1)}
+                            disabled={currentPage === totalPages}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                      {!isEditingScreenplay ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="lg"
+                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                            onClick={handleEditScreenplay}
+                          >
+                            <Edit3 className="h-5 w-5 mr-2" />
+                            Edit Screenplay
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="outline"
+                                size="lg"
+                                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                                disabled={savingScreenplay}
+                              >
+                                <Trash2 className="h-5 w-5 mr-2" />
+                                Delete Screenplay
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                              <AlertDialogHeader>
+                                <AlertDialogTitle className="text-red-400">Delete Screenplay</AlertDialogTitle>
+                                <AlertDialogDescription className="text-muted-foreground">
+                                  Are you sure you want to delete the screenplay for this scene?
+                                  <br /><br />
+                                  <strong>This action cannot be undone.</strong> The screenplay content will be permanently removed from this scene.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                                <AlertDialogAction 
+                                  className="bg-red-500 hover:bg-red-600"
+                                  onClick={handleDeleteScreenplay}
+                                >
+                                  Delete
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                          <Button
+                            size="lg"
+                            className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
+                            onClick={generateScreenplay}
+                            disabled={isGeneratingScreenplay || !treatmentId}
+                          >
+                            {isGeneratingScreenplay ? (
+                              <>
+                                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                                Regenerating...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="h-5 w-5 mr-2" />
+                                Regenerate Screenplay
+                              </>
+                            )}
+                          </Button>
+                        </>
+                      ) : (
+                        <Badge variant="outline" className="px-3 py-1 text-blue-400 border-blue-500/30">
+                          Editing Mode
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {isEditingScreenplay ? (
+                    <div className="space-y-4">
+                      {totalPages > 1 && (
+                        <div className="flex items-center justify-center gap-2 pb-2 border-b border-purple-500/20">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage - 1)}
+                            disabled={currentPage === 1}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Badge variant="outline" className="px-3 py-1">
+                            Page {currentPage} of {totalPages}
+                          </Badge>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={totalPages}
+                            value={currentPage}
+                            onChange={(e) => {
+                              const page = parseInt(e.target.value)
+                              if (page && page >= 1 && page <= totalPages) {
+                                goToPage(page)
+                              }
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                const page = parseInt((e.target as HTMLInputElement).value)
+                                if (page && page >= 1 && page <= totalPages) {
+                                  goToPage(page)
+                                }
+                              }
+                            }}
+                            className="w-20 text-center"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage + 1)}
+                            disabled={currentPage === totalPages}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                      <Textarea
+                        key={`page-${currentPage}`}
+                        ref={screenplayTextareaRef}
+                        value={getCurrentPageEditContent()}
+                        onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                        className="min-h-[600px] font-mono text-sm leading-relaxed"
+                        placeholder="Enter your screenplay here..."
+                      />
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">
+                          💡 Editing page {currentPage} of {totalPages}
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={handleCancelEditScreenplay}
+                            disabled={savingScreenplay}
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={handleSaveScreenplay}
+                            disabled={savingScreenplay}
+                            className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold"
+                          >
+                            {savingScreenplay ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Saving...
+                              </>
+                            ) : (
+                              <>
+                                <Save className="h-4 w-4 mr-2" />
+                                Save Screenplay
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
+                      <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
+                        {getCurrentPageContent()}
+                      </pre>
+                    </div>
+                  )}
+                </CardContent>
+                {/* Bottom Pagination */}
+                {totalPages > 1 && !isEditingScreenplay && (
+                  <div className="flex items-center justify-center gap-4 py-4 border-t border-purple-500/20">
+                    <Badge variant="outline" className="px-4 py-2">
+                      Page {currentPage} of {totalPages}
+                    </Badge>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => goToPage(currentPage - 1)}
+                      disabled={currentPage === 1}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={totalPages}
+                      value={currentPage}
+                      onChange={(e) => {
+                        const page = parseInt(e.target.value)
+                        if (page && page >= 1 && page <= totalPages) {
+                          goToPage(page)
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          const page = parseInt((e.target as HTMLInputElement).value)
+                          if (page && page >= 1 && page <= totalPages) {
+                            goToPage(page)
+                          }
+                        }
+                      }}
+                      className="w-20 text-center"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => goToPage(currentPage + 1)}
+                      disabled={currentPage === totalPages}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
               </Card>
             )}
           </TabsContent>

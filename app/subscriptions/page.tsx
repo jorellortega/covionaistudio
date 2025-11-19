@@ -1,35 +1,22 @@
 "use client"
 
+import { useState } from "react"
 import Header from "@/components/header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Check, Sparkles, Video, Mic, Image, HardDrive, Users, Zap, Shield, Building2, Crown, RefreshCw, Infinity } from "lucide-react"
+import { Check, Video, Mic, Image, HardDrive, Users, Zap, Shield, Building2, RefreshCw, Infinity, Loader2, AlertTriangle } from "lucide-react"
 import Link from "next/link"
+import { useAuthReady } from "@/components/auth-hooks"
+import { useToast } from "@/hooks/use-toast"
+import { useRouter } from "next/navigation"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 const plans = [
   {
-    name: "Solo",
-    price: 19,
-    description: "Perfect for individual creators",
-    popular: false,
-    credits: "8,000 Studio Credits",
-    videoStandard: "60s",
-    videoCinematic: "10s",
-    aiVoice: "30 min",
-    images: "Uses credits",
-    castingPosts: 0,
-    storage: "25 GB",
-    seats: 1,
-    features: [
-      "Watermarked outputs",
-    ],
-    icon: Sparkles,
-    color: "from-blue-500 to-cyan-400",
-  },
-  {
+    id: "creator",
     name: "Creator",
-    price: 49,
+    price: 60,
     description: "For professional creators",
     popular: true,
     credits: "25,000 Studio Credits",
@@ -48,8 +35,9 @@ const plans = [
     color: "from-purple-500 to-pink-500",
   },
   {
+    id: "studio",
     name: "Studio",
-    price: 149,
+    price: 150,
     description: "For production teams",
     popular: false,
     credits: "90,000 Studio Credits",
@@ -68,8 +56,9 @@ const plans = [
     color: "from-green-500 to-emerald-400",
   },
   {
+    id: "production",
     name: "Production House",
-    price: 399,
+    price: 500,
     description: "For large production companies",
     popular: false,
     credits: "220,000 Studio Credits",
@@ -87,35 +76,78 @@ const plans = [
     icon: Building2,
     color: "from-orange-500 to-red-500",
   },
-  {
-    name: "Enterprise",
-    price: "Custom",
-    description: "Custom solutions for organizations",
-    popular: false,
-    credits: "Custom",
-    videoStandard: "Custom",
-    videoCinematic: "Custom",
-    aiVoice: "Custom",
-    images: "Uses credits",
-    castingPosts: "Custom",
-    storage: "Custom",
-    seats: "Custom",
-    features: [
-      "SSO/SAML",
-      "SLAs",
-      "Dedicated support",
-    ],
-    icon: Crown,
-    color: "from-yellow-500 to-amber-500",
-  },
 ]
 
-export default function PlansInfoPage() {
+export default function SubscriptionsPage() {
+  const { userId, ready, signedIn, user, session } = useAuthReady()
+  const { toast } = useToast()
+  const router = useRouter()
+  const [loadingPlan, setLoadingPlan] = useState<string | null>(null)
+
+  const handleSubscribe = async (planId: string) => {
+    // If user is not signed in, redirect to login
+    if (!signedIn) {
+      router.push(`/login?next=${encodeURIComponent('/subscriptions')}`)
+      return
+    }
+
+    setLoadingPlan(planId)
+    try {
+      // Get email from user object or session
+      const userEmail = user?.email || session?.user?.email
+      
+      const response = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          planId,
+          userId,
+          userEmail,
+          action: 'subscribe',
+        }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to create checkout session')
+      }
+
+      const { url } = await response.json()
+      
+      if (url) {
+        // Redirect to Stripe Checkout
+        window.location.href = url
+      } else {
+        throw new Error('No checkout URL returned')
+      }
+    } catch (error) {
+      console.error('Error creating checkout session:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to start checkout. Please try again.",
+        variant: "destructive",
+      })
+      setLoadingPlan(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
       
       <main className="container mx-auto max-w-7xl px-6 py-12">
+        {/* Warning Banner */}
+        <Alert variant="destructive" className="mb-8 border-orange-500/50 bg-orange-500/10">
+          <AlertTriangle className="h-5 w-5 text-orange-500" />
+          <AlertTitle className="text-lg font-semibold text-orange-600 dark:text-orange-400">
+            Do Not Sign Up Yet
+          </AlertTitle>
+          <AlertDescription className="text-base text-orange-700 dark:text-orange-300 mt-1">
+            We will be ready to go live in January 2026. Please check back then!
+          </AlertDescription>
+        </Alert>
         {/* Header Section */}
         <div className="text-center mb-16">
           <h1 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
@@ -130,15 +162,15 @@ export default function PlansInfoPage() {
         </div>
 
         {/* Pricing Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
           {plans.map((plan) => {
             const Icon = plan.icon
             const isPopular = plan.popular
-            const isEnterprise = plan.name === "Enterprise"
+            const isLoading = loadingPlan === plan.id
             
             return (
               <Card
-                key={plan.name}
+                key={plan.id}
                 className={`cinema-card relative overflow-hidden transition-all duration-300 ${
                   isPopular
                     ? "border-primary shadow-lg scale-105 ring-2 ring-primary/20"
@@ -159,14 +191,8 @@ export default function PlansInfoPage() {
                   <CardDescription>{plan.description}</CardDescription>
                   
                   <div className="mt-4">
-                    {isEnterprise ? (
-                      <div className="text-3xl font-bold">Custom</div>
-                    ) : (
-                      <>
-                        <span className="text-3xl font-bold">${plan.price}</span>
-                        <span className="text-muted-foreground">/month</span>
-                      </>
-                    )}
+                    <span className="text-3xl font-bold">${plan.price}</span>
+                    <span className="text-muted-foreground">/month</span>
                   </div>
                 </CardHeader>
 
@@ -260,12 +286,18 @@ export default function PlansInfoPage() {
                         : "border-border hover:bg-primary hover:text-primary-foreground"
                     }`}
                     variant={isPopular ? "default" : "outline"}
-                    asChild
+                    onClick={() => handleSubscribe(plan.id)}
+                    disabled={isLoading || !ready}
                   >
-                    {isEnterprise ? (
-                      <Link href="/contact">Contact Sales</Link>
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : signedIn ? (
+                      "Subscribe Now"
                     ) : (
-                      <Link href="/signup">Get Started</Link>
+                      "Sign In to Subscribe"
                     )}
                   </Button>
                 </CardContent>
@@ -297,7 +329,7 @@ export default function PlansInfoPage() {
               <div className="space-y-3">
                 <p className="text-foreground leading-relaxed">
                   Don't let credit limits hold you back! You can reload credits on any plan at any time to keep creating without interruption. 
-                  Whether you're on Solo, Creator, Studio, or Production House, you can add more credits whenever you need them.
+                  Whether you're on Creator, Studio, or Production House, you can add more credits whenever you need them.
                 </p>
                 <div className="flex items-start gap-2 pt-2">
                   <Check className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
@@ -319,7 +351,7 @@ export default function PlansInfoPage() {
                 </div>
                 <div className="pt-4">
                   <Button className="gradient-button text-white" asChild>
-                    <Link href="/credits">Add Credits Now</Link>
+                    <Link href="/settings/plans-credits">Add Credits Now</Link>
                   </Button>
                 </div>
               </div>

@@ -43,7 +43,7 @@ import { MovieService, type Movie } from "@/lib/movie-service"
 import FileImport from "@/components/file-import"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ScreenplayScenesService, type ScreenplayScene, type CreateScreenplaySceneData } from "@/lib/screenplay-scenes-service"
-import { TimelineService } from "@/lib/timeline-service"
+import { TimelineService, type CreateSceneData } from "@/lib/timeline-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
 
 // Screenplay page number calculation (standard: ~55 lines per page)
@@ -129,10 +129,10 @@ function ScreenplayPageClient({ id }: { id: string }) {
     fetchMovie()
   }, [id, ready, userId])
 
-  // Load screenplay scenes
+  // Load timeline scenes (shared with timeline page)
   useEffect(() => {
     if (id && ready && userId) {
-      loadScreenplayScenes(id)
+      loadTimelineScenes(id)
     }
   }, [id, ready, userId])
 
@@ -758,13 +758,6 @@ function ScreenplayPageClient({ id }: { id: string }) {
         saveCurrentPageEdit(textareaRef.current.value)
       }
       setCurrentPage(page)
-      // Scroll to top of script content when page changes
-      setTimeout(() => {
-        const scriptCard = document.querySelector('[data-script-content]')
-        if (scriptCard) {
-          scriptCard.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }
-      }, 100)
     }
   }
 
@@ -852,16 +845,53 @@ function ScreenplayPageClient({ id }: { id: string }) {
     return setting?.locked_model || ""
   }
 
-  // Load screenplay scenes
-  const loadScreenplayScenes = async (projectId: string) => {
+  // Load timeline scenes (shared scenes - same as timeline page)
+  const loadTimelineScenes = async (projectId: string) => {
     if (!ready || !userId) return
     
     try {
       setIsLoadingScenes(true)
-      const scenes = await ScreenplayScenesService.getScreenplayScenes(projectId)
-      setScreenplayScenes(scenes)
+      
+      // Get or create timeline for the project
+      let timeline = await TimelineService.getTimelineForMovie(projectId)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(projectId, {
+          name: `${movie?.name || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
+      
+      // Load scenes from timeline (same as timeline page uses)
+      const scenes = await TimelineService.getScenesForTimeline(timeline.id)
+      
+      // Convert timeline scenes to screenplay scene format for display
+      const screenplayScenesData = scenes.map(scene => ({
+        id: scene.id,
+        project_id: projectId,
+        user_id: userId!,
+        name: scene.name,
+        description: scene.metadata?.description || scene.description || '',
+        scene_number: scene.metadata?.sceneNumber || '',
+        location: scene.metadata?.location || '',
+        characters: scene.metadata?.characters || [],
+        shot_type: scene.metadata?.shotType || '',
+        mood: scene.metadata?.mood || '',
+        notes: scene.metadata?.notes || '',
+        status: scene.metadata?.status || 'Planning',
+        content: (scene as any).screenplay_content || scene.description || '',
+        metadata: scene.metadata || {},
+        order_index: scene.order_index || 0,
+        created_at: scene.created_at,
+        updated_at: scene.updated_at,
+      }))
+      
+      setScreenplayScenes(screenplayScenesData as any)
     } catch (error) {
-      console.error('Error loading screenplay scenes:', error)
+      console.error('Error loading timeline scenes:', error)
       toast({
         title: "Error",
         description: "Failed to load scenes",
@@ -1014,24 +1044,85 @@ Return ONLY the JSON array, no other text:`
         return
       }
 
-      // Create screenplay scenes
-      const sceneData: CreateScreenplaySceneData[] = scenes.map((scene, index) => ({
-        project_id: id,
-        name: scene.name || `Scene ${scene.scene_number || index + 1}`,
-        description: scene.description || '',
-        scene_number: scene.scene_number || String(index + 1),
-        location: '',
-        characters: [],
-        shot_type: '',
-        mood: '',
-        notes: '',
-        status: 'draft',
-        content: scene.description || '',
-        order_index: index,
-      }))
+      // Get or create timeline for the project
+      let timeline = await TimelineService.getTimelineForMovie(id)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(id, {
+          name: `${movie?.name || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
 
-      const createdScenes = await ScreenplayScenesService.bulkCreateScreenplayScenes(sceneData)
-      setScreenplayScenes([...screenplayScenes, ...createdScenes])
+      // Get existing timeline scenes to calculate start times and check for duplicates
+      const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
+      let lastEndTime = existingScenes.length > 0
+        ? existingScenes[existingScenes.length - 1].start_time_seconds + existingScenes[existingScenes.length - 1].duration_seconds
+        : 0
+
+      // Create scenes directly in timeline (shared scenes table)
+      const createdScenes = []
+      for (const scene of scenes) {
+        const sceneNumber = scene.scene_number || String(scenes.indexOf(scene) + 1)
+        
+        // Check if scene with this number already exists
+        const existingScene = existingScenes.find(s => 
+          s.metadata?.sceneNumber === sceneNumber
+        )
+
+        if (!existingScene) {
+          const durationSeconds = 60 // Default 1 minute per scene
+          const sceneData: CreateSceneData = {
+            timeline_id: timeline.id,
+            name: scene.name || `Scene ${sceneNumber}`,
+            description: scene.description || '',
+            start_time_seconds: lastEndTime,
+            duration_seconds: durationSeconds,
+            scene_type: 'video',
+            content_url: '',
+            metadata: {
+              sceneNumber: sceneNumber,
+              location: '',
+              characters: [],
+              shotType: '',
+              mood: '',
+              notes: '',
+              status: 'draft',
+            }
+          }
+
+          const createdScene = await TimelineService.createScene(sceneData)
+          
+          // Convert to screenplay scene format for local state
+          const screenplaySceneData = {
+            id: createdScene.id,
+            project_id: id,
+            user_id: userId!,
+            name: createdScene.name,
+            description: createdScene.metadata?.description || createdScene.description || '',
+            scene_number: createdScene.metadata?.sceneNumber || '',
+            location: createdScene.metadata?.location || '',
+            characters: createdScene.metadata?.characters || [],
+            shot_type: createdScene.metadata?.shotType || '',
+            mood: createdScene.metadata?.mood || '',
+            notes: createdScene.metadata?.notes || '',
+            status: createdScene.metadata?.status || 'Planning',
+            content: createdScene.description || '',
+            metadata: createdScene.metadata || {},
+            order_index: createdScene.order_index || 0,
+            created_at: createdScene.created_at,
+            updated_at: createdScene.updated_at,
+          }
+          
+          createdScenes.push(screenplaySceneData)
+          lastEndTime += durationSeconds
+        }
+      }
+
+      setScreenplayScenes([...screenplayScenes, ...createdScenes as any])
 
       toast({
         title: "Success",
@@ -1072,14 +1163,65 @@ Return ONLY the JSON array, no other text:`
     setEditingScene({})
   }
 
-  // Save edited scene
+  // Save edited scene (updates timeline scene directly)
   const handleSaveScene = async () => {
-    if (!editingSceneId) return
+    if (!editingSceneId || !id) return
 
     try {
       setIsSavingScene(true)
-      const updatedScene = await ScreenplayScenesService.updateScreenplayScene(editingSceneId, editingScene)
-      setScreenplayScenes(screenplayScenes.map(s => s.id === editingSceneId ? updatedScene : s))
+      
+      // Get timeline for the project
+      let timeline = await TimelineService.getTimelineForMovie(id)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(id, {
+          name: `${movie?.name || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
+
+      // Update the scene in timeline directly
+      const sceneUpdate: Partial<CreateSceneData> = {
+        name: editingScene.name,
+        description: editingScene.description || '',
+        metadata: {
+          sceneNumber: editingScene.scene_number || '',
+          location: editingScene.location || '',
+          characters: editingScene.characters || [],
+          shotType: editingScene.shot_type || '',
+          mood: editingScene.mood || '',
+          notes: editingScene.notes || '',
+          status: editingScene.status || 'Planning',
+        }
+      }
+
+      const updatedScene = await TimelineService.updateScene(editingSceneId, sceneUpdate)
+      
+      // Convert back to screenplay scene format for local state
+      const updatedScreenplayScene = {
+        id: updatedScene.id,
+        project_id: id,
+        user_id: userId!,
+        name: updatedScene.name,
+        description: updatedScene.metadata?.description || updatedScene.description || '',
+        scene_number: updatedScene.metadata?.sceneNumber || '',
+        location: updatedScene.metadata?.location || '',
+        characters: updatedScene.metadata?.characters || [],
+        shot_type: updatedScene.metadata?.shotType || '',
+        mood: updatedScene.metadata?.mood || '',
+        notes: updatedScene.metadata?.notes || '',
+        status: updatedScene.metadata?.status || 'Planning',
+        content: updatedScene.description || '',
+        metadata: updatedScene.metadata || {},
+        order_index: updatedScene.order_index || 0,
+        created_at: updatedScene.created_at,
+        updated_at: updatedScene.updated_at,
+      }
+      
+      setScreenplayScenes(screenplayScenes.map(s => s.id === editingSceneId ? updatedScreenplayScene as any : s))
       setEditingSceneId(null)
       setEditingScene({})
       
@@ -1099,10 +1241,10 @@ Return ONLY the JSON array, no other text:`
     }
   }
 
-  // Delete a scene
+  // Delete a scene (deletes from timeline scenes directly)
   const handleDeleteScene = async (sceneId: string) => {
     try {
-      await ScreenplayScenesService.deleteScreenplayScene(sceneId)
+      await TimelineService.deleteScene(sceneId)
       setScreenplayScenes(screenplayScenes.filter(s => s.id !== sceneId))
       toast({
         title: "Success",
@@ -1254,30 +1396,87 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
 
       // For individual regeneration, always update fields if AI generated them
       // This allows enhancing/expanding existing descriptions
-      const updates: any = {}
+      // Update timeline scene directly
+      const updates: Partial<CreateSceneData> = {
+        metadata: {}
+      }
+      
       if (regeneratedScene.description) {
         updates.description = regeneratedScene.description
-        updates.content = regeneratedScene.description
+        // Also keep existing metadata values, just update what's new
+        updates.metadata = {
+          ...scene.metadata,
+          description: regeneratedScene.description,
+        }
       }
       if (regeneratedScene.location) {
-        updates.location = regeneratedScene.location
+        updates.metadata = {
+          ...updates.metadata,
+          ...scene.metadata,
+          location: regeneratedScene.location,
+        }
       }
       if (regeneratedScene.characters && regeneratedScene.characters.length > 0) {
-        updates.characters = regeneratedScene.characters
+        updates.metadata = {
+          ...updates.metadata,
+          ...scene.metadata,
+          characters: regeneratedScene.characters,
+        }
       }
       if (regeneratedScene.shot_type) {
-        updates.shot_type = regeneratedScene.shot_type
+        updates.metadata = {
+          ...updates.metadata,
+          ...scene.metadata,
+          shotType: regeneratedScene.shot_type,
+        }
       }
       if (regeneratedScene.mood) {
-        updates.mood = regeneratedScene.mood
+        updates.metadata = {
+          ...updates.metadata,
+          ...scene.metadata,
+          mood: regeneratedScene.mood,
+        }
       }
       if (regeneratedScene.notes) {
-        updates.notes = regeneratedScene.notes
+        updates.metadata = {
+          ...updates.metadata,
+          ...scene.metadata,
+          notes: regeneratedScene.notes,
+        }
       }
 
-      if (Object.keys(updates).length > 0) {
-        const updatedScene = await ScreenplayScenesService.updateScreenplayScene(scene.id, updates)
-        setScreenplayScenes(screenplayScenes.map(s => s.id === scene.id ? updatedScene : s))
+      // Ensure we preserve existing metadata that wasn't regenerated
+      updates.metadata = {
+        sceneNumber: scene.metadata?.sceneNumber || scene.scene_number || '',
+        status: scene.metadata?.status || scene.status || 'Planning',
+        ...updates.metadata,
+      }
+
+      if (Object.keys(updates).length > 0 && (updates.description || Object.keys(updates.metadata || {}).length > 2)) {
+        const updatedScene = await TimelineService.updateScene(scene.id, updates)
+        
+        // Convert back to screenplay scene format for local state
+        const updatedScreenplayScene = {
+          id: updatedScene.id,
+          project_id: id,
+          user_id: userId!,
+          name: updatedScene.name,
+          description: updatedScene.metadata?.description || updatedScene.description || '',
+          scene_number: updatedScene.metadata?.sceneNumber || '',
+          location: updatedScene.metadata?.location || '',
+          characters: updatedScene.metadata?.characters || [],
+          shot_type: updatedScene.metadata?.shotType || '',
+          mood: updatedScene.metadata?.mood || '',
+          notes: updatedScene.metadata?.notes || '',
+          status: updatedScene.metadata?.status || 'Planning',
+          content: (updatedScene as any).screenplay_content || updatedScene.description || '',
+          metadata: updatedScene.metadata || {},
+          order_index: updatedScene.order_index || 0,
+          created_at: updatedScene.created_at,
+          updated_at: updatedScene.updated_at,
+        }
+        
+        setScreenplayScenes(screenplayScenes.map(s => s.id === scene.id ? updatedScreenplayScene as any : s))
 
         toast({
           title: "Success",
@@ -1439,36 +1638,66 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         return
       }
 
-      // Update only scenes that need details (don't overwrite existing)
+      // Update only scenes that need details (don't overwrite existing) - update timeline scenes directly
       const updatePromises = scenesNeedingDetails.map(async (scene) => {
         const details = sceneDetails.find(d => d.scene_number === scene.scene_number || d.scene_number === String(scene.scene_number))
         if (details) {
           try {
             // Only update fields that are empty, preserve existing data
-            const updates: any = {}
+            const updates: Partial<CreateSceneData> = {
+              metadata: { ...scene.metadata }
+            }
+            
             if (!scene.description?.trim() && details.description) {
               updates.description = details.description
-              updates.content = details.description
             }
             if (!scene.location?.trim() && details.location) {
-              updates.location = details.location
+              updates.metadata!.location = details.location
             }
             if ((!scene.characters || scene.characters.length === 0) && details.characters && details.characters.length > 0) {
-              updates.characters = details.characters
+              updates.metadata!.characters = details.characters
             }
             if (!scene.shot_type?.trim() && details.shot_type) {
-              updates.shot_type = details.shot_type
+              updates.metadata!.shotType = details.shot_type
             }
             if (!scene.mood?.trim() && details.mood) {
-              updates.mood = details.mood
+              updates.metadata!.mood = details.mood
             }
             if (!scene.notes?.trim() && details.notes) {
-              updates.notes = details.notes
+              updates.metadata!.notes = details.notes
+            }
+
+            // Ensure we preserve existing metadata
+            updates.metadata = {
+              sceneNumber: scene.metadata?.sceneNumber || scene.scene_number || '',
+              status: scene.metadata?.status || scene.status || 'Planning',
+              ...updates.metadata,
             }
 
             // Only update if there are changes
-            if (Object.keys(updates).length > 0) {
-              return await ScreenplayScenesService.updateScreenplayScene(scene.id, updates)
+            if (Object.keys(updates).length > 0 && (updates.description || Object.keys(updates.metadata || {}).length > 2)) {
+              const updatedScene = await TimelineService.updateScene(scene.id, updates)
+              
+              // Convert back to screenplay scene format for local state
+              return {
+                id: updatedScene.id,
+                project_id: id,
+                user_id: userId!,
+                name: updatedScene.name,
+                description: updatedScene.metadata?.description || updatedScene.description || '',
+                scene_number: updatedScene.metadata?.sceneNumber || '',
+                location: updatedScene.metadata?.location || '',
+                characters: updatedScene.metadata?.characters || [],
+                shot_type: updatedScene.metadata?.shotType || '',
+                mood: updatedScene.metadata?.mood || '',
+                notes: updatedScene.metadata?.notes || '',
+                status: updatedScene.metadata?.status || 'Planning',
+                content: updatedScene.description || '',
+                metadata: updatedScene.metadata || {},
+                order_index: updatedScene.order_index || 0,
+                created_at: updatedScene.created_at,
+                updated_at: updatedScene.updated_at,
+              } as any
             }
             return scene
           } catch (error) {
@@ -1545,12 +1774,14 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         throw new Error('Failed to get or create timeline')
       }
 
-      // Get existing scenes to calculate start time
+      // Get existing scenes to check if scene already exists and calculate start time
       const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
-      const lastScene = existingScenes[existingScenes.length - 1]
-      const startTimeSeconds = lastScene 
-        ? lastScene.start_time_seconds + lastScene.duration_seconds 
-        : 0
+      
+      // Check if a scene with this scene number already exists
+      const sceneNumber = scene.scene_number || ''
+      const existingScene = existingScenes.find(s => 
+        s.metadata?.sceneNumber === sceneNumber
+      )
 
       const durationSeconds = 60 // Default 1 minute per scene
       
@@ -1558,12 +1789,11 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         timeline_id: timeline.id,
         name: scene.name,
         description: scene.description || '',
-        start_time_seconds: startTimeSeconds,
         duration_seconds: durationSeconds,
         scene_type: 'video' as const,
         content_url: '',
         metadata: {
-          sceneNumber: scene.scene_number || '',
+          sceneNumber: sceneNumber,
           location: scene.location || '',
           characters: scene.characters || [],
           shotType: scene.shot_type || '',
@@ -1573,12 +1803,35 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         }
       }
 
-      await TimelineService.createScene(sceneData)
+      if (existingScene) {
+        // Update existing scene instead of creating a new one
+        await TimelineService.updateScene(existingScene.id, {
+          ...sceneData,
+          // Preserve start_time_seconds if it exists
+          start_time_seconds: existingScene.start_time_seconds,
+        })
+        
+        toast({
+          title: "Success",
+          description: `Scene "${scene.name}" updated in timeline`,
+        })
+      } else {
+        // Calculate start time for new scene
+        const lastScene = existingScenes[existingScenes.length - 1]
+        const startTimeSeconds = lastScene 
+          ? lastScene.start_time_seconds + lastScene.duration_seconds 
+          : 0
 
-      toast({
-        title: "Success",
-        description: `Scene "${scene.name}" added to timeline`,
-      })
+        await TimelineService.createScene({
+          ...sceneData,
+          start_time_seconds: startTimeSeconds,
+        })
+
+        toast({
+          title: "Success",
+          description: `Scene "${scene.name}" added to timeline`,
+        })
+      }
     } catch (error) {
       console.error('Error pushing scene to timeline:', error)
       toast({
@@ -1623,28 +1876,37 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         throw new Error('Failed to get or create timeline')
       }
 
-      // Get existing scenes to calculate start time
+      // Get existing scenes to check for duplicates and calculate start time
       const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
-      const lastScene = existingScenes[existingScenes.length - 1]
-      let startTimeSeconds = lastScene 
-        ? lastScene.start_time_seconds + lastScene.duration_seconds 
-        : 0
-
+      
       // Convert screenplay scenes to timeline scenes
       const timelineScenes = []
+      let updatedCount = 0
+      let createdCount = 0
+      
+      // Track the last scene's end time for calculating new scene start times
+      let lastEndTime = existingScenes.length > 0
+        ? existingScenes[existingScenes.length - 1].start_time_seconds + existingScenes[existingScenes.length - 1].duration_seconds
+        : 0
+      
       for (const screenplayScene of screenplayScenes) {
         const durationSeconds = 60 // Default 1 minute per scene
+        const sceneNumber = screenplayScene.scene_number || ''
+        
+        // Check if a scene with this scene number already exists
+        const existingScene = existingScenes.find(s => 
+          s.metadata?.sceneNumber === sceneNumber
+        )
         
         const sceneData = {
           timeline_id: timeline.id,
           name: screenplayScene.name,
           description: screenplayScene.description || '',
-          start_time_seconds: startTimeSeconds,
           duration_seconds: durationSeconds,
           scene_type: 'video' as const,
           content_url: '',
           metadata: {
-            sceneNumber: screenplayScene.scene_number || '',
+            sceneNumber: sceneNumber,
             location: screenplayScene.location || '',
             characters: screenplayScene.characters || [],
             shotType: screenplayScene.shot_type || '',
@@ -1654,14 +1916,37 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           }
         }
 
-        const createdScene = await TimelineService.createScene(sceneData)
-        timelineScenes.push(createdScene)
-        startTimeSeconds += durationSeconds
+        if (existingScene) {
+          // Update existing scene instead of creating a new one
+          const updatedScene = await TimelineService.updateScene(existingScene.id, {
+            ...sceneData,
+            // Preserve start_time_seconds if it exists
+            start_time_seconds: existingScene.start_time_seconds,
+          })
+          timelineScenes.push(updatedScene)
+          updatedCount++
+        } else {
+          // Calculate start time for new scene
+          const createdScene = await TimelineService.createScene({
+            ...sceneData,
+            start_time_seconds: lastEndTime,
+          })
+          timelineScenes.push(createdScene)
+          // Update lastEndTime for next iteration
+          lastEndTime = createdScene.start_time_seconds + createdScene.duration_seconds
+          createdCount++
+        }
       }
+
+      const successMessage = createdCount > 0 && updatedCount > 0
+        ? `Pushed ${createdCount} new scene${createdCount !== 1 ? 's' : ''} and updated ${updatedCount} existing scene${updatedCount !== 1 ? 's' : ''} to timeline`
+        : createdCount > 0
+        ? `Pushed ${createdCount} scene${createdCount !== 1 ? 's' : ''} to timeline`
+        : `Updated ${updatedCount} scene${updatedCount !== 1 ? 's' : ''} in timeline`
 
       toast({
         title: "Success",
-        description: `Pushed ${timelineScenes.length} scenes to timeline`,
+        description: successMessage,
       })
 
       // Navigate to timeline

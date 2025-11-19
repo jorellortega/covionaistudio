@@ -234,7 +234,24 @@ export default function MoviesPage() {
       
       for (const movie of moviesData) {
         try {
-          // 1. Check treatment for cover image (highest priority)
+          // 0. First check if movie already has a thumbnail set - if so, use it and skip all lookups
+          const hasExistingThumbnail = movie.thumbnail && 
+                                      movie.thumbnail.trim() && 
+                                      movie.thumbnail !== "/placeholder.svg?height=300&width=200"
+          
+          if (hasExistingThumbnail) {
+            coverImageMap[movie.id] = movie.thumbnail
+            console.log(`🖼️ Movies Page - Using existing thumbnail for movie ${movie.id} (${movie.name})`)
+            // Still check for treatment (for the treatment link), but don't override thumbnail
+            const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
+            if (treatment) {
+              treatmentMap[movie.id] = treatment.id
+              console.log(`✅ Movies Page - Found treatment ${treatment.id} for movie ${movie.id} (${movie.name})`)
+            }
+            continue // Skip to next movie - no need to check assets or ideas
+          }
+          
+          // 1. Check treatment for cover image (highest priority when no thumbnail exists)
           const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
           if (treatment) {
             treatmentMap[movie.id] = treatment.id
@@ -249,30 +266,30 @@ export default function MoviesPage() {
             console.log(`⚠️ Movies Page - No treatment found for movie ${movie.id} (${movie.name})`)
           }
           
-          // 2. If no treatment cover, check assets (project-level image assets)
+          // 2. If no treatment cover, check assets - prioritize actual covers (is_default_cover = true)
           if (!coverImageMap[movie.id]) {
             try {
-              const assets = await AssetService.getAssetsForProject(movie.id)
-              const imageAssets = assets.filter(a => 
-                a.content_type === 'image' && 
-                a.is_latest_version && 
-                a.content_url
-              )
+              // Get cover image assets - returns sorted with default covers first
+              const coverAssets = await AssetService.getCoverImageAssets(movie.id)
               
-              if (imageAssets.length > 0) {
-                // Get the most recent image asset
-                imageAssets.sort((a, b) => 
-                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-                )
-                coverImageMap[movie.id] = imageAssets[0].content_url!
-                console.log(`🖼️ Movies Page - Found cover image from assets for movie ${movie.id}`)
+              if (coverAssets.length > 0) {
+                // Prioritize actual covers (is_default_cover = true) over regular images
+                const defaultCover = coverAssets.find(a => a.is_default_cover)
+                if (defaultCover) {
+                  coverImageMap[movie.id] = defaultCover.content_url!
+                  console.log(`🖼️ Movies Page - Found default cover asset for movie ${movie.id}`)
+                } else {
+                  // Fallback to most recent image only if no actual covers exist
+                  coverImageMap[movie.id] = coverAssets[0].content_url!
+                  console.log(`🖼️ Movies Page - Found fallback image asset for movie ${movie.id} (no covers found)`)
+                }
               }
             } catch (assetError) {
               console.error(`❌ Movies Page - Error fetching assets for movie ${movie.id}:`, assetError)
             }
           }
           
-          // 3. If still no cover, check ideas (match by title)
+          // 3. If still no cover, check ideas (match by title) - final fallback
           if (!coverImageMap[movie.id]) {
             try {
               const ideas = await MovieIdeasService.getUserIdeas(userId)
@@ -638,7 +655,7 @@ export default function MoviesPage() {
       .trim()
 
     // Check prompt length for DALL-E 3 (1000 character limit)
-    const fullPrompt = `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+    const fullPrompt = `Cinematic Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
     if (fullPrompt.length > 1000) {
       toast({
         title: "Prompt Too Long",
@@ -681,19 +698,21 @@ export default function MoviesPage() {
     setIsGeneratingCover(true)
     try {
       let imageUrl = ""
+      let actualPromptUsed = "" // Track the actual prompt sent to the service
       
       console.log(`Generating movie cover using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'}) - normalized to: ${normalizedService}`)
       
       // Use the service to use for cover generation
       switch (normalizedService) {
         case "dalle":
-          console.log('Making DALL-E request with prompt:', `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`)
+          actualPromptUsed = `Cinematic Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+          console.log('Making DALL-E request with prompt:', actualPromptUsed)
           
           const dalleResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: `Movie poster: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`,
+              prompt: actualPromptUsed,
               service: 'dalle',
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
@@ -710,11 +729,12 @@ export default function MoviesPage() {
           break
           
         case "openart":
+          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const openartResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              prompt: actualPromptUsed,
               service: 'openart',
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
@@ -731,11 +751,12 @@ export default function MoviesPage() {
           break
           
         case "leonardo":
+          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const leonardoResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              prompt: actualPromptUsed,
               service: 'leonardo',
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
@@ -749,11 +770,12 @@ export default function MoviesPage() {
           
         default:
           // Fallback to DALL-E
+          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const fallbackResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              prompt: `Movie poster cover: ${aiPrompt}. Cinematic, professional movie poster style, high quality, dramatic lighting.`,
+              prompt: actualPromptUsed,
               service: 'dalle',
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
@@ -778,10 +800,56 @@ export default function MoviesPage() {
         setGeneratedCoverUrl(supabaseUrl)
         setNewMovie(prev => ({ ...prev, thumbnail: supabaseUrl }))
         
-        toast({
-          title: "AI Cover Generated & Uploaded",
-          description: `Cover generated and uploaded to storage using ${normalizedService.toUpperCase()}`,
-        })
+        // Create asset record in the assets table if we have a project/movie ID
+        const projectId = editingMovie?.id || null
+        if (projectId && user?.id) {
+          try {
+            const assetData = {
+              project_id: projectId,
+              scene_id: null, // Movie covers are project-level, not scene-level
+              title: `Movie Cover - ${editingMovie?.name || newMovie.name || 'Untitled'} - ${new Date().toLocaleDateString()}`,
+              content_type: 'image' as const,
+              content: '', // No text content for images
+              content_url: supabaseUrl,
+              prompt: actualPromptUsed || `Cinematic Movie Art Cover: ${aiPrompt}`,
+              model: normalizedService,
+              generation_settings: {
+                service: normalizedService,
+                prompt: actualPromptUsed || `Cinematic Movie Art Cover: ${aiPrompt}`,
+                timestamp: new Date().toISOString(),
+              },
+              metadata: {
+                generated_at: new Date().toISOString(),
+                source: 'movies_page_cover_generation',
+                movie_name: editingMovie?.name || newMovie.name || 'Untitled',
+                is_movie_cover: true,
+              }
+            }
+
+            console.log('Creating asset record for movie cover:', assetData)
+            await AssetService.createAsset(assetData)
+            console.log('Asset record created successfully for movie cover')
+            
+            toast({
+              title: "AI Cover Generated & Saved",
+              description: `Cover generated, uploaded to storage, and saved to assets using ${normalizedService.toUpperCase()}`,
+            })
+          } catch (assetError) {
+            console.error('Failed to create asset record for movie cover:', assetError)
+            // Don't fail the whole operation if asset creation fails
+            toast({
+              title: "AI Cover Generated & Uploaded",
+              description: `Cover generated and uploaded to storage using ${normalizedService.toUpperCase()}. Note: Asset record creation failed.`,
+              variant: "default",
+            })
+          }
+        } else {
+          // If no project ID yet (creating new movie), just show upload success
+          toast({
+            title: "AI Cover Generated & Uploaded",
+            description: `Cover generated and uploaded to storage using ${normalizedService.toUpperCase()}`,
+          })
+        }
       } catch (uploadError) {
         console.error('Failed to upload movie cover to Supabase:', uploadError)
         toast({

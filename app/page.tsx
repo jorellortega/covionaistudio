@@ -1,9 +1,10 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import Link from "next/link"
 import { AIChat } from "@/components/ai-chat"
-import { Bot } from "lucide-react"
+import { Bot, Sparkles, ArrowRight } from "lucide-react"
 
 export default function HomePage() {
   return (
@@ -87,6 +88,45 @@ export default function HomePage() {
               </div>
             </div>
             <AIChat />
+          </div>
+        </section>
+
+        {/* Subscription Plans Card */}
+        <section className="container mx-auto px-4 sm:px-6 pb-16">
+          <div className="max-w-4xl mx-auto">
+            <Card className="border-primary/30 bg-gradient-to-br from-primary/5 via-purple-500/5 to-cyan-500/5 hover:shadow-lg transition-all duration-300">
+              <CardHeader>
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="h-6 w-6 text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <CardTitle className="text-2xl mb-2 bg-gradient-to-r from-blue-500 to-purple-500 bg-clip-text text-transparent">
+                      Choose Your Plan
+                    </CardTitle>
+                    <CardDescription className="text-base">
+                      From professional creators to Production Houses — find the perfect plan for your needs. Starting at $60/month with flexible credit options.
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">Plans for every creator</p>
+                    <p className="text-sm text-muted-foreground">
+                      Creator • Studio • Production House
+                    </p>
+                  </div>
+                  <Button className="gradient-button neon-glow text-white group" asChild>
+                    <Link href="/subscriptions">
+                      View Plans
+                      <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
+                    </Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </section>
 

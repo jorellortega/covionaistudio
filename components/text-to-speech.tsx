@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, Play, Pause, Volume2, Download, RefreshCw, Headphones } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { Loader2, Play, Pause, Volume2, Download, RefreshCw, Headphones, Edit, Check, X as XIcon, Trash2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { useAuthReady } from '@/components/auth-hooks'
 import { AISettingsService } from '@/lib/ai-settings-service'
@@ -50,6 +51,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPreviewingVoice, setIsPreviewingVoice] = useState(false)
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null)
   const [previewAudioUrl, setPreviewAudioUrl] = useState<string | null>(null)
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -264,14 +266,63 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     setIsPlaying(false)
   }
 
-  const downloadAudio = () => {
-    if (audioUrl) {
+  const downloadAudio = async () => {
+    if (!audioUrl) return
+
+    try {
+      // Fetch the audio as a blob to force download
+      const response = await fetch(audioUrl)
+      if (!response.ok) {
+        throw new Error('Failed to fetch audio')
+      }
+      
+      const blob = await response.blob()
+      
+      // Generate download filename matching the save format
+      let downloadFileName: string
+      const titleLower = title.toLowerCase()
+      
+      if (titleLower.includes('synopsis')) {
+        // Extract movie title (everything before " - Synopsis")
+        const movieTitle = title.split(' - Synopsis')[0].trim()
+        downloadFileName = `${movieTitle} - Synopsis audio.mp3`
+      } else if (titleLower.includes('treatment')) {
+        // Extract movie title (everything before " - Treatment")
+        const movieTitle = title.split(' - Treatment')[0].trim()
+        downloadFileName = `${movieTitle} - Treatment audio.mp3`
+      } else {
+        // For other cases, use the original logic
+        downloadFileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech.mp3`
+      }
+      
+      // Create blob URL directly from the blob to force download
+      const blobUrl = window.URL.createObjectURL(blob)
+      
       const link = document.createElement('a')
-      link.href = audioUrl
-      link.download = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech.mp3`
+      link.href = blobUrl
+      link.download = downloadFileName
+      link.style.display = 'none'
+      link.setAttribute('download', downloadFileName) // Force download attribute
+      // Don't set target - let download attribute handle it
       document.body.appendChild(link)
+      
+      // Trigger download - use click() directly
       link.click()
-      document.body.removeChild(link)
+      
+      // Clean up immediately
+      setTimeout(() => {
+        if (document.body.contains(link)) {
+          document.body.removeChild(link)
+        }
+        window.URL.revokeObjectURL(blobUrl)
+      }, 100)
+    } catch (error) {
+      console.error('Error downloading audio:', error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download audio. Please try again.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -298,11 +349,31 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
       const result = await response.json()
       if (result.success) {
-        setSavedAudioFiles(result.data.audioFiles)
+        // Filter audio files based on the title prop to separate synopsis and treatment audio
+        // The title prop contains either "Synopsis" or "Treatment" to distinguish them
+        let filteredAudioFiles = result.data.audioFiles
+        
+        if (title) {
+          // Extract the type from title (e.g., "Movie Title - Synopsis" -> "Synopsis")
+          const titleLower = title.toLowerCase()
+          if (titleLower.includes('synopsis')) {
+            // Only show audio files that contain "synopsis" in their name
+            filteredAudioFiles = result.data.audioFiles.filter((file: any) => 
+              file.name.toLowerCase().includes('synopsis')
+            )
+          } else if (titleLower.includes('treatment')) {
+            // Only show audio files that contain "treatment" in their name (but not "synopsis")
+            filteredAudioFiles = result.data.audioFiles.filter((file: any) => 
+              file.name.toLowerCase().includes('treatment') && !file.name.toLowerCase().includes('synopsis')
+            )
+          }
+        }
+        
+        setSavedAudioFiles(filteredAudioFiles)
         if (options?.showToast !== false) {
           toast({
             title: "Audio Loaded",
-            description: `Found ${result.data.count} saved audio files.`,
+            description: `Found ${filteredAudioFiles.length} saved audio files.`,
           })
         }
       }
@@ -380,8 +451,31 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       const base64Audio = await blobToBase64(audioBlob)
       console.log('💾 Audio converted to base64, length:', base64Audio.length)
 
-      const fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+      // Generate appropriate filename based on title
+      // Extract the movie/treatment name from title (e.g., "Movie Title - Synopsis" -> "Movie Title")
+      let fileName: string
+      let audioTitle: string // For the database title
+      const titleLower = title.toLowerCase()
+      
+      if (titleLower.includes('synopsis')) {
+        // Extract movie title (everything before " - Synopsis")
+        const movieTitle = title.split(' - Synopsis')[0].trim()
+        const safeMovieTitle = movieTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+        fileName = `${safeMovieTitle}_synopsis_audio`
+        audioTitle = `${movieTitle} - Synopsis audio`
+      } else if (titleLower.includes('treatment')) {
+        // Extract movie title (everything before " - Treatment")
+        const movieTitle = title.split(' - Treatment')[0].trim()
+        const safeMovieTitle = movieTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+        fileName = `${safeMovieTitle}_treatment_audio`
+        audioTitle = `${movieTitle} - Treatment audio`
+      } else {
+        // For other cases, use the original logic
+        fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+        audioTitle = `${title} audio`
+      }
       console.log('💾 Saving audio with filename:', fileName)
+      console.log('💾 Audio title for database:', audioTitle)
 
       const saveResponse = await fetch('/api/ai/save-audio', {
         method: 'POST',
@@ -389,6 +483,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         body: JSON.stringify({
           audioBlob: base64Audio,
           fileName: fileName,
+          audioTitle: audioTitle, // Pass the formatted title for the database
           projectId,
           sceneId: sceneId || null,
           treatmentId: treatmentId || null,
@@ -439,6 +534,73 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     return voices.find(v => v.voice_id === selectedVoice)?.name || 'Select Voice'
   }
 
+  const previewVoiceById = async (voiceId: string, e?: React.MouseEvent) => {
+    // Prevent event propagation if event is provided (when clicking from dropdown)
+    if (e) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+
+    setIsPreviewingVoice(true)
+    setPreviewingVoiceId(voiceId)
+    try {
+      // Stop any currently playing preview
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause()
+        previewAudioRef.current = null
+      }
+
+      // Check if voice has a preview_url (from ElevenLabs API)
+      const voice = voices.find(v => v.voice_id === voiceId)
+      if (voice?.preview_url) {
+        // Use the preview URL directly from ElevenLabs
+        const audio = new Audio(voice.preview_url)
+        previewAudioRef.current = audio
+        
+        audio.onended = () => {
+          setIsPreviewingVoice(false)
+          setPreviewingVoiceId(null)
+          previewAudioRef.current = null
+        }
+        
+        audio.onerror = (e) => {
+          console.error('Preview URL failed, generating preview instead:', e)
+          setIsPreviewingVoice(false)
+          // If preview_url fails, try generating a preview
+          generateVoicePreviewById(voiceId).catch(err => {
+            console.error('Failed to generate preview:', err)
+            setIsPreviewingVoice(false)
+            setPreviewingVoiceId(null)
+          })
+        }
+        
+        try {
+          await audio.play()
+          toast({
+            title: "Voice Preview",
+            description: `Playing preview for ${voice.name}...`,
+          })
+          return
+        } catch (playError) {
+          console.error('Failed to play preview URL:', playError)
+          // Fall through to generate preview
+        }
+      }
+
+      // If no preview_url or preview_url failed, generate a preview via API
+      await generateVoicePreviewById(voiceId)
+    } catch (error) {
+      console.error('Error previewing voice:', error)
+      toast({
+        title: "Preview Failed",
+        description: error instanceof Error ? error.message : "Failed to preview voice",
+        variant: "destructive",
+      })
+      setIsPreviewingVoice(false)
+      setPreviewingVoiceId(null)
+    }
+  }
+
   const previewVoice = async () => {
     if (!selectedVoice) {
       toast({
@@ -449,63 +611,10 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       return
     }
 
-    setIsPreviewingVoice(true)
-    try {
-      // Stop any currently playing preview
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause()
-        previewAudioRef.current = null
-      }
-
-      // Check if voice has a preview_url (from ElevenLabs API)
-      const voice = voices.find(v => v.voice_id === selectedVoice)
-      if (voice?.preview_url) {
-        // Use the preview URL directly from ElevenLabs
-        const audio = new Audio(voice.preview_url)
-        previewAudioRef.current = audio
-        
-        audio.onended = () => {
-          setIsPreviewingVoice(false)
-          previewAudioRef.current = null
-        }
-        
-        audio.onerror = (e) => {
-          console.error('Preview URL failed, generating preview instead:', e)
-          setIsPreviewingVoice(false)
-          // If preview_url fails, try generating a preview
-          generateVoicePreview().catch(err => {
-            console.error('Failed to generate preview:', err)
-            setIsPreviewingVoice(false)
-          })
-        }
-        
-        try {
-          await audio.play()
-          toast({
-            title: "Voice Preview",
-            description: "Playing voice preview...",
-          })
-          return
-        } catch (playError) {
-          console.error('Failed to play preview URL:', playError)
-          // Fall through to generate preview
-        }
-      }
-
-      // If no preview_url or preview_url failed, generate a preview via API
-      await generateVoicePreview()
-    } catch (error) {
-      console.error('Error previewing voice:', error)
-      toast({
-        title: "Preview Failed",
-        description: error instanceof Error ? error.message : "Failed to preview voice",
-        variant: "destructive",
-      })
-      setIsPreviewingVoice(false)
-    }
+    await previewVoiceById(selectedVoice)
   }
 
-  const generateVoicePreview = async () => {
+  const generateVoicePreviewById = async (voiceId: string) => {
     if (!elevenLabsApiKey) {
       toast({
         title: "API Key Required",
@@ -521,7 +630,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       const response = await fetch('/api/ai/voice-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voiceId: selectedVoice })
+        body: JSON.stringify({ voiceId })
       })
 
       if (!response.ok) {
@@ -542,6 +651,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         previewAudioRef.current = audio
         audio.onended = () => {
           setIsPreviewingVoice(false)
+          setPreviewingVoiceId(null)
           setPreviewAudioUrl(null)
           if (previewAudioRef.current) {
             URL.revokeObjectURL(audioUrl)
@@ -560,6 +670,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
           previewAudioRef.current = audio
           audio.onended = () => {
             setIsPreviewingVoice(false)
+            setPreviewingVoiceId(null)
             setPreviewAudioUrl(null)
             previewAudioRef.current = null
           }
@@ -738,12 +849,34 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
               </div>
             ) : (
               voices.map((voice) => (
-                <SelectItem key={voice.voice_id} value={voice.voice_id}>
-                  <div className="flex flex-col min-w-0">
-                    <span className="font-medium truncate text-xs">{voice.name}</span>
-                    {voice.description && (
-                      <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
-                    )}
+                <SelectItem 
+                  key={voice.voice_id} 
+                  value={voice.voice_id}
+                >
+                  <div className="flex items-center justify-between w-full gap-2">
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <span className="font-medium truncate text-xs">{voice.name}</span>
+                      {voice.description && (
+                        <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        e.preventDefault()
+                        previewVoiceById(voice.voice_id, e)
+                      }}
+                      disabled={isPreviewingVoice}
+                      className="flex-shrink-0 p-1 rounded hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                      title={`Preview ${voice.name}`}
+                      aria-label={`Preview ${voice.name}`}
+                    >
+                      {isPreviewingVoice && previewingVoiceId === voice.voice_id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Headphones className="h-3 w-3" />
+                      )}
+                    </button>
                   </div>
                 </SelectItem>
               ))
@@ -766,9 +899,6 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
                 <Headphones className="h-3 w-3" />
               )}
             </Button>
-          <Badge variant="outline" className="text-xs border-blue-500/30 text-blue-400 hidden sm:flex">
-            {voices.find(v => v.voice_id === selectedVoice)?.category || 'premade'}
-          </Badge>
           </>
         )}
         <Button
@@ -896,60 +1026,119 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         </div>
       )}
 
-      {/* Saved Audio Files Section - Compact & Collapsible */}
+      {/* Saved Audio Files Section - Always Visible */}
       {(sceneId || treatmentId) && savedAudioFiles.length > 0 && (
-        <details className="mt-2 pt-2 border-t border-border/50">
-          <summary className="text-xs font-medium text-muted-foreground cursor-pointer flex items-center gap-2 hover:text-foreground">
+        <div className="mt-2 pt-2 border-t border-border/50">
+          <div className="text-xs font-medium text-muted-foreground flex items-center gap-2 mb-2">
             <span>Saved Audio ({savedAudioFiles.length})</span>
             <RefreshCw 
-              className="h-3 w-3 hover:text-blue-400" 
-              onClick={(e) => {
-                e.preventDefault()
-                fetchSavedAudio()
-              }}
+              className="h-3 w-3 hover:text-blue-400 cursor-pointer" 
+              onClick={() => fetchSavedAudio()}
+              title="Refresh saved audio list"
             />
-          </summary>
-          <div className="space-y-2 mt-2">
+          </div>
+          <div className="space-y-2">
             {savedAudioFiles.map((file, index) => (
               <div key={index} className="flex items-center gap-2 p-2 bg-muted/20 rounded border border-border/50">
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-foreground truncate">{file.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {(file.size / 1024 / 1024).toFixed(2)} MB
-                  </p>
-                </div>
-                <audio
-                  src={file.public_url}
-                  controls
-                  className="h-8 w-32"
-                  preload="none"
-                />
-                <Button
-                  onClick={() => window.open(file.public_url, '_blank')}
-                  variant="outline"
-                  size="sm"
-                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 h-7 w-7 p-0"
-                >
-                  <Download className="h-3 w-3" />
-                </Button>
-                <Button
-                  onClick={() => deleteAudioFile(file)}
-                  disabled={isDeletingAudio === file.id}
-                  variant="outline"
-                  size="sm"
-                  className="border-gray-500/30 text-gray-400 hover:bg-gray-500/10 h-7 w-7 p-0"
-                >
-                  {isDeletingAudio === file.id ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                  {editingAudioId === file.id ? (
+                    <div className="space-y-1">
+                      <Input
+                        value={editingAudioName}
+                        onChange={(e) => setEditingAudioName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            saveEditedAudioName(file)
+                          } else if (e.key === 'Escape') {
+                            cancelEditingAudioName()
+                          }
+                        }}
+                        className="h-7 text-xs"
+                        autoFocus
+                      />
+                      <div className="flex gap-1">
+                        <Button
+                          onClick={() => saveEditedAudioName(file)}
+                          disabled={isRenamingAudio === file.id}
+                          variant="outline"
+                          size="sm"
+                          className="h-6 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                        >
+                          {isRenamingAudio === file.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Check className="h-3 w-3" />
+                          )}
+                        </Button>
+                        <Button
+                          onClick={cancelEditingAudioName}
+                          disabled={isRenamingAudio === file.id}
+                          variant="outline"
+                          size="sm"
+                          className="h-6 px-2 text-xs border-gray-500/30 text-gray-400 hover:bg-gray-500/10"
+                        >
+                          <XIcon className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
                   ) : (
-                    '×'
+                    <>
+                      <p className="text-xs font-medium text-foreground truncate">{file.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {(file.size / 1024 / 1024).toFixed(2)} MB
+                      </p>
+                    </>
                   )}
-                </Button>
+                </div>
+                {editingAudioId !== file.id && (
+                  <>
+                    <audio
+                      src={file.public_url}
+                      controls
+                      className="h-8 w-32"
+                      preload="none"
+                    />
+                    <Button
+                      onClick={() => startEditingAudioName(file)}
+                      disabled={editingAudioId !== null}
+                      variant="outline"
+                      size="sm"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 h-7 w-7 p-0"
+                      title="Edit audio file name"
+                    >
+                      <Edit className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      onClick={() => window.open(file.public_url, '_blank')}
+                      variant="outline"
+                      size="sm"
+                      className="border-green-500/30 text-green-400 hover:bg-green-500/10 h-7 w-7 p-0"
+                      title="Download audio file"
+                    >
+                      <Download className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      onClick={() => deleteAudioFile(file)}
+                      disabled={isDeletingAudio === file.id}
+                      variant="outline"
+                      size="sm"
+                      className="border-red-500/30 text-red-400 hover:bg-red-500/10 h-7 w-7 p-0"
+                      title="Delete audio file"
+                    >
+                      {isDeletingAudio === file.id ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3" />
+                      )}
+                    </Button>
+                  </>
+                )}
               </div>
             ))}
           </div>
-        </details>
+        </div>
       )}
     </div>
   )
 }
+

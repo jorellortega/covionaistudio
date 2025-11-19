@@ -5,6 +5,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { getSupabaseClient } from '@/lib/supabase';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -99,56 +100,113 @@ function LoginPageContent() {
         </Link>
       </div>
       
-      <form onSubmit={onSubmit} className="w-full max-w-sm space-y-4">
-        <h1 className="text-2xl font-semibold">
-          {mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : 'Reset password'}
-        </h1>
+      <div className="w-full max-w-sm space-y-4">
+        <Tabs 
+          value={mode === 'reset' ? 'signin' : mode} 
+          onValueChange={(value) => setMode(value as Mode)}
+          className="w-full"
+        >
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="signin">Sign In</TabsTrigger>
+            <TabsTrigger value="signup">Sign Up</TabsTrigger>
+          </TabsList>
 
-        <label className="block">
-          <span className="text-sm">Email</span>
-          <input type="email" autoComplete="email"
-            className="mt-1 w-full rounded-md border p-2 bg-black/40"
-            value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </label>
+          <TabsContent value="signin" className="space-y-4 mt-4">
+            <form onSubmit={onSubmit} className="space-y-4">
+              <h1 className="text-2xl font-semibold">Sign in</h1>
 
-        {mode !== 'reset' && (
-          <>
-            <label className="block">
-              <span className="text-sm">Password</span>
-              <input type="password"
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                className="mt-1 w-full rounded-md border p-2 bg-black/40"
-                value={password} onChange={(e) => setPassword(e.target.value)} required />
-            </label>
-            {mode === 'signup' && (
+              <label className="block">
+                <span className="text-sm">Email</span>
+                <input type="email" autoComplete="email"
+                  className="mt-1 w-full rounded-md border p-2 bg-black/40"
+                  value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </label>
+
+              <label className="block">
+                <span className="text-sm">Password</span>
+                <input type="password"
+                  autoComplete="current-password"
+                  className="mt-1 w-full rounded-md border p-2 bg-black/40"
+                  value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </label>
+
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+              {message && <p className="text-green-500 text-sm">{message}</p>}
+
+              <button type="submit" disabled={submitting} className="w-full rounded-md border p-2">
+                {submitting ? 'Please wait…' : 'Sign in'}
+              </button>
+
+              <div className="text-center">
+                <button type="button" onClick={() => setMode('reset')} className="text-sm text-muted-foreground hover:text-foreground">
+                  Forgot password?
+                </button>
+              </div>
+            </form>
+          </TabsContent>
+
+          <TabsContent value="signup" className="space-y-4 mt-4">
+            <form onSubmit={onSubmit} className="space-y-4">
+              <h1 className="text-2xl font-semibold">Create account</h1>
+
+              <label className="block">
+                <span className="text-sm">Email</span>
+                <input type="email" autoComplete="email"
+                  className="mt-1 w-full rounded-md border p-2 bg-black/40"
+                  value={email} onChange={(e) => setEmail(e.target.value)} required />
+              </label>
+
+              <label className="block">
+                <span className="text-sm">Password</span>
+                <input type="password"
+                  autoComplete="new-password"
+                  className="mt-1 w-full rounded-md border p-2 bg-black/40"
+                  value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </label>
+
               <label className="block">
                 <span className="text-sm">Confirm password</span>
                 <input type="password" autoComplete="new-password"
                   className="mt-1 w-full rounded-md border p-2 bg-black/40"
                   value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
               </label>
-            )}
-          </>
+
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+              {message && <p className="text-green-500 text-sm">{message}</p>}
+
+              <button type="submit" disabled={submitting} className="w-full rounded-md border p-2">
+                {submitting ? 'Please wait…' : 'Create account'}
+              </button>
+            </form>
+          </TabsContent>
+        </Tabs>
+
+        {mode === 'reset' && (
+          <form onSubmit={onSubmit} className="space-y-4">
+            <h1 className="text-2xl font-semibold">Reset password</h1>
+
+            <label className="block">
+              <span className="text-sm">Email</span>
+              <input type="email" autoComplete="email"
+                className="mt-1 w-full rounded-md border p-2 bg-black/40"
+                value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </label>
+
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            {message && <p className="text-green-500 text-sm">{message}</p>}
+
+            <button type="submit" disabled={submitting} className="w-full rounded-md border p-2">
+              {submitting ? 'Please wait…' : 'Send reset email'}
+            </button>
+
+            <div className="text-center">
+              <button type="button" onClick={() => setMode('signin')} className="text-sm text-muted-foreground hover:text-foreground">
+                Back to sign in
+              </button>
+            </div>
+          </form>
         )}
-
-        {error && <p className="text-red-500 text-sm">{error}</p>}
-        {message && <p className="text-green-500 text-sm">{message}</p>}
-
-        <button type="submit" disabled={submitting} className="w-full rounded-md border p-2">
-          {submitting ? 'Please wait…' : mode === 'signin' ? 'Sign in'
-            : mode === 'signup' ? 'Create account' : 'Send reset email'}
-        </button>
-
-        <div className="flex justify-between text-sm">
-          {mode === 'signin' && (
-            <>
-              <button type="button" onClick={() => setMode('signup')}>Create account</button>
-              <button type="button" onClick={() => setMode('reset')}>Forgot password?</button>
-            </>
-          )}
-          {mode !== 'signin' && <button type="button" onClick={() => setMode('signin')}>Back to sign in</button>}
-        </div>
-      </form>
+      </div>
     </main>
   );
 }

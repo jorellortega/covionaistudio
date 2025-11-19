@@ -17,6 +17,7 @@ import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
 import { AssetService } from "@/lib/asset-service"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
+import { CharactersService, Character } from "@/lib/characters-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import {
@@ -99,15 +100,25 @@ const scriptTemplates = [
   { name: "Plot Treatment", prompt: "Create a plot treatment for:" },
 ]
 
-const imageStyles = [
-  "Cinematic",
-  "Concept Art",
-  "Storyboard",
-  "Character Design",
-  "Environment",
-  "Props",
-  "Mood Board",
-  "Technical Drawing",
+const cinematicShots = [
+  "Close-up",
+  "Extreme Close-up",
+  "Medium Close-up",
+  "Medium Shot",
+  "Medium Wide Shot",
+  "Wide Shot",
+  "Extreme Wide Shot",
+  "Establishing Shot",
+  "Two Shot",
+  "Over-the-Shoulder",
+  "Point of View (POV)",
+  "Dutch Angle",
+  "High Angle",
+  "Low Angle",
+  "Bird's Eye View",
+  "Cowboy Shot",
+  "Full Shot",
+  "Master Shot",
 ]
 
 const handleCopy = (content: string) => {
@@ -129,6 +140,7 @@ export default function AIStudioPage() {
   const [audioPrompt, setAudioPrompt] = useState("")
   const [selectedModel, setSelectedModel] = useState("")
   const [selectedStyle, setSelectedStyle] = useState("")
+  const [selectedShot, setSelectedShot] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState("")
   const [selectedProject, setSelectedProject] = useState("")
   const [selectedScene, setSelectedScene] = useState("none")
@@ -171,6 +183,11 @@ export default function AIStudioPage() {
   const [sceneScripts, setSceneScripts] = useState<any[]>([])
   const [selectedSceneScript, setSelectedSceneScript] = useState("none")
   const [isLoadingSceneScripts, setIsLoadingSceneScripts] = useState(false)
+  
+  // Characters state
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
+  const [selectedCharacter, setSelectedCharacter] = useState<string>("none")
 
   // Content violation dialog state
   const [showContentViolationDialog, setShowContentViolationDialog] = useState(false)
@@ -598,6 +615,7 @@ export default function AIStudioPage() {
     }
     
     setSelectedStyle("")
+    setSelectedShot("")
     setSelectedTemplate("")
     setSelectedDuration("5s")
     setSelectedVideoStyle("cinematic")
@@ -695,7 +713,31 @@ export default function AIStudioPage() {
     }
 
     loadScenes()
-  }, [selectedProject, userId])
+  }, [selectedProject, userId, ready])
+
+  // Load characters when project is selected
+  useEffect(() => {
+    const loadCharacters = async () => {
+      if (!selectedProject || !ready) return
+      
+      try {
+        setIsLoadingCharacters(true)
+        console.log('Loading characters for project:', selectedProject)
+        
+        const projectCharacters = await CharactersService.getCharacters(selectedProject)
+        console.log('Characters loaded:', projectCharacters)
+        
+        setCharacters(projectCharacters)
+      } catch (error) {
+        console.error('Error loading characters:', error)
+        setCharacters([])
+      } finally {
+        setIsLoadingCharacters(false)
+      }
+    }
+
+    loadCharacters()
+  }, [selectedProject, ready])
 
   // Effect to check for continued script data
   useEffect(() => {
@@ -749,50 +791,108 @@ export default function AIStudioPage() {
       return
     }
     
+    // Reset character selection after generation if needed
+    if (type === 'image' && selectedCharacter !== 'none') {
+      // Keep character selected for potential regeneration
+    }
+    
           // API key checks simplified since keys aren't stored in user object
       // All models are considered ready for now
 
     // Helper function to enhance prompt with selected script content
+    // Helper function to build character info string
+    // For image generation, exclude name, goals, and conflicts to save character space
+    const buildCharacterInfo = (forImage: boolean = false) => {
+      if (!selectedCharacter || selectedCharacter === 'none') return ""
+      const char = characters.find(c => c.id === selectedCharacter)
+      if (!char) return ""
+      
+      const parts = []
+      // For images, exclude name, goals, and conflicts to save space
+      if (!forImage) {
+        parts.push(`Name: ${char.name}`)
+      }
+      if (char.archetype) parts.push(`Archetype: ${char.archetype}`)
+      if (char.description) parts.push(`Description: ${char.description}`)
+      if (char.backstory) parts.push(`Backstory: ${char.backstory}`)
+      if (!forImage) {
+        if (char.goals) parts.push(`Goals/Motivations: ${char.goals}`)
+        if (char.conflicts) parts.push(`Conflicts: ${char.conflicts}`)
+      }
+      if (char.personality?.traits && Array.isArray(char.personality.traits) && char.personality.traits.length > 0) {
+        parts.push(`Personality Traits: ${char.personality.traits.join(', ')}`)
+      }
+      return `\n\n--- CHARACTER REFERENCE ---\n${parts.join('\n')}\n--- END CHARACTER REFERENCE ---\n\n`
+    }
+
     const enhancePromptWithScript = (basePrompt: string, type: string) => {
       console.log(`🔍 ENHANCE PROMPT - Type: ${type}, Base Prompt: "${basePrompt}"`)
       console.log(`🔍 ENHANCE PROMPT - Selected Script ID: ${selectedSceneScript}`)
       console.log(`🔍 ENHANCE PROMPT - Available Scripts:`, sceneScripts.map(s => ({ id: s.id, title: s.title })))
       
-      if (!selectedSceneScript || !sceneScripts.find(s => s.id === selectedSceneScript)) {
-        console.log(`🔍 ENHANCE PROMPT - No script selected, returning base prompt`)
-        console.log(`🔍 ENHANCE PROMPT - Base prompt length: ${basePrompt.length} characters`)
+      const forImage = type === 'image'
+      const characterInfo = buildCharacterInfo(forImage)
+      const hasScript = selectedSceneScript && sceneScripts.find(s => s.id === selectedSceneScript)
+      const selectedScript = hasScript ? sceneScripts.find(s => s.id === selectedSceneScript) : null
+      
+      // If no script and no character, return base prompt
+      if (!hasScript && !characterInfo) {
+        console.log(`🔍 ENHANCE PROMPT - No script or character selected, returning base prompt`)
         return basePrompt
       }
       
-      const selectedScript = sceneScripts.find(s => s.id === selectedSceneScript)
+      let scriptInfo = ""
+      if (selectedScript?.content) {
       console.log(`🔍 ENHANCE PROMPT - Selected Script:`, { 
-        id: selectedScript?.id, 
-        title: selectedScript?.title, 
-        version: selectedScript?.version_name || selectedScript?.version,
-        contentLength: selectedScript?.content?.length || 0
+          id: selectedScript.id, 
+          title: selectedScript.title, 
+          version: selectedScript.version_name || selectedScript.version,
+          contentLength: selectedScript.content.length
       })
-      
-      if (!selectedScript?.content) {
-        console.log(`🔍 ENHANCE PROMPT - No script content found, returning base prompt`)
-        return basePrompt
+        scriptInfo = `\n\n--- REFERENCE SCRIPT ---\nTitle: ${selectedScript.title}\nVersion: ${selectedScript.version_name || `Version ${selectedScript.version}`}\nFull Script Content:\n${selectedScript.content}\n--- END REFERENCE ---\n\n`
       }
-      
-      // Send the FULL script content, not just a preview
-      const scriptInfo = `\n\n--- REFERENCE SCRIPT ---\nTitle: ${selectedScript.title}\nVersion: ${selectedScript.version_name || `Version ${selectedScript.version}`}\nFull Script Content:\n${selectedScript.content}\n--- END REFERENCE ---\n\n`
       
       let enhancedPrompt = ""
       switch (type) {
         case 'script':
-          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nPlease use the above reference script as context and inspiration. Build upon the existing story, characters, and style while creating something new that fits seamlessly with the established narrative.`
+          if (scriptInfo) {
+          enhancedPrompt = `${scriptInfo}${characterInfo}${basePrompt}\n\nPlease use the above reference script as context and inspiration.${characterInfo ? ' Include character details from the character reference.' : ''} Build upon the existing story, characters, and style while creating something new that fits seamlessly with the established narrative.`
+          } else if (characterInfo) {
+            enhancedPrompt = `${characterInfo}${basePrompt}\n\nUse the character reference above to inform your writing. Stay true to the character's personality, goals, conflicts, and backstory.`
+          } else {
+            enhancedPrompt = basePrompt
+          }
           break
         case 'image':
-          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nCreate an image that visually represents the scene described in the reference script above. The image should capture the mood, setting, and visual elements mentioned in the script.`
+          // Add shot instruction at the very top if selected
+          const shotInstruction = selectedShot && selectedShot.trim() ? `IMPORTANT: Ensure this is a ${selectedShot}.\n\n` : ''
+          // Also prefix the user prompt with shot type if selected
+          const userPromptWithShot = selectedShot && selectedShot.trim() ? `${selectedShot}: ${basePrompt}` : basePrompt
+          if (scriptInfo) {
+            enhancedPrompt = `${shotInstruction}${scriptInfo}${characterInfo}${userPromptWithShot}\n\nCreate an image that visually represents the scene described in the reference script above.${characterInfo ? ' Include the character details from the character reference, ensuring the character appears as described.' : ''} The image should capture the mood, setting, and visual elements mentioned in the script.`
+          } else if (characterInfo) {
+            enhancedPrompt = `${shotInstruction}${characterInfo}${userPromptWithShot}\n\nCreate an image that accurately represents the character from the character reference above. Ensure the character's appearance, style, and demeanor match their description.`
+          } else {
+            enhancedPrompt = shotInstruction ? `${shotInstruction}${userPromptWithShot}` : basePrompt
+          }
           break
         case 'video':
-          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nGenerate a video that brings to life the scene from the reference script above. Consider the pacing, mood, and visual style established in the script.`
+          if (scriptInfo) {
+          enhancedPrompt = `${scriptInfo}${characterInfo}${basePrompt}\n\nGenerate a video that brings to life the scene from the reference script above.${characterInfo ? ' Include the character details from the character reference.' : ''} Consider the pacing, mood, and visual style established in the script.`
+          } else if (characterInfo) {
+            enhancedPrompt = `${characterInfo}${basePrompt}\n\nGenerate a video featuring the character from the character reference above. Ensure the character's appearance, behavior, and personality traits are accurately represented.`
+          } else {
+            enhancedPrompt = basePrompt
+          }
           break
         case 'audio':
-          enhancedPrompt = `${scriptInfo}${basePrompt}\n\nCreate audio that complements the mood and atmosphere described in the reference script above. The audio should enhance the emotional impact and setting of the scene.`
+          if (scriptInfo) {
+          enhancedPrompt = `${scriptInfo}${characterInfo}${basePrompt}\n\nCreate audio that complements the mood and atmosphere described in the reference script above.${characterInfo ? ' Consider the character\'s personality and traits when creating the audio.' : ''} The audio should enhance the emotional impact and setting of the scene.`
+          } else if (characterInfo) {
+            enhancedPrompt = `${characterInfo}${basePrompt}\n\nCreate audio that reflects the character's personality, motivations, and conflicts from the character reference above.`
+          } else {
+            enhancedPrompt = basePrompt
+          }
           break
         default:
           enhancedPrompt = basePrompt
@@ -800,10 +900,13 @@ export default function AIStudioPage() {
       
       console.log(`🔍 ENHANCE PROMPT - Final Enhanced Prompt:`)
       console.log(`🔍 ENHANCE PROMPT - ${enhancedPrompt}`)
-      console.log(`🔍 ENHANCE PROMPT - Script Info Added: ${scriptInfo}`)
+      console.log(`🔍 ENHANCE PROMPT - Script Info Added: ${scriptInfo ? 'Yes' : 'No'}`)
+      console.log(`🔍 ENHANCE PROMPT - Character Info Added: ${characterInfo ? 'Yes' : 'No'}`)
       console.log(`🔍 ENHANCE PROMPT - Total Prompt Length: ${enhancedPrompt.length} characters`)
+      if (selectedScript?.content) {
       console.log(`🔍 ENHANCE PROMPT - Full Script Content Length: ${selectedScript.content.length} characters`)
       console.log(`🔍 ENHANCE PROMPT - AI now receives: 100% of the script (${selectedScript.content.length} characters)`)
+      }
       
       return enhancedPrompt
     }
@@ -873,7 +976,7 @@ export default function AIStudioPage() {
       } else if (type === "image" && (selectedModel === "DALL-E 3" || selectedModel.startsWith("Runway"))) {
         console.log('Attempting to generate image with:', {
           prompt: imagePrompt,
-          style: selectedStyle || "Cinematic",
+          shot: selectedShot || "",
           apiKeyLength: userApiKeys.openai_api_key?.length || 0,
           apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
         })
@@ -892,15 +995,19 @@ export default function AIStudioPage() {
         const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
         console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to ${selectedModel}:`)
         console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
-        console.log(`🚀 IMAGE GENERATION - Style: ${selectedStyle || "Cinematic"}`)
+        console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
         
         let response
         if (selectedModel === "DALL-E 3") {
+          console.log(`🚀 IMAGE GENERATION - Calling OpenAIService.generateImage...`)
           response = await OpenAIService.generateImage({
           prompt: enhancedPrompt,
-          style: selectedStyle || "Cinematic",
+          shot: selectedShot || "",
           apiKey: userApiKeys.openai_api_key!,
         })
+          console.log(`🚀 IMAGE GENERATION - Response received:`, response)
+          console.log(`🚀 IMAGE GENERATION - Response success:`, response?.success)
+          console.log(`🚀 IMAGE GENERATION - Response error:`, response?.error)
         } else if (selectedModel === "Runway ML") {
           // Use the selected sub-model
           const actualModel = selectedRunwayImageModel
@@ -1810,6 +1917,7 @@ export default function AIStudioPage() {
         generation_settings: {
           template: selectedTemplate,
           style: selectedStyle,
+          shot: saveModalData.type === 'image' ? selectedShot : undefined,
         },
         metadata: {
           project_name: saveModalData.projectName,
@@ -2503,20 +2611,51 @@ export default function AIStudioPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid gap-2">
-                    <Label>Style</Label>
-                    <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                    <Label>Shot (Optional)</Label>
+                    <Select value={selectedShot} onValueChange={setSelectedShot}>
                       <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Choose a style" />
+                        <SelectValue placeholder="Choose a shot type (optional)" />
                       </SelectTrigger>
                       <SelectContent className="cinema-card border-border">
-                        {imageStyles.map((style) => (
-                          <SelectItem key={style} value={style}>
-                            {style}
+                        {cinematicShots.map((shot) => (
+                          <SelectItem key={shot} value={shot}>
+                            {shot}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Character Selector - Show when project is selected and characters exist */}
+                  {selectedProject && characters.length > 0 && (
+                    <div className="grid gap-2">
+                      <Label>Character (Optional)</Label>
+                      <Select 
+                        value={selectedCharacter} 
+                        onValueChange={setSelectedCharacter}
+                        disabled={isLoadingCharacters}
+                      >
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder={isLoadingCharacters ? "Loading characters..." : "Select a character..."} />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="none">
+                            <span className="text-muted-foreground">No character selected</span>
+                          </SelectItem>
+                          {characters.map((char) => (
+                            <SelectItem key={char.id} value={char.id}>
+                              <div className="flex flex-col">
+                                <span className="font-medium">{char.name}</span>
+                                {char.archetype && (
+                                  <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                                )}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
                   {/* Scene Scripts Dropdown - Only show if scene is selected */}
                   {selectedScene && selectedScene !== 'none' && (

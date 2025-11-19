@@ -18,9 +18,11 @@ export default function MoodBoardsPage() {
   const searchParams = useSearchParams()
   const initialScope = (searchParams.get('scope') as MoodBoardScope) || 'movie'
   const initialTarget = searchParams.get('targetId') || ""
+  const initialProjectId = searchParams.get('projectId') || ""
 
   const [scope, setScope] = useState<MoodBoardScope>(initialScope)
   const [targetId, setTargetId] = useState<string>(initialTarget)
+  const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [boards, setBoards] = useState<MoodBoard[]>([])
   const [loading, setLoading] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -125,6 +127,14 @@ export default function MoodBoardsPage() {
     }
   }
 
+  // Auto-load boards when scope and targetId are provided from URL params on initial mount
+  useEffect(() => {
+    if (initialScope && initialTarget && initialTarget.length > 0) {
+      void loadBoards()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run on mount
+
   useEffect(() => {
     setBoards([])
     if (canLoad) {
@@ -171,12 +181,15 @@ export default function MoodBoardsPage() {
           <label className="text-sm font-medium">Project</label>
           <div className="mt-1">
             <ProjectSelector
-              selectedProject={scope === 'movie' ? targetId : undefined}
+              selectedProject={scope === 'movie' ? targetId : (projectId || undefined)}
               onProjectChange={(projectId) => {
-                setScope('movie')
-                setTargetId(projectId)
-                setBoards([])
-                void loadBoards()
+                if (scope === 'movie') {
+                  setTargetId(projectId)
+                  setBoards([])
+                  void loadBoards()
+                } else {
+                  setProjectId(projectId)
+                }
               }}
               placeholder="Select a movie project"
             />

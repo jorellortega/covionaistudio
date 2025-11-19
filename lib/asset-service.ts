@@ -5,6 +5,8 @@ export interface Asset {
   user_id: string
   project_id?: string | null // Optional for standalone content
   scene_id?: string | null
+  treatment_id?: string | null // Optional reference to treatment
+  character_id?: string | null // Optional reference to character
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -12,6 +14,7 @@ export interface Asset {
   version: number
   version_name?: string // Add version name field
   is_latest_version: boolean
+  is_default_cover?: boolean // Whether this is the default cover for the project
   parent_asset_id?: string | null
   prompt?: string
   model?: string
@@ -30,6 +33,8 @@ export interface Asset {
 export interface CreateAssetData {
   project_id?: string | null // Optional for standalone content
   scene_id?: string | null
+  treatment_id?: string | null // Optional reference to treatment
+  character_id?: string | null // Optional reference to character
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -96,6 +101,21 @@ export class AssetService {
       }
     }
     
+    // Validate that the referenced character exists (if provided and not bypassed)
+    if (assetData.character_id && assetData.character_id !== null && typeof assetData.character_id === 'string' && !assetData.metadata?.bypassCharacterValidation) {
+      const { data: characterExists, error: characterError } = await getSupabaseClient()
+        .from('characters')
+        .select('id')
+        .eq('id', assetData.character_id)
+        .eq('user_id', user.id)
+        .single()
+      
+      if (characterError || !characterExists) {
+        console.error('Character validation failed:', { character_id: assetData.character_id, error: characterError })
+        throw new Error(`Character with ID ${assetData.character_id} not found or access denied`)
+      }
+    }
+    
     // Check if there's an existing asset for this scene to determine version
     let version = assetData.version || 1  // Use provided version or default to 1
     let parentAssetId: string | undefined = undefined
@@ -127,6 +147,8 @@ export class AssetService {
       user_id: user.id,
       project_id: assetData.project_id,
       scene_id: (assetData.scene_id && typeof assetData.scene_id === 'string') ? assetData.scene_id : null,
+      treatment_id: assetData.treatment_id || null,
+      character_id: (assetData.character_id && typeof assetData.character_id === 'string') ? assetData.character_id : null,
       title: assetData.title,
       content_type: assetData.content_type,
       content: assetData.content,
@@ -140,6 +162,7 @@ export class AssetService {
       generation_settings: assetData.generation_settings || {},
       metadata: assetData.metadata || {},
       locked_sections: assetData.locked_sections || null,
+      is_default_cover: (assetData.metadata?.is_default_cover || false) && assetData.content_type === 'image' && (assetData.project_id || assetData.treatment_id) ? true : false,
     }
 
     console.log('Attempting to insert asset with data:', JSON.stringify(insertData, null, 2))
@@ -175,6 +198,11 @@ export class AssetService {
         code: error.code
       })
       console.error('Full error object:', error)
+      // If character_id column doesn't exist (e.g., migration not run)
+      if (error.code === '42703' || error.message?.includes('column "character_id"')) {
+        console.error('character_id column may not exist. Please run migration 039_add_character_id_to_assets.sql')
+        throw new Error('Database migration required: Please run migration 039_add_character_id_to_assets.sql to enable character assets. ' + error.message)
+      }
       throw error
     }
 
@@ -244,6 +272,30 @@ export class AssetService {
     })
     
     return data as Asset[]
+  }
+
+  static async getAssetsForCharacter(characterId: string): Promise<Asset[]> {
+    const user = await this.ensureAuthenticated()
+    
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('character_id', characterId)
+      .eq('user_id', user.id)
+      .eq('is_latest_version', true)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching character assets:', error)
+      // If column doesn't exist (e.g., migration not run), return empty array
+      if (error.code === '42703' || error.message?.includes('column "character_id"')) {
+        console.warn('character_id column may not exist. Please run migration 039_add_character_id_to_assets.sql')
+        return []
+      }
+      throw error
+    }
+
+    return (data || []) as Asset[]
   }
 
   static async getAssetById(assetId: string): Promise<Asset | null> {
@@ -388,5 +440,140 @@ export class AssetService {
       console.error('AssetService - Smart delete failed:', error)
       throw error
     }
+  }
+
+  // Get cover image assets for a project (all image assets that could be covers)
+  static async getCoverImageAssets(projectId: string): Promise<Asset[]> {
+    const user = await this.ensureAuthenticated()
+    
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('user_id', user.id)
+      .eq('content_type', 'image')
+      .eq('is_latest_version', true)
+      .is('scene_id', null) // Only project-level images (not scene-specific)
+      .order('is_default_cover', { ascending: false }) // Default cover first
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching cover image assets:', error)
+      throw error
+    }
+
+    return data as Asset[]
+  }
+
+  // Get cover image assets for a treatment (by treatment_id)
+  static async getCoverImageAssetsForTreatment(treatmentId: string): Promise<Asset[]> {
+    const user = await this.ensureAuthenticated()
+    
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('treatment_id', treatmentId)
+      .eq('user_id', user.id)
+      .eq('content_type', 'image')
+      .eq('is_latest_version', true)
+      .is('scene_id', null) // Only treatment-level images (not scene-specific)
+      .order('is_default_cover', { ascending: false }) // Default cover first
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching cover image assets for treatment:', error)
+      throw error
+    }
+
+    return data as Asset[]
+  }
+
+  // Get the default cover asset for a project
+  static async getDefaultCoverAsset(projectId: string): Promise<Asset | null> {
+    const user = await this.ensureAuthenticated()
+    
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('user_id', user.id)
+      .eq('content_type', 'image')
+      .eq('is_default_cover', true)
+      .eq('is_latest_version', true)
+      .is('scene_id', null)
+      .single()
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return null // No default cover found
+      }
+      console.error('Error fetching default cover asset:', error)
+      throw error
+    }
+
+    return data as Asset
+  }
+
+  // Set an asset as the default cover for a project or treatment
+  static async setDefaultCover(assetId: string): Promise<Asset> {
+    const user = await this.ensureAuthenticated()
+    
+    // First, get the asset to check it exists and get project_id/treatment_id
+    const asset = await this.getAssetById(assetId)
+    if (!asset) {
+      throw new Error('Asset not found')
+    }
+    
+    if (asset.content_type !== 'image') {
+      throw new Error('Only image assets can be set as default cover')
+    }
+    
+    if (!asset.project_id && !asset.treatment_id) {
+      throw new Error('Asset must have a project_id or treatment_id to be set as default cover')
+    }
+    
+    // Update this asset to be the default cover
+    // The database trigger will automatically unset other default covers for the same project
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .update({ is_default_cover: true })
+      .eq('id', assetId)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error setting default cover:', error)
+      throw error
+    }
+
+    return data as Asset
+  }
+
+  // Unset the default cover for an asset
+  static async unsetDefaultCover(assetId: string): Promise<Asset> {
+    const user = await this.ensureAuthenticated()
+    
+    // First, get the asset to verify it exists
+    const asset = await this.getAssetById(assetId)
+    if (!asset) {
+      throw new Error('Asset not found')
+    }
+    
+    // Update this asset to remove default cover status
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .update({ is_default_cover: false })
+      .eq('id', assetId)
+      .eq('user_id', user.id)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error unsetting default cover:', error)
+      throw error
+    }
+
+    return data as Asset
   }
 }

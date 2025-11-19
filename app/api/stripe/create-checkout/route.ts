@@ -11,10 +11,9 @@ function getStripe() {
 }
 
 const plans = {
-  solo: { priceId: process.env.STRIPE_PRICE_SOLO!, name: 'Solo', amount: 1900 },
-  creator: { priceId: process.env.STRIPE_PRICE_CREATOR!, name: 'Creator', amount: 4900 },
-  studio: { priceId: process.env.STRIPE_PRICE_STUDIO!, name: 'Studio', amount: 14900 },
-  production: { priceId: process.env.STRIPE_PRICE_PRODUCTION!, name: 'Production House', amount: 39900 },
+  creator: { priceId: process.env.STRIPE_PRICE_CREATOR!, name: 'Creator', amount: 6000 },
+  studio: { priceId: process.env.STRIPE_PRICE_STUDIO!, name: 'Studio', amount: 15000 },
+  production: { priceId: process.env.STRIPE_PRICE_PRODUCTION!, name: 'Production House', amount: 50000 },
 }
 
 const creditPackages = {
@@ -35,9 +34,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { planId, packageId, userId, action, customAmount, credits } = await request.json()
+    const { planId, packageId, userId, userEmail, action, customAmount, credits } = await request.json()
 
-    console.log('Create checkout request:', { planId, packageId, userId, action, customAmount, credits })
+    console.log('Create checkout request:', { planId, packageId, userId, userEmail, action, customAmount, credits })
 
     if (!userId) {
       return NextResponse.json(
@@ -144,6 +143,7 @@ export async function POST(request: NextRequest) {
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         payment_method_types: ['card'],
+        customer_email: userEmail || undefined, // Pre-fill email if provided
         line_items: [
           {
             price: plan.priceId,

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuthReady } from '@/components/auth-hooks'
+import { getSupabaseClient } from '@/lib/supabase'
 import Header from '@/components/header'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -36,10 +37,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 const plans = [
-  { id: 'solo', name: 'Solo', price: 19, credits: 8000 },
-  { id: 'creator', name: 'Creator', price: 49, credits: 25000 },
-  { id: 'studio', name: 'Studio', price: 149, credits: 90000 },
-  { id: 'production', name: 'Production House', price: 399, credits: 220000 },
+  { id: 'creator', name: 'Creator', price: 60, credits: 25000 },
+  { id: 'studio', name: 'Studio', price: 150, credits: 90000 },
+  { id: 'production', name: 'Production House', price: 500, credits: 220000 },
 ]
 
 const creditPackages = [
@@ -56,6 +56,7 @@ export default function PlansCreditsPage() {
   const [currentPlan, setCurrentPlan] = useState<string | null>(null)
   const [currentCredits, setCurrentCredits] = useState(0)
   const [subscriptionStatus, setSubscriptionStatus] = useState<'active' | 'canceled' | 'none'>('none')
+  const [cancelAtPeriodEnd, setCancelAtPeriodEnd] = useState(false)
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false)
   const [showDowngradeDialog, setShowDowngradeDialog] = useState(false)
   const [showCancelDialog, setShowCancelDialog] = useState(false)
@@ -285,6 +286,7 @@ export default function PlansCreditsPage() {
         }
         
         // Reload subscription data and payment methods
+        console.log('🔄 Reloading subscription data after successful checkout...')
         loadSubscriptionData()
         if (customerId) {
           loadPaymentMethods(customerId)
@@ -326,18 +328,64 @@ export default function PlansCreditsPage() {
   const loadSubscriptionData = async () => {
     try {
       setLoading(true)
-      // TODO: Fetch actual subscription data from your database/Stripe
-      // For now, using mock data
-      setCurrentPlan('solo')
-      setCurrentCredits(5000)
-      setSubscriptionStatus('active')
+      console.log('🔄 Loading subscription data for user:', userId)
+      
+      if (!userId) {
+        console.log('⚠️ No userId, skipping subscription load')
+        setCurrentPlan(null)
+        setSubscriptionStatus('none')
+        return
+      }
+
+      const supabase = getSupabaseClient()
+      
+      // Fetch subscription from database (including canceled ones scheduled to end)
+      const { data: subscription, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('user_id', userId)
+        .in('status', ['active', 'canceled'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (error) {
+        // If no subscription found, that's okay
+        if (error.code === 'PGRST116') {
+          console.log('ℹ️ No active subscription found')
+          setCurrentPlan(null)
+          setSubscriptionStatus('none')
+          setCancelAtPeriodEnd(false)
+        } else {
+          console.error('❌ Error fetching subscription:', error)
+          throw error
+        }
+      } else if (subscription) {
+        console.log('✅ Subscription found:', subscription)
+        setCurrentPlan(subscription.plan_id)
+        setSubscriptionStatus(subscription.status as 'active' | 'canceled' | 'none')
+        setCancelAtPeriodEnd(subscription.cancel_at_period_end || false)
+        console.log('📋 Subscription cancel_at_period_end:', subscription.cancel_at_period_end)
+        
+        // TODO: Fetch actual credits from credit_transactions table
+        // For now, set a default
+        setCurrentCredits(5000)
+      } else {
+        console.log('ℹ️ No subscription data returned')
+        setCurrentPlan(null)
+        setSubscriptionStatus('none')
+        setCancelAtPeriodEnd(false)
+      }
     } catch (error) {
-      console.error('Error loading subscription data:', error)
+      console.error('❌ Error loading subscription data:', error)
       toast({
         title: "Error",
         description: "Failed to load subscription data",
         variant: "destructive",
       })
+      setCurrentPlan(null)
+      setSubscriptionStatus('none')
+      setCancelAtPeriodEnd(false)
     } finally {
       setLoading(false)
     }
@@ -404,27 +452,42 @@ export default function PlansCreditsPage() {
   const handleCancel = async () => {
     setIsProcessing(true)
     try {
-      // TODO: Cancel subscription via Stripe API
+      console.log('🔄 Canceling subscription for user:', userId)
       const response = await fetch('/api/stripe/cancel-subscription', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
       })
 
-      if (!response.ok) throw new Error('Failed to cancel subscription')
+      const data = await response.json()
 
+      if (!response.ok) {
+        console.error('❌ Cancel subscription failed:', data)
+        throw new Error(data.error || 'Failed to cancel subscription')
+      }
+
+      console.log('✅ Subscription cancellation successful:', data)
+      console.log('📋 Updated subscription from API:', data.subscription)
+      
+      // Update local state immediately
+      if (data.subscription) {
+        setCancelAtPeriodEnd(data.subscription.cancel_at_period_end || false)
+        console.log('📋 Updated cancel_at_period_end state:', data.subscription.cancel_at_period_end)
+      }
+      
       toast({
         title: "Subscription Canceled",
         description: "Your subscription will remain active until the end of the billing period",
       })
       
-      setSubscriptionStatus('canceled')
+      // Reload subscription data to reflect the cancellation
+      await loadSubscriptionData()
       setShowCancelDialog(false)
     } catch (error) {
-      console.error('Error canceling subscription:', error)
+      console.error('❌ Error canceling subscription:', error)
       toast({
         title: "Error",
-        description: "Failed to cancel subscription",
+        description: error instanceof Error ? error.message : "Failed to cancel subscription",
         variant: "destructive",
       })
     } finally {
@@ -688,8 +751,18 @@ export default function PlansCreditsPage() {
                       <p className="text-2xl font-bold">{currentPlanData?.name || 'No Plan'}</p>
                       <p className="text-muted-foreground">${currentPlanData?.price}/month</p>
                     </div>
-                    <Badge variant={subscriptionStatus === 'active' ? 'default' : 'destructive'}>
-                      {subscriptionStatus === 'active' ? 'Active' : 'Canceled'}
+                    <Badge variant={
+                      cancelAtPeriodEnd 
+                        ? 'secondary' 
+                        : subscriptionStatus === 'active' 
+                          ? 'default' 
+                          : 'destructive'
+                    }>
+                      {cancelAtPeriodEnd 
+                        ? 'Canceling' 
+                        : subscriptionStatus === 'active' 
+                          ? 'Active' 
+                          : 'Canceled'}
                     </Badge>
                   </div>
                   
@@ -707,8 +780,16 @@ export default function PlansCreditsPage() {
                     </div>
                   </div>
 
+                  {cancelAtPeriodEnd && (
+                    <div className="mt-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-md">
+                      <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                        ⚠️ Your subscription is scheduled to cancel at the end of the billing period.
+                      </p>
+                    </div>
+                  )}
+                  
                   <div className="flex gap-2 pt-4">
-                    {subscriptionStatus === 'active' && (
+                    {subscriptionStatus === 'active' && !cancelAtPeriodEnd && (
                       <>
                         <Button 
                           variant="outline" 
@@ -762,7 +843,7 @@ export default function PlansCreditsPage() {
                 className="w-full" 
                 asChild
               >
-                <Link href="/plans-info">
+                <Link href="/subscriptions">
                   View All Plans
                 </Link>
               </Button>

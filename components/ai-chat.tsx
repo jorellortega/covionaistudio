@@ -32,15 +32,35 @@ export function AIChat({ className }: AIChatProps) {
   const hasConversation = messages.length > 1 || isLoading
   const isCompact = !isExpanded && !hasConversation
 
-  // Auto-scroll to bottom when new messages arrive
+  // Helper function to scroll within the ScrollArea viewport only
+  const scrollToBottom = () => {
+    if (!scrollAreaRef.current) return
+    
+    // Find the actual viewport element that Radix ScrollArea creates
+    const viewport = scrollAreaRef.current.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement
+    if (viewport) {
+      // Use requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        if (viewport) {
+          // Scroll to the bottom of the viewport
+          viewport.scrollTo({
+            top: viewport.scrollHeight,
+            behavior: 'smooth'
+          })
+        }
+      })
+    }
+  }
+
+  // Auto-scroll to bottom when new messages arrive (only within the chat container)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    scrollToBottom()
   }, [messages])
 
   // Also scroll when loading state changes (e.g., assistant is typing)
   useEffect(() => {
     if (isLoading) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      scrollToBottom()
     }
   }, [isLoading])
 

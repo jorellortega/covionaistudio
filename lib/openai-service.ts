@@ -6,7 +6,7 @@ interface GenerateScriptRequest {
 
 interface GenerateImageRequest {
   prompt: string
-  style: string
+  shot: string
   model?: string
   apiKey: string
 }
@@ -92,21 +92,72 @@ export class OpenAIService {
   }
 
   static async generateImage(request: GenerateImageRequest): Promise<OpenAIResponse> {
-    const { prompt, style, model, apiKey } = request
+    const { prompt, shot, model, apiKey } = request
     
-    // Clean and enhance the prompt to avoid API errors
+    // The prompt already comes enhanced from the frontend (includes shot, character info, etc.)
+    // Just clean it and ensure it's within DALL-E 3's 1000 character limit
     const cleanPrompt = prompt.trim().replace(/\s+/g, ' ')
-    const enhancedPrompt = `${style} style: ${cleanPrompt}`
+    let enhancedPrompt = cleanPrompt
     
-    // Validate prompt length (DALL-E 3 has a 1000 character limit)
-    if (enhancedPrompt.length > 1000) {
-      return {
-        success: false,
-        error: `Prompt too long. Maximum 1000 characters, got ${enhancedPrompt.length}. Please shorten your prompt.`
+    // DALL-E 3 has a 1000 character limit for the prompt
+    // If the prompt is too long, we need to truncate it intelligently
+    // ALWAYS preserve the shot instruction at the top if present
+    const MAX_PROMPT_LENGTH = 1000
+    
+    // Extract shot instruction from the top if present
+    // Note: cleanPrompt has normalized whitespace (\n\n becomes a space)
+    const shotInstructionMatch = cleanPrompt.match(/^IMPORTANT: Ensure this is a ([^.]+)\.\s+/i)
+    const shotInstruction = shotInstructionMatch ? shotInstructionMatch[0] : ''
+    const promptWithoutShot = shotInstruction ? cleanPrompt.substring(shotInstruction.length) : cleanPrompt
+    
+    if (enhancedPrompt.length > MAX_PROMPT_LENGTH) {
+      console.warn(`Prompt too long (${enhancedPrompt.length} chars), truncating to ${MAX_PROMPT_LENGTH} chars`)
+      
+      // Find where the actual user prompt starts (after character reference)
+      const userPromptMatch = promptWithoutShot.match(/outside.*?$/i) || promptWithoutShot.match(/inside.*?$/i) || promptWithoutShot.match(/([^.]{10,})$/i)
+      const userPromptPart = userPromptMatch ? userPromptMatch[0] : ''
+      
+      // Build a shorter version: preserve shot instruction + character summary + user prompt
+      if (promptWithoutShot.includes('--- CHARACTER REFERENCE ---')) {
+        // Extract character name and key details
+        const charNameMatch = promptWithoutShot.match(/Name: ([^\n]+)/)
+        const charDescMatch = promptWithoutShot.match(/Description: ([^\n]+)/)
+        const charName = charNameMatch ? charNameMatch[1] : ''
+        const charDesc = charDescMatch ? charDescMatch[1] : ''
+        
+        // Build shortened character info
+        let shortCharInfo = ''
+        if (charName) shortCharInfo += `Character: ${charName}. `
+        if (charDesc) shortCharInfo += `${charDesc.substring(0, 200)}. `
+        
+        // Calculate available length after shot instruction
+        const availableLength = MAX_PROMPT_LENGTH - shotInstruction.length
+        const contentToKeep = shortCharInfo + userPromptPart || promptWithoutShot.substring(promptWithoutShot.length - Math.min(availableLength - 100, 300))
+        
+        // Reconstruct with shot instruction at top
+        enhancedPrompt = shotInstruction + contentToKeep
+        
+        // Final truncation if still too long (preserve shot instruction)
+        if (enhancedPrompt.length > MAX_PROMPT_LENGTH) {
+          const maxContentLength = MAX_PROMPT_LENGTH - shotInstruction.length - 3
+          const truncatedContent = (shortCharInfo + userPromptPart).substring(0, maxContentLength)
+          enhancedPrompt = shotInstruction + truncatedContent + '...'
+        }
+      } else {
+        // No character reference, just preserve shot instruction and truncate from end
+        const availableLength = MAX_PROMPT_LENGTH - shotInstruction.length
+        const truncatedContent = promptWithoutShot.substring(0, availableLength)
+        enhancedPrompt = shotInstruction + truncatedContent
+      }
+      
+      console.log(`Prompt truncated from ${prompt.length} to ${enhancedPrompt.length} characters`)
+      if (shotInstruction) {
+        console.log('Shot instruction preserved at top:', shotInstruction.trim())
       }
     }
     
-    console.log('Generating image with prompt:', enhancedPrompt)
+    console.log('Generating image with prompt (length:', enhancedPrompt.length, '):', enhancedPrompt.substring(0, 200) + '...')
+    if (shot) console.log('Shot specified:', shot)
     console.log('Using model:', model)
     
     const data = {
