@@ -730,10 +730,12 @@ export default function CastingPage() {
                             </div>
                           )}
                           
-                          <div className="mb-4">
-                            <h4 className="font-semibold mb-2">Synopsis</h4>
-                            <p className="text-sm whitespace-pre-wrap">{treatment.synopsis}</p>
-                          </div>
+                          {treatment.synopsis && (
+                            <div className="mb-4">
+                              <h4 className="font-semibold mb-2">Synopsis</h4>
+                              <p className="text-sm whitespace-pre-wrap">{treatment.synopsis}</p>
+                            </div>
+                          )}
                           
                           {treatment.characters && (
                             <div className="mb-4">

@@ -449,8 +449,8 @@ Synopsis (2-3 paragraphs only):`
         title: treatmentTitle.trim() || convertingIdeaForTreatment.title,
         genre: treatmentGenre || "Unspecified",
         status: 'draft',
-        synopsis: treatmentSynopsis.trim() ? treatmentSynopsis.trim() : undefined,
-        prompt: treatmentPrompt.trim() ? treatmentPrompt.trim() : undefined,
+        synopsis: treatmentSynopsis.trim() || undefined,
+        prompt: treatmentPrompt.trim() || undefined,
         logline: treatmentLogline.trim() || convertingIdeaForTreatment.description || '',
         notes: convertingIdeaForTreatment.original_prompt || undefined,
         cover_image_url: coverImageUrl,
@@ -2229,8 +2229,8 @@ Synopsis (2-3 paragraphs only):`
                 Add New Idea
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
+            <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
+              <DialogHeader className="flex-shrink-0">
                 <DialogTitle>
                   {editingIdea ? "Edit Movie Idea" : "Add New Movie Idea"}
                 </DialogTitle>
@@ -2239,7 +2239,7 @@ Synopsis (2-3 paragraphs only):`
                 </DialogDescription>
               </DialogHeader>
               
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="title">Title *</Label>
@@ -2452,7 +2452,7 @@ Synopsis (2-3 paragraphs only):`
                 </div>
               </div>
               
-              <div className="flex justify-end gap-2">
+              <DialogFooter className="flex-shrink-0">
                 <Button variant="outline" onClick={() => setShowAddDialog(false)} disabled={isGeneratingSynopsis}>
                   Cancel
                 </Button>
@@ -2469,7 +2469,7 @@ Synopsis (2-3 paragraphs only):`
                     </>
                   )}
                 </Button>
-              </div>
+              </DialogFooter>
             </DialogContent>
           </Dialog>
           

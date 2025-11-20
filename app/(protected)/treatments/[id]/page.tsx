@@ -3598,14 +3598,14 @@ Return ONLY the JSON object, no other text:`
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column - Main Content */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Synopsis - Only show if it's different from treatment prompt */}
+            {/* Synopsis Card - Always show, but hide content if identical to prompt */}
             {(() => {
               // Check if synopsis and prompt are the same or very similar
               const synopsisText = treatment.synopsis?.trim() || ''
               const promptText = treatment.prompt?.trim() || ''
               
-              // Only hide if they are exactly the same or synopsis is empty
-              // Don't hide if synopsis is just similar - they should be separate
+              // Only hide content if they are exactly the same (to avoid duplication)
+              // But always show the card so user can add/edit synopsis
               const areIdentical = synopsisText && promptText && synopsisText === promptText
               
               console.log('📋 Treatment display check:', {
@@ -3618,8 +3618,9 @@ Return ONLY the JSON object, no other text:`
                 promptPreview: promptText.substring(0, 100)
               })
               
-              // Only show synopsis if it exists and is not identical to prompt
-              if (!synopsisText || areIdentical) {
+              // Always show the card, but hide content if identical to prompt
+              // This allows users to add a synopsis even when there's no synopsis yet
+              if (areIdentical) {
                 return null
               }
               

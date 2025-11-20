@@ -2136,7 +2136,7 @@ export default function TreatmentsPage() {
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-muted-foreground mb-4 line-clamp-3">
-                    {treatment.synopsis}
+                    {treatment.synopsis || ''}
                   </p>
                   
                   <div className="space-y-2 text-sm">
