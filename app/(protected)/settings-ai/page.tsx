@@ -900,11 +900,11 @@ export default function AISettingsPage() {
                         {setting.is_locked ? (
                           <Badge variant="outline" className="bg-green-500/20 text-green-600 border-green-500/30">
                             <CheckCircle className="h-3 w-3 mr-1" />
-                            {setting.locked_model} (Hidden)
+                            {setting.locked_model}
                           </Badge>
                         ) : (
                           <Badge variant="outline">
-                            {setting.locked_model} (Visible)
+                            {setting.locked_model}
                           </Badge>
                         )}
                       </div>

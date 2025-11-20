@@ -238,6 +238,16 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       }
 
       generatedScreenplay = response.data.choices[0].message.content
+      
+      // Clean up markdown code block markers if present
+      generatedScreenplay = generatedScreenplay.trim()
+      if (generatedScreenplay.startsWith('```')) {
+        generatedScreenplay = generatedScreenplay.replace(/^```[a-z]*\n?/i, '')
+      }
+      if (generatedScreenplay.endsWith('```')) {
+        generatedScreenplay = generatedScreenplay.replace(/\n?```$/i, '')
+      }
+      generatedScreenplay = generatedScreenplay.trim()
     } else if (normalizedService === 'anthropic') {
       const response = await AnthropicService.generateScript({
         prompt: userPrompt,
@@ -254,6 +264,16 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       }
 
       generatedScreenplay = response.data.content[0].text
+      
+      // Clean up markdown code block markers if present
+      generatedScreenplay = generatedScreenplay.trim()
+      if (generatedScreenplay.startsWith('```')) {
+        generatedScreenplay = generatedScreenplay.replace(/^```[a-z]*\n?/i, '')
+      }
+      if (generatedScreenplay.endsWith('```')) {
+        generatedScreenplay = generatedScreenplay.replace(/\n?```$/i, '')
+      }
+      generatedScreenplay = generatedScreenplay.trim()
     } else {
       return NextResponse.json(
         { error: 'Unsupported AI service' },

@@ -46,6 +46,9 @@ import {
   Download,
   ChevronLeft,
   ChevronRight,
+  Film,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -60,6 +63,9 @@ import AITextEditor from "@/components/ai-text-editor"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Navigation } from "@/components/navigation"
 import { AISettingsService } from "@/lib/ai-settings-service"
+import { ShotListComponent } from "@/components/shot-list"
+import { ShotListService } from "@/lib/shot-list-service"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 export default function ScenePage() {
   const params = useParams()
@@ -192,6 +198,9 @@ function ScenePageClient({ id }: { id: string }) {
   const [editedPages, setEditedPages] = useState<Map<number, string>>(new Map())
   const [savingScreenplay, setSavingScreenplay] = useState(false)
   const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
+  const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
+  const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
+  const [isShotListExpanded, setIsShotListExpanded] = useState(false)
   
   // Screenplay page number calculation (standard: ~55 lines per page)
   const LINES_PER_PAGE = 55
@@ -863,6 +872,115 @@ function ScenePageClient({ id }: { id: string }) {
       })
     } finally {
       setIsGeneratingScreenplay(false)
+    }
+  }
+
+  const generateShotListFromPage = async () => {
+    if (!id || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const pageContent = getCurrentPageContent()
+    if (!pageContent || pageContent.trim().length === 0) {
+      toast({
+        title: "Error",
+        description: "No screenplay content on this page to generate shot list from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingShotList(true)
+
+      // Get AI settings
+      const aiSettings = await AISettingsService.getUserSettings(userId!)
+      const scriptsSetting = aiSettings.find(s => s.tab_type === 'scripts')
+      const lockedModel = scriptsSetting?.locked_model || 'ChatGPT'
+      
+      // Normalize service name for API
+      const normalizedService = lockedModel.toLowerCase().includes('gpt') || lockedModel.toLowerCase().includes('openai') || lockedModel.toLowerCase().includes('chatgpt')
+        ? 'openai'
+        : lockedModel.toLowerCase().includes('claude') || lockedModel.toLowerCase().includes('anthropic')
+        ? 'anthropic'
+        : 'openai'
+      
+      // Get model - use selected_model if available, otherwise default based on service
+      const modelToUse = scriptsSetting?.selected_model || 
+        (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
+      const response = await fetch('/api/scenes/generate-shot-list', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sceneId: id,
+          screenplayContent: pageContent,
+          pageNumber: currentPage,
+          service: normalizedService,
+          model: modelToUse,
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate shot list')
+      }
+
+      const result = await response.json()
+
+      console.log('🎬 Shot List Generation - API Response:', {
+        success: result.success,
+        shotsCount: result.shots?.length || 0,
+        count: result.count
+      })
+
+      if (result.success && result.shots && result.shots.length > 0) {
+        console.log('🎬 Shot List Generation - Saving shots to database...')
+        
+        // Save all generated shots
+        const savedShots = await ShotListService.bulkCreateShotLists(
+          result.shots.map((shot: any) => ({
+            ...shot,
+            scene_id: id,
+            project_id: projectId,
+          }))
+        )
+
+        console.log('🎬 Shot List Generation - Saved shots:', savedShots.length)
+
+        // Trigger refresh of shot list component
+        setShotListRefreshKey(prev => prev + 1)
+        console.log('🎬 Shot List Generation - Refreshed shot list component')
+
+        // Expand the shot list card to show the newly generated shots
+        setIsShotListExpanded(true)
+
+        toast({
+          title: "Shot List Generated!",
+          description: `Successfully created ${savedShots.length} shots from page ${currentPage}.`,
+          duration: 5000,
+        })
+      } else {
+        console.error('🎬 Shot List Generation - No shots in response:', result)
+        throw new Error(result.error || 'No shots returned from AI')
+      }
+    } catch (error) {
+      console.error('Error generating shot list:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate shot list.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShotList(false)
     }
   }
 
@@ -1643,6 +1761,12 @@ function ScenePageClient({ id }: { id: string }) {
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Import Files
+            </TabsTrigger>
+            <TabsTrigger
+              value="shot-list"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+            >
+              Shot List
             </TabsTrigger>
           </TabsList>
 
@@ -3136,10 +3260,48 @@ function ScenePageClient({ id }: { id: string }) {
                       </div>
                     </div>
                   ) : (
-                    <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
-                      <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                        {getCurrentPageContent()}
-                      </pre>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="px-3 py-1">
+                            Page {currentPage} of {totalPages}
+                          </Badge>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                            onClick={() => router.push(`/storyboards/${id}`)}
+                          >
+                            <Film className="h-4 w-4 mr-2" />
+                            View Storyboards
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
+                            onClick={generateShotListFromPage}
+                            disabled={isGeneratingShotList || !getCurrentPageContent()}
+                          >
+                            {isGeneratingShotList ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Generating Shot List...
+                              </>
+                            ) : (
+                              <>
+                                <Film className="h-4 w-4 mr-2" />
+                                Generate Shot List from This Page
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
+                        <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
+                          {getCurrentPageContent()}
+                        </pre>
+                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -3192,6 +3354,41 @@ function ScenePageClient({ id }: { id: string }) {
                   </div>
                 )}
               </Card>
+            )}
+
+            {/* Shot List Card - Separate from Screenplay Card */}
+            {!isEditingScreenplay && screenplayContent && (
+              <Collapsible open={isShotListExpanded} onOpenChange={setIsShotListExpanded} className="mt-6">
+                <Card className="bg-card border-primary/20">
+                  <CollapsibleTrigger asChild>
+                    <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Film className="h-5 w-5 text-blue-400" />
+                          <CardTitle>Shot List</CardTitle>
+                        </div>
+                        {isShotListExpanded ? (
+                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Shots generated from this scene's screenplay. Use "Generate Shot List from This Page" above to create shots for the current page.
+                      </p>
+                    </CardHeader>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <CardContent>
+                      <ShotListComponent
+                        key={`shot-list-${shotListRefreshKey}`}
+                        sceneId={id}
+                        projectId={projectId}
+                      />
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
             )}
           </TabsContent>
 
@@ -3748,6 +3945,19 @@ function ScenePageClient({ id }: { id: string }) {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          {/* Shot List Tab */}
+          <TabsContent value="shot-list" className="space-y-6">
+            <Card>
+              <CardContent className="pt-6">
+                <ShotListComponent
+                  key={shotListRefreshKey}
+                  sceneId={id}
+                  projectId={projectId}
+                />
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Versions Tab Content */}

@@ -2006,48 +2006,51 @@ export default function TreatmentsPage() {
               <Card key={treatment.id} className="hover:shadow-lg transition-shadow">
                 {/* Cover Image */}
                 {treatment.cover_image_url && (
-                  <div className="relative h-48 bg-muted rounded-t-lg overflow-hidden group">
-                    <img
-                      src={treatment.cover_image_url}
-                      alt={`${treatment.title} cover`}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.display = 'none';
-                        target.nextElementSibling?.classList.remove('hidden');
-                      }}
-                    />
-                    <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
-                      <div className="text-center text-muted-foreground">
-                        <FileText className="h-12 w-12 mx-auto mb-2" />
-                        <p className="text-sm">Cover Image</p>
+                  <Link href={`/treatments/${treatment.id}`} className="block">
+                    <div className="relative h-48 bg-muted rounded-t-lg overflow-hidden group cursor-pointer">
+                      <img
+                        src={treatment.cover_image_url}
+                        alt={`${treatment.title} cover`}
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          target.style.display = 'none';
+                          target.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                      <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
+                        <div className="text-center text-muted-foreground">
+                          <FileText className="h-12 w-12 mx-auto mb-2" />
+                          <p className="text-sm">Cover Image</p>
+                        </div>
+                      </div>
+                      {/* Quick AI Button Overlay */}
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                        <Button
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            handleQuickAIGenerate(treatment)
+                          }}
+                          disabled={generatingTreatmentId === treatment.id}
+                          className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white shadow-lg"
+                        >
+                          {generatingTreatmentId === treatment.id ? (
+                            <>
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              AI
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="h-3 w-3 mr-1" />
+                              Quick AI
+                            </>
+                          )}
+                        </Button>
                       </div>
                     </div>
-                    {/* Quick AI Button Overlay */}
-                    <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button
-                        size="sm"
-                        onClick={(e) => {
-                          e.preventDefault()
-                          handleQuickAIGenerate(treatment)
-                        }}
-                        disabled={generatingTreatmentId === treatment.id}
-                        className="bg-gradient-to-r from-purple-500 to-blue-500 hover:opacity-90 text-white shadow-lg"
-                      >
-                        {generatingTreatmentId === treatment.id ? (
-                          <>
-                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                            AI
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="h-3 w-3 mr-1" />
-                            Quick AI
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
+                  </Link>
                 )}
                 {/* No Cover Image - Show Quick AI Button */}
                 {!treatment.cover_image_url && (

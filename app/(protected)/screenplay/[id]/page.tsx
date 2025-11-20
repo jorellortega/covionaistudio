@@ -45,6 +45,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { ScreenplayScenesService, type ScreenplayScene, type CreateScreenplaySceneData } from "@/lib/screenplay-scenes-service"
 import { TimelineService, type CreateSceneData } from "@/lib/timeline-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
+import { ShotListComponent } from "@/components/shot-list"
 
 // Screenplay page number calculation (standard: ~55 lines per page)
 const LINES_PER_PAGE = 55
@@ -2780,6 +2781,12 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                               </p>
                             </div>
                           )}
+                          <div className="pt-4 border-t mt-4">
+                            <ShotListComponent
+                              screenplaySceneId={scene.id}
+                              projectId={id}
+                            />
+                          </div>
                         </>
                       )}
                     </CardContent>

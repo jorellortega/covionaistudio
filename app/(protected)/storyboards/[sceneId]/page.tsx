@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -23,6 +23,7 @@ import { SavedPromptsService } from "@/lib/saved-prompts-service"
 import { PreferencesService } from "@/lib/preferences-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
+import { ShotListComponent } from "@/components/shot-list"
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -176,6 +177,8 @@ export default function SceneStoryboardsPage() {
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneScript, setSceneScript] = useState<string>("")
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
+  const [allScenes, setAllScenes] = useState<SceneWithMetadata[]>([])
+  const [currentSceneIndex, setCurrentSceneIndex] = useState<number>(-1)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -556,7 +559,6 @@ export default function SceneStoryboardsPage() {
   useEffect(() => {
     if (ready && userId && sceneId) {
       fetchStoryboards()
-      fetchSceneScript()
       fetchSceneInfo()
       loadStoryboardsWithTextRanges()
       // Note: loadSavedPrompts() will be called when sceneInfo loads with project_id
@@ -565,6 +567,13 @@ export default function SceneStoryboardsPage() {
       loadUserPreferences()
     }
   }, [ready, userId, sceneId])
+
+  // Fetch script after sceneInfo is loaded (to get screenplay_content)
+  useEffect(() => {
+    if (sceneInfo && ready && userId) {
+      fetchSceneScript()
+    }
+  }, [sceneInfo, ready, userId])
 
   // Hide selection actions when clicking outside and handle global selection changes
   useEffect(() => {
@@ -682,6 +691,14 @@ export default function SceneStoryboardsPage() {
     }
   }, [sceneInfo?.project_id, userId])
 
+  // Update current scene index when sceneId or allScenes changes
+  useEffect(() => {
+    if (sceneId && allScenes.length > 0) {
+      const index = allScenes.findIndex(s => s.id === sceneId)
+      setCurrentSceneIndex(index)
+    }
+  }, [sceneId, allScenes])
+
   const fetchSceneInfo = async () => {
     try {
       console.log('🎬 fetchSceneInfo: Starting to fetch scene:', sceneId)
@@ -782,6 +799,20 @@ export default function SceneStoryboardsPage() {
         timeline_name: timelineName,
         project_id: projectId
       })
+      
+      // Fetch all scenes for navigation if we have timeline_id
+      if ((scene as any).timeline_id) {
+        try {
+          const scenes = await TimelineService.getScenesForTimeline((scene as any).timeline_id)
+          setAllScenes(scenes)
+          // Find current scene index
+          const index = scenes.findIndex(s => s.id === sceneId)
+          setCurrentSceneIndex(index)
+        } catch (scenesError) {
+          console.error('Error fetching scenes for navigation:', scenesError)
+        }
+      }
+      
       setIsLoadingScene(false)
     } catch (error) {
       console.error("🎬 Error fetching scene info:", error)
@@ -1025,6 +1056,13 @@ export default function SceneStoryboardsPage() {
       setIsLoadingScript(true)
       console.log("🎬 Fetching script for scene:", sceneId)
       
+      // First, check if scene has screenplay_content
+      if (sceneInfo && (sceneInfo as any).screenplay_content) {
+        console.log("🎬 Found screenplay_content in scene")
+        setSceneScript((sceneInfo as any).screenplay_content)
+        return
+      }
+      
       // Look for script assets for this scene
       const { data: scriptAssets, error } = await getSupabaseClient()
         .from('assets')
@@ -1208,6 +1246,43 @@ export default function SceneStoryboardsPage() {
     const maxSequenceOrder = Math.max(...storyboards.map(sb => sb.sequence_order || sb.shot_number))
     
     return Math.max(maxShotNumber, maxSequenceOrder) + 1
+  }
+
+  // Get an available shot number, trying to preserve the preferred number if possible
+  const getAvailableShotNumber = (preferredNumber: number): number => {
+    // Get all existing shot numbers for this scene from current state
+    const existingShotNumbers = new Set(storyboards.map(sb => sb.shot_number))
+    
+    // If the preferred number is available, use it
+    if (!existingShotNumbers.has(preferredNumber)) {
+      return preferredNumber
+    }
+    
+    // Otherwise, find the next available number starting from preferred
+    let candidate = preferredNumber
+    while (existingShotNumbers.has(candidate)) {
+      candidate++
+    }
+    return candidate
+  }
+
+  // Fetch storyboards and get available shot number (for use in retry logic)
+  const getAvailableShotNumberWithFetch = async (preferredNumber: number): Promise<number> => {
+    // Fetch fresh storyboards from database
+    const freshStoryboards = await StoryboardsService.getStoryboardsByScene(sceneId)
+    const existingShotNumbers = new Set(freshStoryboards.map(sb => sb.shot_number))
+    
+    // If the preferred number is available, use it
+    if (!existingShotNumbers.has(preferredNumber)) {
+      return preferredNumber
+    }
+    
+    // Otherwise, find the next available number starting from preferred
+    let candidate = preferredNumber
+    while (existingShotNumbers.has(candidate)) {
+      candidate++
+    }
+    return candidate
   }
 
   const resetForm = () => {
@@ -1605,7 +1680,7 @@ export default function SceneStoryboardsPage() {
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
             </Button>
-            <div>
+            <div className="flex-1">
               <div className="flex items-center gap-3 mb-2">
                 {sceneInfo?.scene_number && (
                   <Badge variant="secondary" className="text-lg px-3 py-1">
@@ -1616,6 +1691,88 @@ export default function SceneStoryboardsPage() {
               </div>
               <p className="text-muted-foreground text-lg">{sceneInfo?.description || "Loading description..."}</p>
             </div>
+            
+            {/* Scene Navigation */}
+            {allScenes.length > 1 && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex > 0) {
+                      const prevScene = allScenes[currentSceneIndex - 1]
+                      router.push(`/storyboards/${prevScene.id}`)
+                    }
+                  }}
+                  disabled={currentSceneIndex <= 0}
+                  className="border-primary/30 text-primary hover:bg-primary/10"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden sm:inline ml-1">Previous</span>
+                </Button>
+                
+                <Select
+                  value={sceneId}
+                  onValueChange={(value) => {
+                    router.push(`/storyboards/${value}`)
+                  }}
+                >
+                  <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
+                    <SelectValue>
+                      {sceneInfo ? (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{sceneInfo.name}</span>
+                          {sceneInfo.metadata?.sceneNumber && (
+                            <Badge variant="outline" className="text-xs">
+                              {sceneInfo.metadata.sceneNumber}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        'Select Scene'
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allScenes.map((s, index) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-2">
+                            <span>{s.name}</span>
+                            {s.metadata?.sceneNumber && (
+                              <Badge variant="outline" className="text-xs">
+                                {s.metadata.sceneNumber}
+                              </Badge>
+                            )}
+                          </div>
+                          {s.id === sceneId && (
+                            <Badge variant="secondary" className="text-xs ml-2">
+                              Current
+                            </Badge>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex >= 0 && currentSceneIndex < allScenes.length - 1) {
+                      const nextScene = allScenes[currentSceneIndex + 1]
+                      router.push(`/storyboards/${nextScene.id}`)
+                    }
+                  }}
+                  disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
+                  className="border-primary/30 text-primary hover:bg-primary/10"
+                >
+                  <span className="hidden sm:inline mr-1">Next</span>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -2754,10 +2911,7 @@ export default function SceneStoryboardsPage() {
                     <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
                       <p className="text-sm text-green-600 flex items-center gap-2">
                         <CheckCircle className="h-4 w-4" />
-                        Using locked model: {aiSettings.find(setting => setting.tab_type === 'images')?.locked_model} (Hidden)
-                      </p>
-                      <p className="text-xs text-green-500 mt-1">
-                        Model selection is locked. <Link href="/settings-ai" className="underline">Change settings</Link>
+                        AI model configured
                       </p>
                       <div className="flex items-end mt-3">
                         <Button
@@ -2961,7 +3115,7 @@ export default function SceneStoryboardsPage() {
                       variant="ghost" 
                       size="sm" 
                       className="h-8 w-8 p-0 hover:text-purple-600"
-                      title={`Generate AI Image${aiSettings.find(s => s.tab_type === 'images')?.is_locked ? ` using ${aiSettings.find(s => s.tab_type === 'images')?.locked_model}` : ''}`}
+                      title="Generate AI Image"
                       onClick={() => {
                         // Set the editing storyboard and show edit form with AI focus
                         setEditingStoryboard(storyboard)
@@ -3082,6 +3236,147 @@ export default function SceneStoryboardsPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Shot List Section */}
+      <div className="mt-12">
+        <Card>
+          <CardHeader>
+            <CardTitle>Shot List</CardTitle>
+            <CardDescription>
+              Break down this scene into individual shots with detailed technical specifications
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ShotListComponent
+              sceneId={sceneId}
+              projectId={sceneInfo?.project_id}
+              showCreateStoryboardButton={true}
+              onCreateStoryboard={async (shot) => {
+                // Parse scene number from metadata
+                let sceneNumber = 1
+                if (sceneInfo?.metadata?.sceneNumber) {
+                  const parsed = typeof sceneInfo.metadata.sceneNumber === 'string' 
+                    ? parseInt(sceneInfo.metadata.sceneNumber) 
+                    : sceneInfo.metadata.sceneNumber
+                  sceneNumber = isNaN(parsed) ? 1 : parsed
+                }
+                
+                // Map shot types to valid storyboard values
+                // Old storyboards constraints only allow: 'wide', 'medium', 'close', 'extreme-close'
+                // After migration 046 runs, all shot_lists values will be valid
+                const mapShotType = (shotType: string): string => {
+                  // Old constraint values (currently in database)
+                  const oldValidTypes = ['wide', 'medium', 'close', 'extreme-close']
+                  if (oldValidTypes.includes(shotType)) return shotType
+                  // Map new shot types to old valid types
+                  if (['two-shot', 'over-the-shoulder'].includes(shotType)) return 'medium'
+                  if (['point-of-view', 'establishing'].includes(shotType)) return 'wide'
+                  if (['insert', 'cutaway'].includes(shotType)) return 'close'
+                  return 'wide' // Default fallback
+                }
+                
+                // Map camera angles to valid storyboard values
+                // Old constraints only allow: 'eye-level', 'high-angle', 'low-angle', 'dutch-angle'
+                const mapCameraAngle = (angle: string): string => {
+                  const oldValidAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle']
+                  if (oldValidAngles.includes(angle)) return angle
+                  // Map new angles to old valid angles
+                  if (angle === 'bird-eye') return 'high-angle'
+                  if (angle === 'worm-eye') return 'low-angle'
+                  return 'eye-level' // Default fallback
+                }
+                
+                // Map movement to valid storyboard values
+                // Old constraints only allow: 'static', 'panning', 'tilting', 'tracking', 'zooming'
+                const mapMovement = (movement: string): string => {
+                  const oldValidMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming']
+                  if (oldValidMovements.includes(movement)) return movement
+                  // Map new movements to old valid movements
+                  if (movement === 'dolly') return 'tracking'
+                  if (['crane', 'handheld', 'steadicam'].includes(movement)) return 'static'
+                  return 'static' // Default fallback
+                }
+                
+                // Try to preserve the shot's original shot_number, with retry logic for conflicts
+                const preferredShotNumber = shot.shot_number || 1
+                let attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+                let attempts = 0
+                const maxAttempts = 10
+                
+                while (attempts < maxAttempts) {
+                  try {
+                    // For retries, fetch fresh storyboards and recalculate available shot number
+                    if (attempts > 0) {
+                      attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+                    }
+                    
+                    // Create storyboard from shot list data
+                    const storyboardData: CreateStoryboardData = {
+                      title: shot.description || `Shot ${attemptShotNumber}`,
+                      description: shot.description || shot.action || '',
+                      scene_number: sceneNumber,
+                      shot_number: attemptShotNumber, // Preserve shot number from shot list if available
+                      shot_type: mapShotType(shot.shot_type),
+                      camera_angle: mapCameraAngle(shot.camera_angle),
+                      movement: mapMovement(shot.movement),
+                      dialogue: shot.dialogue || undefined,
+                      action: shot.action || undefined,
+                      visual_notes: shot.visual_notes || undefined,
+                      scene_id: sceneId,
+                      project_id: sceneInfo?.project_id || undefined,
+                      sequence_order: shot.sequence_order || attemptShotNumber,
+                      status: 'draft',
+                    }
+                    
+                    const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
+                    
+                    // Refresh storyboards list
+                    await fetchStoryboards()
+                    
+                    // Show appropriate message based on whether we preserved the shot number
+                    const shotNumberMessage = attemptShotNumber === preferredShotNumber
+                      ? `Storyboard created from shot ${shot.shot_number} (preserved shot number).`
+                      : `Storyboard created from shot ${shot.shot_number} (assigned shot number ${attemptShotNumber} - ${preferredShotNumber} was taken).`
+                    
+                    toast({
+                      title: "Storyboard Created!",
+                      description: shotNumberMessage,
+                    })
+                    
+                    // Success - break out of retry loop
+                    break
+                  } catch (error: any) {
+                    attempts++
+                    
+                    // Check if it's a 409 conflict error (shot number already taken)
+                    const isConflictError = error?.code === '23505' || 
+                                          error?.error?.code === '23505' ||
+                                          error?.message?.includes('unique') ||
+                                          error?.error?.message?.includes('unique') ||
+                                          (error?.status === 409 || error?.error?.status === 409)
+                    
+                    if (isConflictError && attempts < maxAttempts) {
+                      // Shot number conflict - try next available number
+                      attemptShotNumber = getNextShotNumber()
+                      continue
+                    }
+                    
+                    // Not a conflict error or max attempts reached - throw the error
+                    console.error('Error creating storyboard from shot list:', error)
+                    const errorMessage = error?.message || error?.error?.message || 'Failed to create storyboard from shot list.'
+                    toast({
+                      title: "Error",
+                      description: errorMessage,
+                      variant: "destructive",
+                    })
+                    throw error
+                  }
+                }
+              }}
+            />
+          </CardContent>
+        </Card>
       </div>
     </div>
   )

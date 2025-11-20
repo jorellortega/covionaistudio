@@ -59,6 +59,13 @@ export default function IdeasPage() {
   const [generatedImage, setGeneratedImage] = useState<string>("")
   const [isSavingImage, setIsSavingImage] = useState(false)
   
+  // Text enhancer state
+  const [textEnhancerSettings, setTextEnhancerSettings] = useState<{
+    model: string
+    prefix: string
+  }>({ model: 'gpt-4o-mini', prefix: '' })
+  const [isEnhancingText, setIsEnhancingText] = useState(false)
+  
   // Idea Library Image Generation state
   const [showImageDialog, setShowImageDialog] = useState(false)
   const [selectedIdeaForImage, setSelectedIdeaForImage] = useState<MovieIdea | null>(null)
@@ -157,6 +164,7 @@ export default function IdeasPage() {
       fetchIdeas()
       fetchAISettings()
       fetchUserApiKeys()
+      fetchTextEnhancerSettings()
     }
   }, [ready])
 
@@ -1208,6 +1216,146 @@ Synopsis (2-3 paragraphs only):`
       }
     } catch (error) {
       console.error('Error fetching user API keys:', error)
+    }
+  }
+
+  const fetchTextEnhancerSettings = async () => {
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('system_ai_config')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['text_enhancer_model', 'text_enhancer_prefix'])
+
+      if (error) {
+        console.error('Error fetching text enhancer settings:', error)
+        return
+      }
+
+      const settings: { model: string; prefix: string } = {
+        model: 'gpt-4o-mini',
+        prefix: ''
+      }
+
+      data?.forEach((item) => {
+        if (item.setting_key === 'text_enhancer_model') {
+          settings.model = item.setting_value || 'gpt-4o-mini'
+        } else if (item.setting_key === 'text_enhancer_prefix') {
+          settings.prefix = item.setting_value || ''
+        }
+      })
+
+      setTextEnhancerSettings(settings)
+    } catch (error) {
+      console.error('Error fetching text enhancer settings:', error)
+    }
+  }
+
+  const enhanceText = async () => {
+    if (!prompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to enhance",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEnhancingText(true)
+    
+    try {
+      const model = textEnhancerSettings.model
+      const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
+      const fullPrompt = `${prefix}\n\n${prompt}`
+
+      // Determine which API to use based on model
+      const isAnthropic = model.startsWith('claude-')
+      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
+
+      if (!apiKey) {
+        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      }
+
+      let response
+      if (isAnthropic) {
+        // Use Anthropic API
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 4000,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text()
+          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
+        }
+
+        const result = await anthropicResponse.json()
+        response = result.content?.[0]?.text || ''
+      } else {
+        // Use OpenAI API
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+            max_tokens: 4000,
+            temperature: 0.7,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text()
+          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
+        }
+
+        const result = await openaiResponse.json()
+        response = result.choices?.[0]?.message?.content || ''
+      }
+
+      if (response) {
+        setPrompt(response.trim())
+        toast({
+          title: "Success",
+          description: "Text enhanced successfully",
+        })
+      } else {
+        throw new Error('No response from AI')
+      }
+    } catch (error) {
+      console.error('Error enhancing text:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to enhance text",
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancingText(false)
     }
   }
 
@@ -2840,7 +2988,23 @@ Synopsis (2-3 paragraphs only):`
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <Label htmlFor="ai-prompt-input">Describe your idea or ask for help</Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <Label htmlFor="ai-prompt-input">Describe your idea or ask for help</Label>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={enhanceText}
+                      disabled={isEnhancingText || !prompt.trim()}
+                      className="flex items-center gap-2"
+                    >
+                      {isEnhancingText ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                      ) : (
+                        <Wand2 className="h-4 w-4" />
+                      )}
+                      {isEnhancingText ? "Enhancing..." : "Enhance Text"}
+                    </Button>
+                  </div>
                   <Textarea
                     id="ai-prompt-input"
                     value={prompt}

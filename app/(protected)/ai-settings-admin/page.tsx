@@ -14,6 +14,7 @@ import { GlobalAISetting } from "@/lib/ai-chat-types"
 import { useToast } from "@/hooks/use-toast"
 import { Save, Eye, EyeOff, Loader2, AlertCircle, Settings, RefreshCw } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Textarea } from "@/components/ui/textarea"
 
 // OpenAI models
 const OPENAI_MODELS = [
@@ -162,12 +163,17 @@ export default function AISettingsAdminPage() {
       setIsSaving(true)
       const supabase = getSupabaseClient()
 
-      // Update each setting
+      // Update or insert each setting
       for (const setting of settings) {
         const { error } = await supabase
           .from('system_ai_config')
-          .update({ setting_value: setting.setting_value })
-          .eq('setting_key', setting.setting_key)
+          .upsert({
+            setting_key: setting.setting_key,
+            setting_value: setting.setting_value,
+            description: setting.description
+          }, {
+            onConflict: 'setting_key'
+          })
 
         if (error) throw error
       }
@@ -236,122 +242,246 @@ export default function AISettingsAdminPage() {
           </AlertDescription>
         </Alert>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Provider Configuration</CardTitle>
-            <CardDescription>
-              Manage API keys and model selections for AI providers.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {settings.map((setting) => {
-              const isSensitive = isSensitiveKey(setting.setting_key)
-              const isVisible = visibleKeys[setting.setting_key] || false
-              const displayValue = isSensitive && !isVisible
-                ? '•'.repeat(20)
-                : setting.setting_value
+        <div className="space-y-6">
+          {/* Provider Configuration Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Provider Configuration</CardTitle>
+              <CardDescription>
+                Manage API keys and model selections for AI providers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {settings
+                .filter(setting => !setting.setting_key.startsWith('text_enhancer'))
+                .map((setting) => {
+                  const isSensitive = isSensitiveKey(setting.setting_key)
+                  const isVisible = visibleKeys[setting.setting_key] || false
+                  const displayValue = isSensitive && !isVisible
+                    ? '•'.repeat(20)
+                    : setting.setting_value
 
-              return (
-                <div key={setting.setting_key} className="space-y-2">
-                  <Label htmlFor={setting.setting_key} className="flex items-center gap-2">
-                    {setting.setting_key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                    {setting.description && (
-                      <span className="text-xs text-muted-foreground font-normal">
-                        ({setting.description})
-                      </span>
-                    )}
-                  </Label>
-                  
-                  {setting.setting_key === 'openai_model' ? (
-                    <Select
-                      value={setting.setting_value || ''}
-                      onValueChange={(value) => updateValue(setting.setting_key, value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {OPENAI_MODELS.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : setting.setting_key === 'anthropic_model' ? (
-                    <Select
-                      value={setting.setting_value || ''}
-                      onValueChange={(value) => updateValue(setting.setting_key, value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ANTHROPIC_MODELS.map((model) => (
-                          <SelectItem key={model} value={model}>
-                            {model}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <div className="relative">
-                      <Input
-                        id={setting.setting_key}
-                        type={isSensitive && !isVisible ? 'password' : 'text'}
-                        value={displayValue}
-                        onChange={(e) => updateValue(setting.setting_key, e.target.value)}
-                        placeholder={`Enter ${setting.setting_key.replace(/_/g, ' ')}`}
-                        className={isSensitive ? 'pr-10' : ''}
-                      />
-                      {isSensitive && (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="absolute right-0 top-0 h-full px-3"
-                          onClick={() => toggleVisibility(setting.setting_key)}
+                  return (
+                    <div key={setting.setting_key} className="space-y-2">
+                      <Label htmlFor={setting.setting_key} className="flex items-center gap-2">
+                        {setting.setting_key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                        {setting.description && (
+                          <span className="text-xs text-muted-foreground font-normal">
+                            ({setting.description})
+                          </span>
+                        )}
+                      </Label>
+                      
+                      {setting.setting_key === 'openai_model' ? (
+                        <Select
+                          value={setting.setting_value || ''}
+                          onValueChange={(value) => updateValue(setting.setting_key, value)}
                         >
-                          {isVisible ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select model" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {OPENAI_MODELS.map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : setting.setting_key === 'anthropic_model' ? (
+                        <Select
+                          value={setting.setting_value || ''}
+                          onValueChange={(value) => updateValue(setting.setting_key, value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select model" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {ANTHROPIC_MODELS.map((model) => (
+                              <SelectItem key={model} value={model}>
+                                {model}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="relative">
+                          <Input
+                            id={setting.setting_key}
+                            type={isSensitive && !isVisible ? 'password' : 'text'}
+                            value={displayValue}
+                            onChange={(e) => updateValue(setting.setting_key, e.target.value)}
+                            placeholder={`Enter ${setting.setting_key.replace(/_/g, ' ')}`}
+                            className={isSensitive ? 'pr-10' : ''}
+                          />
+                          {isSensitive && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="absolute right-0 top-0 h-full px-3"
+                              onClick={() => toggleVisibility(setting.setting_key)}
+                            >
+                              {isVisible ? (
+                                <EyeOff className="h-4 w-4" />
+                              ) : (
+                                <Eye className="h-4 w-4" />
+                              )}
+                            </Button>
                           )}
-                        </Button>
+                        </div>
+                      )}
+                      
+                      {setting.updated_at && (
+                        <p className="text-xs text-muted-foreground">
+                          Last updated: {new Date(setting.updated_at).toLocaleString()}
+                        </p>
                       )}
                     </div>
-                  )}
-                  
-                  {setting.updated_at && (
-                    <p className="text-xs text-muted-foreground">
-                      Last updated: {new Date(setting.updated_at).toLocaleString()}
-                    </p>
-                  )}
-                </div>
-              )
-            })}
+                  )
+                })}
 
-            <div className="flex gap-4 pt-4 border-t">
-              <Button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="flex-1"
-              >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save Changes
-                  </>
+              <div className="flex gap-4 pt-4 border-t">
+                <Button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="flex-1"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4 mr-2" />
+                      Save Changes
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Text Enhancer Settings Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Text Enhancer Settings</CardTitle>
+              <CardDescription>
+                Configure the AI text enhancer for grammar, spelling, and movie content enhancement.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Model Selector */}
+              <div className="space-y-2">
+                <Label htmlFor="text_enhancer_model">
+                  Model
+                  <span className="text-xs text-muted-foreground font-normal ml-2">
+                    (Model to use for text enhancement)
+                  </span>
+                </Label>
+                <Select
+                  value={
+                    settings.find(s => s.setting_key === 'text_enhancer_model')?.setting_value || 'gpt-4o-mini'
+                  }
+                  onValueChange={(value) => {
+                    const existing = settings.find(s => s.setting_key === 'text_enhancer_model')
+                    if (existing) {
+                      updateValue('text_enhancer_model', value)
+                    } else {
+                      // Add new setting if it doesn't exist
+                      setSettings([...settings, {
+                        setting_key: 'text_enhancer_model',
+                        setting_value: value,
+                        description: 'Model to use for text enhancement',
+                        updated_at: new Date().toISOString()
+                      }])
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OPENAI_MODELS.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                    {ANTHROPIC_MODELS.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {settings.find(s => s.setting_key === 'text_enhancer_model')?.updated_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_model')!.updated_at).toLocaleString()}
+                  </p>
                 )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+              </div>
+
+              {/* Prefix/Prompt Field */}
+              <div className="space-y-2">
+                <Label htmlFor="text_enhancer_prefix">
+                  Enhancement Prefix
+                  <span className="text-xs text-muted-foreground font-normal ml-2">
+                    (The prefix/prompt used for text enhancement)
+                  </span>
+                </Label>
+                <Textarea
+                  id="text_enhancer_prefix"
+                  value={
+                    settings.find(s => s.setting_key === 'text_enhancer_prefix')?.setting_value || ''
+                  }
+                  onChange={(e) => {
+                    const existing = settings.find(s => s.setting_key === 'text_enhancer_prefix')
+                    if (existing) {
+                      updateValue('text_enhancer_prefix', e.target.value)
+                    } else {
+                      // Add new setting if it doesn't exist
+                      setSettings([...settings, {
+                        setting_key: 'text_enhancer_prefix',
+                        setting_value: e.target.value,
+                        description: 'The prefix/prompt used for text enhancement',
+                        updated_at: new Date().toISOString()
+                      }])
+                    }
+                  }}
+                  placeholder="Enter the prefix/prompt for text enhancement"
+                  rows={10}
+                  className="font-mono text-sm"
+                />
+                {settings.find(s => s.setting_key === 'text_enhancer_prefix')?.updated_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_prefix')!.updated_at).toLocaleString()}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-4 pt-4 border-t">
+                <Button
+                  onClick={handleSave}
+                  disabled={isSaving}
+                  className="flex-1"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4 mr-2" />
+                      Save Changes
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   )

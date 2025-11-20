@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/components/AuthProvider'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
 import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
-import { MovieService } from '@/lib/movie-service'
+import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
 import TextToSpeech from '@/components/text-to-speech'
 import Link from 'next/link'
@@ -28,6 +28,7 @@ import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneD
 import { CastingService, type CastingSetting } from '@/lib/casting-service'
 import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
+import { CharactersService } from '@/lib/characters-service'
 
 export default function TreatmentDetailPage() {
   const { id } = useParams()
@@ -103,12 +104,35 @@ export default function TreatmentDetailPage() {
   const [charactersFilter, setCharactersFilter] = useState<string>("")
   const [newCharacterRole, setNewCharacterRole] = useState<string>("")
   const [isSyncingRoles, setIsSyncingRoles] = useState(false)
+  const [isDetectingCharacters, setIsDetectingCharacters] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
+  const hasAutoDetectedRef = useRef(false)
+  const [editingCharacterName, setEditingCharacterName] = useState<string | null>(null)
+  const [editedCharacterNames, setEditedCharacterNames] = useState<Record<string, string>>({})
+  const [savingCharacters, setSavingCharacters] = useState<string[]>([])
 
   useEffect(() => {
     if (id) {
       loadTreatment(id as string)
+      fetchUserApiKeys()
     }
   }, [id])
+
+  const fetchUserApiKeys = async () => {
+    if (!ready || !userId) return
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key, anthropic_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      setUserApiKeys(data || {})
+    } catch (error) {
+      console.error('Error fetching user API keys:', error)
+    }
+  }
 
   useEffect(() => {
     if (treatment?.id) {
@@ -116,11 +140,24 @@ export default function TreatmentDetailPage() {
       if (treatment.project_id) {
         loadTimelineScenes(treatment.project_id)
       } else {
-        setTreatmentScenes([])
-        setIsLoadingScenes(false)
+        // Load treatment scenes directly if no project_id
+        const loadTreatmentScenes = async () => {
+          try {
+            setIsLoadingScenes(true)
+            const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+            setTreatmentScenes(scenes)
+          } catch (error) {
+            console.error('Error loading treatment scenes:', error)
+            setTreatmentScenes([])
+          } finally {
+            setIsLoadingScenes(false)
+          }
+        }
+        loadTreatmentScenes()
       }
     }
   }, [treatment?.id, treatment?.project_id])
+
 
   // Load cover image assets when treatment is loaded
   useEffect(() => {
@@ -2187,11 +2224,25 @@ Return ONLY the JSON array, no other text:`
 
     // Filter to only scenes that are missing details (empty description, location, etc.)
     const scenesNeedingDetails = treatmentScenes.filter(scene => {
-      const hasDetails = scene.description?.trim() && 
-                        scene.location?.trim() && 
-                        scene.characters && scene.characters.length > 0
+      // Check both direct fields and metadata fields
+      const description = scene.description?.trim() || scene.metadata?.description?.trim() || ''
+      const location = scene.location?.trim() || scene.metadata?.location?.trim() || ''
+      const characters = scene.characters || scene.metadata?.characters || []
+      
+      const hasDetails = description && location && characters && characters.length > 0
+      
+      if (!hasDetails) {
+        console.log(`Scene ${scene.scene_number} (${scene.name}) needs details:`, {
+          hasDescription: !!description,
+          hasLocation: !!location,
+          hasCharacters: characters.length > 0
+        })
+      }
+      
       return !hasDetails
     })
+    
+    console.log(`📋 Scenes needing details: ${scenesNeedingDetails.length} out of ${treatmentScenes.length}`)
 
     if (scenesNeedingDetails.length === 0) {
       toast({
@@ -2293,21 +2344,49 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         let jsonText = data.text || data.response || data.content || ''
         jsonText = jsonText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
         
-        const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
-        const objectMatches = jsonText.match(objectPattern)
-        
-        if (objectMatches && objectMatches.length > 0) {
-          sceneDetails = []
-          for (const objStr of objectMatches) {
-            try {
-              const parsedObj = JSON.parse(objStr)
-              if (parsedObj && parsedObj.scene_number) {
-                sceneDetails.push(parsedObj)
-              }
-            } catch (objError) {
-              console.warn('Skipping invalid scene detail object:', objError)
-            }
+        // First, try to parse as a complete JSON array
+        try {
+          const parsed = JSON.parse(jsonText)
+          if (Array.isArray(parsed)) {
+            sceneDetails = parsed.filter((item: any) => item && item.scene_number)
+            console.log(`✅ Parsed ${sceneDetails.length} scenes from JSON array`)
+          } else if (parsed && parsed.scene_number) {
+            // Single object
+            sceneDetails = [parsed]
+            console.log(`✅ Parsed 1 scene from single JSON object`)
           }
+        } catch (arrayParseError) {
+          // If array parsing fails, try regex pattern matching
+          console.log('Array parse failed, trying regex pattern matching...')
+          
+          // Improved regex pattern that handles nested objects better
+          const objectPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/gs
+          const objectMatches = jsonText.match(objectPattern)
+          
+          if (objectMatches && objectMatches.length > 0) {
+            sceneDetails = []
+            for (const objStr of objectMatches) {
+              try {
+                const parsedObj = JSON.parse(objStr)
+                if (parsedObj && parsedObj.scene_number) {
+                  sceneDetails.push(parsedObj)
+                }
+              } catch (objError) {
+                console.warn('Skipping invalid scene detail object:', objError)
+              }
+            }
+            console.log(`✅ Parsed ${sceneDetails.length} scenes from regex pattern matching`)
+          }
+        }
+        
+        // Log which scenes were requested vs received
+        const requestedSceneNumbers = scenesNeedingDetails.map(s => s.scene_number || String(s.scene_number))
+        const receivedSceneNumbers = sceneDetails.map(d => String(d.scene_number))
+        const missingScenes = requestedSceneNumbers.filter(num => !receivedSceneNumbers.includes(num))
+        
+        if (missingScenes.length > 0) {
+          console.warn(`⚠️ Missing scenes in AI response: ${missingScenes.join(', ')}`)
+          console.log(`Requested: ${requestedSceneNumbers.join(', ')}, Received: ${receivedSceneNumbers.join(', ')}`)
         }
       } catch (parseError) {
         console.error('Error parsing scene details JSON:', parseError)
@@ -2325,26 +2404,34 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         if (details) {
           try {
             // Only update fields that are empty, preserve existing data
+            // Check both direct fields and metadata fields to match filtering logic
+            const currentDescription = scene.description?.trim() || scene.metadata?.description?.trim() || ''
+            const currentLocation = scene.location?.trim() || scene.metadata?.location?.trim() || ''
+            const currentCharacters = scene.characters || scene.metadata?.characters || []
+            const currentShotType = scene.shot_type?.trim() || scene.metadata?.shotType?.trim() || ''
+            const currentMood = scene.mood?.trim() || scene.metadata?.mood?.trim() || ''
+            const currentNotes = scene.notes?.trim() || scene.metadata?.notes?.trim() || ''
+            
             const updates: Partial<CreateSceneData> = {
               metadata: { ...scene.metadata }
             }
             
-            if (!scene.description?.trim() && details.description) {
+            if (!currentDescription && details.description) {
               updates.description = details.description
             }
-            if (!scene.location?.trim() && details.location) {
+            if (!currentLocation && details.location) {
               updates.metadata!.location = details.location
             }
-            if ((!scene.characters || scene.characters.length === 0) && details.characters && details.characters.length > 0) {
+            if ((!currentCharacters || currentCharacters.length === 0) && details.characters && details.characters.length > 0) {
               updates.metadata!.characters = details.characters
             }
-            if (!scene.shot_type?.trim() && details.shot_type) {
+            if (!currentShotType && details.shot_type) {
               updates.metadata!.shotType = details.shot_type
             }
-            if (!scene.mood?.trim() && details.mood) {
+            if (!currentMood && details.mood) {
               updates.metadata!.mood = details.mood
             }
-            if (!scene.notes?.trim() && details.notes) {
+            if (!currentNotes && details.notes) {
               updates.metadata!.notes = details.notes
             }
 
@@ -2396,18 +2483,36 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       const finalScenes = treatmentScenes.map(scene => updatedScenesMap.get(scene.id) || scene)
       setTreatmentScenes(finalScenes)
 
+      // Count how many scenes were actually updated (check both direct fields and metadata)
       const updatedCount = updatedScenes.filter((s, idx) => {
         const original = scenesNeedingDetails[idx]
-        return s.description?.trim() !== original.description?.trim() ||
-               s.location?.trim() !== original.location?.trim() ||
-               (s.characters?.length || 0) > (original.characters?.length || 0)
+        const originalDesc = original.description?.trim() || original.metadata?.description?.trim() || ''
+        const originalLoc = original.location?.trim() || original.metadata?.location?.trim() || ''
+        const originalChars = original.characters || original.metadata?.characters || []
+        
+        const updatedDesc = s.description?.trim() || s.metadata?.description?.trim() || ''
+        const updatedLoc = s.location?.trim() || s.metadata?.location?.trim() || ''
+        const updatedChars = s.characters || s.metadata?.characters || []
+        
+        return updatedDesc !== originalDesc ||
+               updatedLoc !== originalLoc ||
+               updatedChars.length > originalChars.length
       }).length
 
       const skippedCount = scenesNeedingDetails.length - updatedCount
+      
+      // Check which scenes from the request were actually received in the AI response
+      const requestedSceneNumbers = scenesNeedingDetails.map(s => String(s.scene_number || ''))
+      const receivedSceneNumbers = sceneDetails.map(d => String(d.scene_number || ''))
+      const missingFromResponse = requestedSceneNumbers.filter(num => !receivedSceneNumbers.includes(num))
+
+      if (missingFromResponse.length > 0) {
+        console.warn(`⚠️ AI response missing ${missingFromResponse.length} scenes: ${missingFromResponse.join(', ')}`)
+      }
 
       toast({
-        title: "Success",
-        description: `Generated details for ${updatedCount} scene${updatedCount !== 1 ? 's' : ''}${skippedCount > 0 ? `. ${skippedCount} scene${skippedCount !== 1 ? 's' : ''} still need details - run again to continue.` : ''}`,
+        title: updatedCount > 0 ? "Success" : "Partial Success",
+        description: `Generated details for ${updatedCount} scene${updatedCount !== 1 ? 's' : ''}${skippedCount > 0 ? `. ${skippedCount} scene${skippedCount !== 1 ? 's' : ''} still need details - click "Generate All Details" again to continue.` : ''}`,
       })
     } catch (error) {
       console.error('Error generating scene details:', error)
@@ -2501,6 +2606,611 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       setIsSyncingRoles(false)
     }
   }
+
+  const startEditingCharacter = (characterName: string) => {
+    setEditingCharacterName(characterName)
+    setEditedCharacterNames(prev => ({
+      ...prev,
+      [characterName]: characterName
+    }))
+  }
+
+  const cancelEditingCharacter = () => {
+    setEditingCharacterName(null)
+  }
+
+  const saveCharacterNameEdit = async (oldName: string) => {
+    const newName = editedCharacterNames[oldName]?.trim()
+    if (!newName || newName === oldName) {
+      setEditingCharacterName(null)
+      return
+    }
+
+    try {
+      // Update character name in all scenes
+      for (const scene of treatmentScenes) {
+        if (scene.characters?.includes(oldName)) {
+          const updatedCharacters = scene.characters.map(c => c === oldName ? newName : c)
+          if (treatment?.project_id) {
+            // Update timeline scenes
+            const timelineScenes = await TimelineService.getScenesForTimeline(treatment.project_id)
+            const matchingScene = timelineScenes.find(s => s.metadata?.characters?.includes(oldName))
+            if (matchingScene) {
+              await TimelineService.updateScene(matchingScene.id, {
+                metadata: {
+                  ...matchingScene.metadata,
+                  characters: updatedCharacters,
+                },
+              })
+            }
+          } else {
+            // Update treatment scenes
+            await TreatmentScenesService.updateTreatmentScene(scene.id, {
+              characters: updatedCharacters,
+              metadata: {
+                ...scene.metadata,
+                characters: updatedCharacters,
+              },
+            })
+          }
+        }
+      }
+
+      // Reload scenes
+      if (treatment?.project_id) {
+        await loadTimelineScenes(treatment.project_id)
+      } else if (treatment) {
+        const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+        setTreatmentScenes(scenes)
+      }
+
+      setEditingCharacterName(null)
+      toast({
+        title: "Character Name Updated",
+        description: `"${oldName}" renamed to "${newName}" in all scenes.`,
+      })
+    } catch (error) {
+      console.error('Error updating character name:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update character name.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const convertTreatmentToMovie = async () => {
+    if (!treatment || !user || !userId) return null
+
+    try {
+      const movieData: CreateMovieData = {
+        name: treatment.title,
+        description: treatment.synopsis || treatment.prompt?.substring(0, 500) || '',
+        genre: treatment.genre || 'Drama',
+        project_type: 'movie',
+        movie_status: 'Pre-Production',
+        project_status: 'active',
+        writer: user.user_metadata?.name || user.email?.split('@')[0] || 'Unknown',
+        cowriters: [],
+      }
+
+      const movie = await MovieService.createMovie(movieData)
+      const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+        project_id: movie.id
+      })
+      setTreatment(updatedTreatment)
+
+      toast({
+        title: "Treatment Linked",
+        description: `Treatment linked to movie "${movie.name}". You can now save characters.`,
+      })
+
+      return movie.id
+    } catch (error) {
+      console.error('Error converting treatment to movie:', error)
+      throw error
+    }
+  }
+
+  const saveCharacterAsRecord = async (characterName: string) => {
+    if (!ready || !userId || !user) {
+      toast({
+        title: "Not Ready",
+        description: "Please wait for authentication to complete.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setSavingCharacters(prev => [...prev, characterName])
+
+    try {
+      let projectId = treatment?.project_id
+
+      // If no project_id, automatically create a movie project
+      if (!projectId) {
+        console.log('No project_id, creating movie project automatically...')
+        projectId = await convertTreatmentToMovie()
+        if (!projectId) {
+          throw new Error('Failed to create movie project')
+        }
+      }
+
+      // Check if character already exists
+      const existingCharacters = await CharactersService.getCharacters(projectId)
+      const existing = existingCharacters.find(c => c.name.toLowerCase() === characterName.toLowerCase())
+
+      if (existing) {
+        toast({
+          title: "Character Exists",
+          description: `"${characterName}" already exists in characters.`,
+        })
+        return
+      }
+
+      // Create character record
+      const character = await CharactersService.createCharacter({
+        project_id: projectId,
+        name: characterName,
+        description: `Character from treatment: ${treatment?.title || 'Untitled'}`,
+      })
+
+      toast({
+        title: "Character Saved",
+        description: `"${characterName}" has been saved to characters. You can view it on the Characters page.`,
+      })
+    } catch (error) {
+      console.error('Error saving character:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      toast({
+        title: "Error",
+        description: `Failed to save character: ${errorMessage}`,
+        variant: "destructive",
+      })
+    } finally {
+      setSavingCharacters(prev => prev.filter(name => name !== characterName))
+    }
+  }
+
+  const detectCharactersFromTreatment = async () => {
+    if (!treatment || !ready || !userId) return
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    try {
+      setIsDetectingCharacters(true)
+
+      // Get treatment content - prioritize prompt (full treatment) over synopsis
+      // Check explicitly for prompt first since it contains the full treatment document
+      let treatmentContent = ''
+      if (treatment.prompt && treatment.prompt.trim().length > 0) {
+        treatmentContent = treatment.prompt.trim()
+        console.log('Using treatment prompt for character detection:', treatmentContent.length, 'characters')
+      } else if (treatment.synopsis && treatment.synopsis.trim().length > 0) {
+        treatmentContent = treatment.synopsis.trim()
+        console.log('Using treatment synopsis for character detection:', treatmentContent.length, 'characters')
+      } else if (treatment.logline && treatment.logline.trim().length > 0) {
+        treatmentContent = treatment.logline.trim()
+        console.log('Using treatment logline for character detection:', treatmentContent.length, 'characters')
+      }
+
+      if (!treatmentContent) {
+        toast({
+          title: "No Content",
+          description: "Treatment has no content to analyze. Please add treatment content (prompt field) first.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      // Limit content to avoid token limits (use more for prompt since it's the full treatment)
+      const maxLength = treatment.prompt ? 6000 : 4000
+      const contentForPrompt = treatmentContent.length > maxLength 
+        ? treatmentContent.substring(0, maxLength) + '...'
+        : treatmentContent
+      
+      console.log('Character detection - content length:', contentForPrompt.length, 'characters')
+
+      const aiPrompt = `Analyze the following movie treatment and extract all character names mentioned. Return ONLY a JSON array of character names (strings), nothing else. Format: ["Character Name 1", "Character Name 2", ...]
+
+TREATMENT:
+${contentForPrompt}
+
+Return the character names as a JSON array:`
+
+      const modelToUse = aiSettings.find((s: any) => s.tab_type === 'scripts')?.selected_model || 
+                        (normalizedService === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022')
+
+      let response
+      if (normalizedService === 'anthropic') {
+        const apiKey = userApiKeys.anthropic_api_key
+        if (!apiKey) {
+          throw new Error('Anthropic API key not found')
+        }
+
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: modelToUse,
+            max_tokens: 1000,
+            messages: [
+              { role: 'user', content: aiPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text()
+          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
+        }
+
+        const result = await anthropicResponse.json()
+        response = result.content?.[0]?.text || ''
+      } else {
+        const apiKey = userApiKeys.openai_api_key
+        if (!apiKey) {
+          throw new Error('OpenAI API key not found')
+        }
+
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: modelToUse,
+            messages: [
+              { role: 'user', content: aiPrompt }
+            ],
+            max_tokens: 1000,
+            temperature: 0.3,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text()
+          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
+        }
+
+        const result = await openaiResponse.json()
+        response = result.choices?.[0]?.message?.content || ''
+      }
+
+      console.log('AI Response received:', response.substring(0, 500))
+
+      // Extract JSON array from response - try multiple patterns
+      let jsonMatch = response.match(/\[[\s\S]*?\]/)
+      if (!jsonMatch) {
+        // Try to find JSON object with characters array
+        const objMatch = response.match(/\{[\s\S]*?"characters"[\s\S]*?\}/)
+        if (objMatch) {
+          try {
+            const parsed = JSON.parse(objMatch[0])
+            if (parsed.characters && Array.isArray(parsed.characters)) {
+              jsonMatch = [JSON.stringify(parsed.characters)]
+            }
+          } catch (e) {
+            console.error('Error parsing object match:', e)
+          }
+        }
+      }
+
+      if (!jsonMatch) {
+        console.error('Full AI response:', response)
+        throw new Error('Could not extract character names from AI response. Response: ' + response.substring(0, 200))
+      }
+
+      let characterNames: string[] = []
+      try {
+        const jsonText = jsonMatch[0]
+        console.log('Extracted JSON:', jsonText)
+        characterNames = JSON.parse(jsonText)
+        if (!Array.isArray(characterNames)) {
+          throw new Error('Response is not an array')
+        }
+        characterNames = characterNames
+          .filter((name: any) => typeof name === 'string' && name.trim().length > 0)
+          .map((name: string) => name.trim())
+        console.log('Parsed character names:', characterNames)
+      } catch (parseError) {
+        console.error('Error parsing character names:', parseError)
+        console.error('Response that failed to parse:', response)
+        throw new Error('Failed to parse character names from AI response: ' + (parseError instanceof Error ? parseError.message : String(parseError)))
+      }
+
+      if (characterNames.length === 0) {
+        console.warn('No characters found in parsed response')
+        toast({
+          title: "No Characters Found",
+          description: "AI could not detect any character names in the treatment. Check console for details.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      console.log('Successfully extracted', characterNames.length, 'characters:', characterNames)
+
+      // Add characters to scenes - distribute them across existing scenes or create a new scene
+      if (treatmentScenes.length === 0) {
+        // No scenes exist - create a new scene
+        if (treatment.project_id) {
+          // Create timeline scene if project exists
+          console.log('No scenes exist, creating new timeline scene with characters')
+          try {
+            // Get or create timeline for the project
+            let timeline = await TimelineService.getTimelineForMovie(treatment.project_id)
+            if (!timeline) {
+              timeline = await TimelineService.createTimelineForMovie(treatment.project_id, {
+                name: `${treatment.title} Timeline`,
+                description: `Timeline for ${treatment.title}`,
+                duration_seconds: 0,
+                fps: 24,
+                resolution_width: 1920,
+                resolution_height: 1080,
+              })
+            }
+
+            // Get user for direct insert
+            const { data: { user: authUser } } = await getSupabaseClient().auth.getUser()
+            if (!authUser) throw new Error('User not authenticated')
+            
+            // Calculate order_index manually (since getNextSceneOrderIndex is failing)
+            let orderIndex = 1
+            try {
+              const { data: existingScenes } = await getSupabaseClient()
+                .from('scenes')
+                .select('order_index')
+                .eq('timeline_id', timeline.id)
+                .eq('user_id', authUser.id)
+                .order('order_index', { ascending: false })
+                .limit(1)
+              
+              if (existingScenes && existingScenes.length > 0 && existingScenes[0].order_index) {
+                orderIndex = existingScenes[0].order_index + 1
+              }
+            } catch (error) {
+              console.warn('Could not get existing scenes, using order_index 1:', error)
+              orderIndex = 1
+            }
+            
+            // Insert scene directly to avoid getOrderIndexForSceneNumber issues
+            // Note: scene_type must be one of: 'video', 'image', 'text', 'audio' (not 'scene')
+            const sceneData = {
+              timeline_id: timeline.id,
+              name: 'Character Introduction',
+              description: 'Characters detected from treatment',
+              start_time_seconds: 0,
+              duration_seconds: 60,
+              scene_type: 'video', // Must be 'video', 'image', 'text', or 'audio'
+              order_index: orderIndex,
+              metadata: {
+                characters: characterNames,
+                location: '',
+                sceneNumber: '1',
+              },
+              user_id: authUser.id,
+            }
+            
+            const { data: createdScene, error: insertError } = await getSupabaseClient()
+              .from('scenes')
+              .insert(sceneData)
+              .select()
+              .single()
+            
+            if (insertError) {
+              console.error('Error inserting scene:', insertError)
+              console.error('Scene data attempted:', JSON.stringify(sceneData, null, 2))
+              console.error('Error details:', {
+                message: insertError.message,
+                details: insertError.details,
+                hint: insertError.hint,
+                code: insertError.code,
+              })
+              throw new Error(`Failed to create scene: ${insertError.message || JSON.stringify(insertError)}`)
+            }
+            
+            console.log('Scene created successfully:', createdScene)
+            await loadTimelineScenes(treatment.project_id)
+            console.log('Created new timeline scene with characters')
+            toast({
+              title: "Characters Detected",
+              description: `Found ${characterNames.length} character(s) and created a new scene with them.`,
+            })
+          } catch (error) {
+            console.error('Error creating timeline scene:', error)
+            throw error
+          }
+        } else {
+          // No project_id - create a treatment scene directly
+          console.log('No project_id, creating treatment scene directly with characters')
+          const sceneData: CreateTreatmentSceneData = {
+            treatment_id: treatment.id,
+            scene_number: 1,
+            name: 'Character Introduction',
+            description: 'Characters detected from treatment',
+            location: '',
+            characters: characterNames,
+            metadata: {
+              characters: characterNames,
+            },
+          }
+          try {
+            await TreatmentScenesService.createTreatmentScene(sceneData)
+            // Reload scenes - if project_id exists, use loadTimelineScenes, otherwise reload treatment scenes
+            if (treatment.project_id) {
+              await loadTimelineScenes(treatment.project_id)
+            } else {
+              // Load treatment scenes directly
+              const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+              setTreatmentScenes(scenes)
+            }
+            console.log('Created new treatment scene with characters')
+            toast({
+              title: "Characters Detected",
+              description: `Found ${characterNames.length} character(s) and created a new scene with them.`,
+            })
+          } catch (error) {
+            console.error('Error creating treatment scene:', error)
+            throw error
+          }
+        }
+      } else {
+        // Distribute characters across existing scenes
+        console.log('Distributing', characterNames.length, 'characters across', treatmentScenes.length, 'scenes')
+        const charactersPerScene = Math.ceil(characterNames.length / treatmentScenes.length)
+        let updatedCount = 0
+        
+        for (let i = 0; i < treatmentScenes.length; i++) {
+          const scene = treatmentScenes[i]
+          const startIdx = i * charactersPerScene
+          const endIdx = Math.min(startIdx + charactersPerScene, characterNames.length)
+          const sceneCharacters = characterNames.slice(startIdx, endIdx)
+          
+          if (sceneCharacters.length > 0) {
+            const existingCharacters = scene.characters || []
+            const mergedCharacters = Array.from(new Set([...existingCharacters, ...sceneCharacters].map(c => c.trim()).filter(Boolean)))
+            
+            console.log(`Updating scene ${scene.id} (${scene.name}) with characters:`, mergedCharacters)
+            try {
+              await TreatmentScenesService.updateTreatmentScene(scene.id, {
+                characters: mergedCharacters,
+                metadata: {
+                  ...scene.metadata,
+                  characters: mergedCharacters,
+                },
+              })
+              updatedCount++
+            } catch (error) {
+              console.error(`Error updating scene ${scene.id}:`, error)
+              // Continue with other scenes even if one fails
+            }
+          }
+        }
+        
+        // Reload scenes
+        if (treatment.project_id) {
+          await loadTimelineScenes(treatment.project_id)
+        } else {
+          // Reload treatment scenes directly
+          const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+          setTreatmentScenes(scenes)
+        }
+        console.log('Updated', updatedCount, 'scenes with characters')
+        
+        toast({
+          title: "Characters Detected",
+          description: `Found ${characterNames.length} character(s) and added them to ${updatedCount} scene(s).`,
+        })
+      }
+    } catch (error) {
+      console.error('Error detecting characters:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to detect characters from treatment.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDetectingCharacters(false)
+    }
+  }
+
+  // Auto-detect characters from treatment when treatment loads and has no characters in scenes
+  useEffect(() => {
+    // Only auto-detect once per treatment load
+    if (hasAutoDetectedRef.current) {
+      return
+    }
+
+    // Only auto-detect if:
+    // 1. Treatment is loaded
+    // 2. Scenes are loaded (not loading)
+    // 3. No characters detected in scenes
+    // 4. Treatment has content (prompt or synopsis)
+    // 5. User is ready
+    // 6. Not already detecting
+    if (
+      !treatment ||
+      !ready ||
+      !userId ||
+      isLoadingScenes ||
+      isDetectingCharacters ||
+      (!treatment.prompt && !treatment.synopsis)
+    ) {
+      return
+    }
+
+    // Check if we have API keys
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      return // Don't auto-detect if no API keys
+    }
+
+    // Calculate detected characters count from scenes
+    const hasCharacters = treatmentScenes.some(scene => 
+      scene.characters && scene.characters.length > 0
+    )
+
+    // Only auto-detect if no characters are found
+    if (hasCharacters) {
+      hasAutoDetectedRef.current = true
+      return
+    }
+
+    // Small delay to avoid running immediately on every render
+    const timeoutId = setTimeout(() => {
+      console.log('Auto-detecting characters from treatment...')
+      hasAutoDetectedRef.current = true
+      detectCharactersFromTreatment().catch((error) => {
+        console.error('Error in auto-detection:', error)
+        // Don't show error toast for auto-detection failures
+        hasAutoDetectedRef.current = false // Allow retry on error
+      })
+    }, 2000) // Increased delay to ensure everything is loaded
+
+    return () => clearTimeout(timeoutId)
+  }, [treatment?.id, treatment?.prompt, treatment?.synopsis, treatmentScenes.length, isLoadingScenes, ready, userId, userApiKeys.openai_api_key, userApiKeys.anthropic_api_key, isDetectingCharacters, detectCharactersFromTreatment])
+
+  // Reset auto-detection flag when treatment changes
+  useEffect(() => {
+    hasAutoDetectedRef.current = false
+  }, [treatment?.id])
 
   // Regenerate a single scene with AI
   const regenerateSceneWithAI = async (scene: TreatmentScene) => {
@@ -3262,12 +3972,12 @@ Return ONLY the JSON object, no other text:`
         {/* Cover Image */}
           <Card className="mb-8 overflow-hidden">
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <ImageIcon className="h-5 w-5" />
-                Cover Image
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="flex items-center gap-2 flex-1 min-w-0">
+                <ImageIcon className="h-5 w-5 flex-shrink-0" />
+                <span className="truncate">Cover Image</span>
               </CardTitle>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
@@ -3627,12 +4337,12 @@ Return ONLY the JSON object, no other text:`
               return (
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <FileText className="h-5 w-5" />
-                    Synopsis
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-2 flex-1 min-w-0">
+                    <FileText className="h-5 w-5 flex-shrink-0" />
+                    <span className="truncate">Synopsis</span>
                   </CardTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
                     {!isEditingSynopsis ? (
                       <>
                         {/* AI Regenerate Button - Show when treatment has content */}
@@ -3723,16 +4433,16 @@ Return ONLY the JSON object, no other text:`
                 <Card>
                   <CardHeader className="pb-3">
                     <CollapsibleTrigger className="w-full">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
                           {isScriptExpanded ? (
-                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                            <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                           ) : (
-                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                           )}
-                          <CardTitle className="flex items-center gap-2 text-base">
-                            <FileText className="h-4 w-4 text-blue-500" />
-                            Script from Movie
+                          <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                            <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                            <span className="truncate">Script from Movie</span>
                           </CardTitle>
                         </div>
                         {!treatment.prompt && scriptContent && !isLoadingScript && (
@@ -3744,7 +4454,7 @@ Return ONLY the JSON object, no other text:`
                               generateTreatmentFromScript()
                             }}
                             disabled={isGeneratingTreatmentFromScript || !aiSettingsLoaded || !scriptContent}
-                            className="bg-purple-500 hover:bg-purple-600 text-white"
+                            className="bg-purple-500 hover:bg-purple-600 text-white flex-shrink-0"
                           >
                             {isGeneratingTreatmentFromScript ? (
                               <>
@@ -3819,19 +4529,19 @@ Return ONLY the JSON object, no other text:`
             <Collapsible open={isTreatmentExpanded} onOpenChange={setIsTreatmentExpanded}>
               <Card>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
                       {isTreatmentExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       )}
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <FileText className="h-5 w-5 text-blue-500" />
-                        Treatment
+                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                        <FileText className="h-5 w-5 text-blue-500 flex-shrink-0" />
+                        <span className="truncate">Treatment</span>
                       </CardTitle>
                     </CollapsibleTrigger>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
                       {!isEditingPrompt ? (
                         <>
                           {/* AI Regenerate Button */}
@@ -3935,19 +4645,19 @@ Return ONLY the JSON object, no other text:`
             <Collapsible open={isTreatmentDetailsExpanded} onOpenChange={setIsTreatmentDetailsExpanded}>
               <Card>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
                       {isTreatmentDetailsExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       )}
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <FileText className="h-5 w-5 text-purple-500" />
-                        Project Details
+                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                        <FileText className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                        <span className="truncate">Project Details</span>
                       </CardTitle>
                     </CollapsibleTrigger>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
                       {!isEditingTreatment ? (
                         <Button variant="outline" size="sm" onClick={handleStartEditTreatment}>
                           <Edit className="h-4 w-4 mr-2" />
@@ -4110,12 +4820,12 @@ Return ONLY the JSON object, no other text:`
             {treatment.logline && (
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
                       <CardTitle>Logline</CardTitle>
                       <CardDescription>One-sentence summary</CardDescription>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-shrink-0">
                       {/* AI Regenerate Button */}
                       <Button 
                         variant="outline" 
@@ -4220,31 +4930,38 @@ Return ONLY the JSON object, no other text:`
             <Collapsible open={isCharactersExpanded} onOpenChange={setIsCharactersExpanded}>
               <Card>
                 <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
                       {isCharactersExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       )}
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <Users className="h-5 w-5 text-purple-500" />
-                        Characters
+                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                        <Users className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                        <span className="truncate">Characters</span>
                       </CardTitle>
                     </CollapsibleTrigger>
-                    <div className="flex items-center gap-2">
+                  </div>
+                  <CardDescription className="pt-1 pl-6">
+                    Aggregate characters from treatment scenes and sync with casting roles.
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
+                    <div className="flex items-center gap-2 mb-4" onClick={(e) => e.stopPropagation()}>
                       <Input
                         placeholder="Filter characters/roles..."
                         value={charactersFilter}
                         onChange={(e) => setCharactersFilter(e.target.value)}
-                        className="h-8 bg-input border-border"
+                        className="h-8 bg-input border-border flex-1"
                       />
                       <Button
                         variant="outline"
                         size="sm"
                         disabled={missingInRoles.length === 0 || isSyncingRoles || !treatment?.project_id}
                         onClick={syncAllMissingToRoles}
-                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
                       >
                         {isSyncingRoles ? (
                           <>
@@ -4259,19 +4976,33 @@ Return ONLY the JSON object, no other text:`
                         )}
                       </Button>
                     </div>
-                  </div>
-                  <CardDescription className="pt-1 pl-6">
-                    Aggregate characters from treatment scenes and sync with casting roles.
-                  </CardDescription>
-                </CardHeader>
-                <CollapsibleContent>
-                  <CardContent>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <div>
-                    <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
-                      <ListFilter className="h-4 w-4" />
-                      Detected Characters ({detectedCharacters.length})
-                    </h3>
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <h3 className="text-sm font-medium flex items-center gap-2">
+                        <ListFilter className="h-4 w-4 flex-shrink-0" />
+                        Detected Characters ({detectedCharacters.length})
+                      </h3>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={detectCharactersFromTreatment}
+                        disabled={isDetectingCharacters || !treatment}
+                        className="gap-2 flex-shrink-0 whitespace-nowrap"
+                      >
+                        {isDetectingCharacters ? (
+                          <>
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Detecting...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-3 w-3" />
+                            Detect from Treatment
+                          </>
+                        )}
+                      </Button>
+                    </div>
                     <div className="space-y-2">
                       {detectedCharacters.length === 0 ? (
                         <div className="text-sm text-muted-foreground">No characters found in scenes.</div>
@@ -4280,27 +5011,100 @@ Return ONLY the JSON object, no other text:`
                           const alreadyRole = (castingSettings?.roles_available || []).some(
                             (r) => r.toLowerCase() === c.name.toLowerCase(),
                           )
+                          const isEditing = editingCharacterName === c.name
+                          const displayName = editedCharacterNames[c.name] || c.name
+                          const isSaving = savingCharacters.includes(c.name)
+                          
                           return (
-                            <div key={c.name} className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
+                            <div key={c.name} className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50">
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
                                 <Badge variant="outline">{c.count}</Badge>
-                                <span>{c.name}</span>
+                                {isEditing ? (
+                                  <div className="flex items-center gap-2 flex-1">
+                                    <Input
+                                      value={displayName}
+                                      onChange={(e) => setEditedCharacterNames(prev => ({
+                                        ...prev,
+                                        [c.name]: e.target.value
+                                      }))}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          saveCharacterNameEdit(c.name)
+                                        } else if (e.key === 'Escape') {
+                                          cancelEditingCharacter()
+                                        }
+                                      }}
+                                      className="h-8 flex-1"
+                                      autoFocus
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => saveCharacterNameEdit(c.name)}
+                                      className="h-8 w-8 p-0"
+                                    >
+                                      <Save className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={cancelEditingCharacter}
+                                      className="h-8 w-8 p-0"
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <span className="flex-1">{c.name}</span>
+                                )}
                               </div>
-                              {alreadyRole ? (
-                                <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
-                                  In Casting
-                                </Badge>
-                              ) : (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => addRole(c.name)}
-                                  disabled={isSyncingRoles || !treatment?.project_id}
-                                  className="gap-2"
-                                >
-                                  <Plus className="h-4 w-4" />
-                                  Add to Casting
-                                </Button>
+                              {!isEditing && (
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => startEditingCharacter(c.name)}
+                                    disabled={isSaving || !treatment?.project_id}
+                                    className="h-8 w-8 p-0"
+                                    title="Edit name"
+                                  >
+                                    <Edit className="h-3 w-3" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={async (e) => {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      await saveCharacterAsRecord(c.name)
+                                    }}
+                                    disabled={isSaving || !ready}
+                                    className="h-8 w-8 p-0 hover:bg-muted"
+                                    title="Save as character (will create movie project if needed)"
+                                  >
+                                    {isSaving ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Save className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                  {alreadyRole ? (
+                                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+                                      In Casting
+                                    </Badge>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => addRole(c.name)}
+                                      disabled={isSyncingRoles || !treatment?.project_id}
+                                      className="gap-1 h-8 text-xs"
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                      Casting
+                                    </Button>
+                                  )}
+                                </div>
                               )}
                             </div>
                           )
@@ -4308,10 +5112,13 @@ Return ONLY the JSON object, no other text:`
                       )}
                     </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-medium mb-2">Casting Roles ({rolesAvailable.length})</h3>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <ListFilter className="h-4 w-4 flex-shrink-0 opacity-0" />
+                      Casting Roles ({rolesAvailable.length})
+                    </h3>
                     <div className="flex items-end gap-2 mb-3">
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <Label htmlFor="add-role">Add role</Label>
                         <Input
                           id="add-role"
@@ -4330,7 +5137,7 @@ Return ONLY the JSON object, no other text:`
                       <Button
                         onClick={addNewCharacterAsRole}
                         disabled={!newCharacterRole.trim() || isSyncingRoles || !treatment?.project_id}
-                        className="gap-2"
+                        className="gap-2 flex-shrink-0"
                       >
                         <Plus className="h-4 w-4" />
                         Add
@@ -4372,20 +5179,20 @@ Return ONLY the JSON object, no other text:`
             {/* Treatment Scenes - Collapsible */}
             <Collapsible open={isScenesExpanded} onOpenChange={setIsScenesExpanded}>
               <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-1">
+                <CardHeader className="pb-3 overflow-hidden">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 min-w-0">
+                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
                       {isScenesExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                       )}
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <Film className="h-5 w-5 text-purple-500" />
-                        Scenes
+                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                        <Film className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                        <span className="truncate">Scenes</span>
                       </CardTitle>
                     </CollapsibleTrigger>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap min-w-0" onClick={(e) => e.stopPropagation()}>
                       {treatmentScenes.length > 0 && treatment.project_id && (
                         <Button
                           variant="outline"
@@ -4485,15 +5292,15 @@ Return ONLY the JSON object, no other text:`
                   <div className="space-y-4">
                     {treatmentScenes.map((scene) => (
                       <Card key={scene.id} className="border-border">
-                        <CardHeader className="pb-3">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Badge variant="outline" className="text-xs">
+                        <CardHeader className="pb-3 overflow-hidden">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 min-w-0">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                <Badge variant="outline" className="text-xs flex-shrink-0">
                                   Scene {scene.scene_number || 'N/A'}
                                 </Badge>
                                 {scene.status && (
-                                  <Badge variant="outline" className="text-xs">
+                                  <Badge variant="outline" className="text-xs flex-shrink-0">
                                     {scene.status}
                                   </Badge>
                                 )}
@@ -4506,10 +5313,10 @@ Return ONLY the JSON object, no other text:`
                                   placeholder="Scene name"
                                 />
                               ) : (
-                                <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                <CardTitle className="text-lg break-words">{scene.name}</CardTitle>
                               )}
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
                               {editingSceneId === scene.id ? (
                                 <>
                                   <Button
@@ -4792,3 +5599,4 @@ Return ONLY the JSON object, no other text:`
     </>
   )
 }
+
