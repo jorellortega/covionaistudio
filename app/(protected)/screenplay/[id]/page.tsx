@@ -50,6 +50,56 @@ import { ShotListComponent } from "@/components/shot-list"
 // Screenplay page number calculation (standard: ~55 lines per page)
 const LINES_PER_PAGE = 55
 
+// Helper function to parse scene number for sorting (same logic as TimelineService)
+function parseSceneNumber(sceneNumber: string): number {
+  if (!sceneNumber || !sceneNumber.trim()) return 0
+  
+  const trimmed = sceneNumber.trim()
+  
+  // Extract the numeric part
+  const numericMatch = trimmed.match(/^(\d+)/)
+  if (!numericMatch) return 0
+  
+  const numericPart = parseInt(numericMatch[1], 10)
+  
+  // Extract the letter part (if any)
+  const letterMatch = trimmed.match(/^(\d+)([A-Za-z])/)
+  if (letterMatch) {
+    const letter = letterMatch[2].toUpperCase()
+    const letterValue = letter.charCodeAt(0) - 64 // A=1, B=2, C=3, etc.
+    return numericPart + (letterValue / 10)
+  }
+  
+  // If no letter, just return the number
+  return numericPart
+}
+
+// Helper function to sort screenplay scenes by scene number and order_index
+function sortScreenplayScenes(scenes: ScreenplayScene[]): ScreenplayScene[] {
+  return [...scenes].sort((a, b) => {
+    // First try to sort by scene number
+    const aNumber = parseSceneNumber(a.scene_number || '')
+    const bNumber = parseSceneNumber(b.scene_number || '')
+    
+    if (aNumber !== bNumber) {
+      return aNumber - bNumber
+    }
+    
+    // If scene numbers are the same or both 0, fall back to order_index
+    const aOrder = a.order_index || 0
+    const bOrder = b.order_index || 0
+    
+    if (aOrder !== bOrder) {
+      return aOrder - bOrder
+    }
+    
+    // Finally, sort by creation date as a last resort
+    const aDate = new Date(a.created_at || 0).getTime()
+    const bDate = new Date(b.created_at || 0).getTime()
+    return aDate - bDate
+  })
+}
+
 export default function ScreenplayPage() {
   const params = useParams()
   const id = params.id as string
@@ -211,17 +261,15 @@ function ScreenplayPageClient({ id }: { id: string }) {
         // Use the LATEST project-level script only (don't combine multiple project scripts)
         if (projectScripts.length > 0) {
           const latestProjectScript = projectScripts[0]
+          console.log('Using project-level script:', latestProjectScript.title)
           setActiveScriptAsset(latestProjectScript)
           setFullScript(latestProjectScript.content || "")
           setScriptAssets([latestProjectScript])
-        } else if (sceneScripts.length > 0) {
-          // If no project-level script, fetch and combine scene scripts
-          await fetchScriptsFromScenes()
         } else {
-          // No scripts found at all
-          setFullScript("")
-          setScriptAssets([])
-          setActiveScriptAsset(null)
+          // If no project-level script, always try to fetch screenplay_content from scenes
+          console.log('No project-level scripts found, fetching from scenes...')
+          console.log('Scene script assets found:', sceneScripts.length)
+          await fetchScriptsFromScenes()
         }
       } catch (error) {
         console.error('Error fetching scripts:', error)
@@ -241,6 +289,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   // Fetch scripts from scenes if no project-level scripts exist
   const fetchScriptsFromScenes = async () => {
     try {
+      console.log('📝 fetchScriptsFromScenes: Starting to fetch screenplay from scenes...')
+      
       // Get timeline for this project
       const { data: timeline, error: timelineError } = await getSupabaseClient()
         .from('timelines')
@@ -250,25 +300,66 @@ function ScreenplayPageClient({ id }: { id: string }) {
         .single()
 
       if (timelineError || !timeline) {
-        console.log('No timeline found for project')
+        console.log('❌ fetchScriptsFromScenes: No timeline found for project')
         return
       }
 
-      // Get all scenes for this timeline
+      console.log('✅ fetchScriptsFromScenes: Found timeline:', timeline.id)
+
+      // Get all scenes for this timeline with screenplay_content
       const { data: scenes, error: scenesError } = await getSupabaseClient()
         .from('scenes')
-        .select('id, name, metadata, order_index')
+        .select('id, name, metadata, order_index, screenplay_content, created_at, updated_at')
         .eq('timeline_id', timeline.id)
         .eq('user_id', userId)
-        .order('order_index', { ascending: true })
 
-      if (scenesError || !scenes || scenes.length === 0) {
-        console.log('No scenes found for timeline')
+      if (scenesError) {
+        console.error('❌ fetchScriptsFromScenes: Error fetching scenes:', scenesError)
         return
       }
 
-      // Get scripts for each scene
-      const sceneIds = scenes.map(s => s.id)
+      if (!scenes || scenes.length === 0) {
+        console.log('❌ fetchScriptsFromScenes: No scenes found for timeline')
+        setFullScript("")
+        setScriptAssets([])
+        setActiveScriptAsset(null)
+        return
+      }
+
+      console.log(`✅ fetchScriptsFromScenes: Found ${scenes.length} scenes`)
+      
+      // Log which scenes have screenplay_content
+      const scenesWithScreenplayContent = scenes.filter(s => s.screenplay_content && s.screenplay_content.trim().length > 0)
+      console.log(`📄 fetchScriptsFromScenes: ${scenesWithScreenplayContent.length} scenes have screenplay_content`)
+      scenesWithScreenplayContent.forEach(scene => {
+        console.log(`   - Scene "${scene.name}" (${scene.metadata?.sceneNumber || 'no number'}): ${scene.screenplay_content?.length || 0} chars`)
+      })
+
+      // Sort scenes by scene number (using the same logic as TimelineService)
+      const sortedScenes = scenes.sort((a, b) => {
+        const aNumber = parseSceneNumber(a.metadata?.sceneNumber || '')
+        const bNumber = parseSceneNumber(b.metadata?.sceneNumber || '')
+        
+        if (aNumber !== bNumber) {
+          return aNumber - bNumber
+        }
+        
+        // Fall back to order_index if scene numbers are the same
+        const aOrder = a.order_index || 0
+        const bOrder = b.order_index || 0
+        
+        if (aOrder !== bOrder) {
+          return aOrder - bOrder
+        }
+        
+        // Finally, sort by creation date
+        const aDate = new Date(a.created_at || 0).getTime()
+        const bDate = new Date(b.created_at || 0).getTime()
+        return aDate - bDate
+      })
+
+      // Get scripts for each scene (as fallback)
+      const sceneIds = sortedScenes.map(s => s.id)
       const { data: sceneScripts, error: scriptsError } = await getSupabaseClient()
         .from('assets')
         .select('*')
@@ -280,38 +371,116 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
       if (scriptsError) {
         console.error('Error fetching scene scripts:', scriptsError)
+        // Continue anyway - we might have screenplay_content on scenes
+      }
+
+      // Combine scripts in scene order, prioritizing screenplay_content from scenes
+      const scenesWithContent = sortedScenes.filter(scene => {
+        const hasScreenplayContent = scene.screenplay_content && scene.screenplay_content.trim().length > 0
+        const hasScriptAsset = sceneScripts?.some(s => s.scene_id === scene.id)
+        if (hasScreenplayContent || hasScriptAsset) {
+          console.log(`✅ Scene "${scene.name}" has content (screenplay: ${hasScreenplayContent}, asset: ${hasScriptAsset})`)
+        }
+        return hasScreenplayContent || hasScriptAsset
+      })
+
+      if (scenesWithContent.length === 0) {
+        console.log('❌ fetchScriptsFromScenes: No screenplay content found in any scenes')
+        console.log('   Checking scenes:')
+        sortedScenes.forEach(scene => {
+          const hasContent = scene.screenplay_content && scene.screenplay_content.trim().length > 0
+          const hasAsset = sceneScripts?.some(s => s.scene_id === scene.id)
+          console.log(`   - "${scene.name}": screenplay_content=${hasContent}, script_asset=${hasAsset}`)
+        })
+        setFullScript("")
+        setScriptAssets([])
+        setActiveScriptAsset(null)
         return
       }
 
-      if (sceneScripts && sceneScripts.length > 0) {
-        // Combine scripts in scene order
-        const combinedScript = scenes
-          .map(scene => {
+      console.log(`✅ fetchScriptsFromScenes: Found ${scenesWithContent.length} scenes with content to combine`)
+
+      // Combine scripts in scene order
+      const combinedScript = scenesWithContent
+        .map(scene => {
+          // Prioritize screenplay_content from scene, fall back to script asset
+          let content = ''
+          if (scene.screenplay_content && scene.screenplay_content.trim().length > 0) {
+            content = scene.screenplay_content
+          } else if (sceneScripts) {
             const sceneScript = sceneScripts.find(s => s.scene_id === scene.id)
-            if (!sceneScript) return null
-            
-            const sceneNumber = scene.metadata?.sceneNumber || scene.name
-            const content = sceneScript.content || ""
+            if (sceneScript) {
+              content = sceneScript.content || ""
+            }
+          }
+          
+          if (!content || content.trim().length === 0) {
+            return null
+          }
+          
+          const sceneNumber = scene.metadata?.sceneNumber || ''
+          if (sceneNumber) {
             return `\n\n=== SCENE ${sceneNumber}: ${scene.name} ===\n\n${content}`
-          })
-          .filter(Boolean)
-          .join("\n\n")
-        
-        setFullScript(combinedScript)
-        setScriptAssets(sceneScripts)
-        
-        // Use the first scene script as the active script, but store combined content
-        if (sceneScripts.length > 0) {
-          const firstScript = sceneScripts[0]
-          setActiveScriptAsset({
-            ...firstScript,
-            title: `${movie?.name || 'Screenplay'} - Full Script`,
-            content: combinedScript,
-          } as Asset)
-        }
+          } else {
+            return `\n\n=== ${scene.name} ===\n\n${content}`
+          }
+        })
+        .filter(Boolean)
+        .join("\n\n")
+      
+      if (combinedScript.trim().length === 0) {
+        console.log('❌ fetchScriptsFromScenes: Combined script is empty')
+        setFullScript("")
+        setScriptAssets([])
+        setActiveScriptAsset(null)
+        return
       }
+      
+      console.log(`✅ fetchScriptsFromScenes: Combined screenplay has ${combinedScript.length} characters`)
+      console.log(`✅ fetchScriptsFromScenes: Preview (first 200 chars):`, combinedScript.substring(0, 200))
+      
+      setFullScript(combinedScript)
+      
+      // Create virtual assets for screenplay_content if needed
+      const virtualAssets: Asset[] = scenesWithContent.map(scene => {
+        const sceneNumber = scene.metadata?.sceneNumber || ''
+        return {
+          id: `scene-${scene.id}`,
+          project_id: id,
+          scene_id: scene.id,
+          user_id: userId!,
+          title: `Scene ${sceneNumber || scene.name}`,
+          content: scene.screenplay_content || sceneScripts?.find(s => s.scene_id === scene.id)?.content || '',
+          content_type: 'script',
+          created_at: scene.created_at || new Date().toISOString(),
+          updated_at: scene.updated_at || new Date().toISOString(),
+          is_latest_version: true,
+        } as Asset
+      })
+      
+      setScriptAssets(virtualAssets)
+      
+      // Use the combined script as the active script
+      setActiveScriptAsset({
+        id: `combined-${id}`,
+        project_id: id,
+        user_id: userId!,
+        title: `${movie?.name || 'Screenplay'} - Full Script`,
+        content: combinedScript,
+        content_type: 'script',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        is_latest_version: true,
+      } as Asset)
+      
+      console.log('Successfully fetched and combined screenplay from', scenesWithContent.length, 'scenes')
     } catch (error) {
       console.error('Error fetching scripts from scenes:', error)
+      toast({
+        title: "Error",
+        description: "Failed to fetch screenplay from scenes",
+        variant: "destructive",
+      })
     }
   }
 
@@ -892,7 +1061,10 @@ function ScreenplayPageClient({ id }: { id: string }) {
         updated_at: scene.updated_at,
       }))
       
-      setScreenplayScenes(screenplayScenesData as any)
+      // Sort scenes to ensure proper order (by scene number, then order_index, then created_at)
+      const sortedScenes = sortScreenplayScenes(screenplayScenesData as any)
+      
+      setScreenplayScenes(sortedScenes)
     } catch (error) {
       console.error('Error loading timeline scenes:', error)
       toast({
@@ -1125,7 +1297,8 @@ Return ONLY the JSON array, no other text:`
         }
       }
 
-      setScreenplayScenes([...screenplayScenes, ...createdScenes as any])
+      const allScenes = [...screenplayScenes, ...createdScenes as any]
+      setScreenplayScenes(sortScreenplayScenes(allScenes))
 
       toast({
         title: "Success",
@@ -1224,7 +1397,8 @@ Return ONLY the JSON array, no other text:`
         updated_at: updatedScene.updated_at,
       }
       
-      setScreenplayScenes(screenplayScenes.map(s => s.id === editingSceneId ? updatedScreenplayScene as any : s))
+      const updatedScenes = screenplayScenes.map(s => s.id === editingSceneId ? updatedScreenplayScene as any : s)
+      setScreenplayScenes(sortScreenplayScenes(updatedScenes))
       setEditingSceneId(null)
       setEditingScene({})
       
@@ -1248,7 +1422,8 @@ Return ONLY the JSON array, no other text:`
   const handleDeleteScene = async (sceneId: string) => {
     try {
       await TimelineService.deleteScene(sceneId)
-      setScreenplayScenes(screenplayScenes.filter(s => s.id !== sceneId))
+      const filteredScenes = screenplayScenes.filter(s => s.id !== sceneId)
+      setScreenplayScenes(sortScreenplayScenes(filteredScenes))
       toast({
         title: "Success",
         description: "Scene deleted successfully",
@@ -1479,7 +1654,8 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
           updated_at: updatedScene.updated_at,
         }
         
-        setScreenplayScenes(screenplayScenes.map(s => s.id === scene.id ? updatedScreenplayScene as any : s))
+        const updatedScenes = screenplayScenes.map(s => s.id === scene.id ? updatedScreenplayScene as any : s)
+        setScreenplayScenes(sortScreenplayScenes(updatedScenes))
 
         toast({
           title: "Success",
@@ -1716,7 +1892,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       // Merge updated scenes back into full list
       const updatedScenesMap = new Map(updatedScenes.map(s => [s.id, s]))
       const finalScenes = screenplayScenes.map(scene => updatedScenesMap.get(scene.id) || scene)
-      setScreenplayScenes(finalScenes)
+      setScreenplayScenes(sortScreenplayScenes(finalScenes))
 
       const updatedCount = updatedScenes.filter((s, idx) => {
         const original = scenesNeedingDetails[idx]
@@ -2604,7 +2780,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               </div>
             ) : (
               <div className="space-y-4">
-                {screenplayScenes.map((scene) => {
+                {sortScreenplayScenes(screenplayScenes).map((scene) => {
                   const isExpanded = expandedScenes.has(scene.id)
                   return (
                     <Collapsible

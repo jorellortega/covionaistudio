@@ -49,6 +49,8 @@ import {
   Film,
   ChevronDown,
   ChevronUp,
+  Sparkles,
+  X,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -91,6 +93,8 @@ function ScenePageClient({ id }: { id: string }) {
   const [showMediaUpload, setShowMediaUpload] = useState(false)
   const [loading, setLoading] = useState(false)
   const [scene, setScene] = useState<SceneWithMetadata | null>(null)
+  const [allScenes, setAllScenes] = useState<SceneWithMetadata[]>([])
+  const [currentSceneIndex, setCurrentSceneIndex] = useState<number>(-1)
   const [assets, setAssets] = useState<Asset[]>([])
   const [assetsLoading, setAssetsLoading] = useState(false)
   const [showVersionCompare, setShowVersionCompare] = useState(false)
@@ -183,6 +187,12 @@ function ScenePageClient({ id }: { id: string }) {
     assetId: string;
     field: 'content';
   } | null>(null)
+  
+  // Text selection and toolbar states for screenplay editing
+  const [selectedText, setSelectedText] = useState<string>("")
+  const [selectionStart, setSelectionStart] = useState<number>(0)
+  const [selectionEnd, setSelectionEnd] = useState<number>(0)
+  const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null)
 
   const [selectedVersions, setSelectedVersions] = useState<Record<string, Asset>>({})
   const [activeScriptId, setActiveScriptId] = useState<string | null>(null)
@@ -201,6 +211,7 @@ function ScenePageClient({ id }: { id: string }) {
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isShotListExpanded, setIsShotListExpanded] = useState(false)
+  const [isUnlinkedAssetsExpanded, setIsUnlinkedAssetsExpanded] = useState(false)
   
   // Screenplay page number calculation (standard: ~55 lines per page)
   const LINES_PER_PAGE = 55
@@ -252,6 +263,21 @@ function ScenePageClient({ id }: { id: string }) {
         if (scene && mounted) {
 
           setScene(scene)
+          
+          // Fetch all scenes for navigation if we have timeline_id
+          if (scene.timeline_id) {
+            try {
+              const scenes = await TimelineService.getScenesForTimeline(scene.timeline_id)
+              if (mounted) {
+                setAllScenes(scenes)
+                // Find current scene index
+                const index = scenes.findIndex(s => s.id === id)
+                setCurrentSceneIndex(index)
+              }
+            } catch (scenesError) {
+              console.error('Error fetching scenes for navigation:', scenesError)
+            }
+          }
           
           // Get project ID through timeline
           try {
@@ -315,6 +341,14 @@ function ScenePageClient({ id }: { id: string }) {
       mounted = false
     }
   }, [id, userId, ready])
+
+  // Update current scene index when id or allScenes changes
+  useEffect(() => {
+    if (id && allScenes.length > 0) {
+      const index = allScenes.findIndex(s => s.id === id)
+      setCurrentSceneIndex(index)
+    }
+  }, [id, allScenes])
 
   // Calculate pages from screenplay content
   useEffect(() => {
@@ -640,6 +674,67 @@ function ScenePageClient({ id }: { id: string }) {
       setActiveScriptId(latestScript.id)
     }
   }, [assets, activeScriptId])
+
+
+
+  // Update toolbar position on scroll (same as screenplay page)
+  useEffect(() => {
+    if (!isEditingScreenplay || !selectedText || !toolbarPosition) return
+    
+    const handleScroll = () => {
+      const textarea = document.querySelector('textarea[data-screenplay-editor]') as HTMLTextAreaElement
+      if (textarea) {
+        updateToolbarPosition(textarea)
+      }
+    }
+    
+    window.addEventListener('scroll', handleScroll, true)
+    return () => window.removeEventListener('scroll', handleScroll, true)
+  }, [isEditingScreenplay, selectedText, toolbarPosition])
+
+  // Clear selection when clicking outside (for screenplay editing)
+  useEffect(() => {
+    if (!isEditingScreenplay) {
+      setSelectedText("")
+      setToolbarPosition(null)
+      return
+    }
+    
+    let clickTimeout: NodeJS.Timeout | null = null
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      // Don't clear if clicking on toolbar, textarea, or AI editor dialog
+      if (
+        target.closest('textarea[data-screenplay-editor]') ||
+        target.closest('[data-selection-toolbar]') ||
+        target.closest('[role="dialog"]') ||
+        target.closest('[data-radix-dialog-content]')
+      ) {
+        // Clear any pending timeout
+        if (clickTimeout) {
+          clearTimeout(clickTimeout)
+          clickTimeout = null
+        }
+        return
+      }
+      
+      // Clear selection after a short delay to allow toolbar interactions
+      clickTimeout = setTimeout(() => {
+        setSelectedText("")
+        setToolbarPosition(null)
+        clickTimeout = null
+      }, 150)
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      if (clickTimeout) {
+        clearTimeout(clickTimeout)
+      }
+    }
+  }, [isEditingScreenplay])
 
   // Function to refresh assets
   const refreshAssets = async () => {
@@ -1126,7 +1221,7 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }
 
-  // AI text editing handler
+  // AI text editing handler for inline editing (assets/descriptions)
   const handleAITextEdit = (selectedText: string, fullContent: string, assetId: string) => {
     setAiEditData({
       selectedText,
@@ -1137,8 +1232,8 @@ function ScenePageClient({ id }: { id: string }) {
     setShowAITextEditor(true)
   }
 
-  // Handle AI text replacement
-  const handleAITextReplace = (newText: string) => {
+  // Handle AI text replacement for inline editing
+  const handleAITextReplaceInline = (newText: string) => {
     if (!aiEditData || !inlineEditing) return
     
     // Replace the selected text with the new AI-generated text
@@ -1156,6 +1251,119 @@ function ScenePageClient({ id }: { id: string }) {
       setAiEditData(null)
       setShowAITextEditor(false)
     }
+  }
+
+  // Handle AI text replacement for screenplay editing
+  const handleAITextReplaceScreenplay = (newText: string) => {
+    if (!aiEditData || !isEditingScreenplay) return
+    
+    // Get current textarea and its selection to ensure we use the latest positions
+    const textarea = screenplayTextareaRef.current as HTMLTextAreaElement
+    const currentPageContent = getCurrentPageEditContent()
+    
+    if (!textarea) {
+      // Fallback to stored selection positions
+      const newValue = currentPageContent.substring(0, selectionStart) + newText + currentPageContent.substring(selectionEnd)
+      saveCurrentPageEdit(newValue)
+    } else {
+      // Use current textarea selection positions (in case content changed)
+      // Try to use stored positions first, but validate them
+      let start = selectionStart
+      let end = selectionEnd
+      
+      // Validate that stored positions are still valid
+      if (start < 0 || end > currentPageContent.length || start > end) {
+        // Fallback to textarea's current selection
+        start = textarea.selectionStart
+        end = textarea.selectionEnd
+      }
+      
+      // Replace the selected text
+      const newValue = currentPageContent.substring(0, start) + newText + currentPageContent.substring(end)
+      saveCurrentPageEdit(newValue)
+      
+      // Set cursor position after replacement
+      setTimeout(() => {
+        const newCursorPos = start + newText.length
+        textarea.focus()
+        textarea.setSelectionRange(newCursorPos, newCursorPos)
+      }, 50)
+    }
+    
+    // Clear selection and toolbar
+    setSelectedText("")
+    setToolbarPosition(null)
+    setAiEditData(null)
+    setShowAITextEditor(false)
+    
+    toast({
+      title: "Text Replaced",
+      description: "The AI-generated text has been applied to your selection.",
+    })
+  }
+
+  // Handle AI text replacement (routes to appropriate handler)
+  const handleAITextReplace = (newText: string) => {
+    if (isEditingScreenplay) {
+      handleAITextReplaceScreenplay(newText)
+    } else if (inlineEditing) {
+      handleAITextReplaceInline(newText)
+    }
+  }
+
+  // Update toolbar position based on textarea position
+  const updateToolbarPosition = (textarea: HTMLTextAreaElement) => {
+    const rect = textarea.getBoundingClientRect()
+    
+    // For fixed positioning, use viewport coordinates directly (no scroll offset needed)
+    // Position toolbar above the textarea, aligned to the left
+    setToolbarPosition({
+      top: rect.top - 50,
+      left: rect.left + 10
+    })
+  }
+
+  // Handle text selection for AI editing
+  const handleScreenplayTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    if (!isEditingScreenplay) return
+    
+    const target = e.target as HTMLTextAreaElement
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    const selection = target.value.substring(start, end)
+    
+    if (selection.length > 0) {
+      setSelectedText(selection)
+      setSelectionStart(start)
+      setSelectionEnd(end)
+      
+      // Calculate toolbar position based on textarea position
+      updateToolbarPosition(target)
+    } else {
+      setSelectedText("")
+      setToolbarPosition(null)
+    }
+  }
+
+  // Handle AI edit button click from toolbar for screenplay
+  const handleAITextEditScreenplay = () => {
+    if (!isEditingScreenplay || !selectedText || selectedText.length === 0) {
+      toast({
+        title: "No Text Selected",
+        description: "Please select some text to edit with AI.",
+        variant: "destructive",
+      })
+      return
+    }
+    
+    const currentPageContent = getCurrentPageEditContent()
+    setAiEditData({
+      selectedText: selectedText,
+      fullContent: currentPageContent,
+      assetId: id, // Use scene ID as asset ID
+      field: 'content'
+    })
+    setShowAITextEditor(true)
   }
 
   // Recursive delete function that handles complex circular references
@@ -1472,6 +1680,88 @@ function ScenePageClient({ id }: { id: string }) {
           </div>
         </div>
         
+        {/* Scene Navigation */}
+        {allScenes.length > 1 && (
+          <div className="flex items-center gap-2 mb-4 sm:mb-6">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (currentSceneIndex > 0) {
+                  const prevScene = allScenes[currentSceneIndex - 1]
+                  router.push(`/timeline-scene/${prevScene.id}`)
+                }
+              }}
+              disabled={currentSceneIndex <= 0}
+              className="border-primary/30 text-primary hover:bg-primary/10"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="hidden sm:inline ml-1">Previous</span>
+            </Button>
+            
+            <Select
+              value={id}
+              onValueChange={(value) => {
+                router.push(`/timeline-scene/${value}`)
+              }}
+            >
+              <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
+                <SelectValue>
+                  {scene ? (
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{scene.name}</span>
+                      {scene.metadata?.sceneNumber && (
+                        <Badge variant="outline" className="text-xs">
+                          {scene.metadata.sceneNumber}
+                        </Badge>
+                      )}
+                    </div>
+                  ) : (
+                    'Select Scene'
+                  )}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {allScenes.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    <div className="flex items-center justify-between w-full">
+                      <div className="flex items-center gap-2">
+                        <span>{s.name}</span>
+                        {s.metadata?.sceneNumber && (
+                          <Badge variant="outline" className="text-xs">
+                            {s.metadata.sceneNumber}
+                          </Badge>
+                        )}
+                      </div>
+                      {s.id === id && (
+                        <Badge variant="secondary" className="text-xs ml-2">
+                          Current
+                        </Badge>
+                      )}
+                    </div>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (currentSceneIndex >= 0 && currentSceneIndex < allScenes.length - 1) {
+                  const nextScene = allScenes[currentSceneIndex + 1]
+                  router.push(`/timeline-scene/${nextScene.id}`)
+                }
+              }}
+              disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
+              className="border-primary/30 text-primary hover:bg-primary/10"
+            >
+              <span className="hidden sm:inline mr-1">Next</span>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+        
         {/* Action Buttons */}
         <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-4 sm:mb-6">
           {/* Screenplay Button - Only show if projectId is available */}
@@ -1489,6 +1779,20 @@ function ScenePageClient({ id }: { id: string }) {
               </Link>
             </Button>
           )}
+          
+          {/* Treatment Button */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+            asChild
+          >
+            <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
+              <FileText className="h-4 w-4 mr-2" />
+              <span className="hidden sm:inline">View Movie</span>
+              <span className="sm:hidden">Movie</span>
+            </Link>
+          </Button>
           
           {/* Create New Script Version */}
           {assets.filter(a => a.content_type === 'script').length > 0 && (
@@ -1615,99 +1919,95 @@ function ScenePageClient({ id }: { id: string }) {
 
         {/* Unlinked Assets Section */}
         {assets.length === 0 && (
-          <Card className="bg-card border-orange-500/20 mb-6">
-            <CardHeader>
-              <CardTitle className="text-orange-500">Link Existing Assets</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground mb-4">
-                You have assets that aren't linked to this scene. Would you like to link them?
-              </p>
-              <Button
-                onClick={async () => {
-                  try {
-                    // Get all assets for the user
-                    const { data: allAssets } = await supabase
-                      .from('assets')
-                      .select('*')
-                      .eq('user_id', session?.user?.id)
-                      .is('scene_id', null)
-                    
-                    if (allAssets && allAssets.length > 0) {
-                      // Link them to this scene
-                      const { error } = await supabase
-                        .from('assets')
-                        .update({ scene_id: id })
-                        .eq('user_id', session?.user?.id)
-                        .is('scene_id', null)
-                        .eq('project_id', allAssets[0].project_id) // Only link assets from same project
-                      
-                      if (error) {
+          <Collapsible open={isUnlinkedAssetsExpanded} onOpenChange={setIsUnlinkedAssetsExpanded} className="mb-6">
+            <Card className="bg-card border-orange-500/20">
+              <CollapsibleTrigger asChild>
+                <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                  <CardTitle className="text-orange-500 flex items-center justify-between">
+                    Link Existing Assets
+                    {isUnlinkedAssetsExpanded ? (
+                      <ChevronUp className="h-4 w-4" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4" />
+                    )}
+                  </CardTitle>
+                </CardHeader>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent>
+                  <p className="text-muted-foreground mb-4">
+                    You have assets that aren't linked to this scene. Would you like to link them?
+                  </p>
+                  <Button
+                    onClick={async () => {
+                      if (!userId) {
+                        toast({
+                          title: "Error",
+                          description: "You must be logged in to link assets.",
+                          variant: "destructive",
+                        })
+                        return
+                      }
+
+                      try {
+                        const supabase = getSupabaseClient()
+                        
+                        // Get all assets for the user
+                        const { data: allAssets } = await supabase
+                          .from('assets')
+                          .select('*')
+                          .eq('user_id', userId)
+                          .is('scene_id', null)
+                        
+                        if (allAssets && allAssets.length > 0) {
+                          // Link them to this scene
+                          const { error } = await supabase
+                            .from('assets')
+                            .update({ scene_id: id })
+                            .eq('user_id', userId)
+                            .is('scene_id', null)
+                            .eq('project_id', allAssets[0].project_id) // Only link assets from same project
+                          
+                          if (error) {
+                            console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
+                            toast({
+                              title: "Error",
+                              description: "Failed to link assets to scene.",
+                              variant: "destructive",
+                            })
+                          } else {
+                            toast({
+                              title: "Assets Linked!",
+                              description: `${allAssets.length} assets have been linked to this scene.`,
+                            })
+                            // Refresh the assets
+                            refreshAssets()
+                          }
+                        } else {
+                          toast({
+                            title: "No Assets Found",
+                            description: "There are no unlinked assets to link to this scene.",
+                          })
+                        }
+                      } catch (error) {
                         console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
                         toast({
                           title: "Error",
                           description: "Failed to link assets to scene.",
                           variant: "destructive",
                         })
-                      } else {
-                        toast({
-                          title: "Assets Linked!",
-                          description: `${allAssets.length} assets have been linked to this scene.`,
-                        })
-                        // Refresh the assets
-                        refreshAssets()
                       }
-                    }
-                  } catch (error) {
-                    console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
-                    toast({
-                      title: "Error",
-                      description: "Failed to link assets to scene.",
-                      variant: "destructive",
-                    })
-                  }
-                }}
-                className="bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-90"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Link Existing Assets to Scene
-              </Button>
-            </CardContent>
-          </Card>
+                    }}
+                    className="bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-90"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Link Existing Assets to Scene
+                  </Button>
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
         )}
-
-        {/* Scene Info Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
-          <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Clock className="h-4 w-4 text-primary" />
-                <span className="text-sm text-muted-foreground">Duration</span>
-              </div>
-              <p className="text-2xl font-bold text-primary">{scene.duration_seconds}s</p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Play className="h-4 w-4 text-primary" />
-                <span className="text-sm text-muted-foreground">Type</span>
-              </div>
-              <Badge className="text-sm">{scene.scene_type}</Badge>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Calendar className="h-4 w-4 text-primary" />
-                <span className="text-sm text-muted-foreground">Start Time</span>
-              </div>
-              <p className="text-2xl font-bold text-primary">{scene.start_time_seconds}s</p>
-            </CardContent>
-          </Card>
-        </div>
 
         {/* Quick Actions */}
         <div className="flex items-center justify-end">
@@ -1877,7 +2177,7 @@ function ScenePageClient({ id }: { id: string }) {
 
 
 
-            {assets.filter(a => a.content_type === 'script').length > 0 ? (
+            {assets.filter(a => a.content_type === 'script').length > 0 && (
               <div className="space-y-4">
                             {(() => {
               // Group scripts by parent to show version history
@@ -3019,30 +3319,100 @@ function ScenePageClient({ id }: { id: string }) {
                 
 
               </div>
-            ) : (
-              <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
-                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground mb-4">No scripts generated for this scene yet</p>
-                  <div className="space-y-3">
-                    <Button
-                      onClick={() => router.push('/ai-studio')}
-                      className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
-                    >
-                      <Bot className="h-4 w-4 mr-2" />
-                      Generate Your First Script
-                    </Button>
-                    <div className="text-xs text-muted-foreground">
-                      💡 Once you have a script, you can create new versions to track changes and experiment with variations
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
             )}
             {/* Screenplay Section */}
             {(screenplayContent || scene?.screenplay_content) && (
-              <Card className="bg-card border-purple-500/20 mt-6">
-                <CardHeader>
+              <>
+                {/* Fix Formatting Button */}
+                <div className="mt-6 mb-3 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                    onClick={async () => {
+                      try {
+                        const content = screenplayContent || scene?.screenplay_content
+                        if (!content) {
+                          toast({
+                            title: "Error",
+                            description: "No screenplay content to format.",
+                            variant: "destructive",
+                          })
+                          return
+                        }
+
+                        setLoading(true)
+                        
+                        console.log('🎬 FIX FORMAT - Starting formatting fix')
+                        console.log('🎬 FIX FORMAT - Content length:', content.length)
+                        
+                        const response = await fetch('/api/scenes/fix-screenplay-format', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            screenplay: content,
+                            sceneId: id,
+                            userId: userId,
+                          }),
+                        })
+                        
+                        console.log('🎬 FIX FORMAT - Response status:', response.status)
+
+                        if (!response.ok) {
+                          const errorData = await response.json()
+                          throw new Error(errorData.error || 'Failed to fix formatting')
+                        }
+
+                        const result = await response.json()
+                        
+                        if (result.success && result.screenplay) {
+                          console.log('🎬 FIX FORMAT - Formatting successful')
+                          console.log('🎬 FIX FORMAT - Formatted content length:', result.screenplay.length)
+                          
+                          // Update the screenplay content - this will trigger page recalculation via useEffect
+                          // Only update screenplayContent, don't update scene directly to avoid double updates
+                          setScreenplayContent(result.screenplay)
+                          
+                          // Also update scene to keep in sync
+                          if (scene) {
+                            setScene({
+                              ...scene,
+                              screenplay_content: result.screenplay
+                            })
+                          }
+                          
+                          // Wait a moment for state to update before showing success
+                          await new Promise(resolve => setTimeout(resolve, 100))
+                          
+                          toast({
+                            title: "Formatting Fixed!",
+                            description: "The screenplay has been reformatted with proper spacing.",
+                          })
+                        } else {
+                          console.error('🎬 FIX FORMAT - No formatted screenplay in result:', result)
+                          throw new Error('No formatted screenplay returned')
+                        }
+                      } catch (error) {
+                        console.error('Error fixing screenplay formatting:', error)
+                        toast({
+                          title: "Error",
+                          description: error instanceof Error ? error.message : "Failed to fix formatting. Please try again.",
+                          variant: "destructive",
+                        })
+                      } finally {
+                        setLoading(false)
+                      }
+                    }}
+                    disabled={loading || isEditingScreenplay}
+                  >
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Fix Formatting
+                  </Button>
+                </div>
+                <Card className="bg-card border-purple-500/20">
+                  <CardHeader>
                   <div className="flex items-center justify-between">
                     <div>
                       <CardTitle className="text-xl font-bold text-purple-400">Screenplay Script</CardTitle>
@@ -3218,14 +3588,58 @@ function ScenePageClient({ id }: { id: string }) {
                           </Button>
                         </div>
                       )}
-                      <Textarea
-                        key={`page-${currentPage}`}
-                        ref={screenplayTextareaRef}
-                        value={getCurrentPageEditContent()}
-                        onChange={(e) => saveCurrentPageEdit(e.target.value)}
-                        className="min-h-[600px] font-mono text-sm leading-relaxed"
-                        placeholder="Enter your screenplay here..."
-                      />
+                      <div className="space-y-2 relative">
+                        <Textarea
+                          key={`page-${currentPage}`}
+                          ref={screenplayTextareaRef}
+                          data-screenplay-editor
+                          value={getCurrentPageEditContent()}
+                          onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                          onSelect={handleScreenplayTextSelection}
+                          className="min-h-[600px] font-mono text-sm leading-relaxed"
+                          placeholder="Enter your screenplay here..."
+                        />
+                        {/* Floating Selection Toolbar */}
+                        {selectedText && toolbarPosition && (
+                          <div
+                            data-selection-toolbar
+                            className="fixed z-50 flex items-center gap-2 p-2 bg-background border border-border rounded-lg shadow-lg"
+                            style={{
+                              top: `${toolbarPosition.top}px`,
+                              left: `${toolbarPosition.left}px`,
+                            }}
+                          >
+                            <Badge variant="outline" className="text-xs">
+                              {selectedText.length} chars
+                            </Badge>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              onClick={handleAITextEditScreenplay}
+                              className="bg-purple-500 hover:bg-purple-600 text-white"
+                            >
+                              <Bot className="h-3 w-3 mr-1" />
+                              AI Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setSelectedText("")
+                                setToolbarPosition(null)
+                                const textarea = screenplayTextareaRef.current
+                                if (textarea) {
+                                  textarea.focus()
+                                }
+                              }}
+                              className="h-7 w-7 p-0"
+                              title="Clear selection"
+                            >
+                              ×
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-muted-foreground">
                           💡 Editing page {currentPage} of {totalPages}
@@ -3354,6 +3768,7 @@ function ScenePageClient({ id }: { id: string }) {
                   </div>
                 )}
               </Card>
+              </>
             )}
 
             {/* Shot List Card - Separate from Screenplay Card */}

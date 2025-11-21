@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Bot, Sparkles, RotateCcw, CheckCircle, AlertCircle } from "lucide-react"
+import { Loader2, Bot, Sparkles, RotateCcw, CheckCircle, AlertCircle, ChevronDown, ChevronUp } from "lucide-react"
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/components/AuthProvider"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
@@ -62,6 +63,9 @@ export default function AITextEditor({
   const [editingSuggestions, setEditingSuggestions] = useState<string[]>([])
   const [newSuggestion, setNewSuggestion] = useState("")
   const [isSavingSuggestions, setIsSavingSuggestions] = useState(false)
+  
+  // Scene Context collapsible state (default to collapsed)
+  const [isSceneContextOpen, setIsSceneContextOpen] = useState(false)
   
   // Quick suggestions visibility state
   const [showQuickSuggestions, setShowQuickSuggestions] = useState(false)
@@ -538,16 +542,32 @@ export default function AITextEditor({
 
           {/* Scene Context (if available) */}
           {sceneContext && (
-            <div className="space-y-3">
-              <Label className="text-xs text-muted-foreground">
-                Scene Context (AI will use this for better understanding)
-              </Label>
-              <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                <p className="text-sm text-blue-400 max-h-32 overflow-y-auto">
-                  {sceneContext}
-                </p>
+            <Collapsible open={isSceneContextOpen} onOpenChange={setIsSceneContextOpen}>
+              <div className="space-y-3">
+                <CollapsibleTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-between p-2 h-auto hover:bg-blue-500/10"
+                  >
+                    <Label className="text-xs text-muted-foreground cursor-pointer">
+                      Scene Context (AI will use this for better understanding)
+                    </Label>
+                    {isSceneContextOpen ? (
+                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                    <p className="text-sm text-blue-400 max-h-32 overflow-y-auto">
+                      {sceneContext}
+                    </p>
+                  </div>
+                </CollapsibleContent>
               </div>
-            </div>
+            </Collapsible>
           )}
 
           {/* Generate Button */}
