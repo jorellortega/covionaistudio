@@ -102,6 +102,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [editingScene, setEditingScene] = useState<Partial<ScreenplayScene>>({})
   const [isSavingScene, setIsSavingScene] = useState(false)
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
+  const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set())
+  const [isScenesCardExpanded, setIsScenesCardExpanded] = useState(false)
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [selectedScriptAIService, setSelectedScriptAIService] = useState<string>('')
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
@@ -2507,75 +2509,86 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         )}
 
         {/* Screenplay Scenes */}
-        <Card className="mb-6">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Film className="h-5 w-5 text-purple-500" />
-                  Scenes
-                </CardTitle>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Break down your screenplay into individual scenes
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {screenplayScenes.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={pushAllScenesToTimeline}
-                    className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                  >
-                    <Film className="h-4 w-4 mr-2" />
-                    Push All to Timeline
-                  </Button>
-                )}
-                {screenplayScenes.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={generateAllSceneDetails}
-                    disabled={isGeneratingScenes || !aiSettingsLoaded}
-                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                    title="Generate full details (description, location, etc.) for all scenes"
-                  >
-                    {isGeneratingScenes ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Generating...
-                      </>
+        <Collapsible open={isScenesCardExpanded} onOpenChange={setIsScenesCardExpanded}>
+          <Card className="mb-6">
+            <CollapsibleTrigger asChild>
+              <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Film className="h-5 w-5 text-purple-500" />
+                        Scenes
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Break down your screenplay into individual scenes
+                      </p>
+                    </div>
+                    {isScenesCardExpanded ? (
+                      <ChevronUp className="h-5 w-5 text-foreground font-semibold" />
                     ) : (
-                      <>
-                        <Sparkles className="h-4 w-4 mr-2" />
-                        Generate All Details
-                      </>
+                      <ChevronDown className="h-5 w-5 text-foreground font-semibold" />
                     )}
-                  </Button>
-                )}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={generateScenesFromScreenplay}
-                  disabled={isGeneratingScenes || !aiSettingsLoaded || !fullScript}
-                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                >
-                  {isGeneratingScenes ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Generating...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4 mr-2" />
-                      Generate Scene Titles
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
+                  </div>
+                  <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                    {screenplayScenes.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={pushAllScenesToTimeline}
+                        className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                      >
+                        <Film className="h-4 w-4 mr-2" />
+                        Push All to Timeline
+                      </Button>
+                    )}
+                    {screenplayScenes.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={generateAllSceneDetails}
+                        disabled={isGeneratingScenes || !aiSettingsLoaded}
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        title="Generate full details (description, location, etc.) for all scenes"
+                      >
+                        {isGeneratingScenes ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="h-4 w-4 mr-2" />
+                            Generate All Details
+                          </>
+                        )}
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={generateScenesFromScreenplay}
+                      disabled={isGeneratingScenes || !aiSettingsLoaded || !fullScript}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                    >
+                      {isGeneratingScenes ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4 mr-2" />
+                          Generate Scene Titles
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <CardContent>
             {isLoadingScenes ? (
               <div className="text-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
@@ -2591,99 +2604,143 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               </div>
             ) : (
               <div className="space-y-4">
-                {screenplayScenes.map((scene) => (
-                  <Card key={scene.id} className="border-border">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Badge variant="outline" className="text-xs">
-                              Scene {scene.scene_number || 'N/A'}
-                            </Badge>
-                            {scene.status && (
-                              <Badge variant="outline" className="text-xs">
-                                {scene.status}
-                              </Badge>
-                            )}
-                          </div>
-                          {editingSceneId === scene.id ? (
-                            <Input
-                              value={editingScene.name || ''}
-                              onChange={(e) => setEditingScene({ ...editingScene, name: e.target.value })}
-                              className="mb-2"
-                              placeholder="Scene name"
-                            />
-                          ) : (
-                            <CardTitle className="text-lg">{scene.name}</CardTitle>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {editingSceneId === scene.id ? (
-                            <>
-                              <Button
-                                size="sm"
-                                onClick={handleSaveScene}
-                                disabled={isSavingScene}
-                              >
-                                {isSavingScene ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                {screenplayScenes.map((scene) => {
+                  const isExpanded = expandedScenes.has(scene.id)
+                  return (
+                    <Collapsible
+                      key={scene.id}
+                      open={isExpanded}
+                      onOpenChange={(open) => {
+                        setExpandedScenes((prev) => {
+                          const next = new Set(prev)
+                          if (open) {
+                            next.add(scene.id)
+                          } else {
+                            next.delete(scene.id)
+                          }
+                          return next
+                        })
+                      }}
+                    >
+                      <Card className="border-border">
+                        <CollapsibleTrigger asChild>
+                          <CardHeader className="pb-3 cursor-pointer hover:bg-muted/50 transition-colors">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Badge variant="outline" className="text-xs">
+                                    Scene {scene.scene_number || 'N/A'}
+                                  </Badge>
+                                  {scene.status && (
+                                    <Badge variant="outline" className="text-xs">
+                                      {scene.status}
+                                    </Badge>
+                                  )}
+                                </div>
+                                {editingSceneId === scene.id ? (
+                                  <Input
+                                    value={editingScene.name || ''}
+                                    onChange={(e) => setEditingScene({ ...editingScene, name: e.target.value })}
+                                    className="mb-2"
+                                    placeholder="Scene name"
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
                                 ) : (
-                                  <Save className="h-4 w-4" />
+                                  <CardTitle className="text-lg">{scene.name}</CardTitle>
                                 )}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={handleCancelEditScene}
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </>
-                          ) : (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => pushSceneToTimeline(scene)}
-                                className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                                title="Send this scene to timeline"
-                              >
-                                <Film className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => regenerateSceneWithAI(scene)}
-                                disabled={isRegeneratingScene === scene.id}
-                                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                                title="Generate details for this scene (only fills empty fields)"
-                              >
-                                {isRegeneratingScene === scene.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
                                 ) : (
-                                  <Sparkles className="h-4 w-4" />
+                                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
                                 )}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleStartEditScene(scene)}
-                              >
-                                <Edit className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleDeleteScene(scene.id)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
+                                {editingSceneId === scene.id ? (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleSaveScene()
+                                      }}
+                                      disabled={isSavingScene}
+                                    >
+                                      {isSavingScene ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Save className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleCancelEditScene()
+                                      }}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        pushSceneToTimeline(scene)
+                                      }}
+                                      className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                      title="Send this scene to timeline"
+                                    >
+                                      <Film className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        regenerateSceneWithAI(scene)
+                                      }}
+                                      disabled={isRegeneratingScene === scene.id}
+                                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                      title="Generate details for this scene (only fills empty fields)"
+                                    >
+                                      {isRegeneratingScene === scene.id ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : (
+                                        <Sparkles className="h-4 w-4" />
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleStartEditScene(scene)
+                                      }}
+                                    >
+                                      <Edit className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleDeleteScene(scene.id)
+                                      }}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </CardHeader>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent>
+                          <CardContent className="space-y-3">
                       {editingSceneId === scene.id ? (
                         <>
                           <div>
@@ -2789,13 +2846,18 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                           </div>
                         </>
                       )}
-                    </CardContent>
-                  </Card>
-                ))}
+                          </CardContent>
+                        </CollapsibleContent>
+                      </Card>
+                    </Collapsible>
+                  )
+                })}
               </div>
             )}
-          </CardContent>
-        </Card>
+              </CardContent>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
 
         {/* AI Text Editor */}
         {showAITextEditor && aiEditData && (
