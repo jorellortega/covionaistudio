@@ -3,16 +3,19 @@
 import { useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import Header from "@/components/header"
-import { MoodBoardsService, type MoodBoard, type MoodBoardScope } from "@/lib/mood-boards-service"
+import { MoodBoardsService, type MoodBoard, type MoodBoardScope, type MoodBoardItem } from "@/lib/mood-boards-service"
+import { AssetService, type Asset } from "@/lib/asset-service"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
-import { Plus, Trash2 } from "lucide-react"
+import { Plus, Trash2, ExternalLink, CheckCircle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { getSupabaseClient } from "@/lib/supabase"
 import { ProjectSelector } from "@/components/project-selector"
+import { useAuthReady } from "@/components/auth-hooks"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 
 export default function MoodBoardsPage() {
   const searchParams = useSearchParams()
@@ -20,24 +23,92 @@ export default function MoodBoardsPage() {
   const initialTarget = searchParams.get('targetId') || ""
   const initialProjectId = searchParams.get('projectId') || ""
 
+  const { userId, ready } = useAuthReady()
   const [scope, setScope] = useState<MoodBoardScope>(initialScope)
   const [targetId, setTargetId] = useState<string>(initialTarget)
   const [projectId, setProjectId] = useState<string>(initialProjectId)
   const [boards, setBoards] = useState<MoodBoard[]>([])
+  const [boardItems, setBoardItems] = useState<Record<string, MoodBoardItem[]>>({})
+  const [itemAssets, setItemAssets] = useState<Record<string, Asset>>({}) // For items with asset_id
   const [loading, setLoading] = useState(false)
+  const [loadingItems, setLoadingItems] = useState<Record<string, boolean>>({})
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState("")
   const [newDescription, setNewDescription] = useState("")
   const { toast } = useToast()
   const [aiPrompts, setAiPrompts] = useState<Record<string, string>>({})
   const [aiService, setAiService] = useState<'dalle' | 'openart'>('dalle')
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [generatingForBoard, setGeneratingForBoard] = useState<string | null>(null)
   const [suggesting, setSuggesting] = useState(false)
 
   const canLoad = useMemo(() => targetId && targetId.length > 0, [targetId])
 
+  // Map model names to service identifiers
+  const mapModelToService = (model: string): 'dalle' | 'openart' => {
+    switch (model) {
+      case "DALL-E 3": return "dalle"
+      case "OpenArt": return "openart"
+      default: return "dalle"
+    }
+  }
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!ready || !userId) return
+      
+      try {
+        const settings = await AISettingsService.getUserSettings(userId)
+        
+        // Ensure default settings exist for images tab
+        const imagesSetting = await AISettingsService.getOrCreateDefaultTabSetting(userId, 'images')
+        
+        // Merge existing settings with default, preferring existing
+        const existingImagesSetting = settings.find(s => s.tab_type === 'images')
+        const finalSettings = existingImagesSetting ? settings : [...settings, imagesSetting]
+        
+        setAiSettings(finalSettings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images if available
+        const imagesTabSetting = finalSettings.find(setting => setting.tab_type === 'images')
+        if (imagesTabSetting?.is_locked && imagesTabSetting.locked_model) {
+          const service = mapModelToService(imagesTabSetting.locked_model)
+          setAiService(service)
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+      }
+    }
+
+    loadAISettings()
+  }, [ready, userId])
+
+  // Get images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
+  }
+
   async function loadBoards() {
-    if (!canLoad) return
+    console.log('📋 loadBoards() called - canLoad:', canLoad, 'targetId:', targetId, 'scope:', scope)
+    if (!canLoad) {
+      console.log('📋 Cannot load - missing targetId or scope')
+      return
+    }
     setLoading(true)
     try {
       let data: MoodBoard[] = []
@@ -49,10 +120,70 @@ export default function MoodBoardsPage() {
         data = await MoodBoardsService.listByShot(targetId)
       }
       setBoards(data)
+      console.log('📋 Loaded boards:', data.length)
+      // Load items for each board
+      const itemsMap: Record<string, MoodBoardItem[]> = {}
+      const assetsMap: Record<string, Asset> = {}
+      for (const board of data) {
+        // Initialize with empty array to ensure board has an entry
+        itemsMap[board.id] = []
+        try {
+          console.log(`📋 Loading items for board ${board.id} (${board.name})...`)
+          const items = await MoodBoardsService.listItems(board.id)
+          console.log(`📋 Loaded ${items.length} items for board ${board.id}`)
+          itemsMap[board.id] = items
+          // Load assets for items that reference assets
+          for (const item of items) {
+            if (item.asset_id && !item.external_url) {
+              try {
+                const asset = await AssetService.getAssetById(item.asset_id)
+                if (asset) {
+                  assetsMap[item.id] = asset
+                }
+              } catch (e) {
+                console.error(`Failed to load asset ${item.asset_id} for item ${item.id}:`, e)
+              }
+            }
+          }
+        } catch (e) {
+          console.error(`Failed to load items for board ${board.id}:`, e)
+          itemsMap[board.id] = []
+        }
+      }
+      console.log('📋 Setting board items:', Object.keys(itemsMap).length, 'boards with items')
+      setBoardItems(itemsMap)
+      setItemAssets(assetsMap)
     } catch (e) {
       console.error(e)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadBoardItems(boardId: string) {
+    setLoadingItems(prev => ({ ...prev, [boardId]: true }))
+    try {
+      const items = await MoodBoardsService.listItems(boardId)
+      setBoardItems(prev => ({ ...prev, [boardId]: items }))
+      // Load assets for items that reference assets
+      const assetsMap: Record<string, Asset> = {}
+      for (const item of items) {
+        if (item.asset_id && !item.external_url) {
+          try {
+            const asset = await AssetService.getAssetById(item.asset_id)
+            if (asset) {
+              assetsMap[item.id] = asset
+            }
+          } catch (e) {
+            console.error(`Failed to load asset ${item.asset_id} for item ${item.id}:`, e)
+          }
+        }
+      }
+      setItemAssets(prev => ({ ...prev, ...assetsMap }))
+    } catch (e) {
+      console.error(`Failed to load items for board ${boardId}:`, e)
+    } finally {
+      setLoadingItems(prev => ({ ...prev, [boardId]: false }))
     }
   }
 
@@ -69,12 +200,22 @@ export default function MoodBoardsPage() {
         toast({ title: "Not signed in", description: "Please sign in to generate images.", variant: "destructive" })
         return
       }
+
+      // Get the AI settings for images tab
+      const imagesSetting = getImagesTabSetting()
+      
+      // Determine which service to use - locked model takes precedence
+      let serviceToUse = aiService
+      if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+        serviceToUse = mapModelToService(imagesSetting.locked_model)
+      }
+
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          service: aiService,
+          service: serviceToUse,
           apiKey: 'configured',
           userId: user.id,
           autoSaveToBucket: true,
@@ -91,6 +232,8 @@ export default function MoodBoardsPage() {
         kind: 'image',
         title: prompt.substring(0, 80),
       })
+      // Reload items for this board to show the new image
+      await loadBoardItems(boardId)
       toast({ title: "Image added", description: "AI image added to mood board." })
     } catch (e: any) {
       toast({ title: "Generation failed", description: e?.message || 'Unknown error', variant: "destructive" })
@@ -129,19 +272,91 @@ export default function MoodBoardsPage() {
 
   // Auto-load boards when scope and targetId are provided from URL params on initial mount
   useEffect(() => {
-    if (initialScope && initialTarget && initialTarget.length > 0) {
-      void loadBoards()
+    console.log('📋 Initial mount effect - initialScope:', initialScope, 'initialTarget:', initialTarget, 'ready:', ready)
+    if (ready && initialScope && initialTarget && initialTarget.length > 0) {
+      console.log('📋 Auto-loading boards on mount with:', { initialScope, initialTarget })
+      // Small delay to ensure state is set
+      setTimeout(() => {
+        void loadBoards()
+      }, 100)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // Only run on mount
+  }, [ready]) // Run when ready
+
+  // Reload items when boards change (in case items weren't loaded initially)
+  useEffect(() => {
+    console.log('📋 Boards changed effect - boards.length:', boards.length, 'items keys:', Object.keys(boardItems).length)
+    const reloadItemsIfNeeded = async () => {
+      // Check if any board is missing items
+      const boardsWithoutItems = boards.filter(board => !boardItems[board.id] || boardItems[board.id].length === 0)
+      console.log('📋 Boards without items:', boardsWithoutItems.length)
+      
+      if (boards.length > 0 && boardsWithoutItems.length > 0) {
+        console.log('📋 Reloading items for boards without items...')
+        const itemsMap: Record<string, MoodBoardItem[]> = {}
+        const assetsMap: Record<string, Asset> = {}
+        
+        // Use Promise.all to await all board item loads
+        // Initialize all boards with empty arrays first
+        boards.forEach(board => {
+          itemsMap[board.id] = []
+        })
+        
+        await Promise.all(
+          boards.map(async (board) => {
+            try {
+              const items = await MoodBoardsService.listItems(board.id)
+              console.log(`📋 Reloaded ${items.length} items for board ${board.id}`)
+              itemsMap[board.id] = items
+              for (const item of items) {
+                if (item.asset_id && !item.external_url) {
+                  try {
+                    const asset = await AssetService.getAssetById(item.asset_id)
+                    if (asset) {
+                      assetsMap[item.id] = asset
+                    }
+                  } catch (e) {
+                    console.error(`Failed to load asset ${item.asset_id} for item ${item.id}:`, e)
+                  }
+                }
+              }
+            } catch (e) {
+              console.error(`Failed to load items for board ${board.id}:`, e)
+              itemsMap[board.id] = []
+            }
+          })
+        )
+        
+        if (Object.keys(itemsMap).length > 0) {
+          console.log('📋 Reloaded items for boards:', Object.keys(itemsMap))
+          setBoardItems(itemsMap)
+          setItemAssets(assetsMap)
+        }
+      }
+    }
+    
+    reloadItemsIfNeeded()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boards.length])
 
   useEffect(() => {
     setBoards([])
+    setBoardItems({}) // Clear items when scope changes
     if (canLoad) {
+      console.log('📋 Scope changed, loading boards...')
       void loadBoards()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope])
+
+  // Auto-load when targetId changes and canLoad becomes true
+  useEffect(() => {
+    if (canLoad && ready && !loading) {
+      console.log('📋 targetId changed and canLoad is true, loading boards...')
+      void loadBoards()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId, canLoad, ready])
 
   async function handleCreate() {
     if (!newName || !canLoad) return
@@ -166,9 +381,26 @@ export default function MoodBoardsPage() {
   async function handleDelete(id: string) {
     try {
       await MoodBoardsService.deleteBoard(id)
+      // Remove items from state
+      setBoardItems(prev => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
       await loadBoards()
     } catch (e) {
       console.error(e)
+    }
+  }
+
+  async function handleDeleteItem(itemId: string, boardId: string) {
+    try {
+      await MoodBoardsService.deleteItem(itemId)
+      await loadBoardItems(boardId)
+      toast({ title: "Item deleted", description: "Item removed from mood board." })
+    } catch (e) {
+      console.error(e)
+      toast({ title: "Delete failed", description: e instanceof Error ? e.message : "Failed to delete item", variant: "destructive" })
     }
   }
 
@@ -184,9 +416,11 @@ export default function MoodBoardsPage() {
               selectedProject={scope === 'movie' ? targetId : (projectId || undefined)}
               onProjectChange={(projectId) => {
                 if (scope === 'movie') {
+                  console.log('📋 Project selected, setting targetId and loading boards:', projectId)
                   setTargetId(projectId)
                   setBoards([])
-                  void loadBoards()
+                  setBoardItems({})
+                  // loadBoards will be called by the useEffect when targetId changes
                 } else {
                   setProjectId(projectId)
                 }
@@ -257,8 +491,17 @@ export default function MoodBoardsPage() {
         </CardContent>
       </Card>
 
+      {loading && <div className="text-center text-muted-foreground py-8">Loading boards...</div>}
+      {!loading && boards.length === 0 && canLoad && (
+        <div className="text-center text-muted-foreground py-8">No mood boards found. Create one above.</div>
+      )}
+      {!loading && !canLoad && (
+        <div className="text-center text-muted-foreground py-8">Select a scope and enter an ID (or choose a Project) to load mood boards.</div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {boards.map((b) => (
+        {boards.map((b) => {
+          console.log(`📋 Rendering board ${b.id} (${b.name}), items:`, boardItems[b.id]?.length || 0)
+          return (
           <Card key={b.id}>
             <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <div>
@@ -274,19 +517,106 @@ export default function MoodBoardsPage() {
                 Scope: {b.scope} · Created: {new Date(b.created_at).toLocaleString()}
               </div>
               <Separator className="my-3" />
+              
+              {/* Display items (images) for this board */}
+              {(() => {
+                const items = boardItems[b.id]
+                const hasItems = items !== undefined && Array.isArray(items) && items.length > 0
+                console.log(`📋 Board ${b.id} (${b.name}): hasItems=${hasItems}, items exists=${items !== undefined}, items.length=${items?.length || 0}, items type=${typeof items}, isArray=${Array.isArray(items)}`)
+                
+                // If items aren't loaded yet for this board, try loading them
+                if (items === undefined && !loadingItems[b.id]) {
+                  console.log(`📋 Items not loaded for board ${b.id}, loading now...`)
+                  setTimeout(() => {
+                    void loadBoardItems(b.id)
+                  }, 100)
+                }
+                
+                return hasItems ? (
+                <div className="mb-4">
+                  <div className="text-sm font-medium mb-2">Items ({items.length})</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {items.map((item) => {
+                      // Get image URL from either external_url or asset
+                      const imageUrl = item.external_url || (item.asset_id && itemAssets[item.id]?.content_url) || null
+                      const imageTitle = item.title || itemAssets[item.id]?.title || 'Mood board image'
+                      
+                      return (
+                        <div
+                          key={item.id}
+                          className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
+                        >
+                          {item.kind === 'image' && imageUrl && (
+                            <div className="aspect-video relative">
+                              <img
+                                src={imageUrl}
+                                alt={imageTitle}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  console.error('Failed to load image:', imageUrl)
+                                  e.currentTarget.style.display = 'none'
+                                }}
+                              />
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => window.open(imageUrl, '_blank')}
+                                  className="h-8"
+                                >
+                                  <ExternalLink className="h-3 w-3 mr-1" />
+                                  View
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => handleDeleteItem(item.id, b.id)}
+                                  className="h-8 text-white hover:text-white"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                              {imageTitle && (
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs p-1 truncate">
+                                  {imageTitle}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <Separator className="my-3" />
+                </div>
+                ) : null
+              })()}
+              
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">Generate AI Image</span>
-                  <Select value={aiService} onValueChange={(v) => setAiService(v as any)}>
-                    <SelectTrigger className="h-8 w-32">
-                      <SelectValue placeholder="Service" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dalle">DALL·E</SelectItem>
-                      <SelectItem value="openart">OpenArt</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  {!isImagesTabLocked() && (
+                    <Select value={aiService} onValueChange={(v) => setAiService(v as any)}>
+                      <SelectTrigger className="h-8 w-32">
+                        <SelectValue placeholder="Service" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="dalle">DALL·E</SelectItem>
+                        <SelectItem value="openart">OpenArt</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  )}
                 </div>
+                
+                {/* Show locked model info if images tab is locked */}
+                {isImagesTabLocked() && (
+                  <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                    <p className="text-sm text-green-600 flex items-center gap-2">
+                      <CheckCircle className="h-4 w-4" />
+                      AI Online
+                    </p>
+                  </div>
+                )}
                 <Input
                   placeholder="Describe the look, palette, style..."
                   value={aiPrompts[b.id] || ''}
@@ -294,14 +624,15 @@ export default function MoodBoardsPage() {
                 />
                 <Button
                   onClick={() => generateImageForBoard(b.id)}
-                  disabled={generatingForBoard === b.id}
+                  disabled={generatingForBoard === b.id || loadingItems[b.id]}
                 >
                   {generatingForBoard === b.id ? 'Generating…' : 'Generate & Add'}
                 </Button>
               </div>
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
       </div>
       </div>
     </>

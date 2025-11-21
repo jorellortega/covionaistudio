@@ -37,7 +37,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 const plans = [
-  { id: 'creator', name: 'Creator', price: 60, credits: 25000 },
+  { id: 'creator', name: 'Creator', price: 45, credits: 25000 },
   { id: 'studio', name: 'Studio', price: 150, credits: 90000 },
   { id: 'production', name: 'Production House', price: 500, credits: 220000 },
 ]

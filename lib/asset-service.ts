@@ -7,6 +7,7 @@ export interface Asset {
   scene_id?: string | null
   treatment_id?: string | null // Optional reference to treatment
   character_id?: string | null // Optional reference to character
+  location_id?: string | null // Optional reference to location
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -35,6 +36,7 @@ export interface CreateAssetData {
   scene_id?: string | null
   treatment_id?: string | null // Optional reference to treatment
   character_id?: string | null // Optional reference to character
+  location_id?: string | null // Optional reference to location
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -116,6 +118,21 @@ export class AssetService {
       }
     }
     
+    // Validate that the referenced location exists (if provided and not bypassed)
+    if (assetData.location_id && assetData.location_id !== null && typeof assetData.location_id === 'string' && !assetData.metadata?.bypassLocationValidation) {
+      const { data: locationExists, error: locationError } = await getSupabaseClient()
+        .from('locations')
+        .select('id')
+        .eq('id', assetData.location_id)
+        .eq('user_id', user.id)
+        .single()
+      
+      if (locationError || !locationExists) {
+        console.error('Location validation failed:', { location_id: assetData.location_id, error: locationError })
+        throw new Error(`Location with ID ${assetData.location_id} not found or access denied`)
+      }
+    }
+    
     // Check if there's an existing asset for this scene to determine version
     let version = assetData.version || 1  // Use provided version or default to 1
     let parentAssetId: string | undefined = undefined
@@ -149,6 +166,7 @@ export class AssetService {
       scene_id: (assetData.scene_id && typeof assetData.scene_id === 'string') ? assetData.scene_id : null,
       treatment_id: assetData.treatment_id || null,
       character_id: (assetData.character_id && typeof assetData.character_id === 'string') ? assetData.character_id : null,
+      location_id: (assetData.location_id && typeof assetData.location_id === 'string') ? assetData.location_id : null,
       title: assetData.title,
       content_type: assetData.content_type,
       content: assetData.content,
@@ -290,6 +308,30 @@ export class AssetService {
       // If column doesn't exist (e.g., migration not run), return empty array
       if (error.code === '42703' || error.message?.includes('column "character_id"')) {
         console.warn('character_id column may not exist. Please run migration 039_add_character_id_to_assets.sql')
+        return []
+      }
+      throw error
+    }
+
+    return (data || []) as Asset[]
+  }
+
+  static async getAssetsForLocation(locationId: string): Promise<Asset[]> {
+    const user = await this.ensureAuthenticated()
+    
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('location_id', locationId)
+      .eq('user_id', user.id)
+      .eq('is_latest_version', true)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching location assets:', error)
+      // If column doesn't exist (e.g., migration not run), return empty array
+      if (error.code === '42703' || error.message?.includes('column "location_id"')) {
+        console.warn('location_id column may not exist. Please run migration 048_add_location_id_to_assets.sql')
         return []
       }
       throw error

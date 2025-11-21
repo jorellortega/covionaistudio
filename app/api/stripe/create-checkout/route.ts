@@ -11,7 +11,7 @@ function getStripe() {
 }
 
 const plans = {
-  creator: { priceId: process.env.STRIPE_PRICE_CREATOR!, name: 'Creator', amount: 6000 },
+  creator: { priceId: process.env.STRIPE_PRICE_CREATOR!, name: 'Creator', amount: 4500 },
   studio: { priceId: process.env.STRIPE_PRICE_STUDIO!, name: 'Studio', amount: 15000 },
   production: { priceId: process.env.STRIPE_PRICE_PRODUCTION!, name: 'Production House', amount: 50000 },
 }

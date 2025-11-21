@@ -18,7 +18,13 @@ import {
   LayoutDashboard,
   Play,
   Image as ImageIcon,
-  UserCircle
+  UserCircle,
+  MapPin,
+  Zap,
+  Users,
+  Package,
+  Sparkles,
+  Box
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -60,6 +66,11 @@ const navigationCategories: NavCategory[] = [
     items: [
       { name: "Timeline", href: "/timeline", icon: Play },
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
+      { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },
+      { name: "Call Sheet", href: "/call-sheet", icon: FileText },
+      { name: "Crew Sheet", href: "/crew-sheet", icon: Users },
+      { name: "Equipment List", href: "/equipment-list", icon: Package },
+      { name: "Props List", href: "/props-list", icon: Box },
     ],
   },
   {
@@ -71,6 +82,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
       { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
+      { name: "Locations", href: "/locations", icon: MapPin },
     ],
   },
   {
@@ -85,6 +97,7 @@ const navigationCategories: NavCategory[] = [
     icon: Bot,
     items: [
       { name: "AI Studio", href: "/ai-studio", icon: Bot },
+      { name: "Prompts List", href: "/prompts-list", icon: Sparkles },
     ],
   },
 ]

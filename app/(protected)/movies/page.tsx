@@ -38,6 +38,7 @@ import {
   FileText,
   Eye,
   Users,
+  MapPin,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -1575,11 +1576,31 @@ export default function MoviesPage() {
           {filteredMovies.map((movie) => (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
               <CardHeader className="pb-2">
-                <Link 
-                  href={movieTreatmentMap[movie.id] ? `/treatments/${movieTreatmentMap[movie.id]}` : `/timeline?movie=${movie.id}`} 
-                  className="block"
-                >
-                  <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                {movieTreatmentMap[movie.id] ? (
+                  <Link 
+                    href={`/treatments/${movieTreatmentMap[movie.id]}`}
+                    className="block"
+                  >
+                    <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                      <img
+                        src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                        alt={movie.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          // Fallback to placeholder if image fails to load
+                          const target = e.target as HTMLImageElement
+                          if (target.src !== "/placeholder.svg?height=300&width=200") {
+                            target.src = "/placeholder.svg?height=300&width=200"
+                          }
+                        }}
+                      />
+                    </div>
+                  </Link>
+                ) : (
+                  <div 
+                    className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer"
+                    onClick={() => createTreatmentFromMovie(movie)}
+                  >
                     <img
                       src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
                       alt={movie.name}
@@ -1592,8 +1613,13 @@ export default function MoviesPage() {
                         }
                       }}
                     />
+                    {creatingTreatmentForMovieId === movie.id && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-white" />
+                      </div>
+                    )}
                   </div>
-                </Link>
+                )}
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <CardTitle className="text-lg mb-1 group-hover:text-primary transition-colors">
@@ -1763,6 +1789,16 @@ export default function MoviesPage() {
                       className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
                     >
                       Characters
+                    </Button>
+                  </Link>
+                  <Link href={`/locations?movie=${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
+                    >
+                      <MapPin className="mr-2 h-3.5 w-3.5" />
+                      Locations
                     </Button>
                   </Link>
                 </div>

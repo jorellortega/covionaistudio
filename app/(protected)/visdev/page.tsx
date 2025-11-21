@@ -21,9 +21,10 @@ import { AssetService, CreateAssetData } from '@/lib/asset-service'
 import { PreferencesService } from '@/lib/preferences-service'
 import { SavedPromptsService } from '@/lib/saved-prompts-service'
 import Header from '@/components/header'
-import { Loader2, Eye, EyeOff, Edit3, CheckCircle, Users } from 'lucide-react'
+import { Loader2, Eye, EyeOff, Edit3, CheckCircle, Users, MapPin } from 'lucide-react'
 import Link from 'next/link'
 import { CharactersService, type Character } from '@/lib/characters-service'
+import { LocationsService, type Location } from '@/lib/locations-service'
 
 interface VisualDevelopmentItem {
   id: string
@@ -76,6 +77,9 @@ export default function VisualDevelopmentPage() {
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [characters, setCharacters] = useState<Character[]>([])
   const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
+  const [locations, setLocations] = useState<Location[]>([])
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false)
+  const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [promptTitle, setPromptTitle] = useState('')
   const [selectedStyle, setSelectedStyle] = useState('none')
@@ -162,10 +166,12 @@ export default function VisualDevelopmentPage() {
       loadScenes(selectedProject)
       setSelectedScene("movie") // Reset scene selection when project changes
       loadCharactersForProject(selectedProject)
+      loadLocationsForProject(selectedProject)
     } else {
       setScenes([])
       setSelectedScene("movie")
       setCharacters([])
+      setLocations([])
     }
     
     // Reload prompts when project changes to show appropriate prompts
@@ -350,6 +356,24 @@ export default function VisualDevelopmentPage() {
       setCharacters([])
     } finally {
       setIsLoadingCharacters(false)
+    }
+  }
+
+  const loadLocationsForProject = async (movieId: string) => {
+    try {
+      if (!user || !movieId || movieId === 'all' || movieId === 'free') {
+        setLocations([])
+        return
+      }
+      setIsLoadingLocations(true)
+      const list = await LocationsService.getLocations(movieId)
+      setLocations(list)
+      console.log('Loaded locations for project:', movieId, 'Count:', list.length)
+    } catch (error) {
+      console.error('Error loading locations:', error)
+      setLocations([])
+    } finally {
+      setIsLoadingLocations(false)
     }
   }
 
@@ -1871,6 +1895,61 @@ export default function VisualDevelopmentPage() {
                 Create the style, scale, and mood of your world. From forests to futuristic cities, 
                 design the spaces where your story unfolds.
               </p>
+            </div>
+            {/* Locations quick actions + Existing list */}
+            <div className="max-w-6xl mx-auto w-full">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-muted-foreground">
+                  Locations {selectedLocationId ? <span className="ml-2 text-xs text-primary">(Selected)</span> : null}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' && (
+                    <span className="text-xs text-muted-foreground">
+                      {isLoadingLocations ? 'Loading…' : `${locations.length} found`}
+                    </span>
+                  )}
+                  <Link href={selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? `/locations?movie=${selectedProject}` : '/locations'}>
+                    <Button className="gradient-button neon-glow text-white h-8 px-3">
+                      <MapPin className="h-4 w-4 mr-2" />
+                      Manage Locations
+                    </Button>
+                  </Link>
+                </div>
+              </div>
+              {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? (
+                <div className="flex flex-wrap gap-2">
+                  {isLoadingLocations ? (
+                    <Badge variant="secondary">Loading…</Badge>
+                  ) : locations.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No locations yet for this project.</span>
+                  ) : (
+                    locations.map((l) => {
+                      const isSelected = selectedLocationId === l.id
+                      return (
+                        <Button
+                          key={l.id}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
+                          onClick={() => {
+                            setSelectedLocationId(l.id)
+                            const desc = l.description ? ` — ${l.description}` : ''
+                            setPrompt(`${l.name}${desc}`)
+                            setPromptTitle(`${l.name} concept`)
+                            toast({ title: "Location Selected", description: `Using ${l.name} in prompt` })
+                          }}
+                          title={l.description || l.name}
+                          aria-pressed={isSelected}
+                        >
+                          {l.name}
+                        </Button>
+                      )
+                    })
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">Select a movie project to view its locations.</p>
+              )}
             </div>
             {getTabContent('environment')}
           </TabsContent>

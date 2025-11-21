@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -29,6 +29,7 @@ import { CastingService, type CastingSetting } from '@/lib/casting-service'
 import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
 import { CharactersService } from '@/lib/characters-service'
+import { LocationsService, type Location } from '@/lib/locations-service'
 
 export default function TreatmentDetailPage() {
   const { id } = useParams()
@@ -87,6 +88,8 @@ export default function TreatmentDetailPage() {
   const [isScenesExpanded, setIsScenesExpanded] = useState(false)
   // Default to collapsed - user can expand to view characters
   const [isCharactersExpanded, setIsCharactersExpanded] = useState(false)
+  // Default to collapsed - user can expand to view locations
+  const [isLocationsExpanded, setIsLocationsExpanded] = useState(false)
   // Default to collapsed - user can expand to view project details
   const [isTreatmentDetailsExpanded, setIsTreatmentDetailsExpanded] = useState(false)
   
@@ -107,6 +110,12 @@ export default function TreatmentDetailPage() {
   const [isDetectingCharacters, setIsDetectingCharacters] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
   const hasAutoDetectedRef = useRef(false)
+  
+  // Locations states
+  const [locations, setLocations] = useState<Location[]>([])
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false)
+  const [isDetectingLocations, setIsDetectingLocations] = useState(false)
+  const [savingLocations, setSavingLocations] = useState<string[]>([])
   const [editingCharacterName, setEditingCharacterName] = useState<string | null>(null)
   const [editedCharacterNames, setEditedCharacterNames] = useState<Record<string, string>>({})
   const [savingCharacters, setSavingCharacters] = useState<string[]>([])
@@ -251,6 +260,27 @@ export default function TreatmentDetailPage() {
       }
     }
     loadCasting()
+  }, [treatment?.project_id])
+
+  // Load locations when project_id available
+  useEffect(() => {
+    const loadLocations = async () => {
+      if (!treatment?.project_id) {
+        setLocations([])
+        return
+      }
+      try {
+        setIsLoadingLocations(true)
+        const locs = await LocationsService.getLocations(treatment.project_id)
+        setLocations(locs)
+      } catch (e) {
+        console.error('Failed loading locations:', e)
+        setLocations([])
+      } finally {
+        setIsLoadingLocations(false)
+      }
+    }
+    loadLocations()
   }, [treatment?.project_id])
 
   // Load AI settings
@@ -2548,6 +2578,24 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       .filter((c) => (charactersFilter ? c.name.toLowerCase().includes(charactersFilter.toLowerCase()) : true))
   })()
 
+  // Aggregate locations from treatment scenes
+  const detectedLocations = (() => {
+    const set = new Set<string>()
+    const counts = new Map<string, number>()
+    for (const s of treatmentScenes) {
+      const location = (s.location || s.metadata?.location || "").trim()
+      if (!location) continue
+      set.add(location)
+      counts.set(location, (counts.get(location) || 0) + 1)
+    }
+    const list = Array.from(set.values()).map((name) => ({
+      name,
+      count: counts.get(name) || 0,
+    }))
+    return list
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+  })()
+
   const rolesAvailable = (() => {
     const roles = castingSettings?.roles_available || []
     return roles
@@ -3149,6 +3197,279 @@ Return the character names as a JSON array:`
       })
     } finally {
       setIsDetectingCharacters(false)
+    }
+  }
+
+  const detectLocationsFromTreatment = async () => {
+    if (!treatment || !ready || !userId) return
+
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "AI Settings Not Loaded",
+        description: "Please wait for AI settings to load.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const lockedModel = getScriptsTabLockedModel()
+    const serviceToUse = (isScriptsTabLocked() && lockedModel) ? lockedModel : selectedScriptAIService
+    
+    if (!serviceToUse) {
+      toast({
+        title: "AI Service Not Configured",
+        description: "Please configure your AI settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') ? 'openai' : 
+                             serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
+                             'openai'
+
+    try {
+      setIsDetectingLocations(true)
+
+      // Get treatment content - prioritize prompt (full treatment) over synopsis
+      let treatmentContent = ''
+      if (treatment.prompt && treatment.prompt.trim().length > 0) {
+        treatmentContent = treatment.prompt.trim()
+        console.log('Using treatment prompt for location detection:', treatmentContent.length, 'characters')
+      } else if (treatment.synopsis && treatment.synopsis.trim().length > 0) {
+        treatmentContent = treatment.synopsis.trim()
+        console.log('Using treatment synopsis for location detection:', treatmentContent.length, 'characters')
+      } else if (treatment.logline && treatment.logline.trim().length > 0) {
+        treatmentContent = treatment.logline.trim()
+        console.log('Using treatment logline for location detection:', treatmentContent.length, 'characters')
+      }
+
+      if (!treatmentContent) {
+        toast({
+          title: "No Content",
+          description: "Treatment has no content to analyze. Please add treatment content (prompt field) first.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      // Limit content to avoid token limits
+      const maxLength = treatment.prompt ? 6000 : 4000
+      const contentForPrompt = treatmentContent.length > maxLength 
+        ? treatmentContent.substring(0, maxLength) + '...'
+        : treatmentContent
+      
+      console.log('Location detection - content length:', contentForPrompt.length, 'characters')
+
+      const aiPrompt = `Analyze the following movie treatment and extract all location names mentioned (places where scenes take place). Return ONLY a JSON array of location names (strings), nothing else. Format: ["Location Name 1", "Location Name 2", ...]
+
+Include:
+- Specific places (e.g., "Coffee Shop", "Police Station", "Apartment")
+- Generic settings if named (e.g., "The Office", "The Kitchen")
+- Geographic locations if important to the story (e.g., "New York City", "Beach")
+
+Exclude:
+- Non-specific descriptions (e.g., "outside", "inside" without context)
+- Generic time references without location context
+
+TREATMENT:
+${contentForPrompt}
+
+Return the location names as a JSON array:`
+
+      const modelToUse = aiSettings.find((s: any) => s.tab_type === 'scripts')?.selected_model || 
+                        (normalizedService === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022')
+
+      let response
+      if (normalizedService === 'anthropic') {
+        const apiKey = userApiKeys.anthropic_api_key
+        if (!apiKey) {
+          throw new Error('Anthropic API key not found')
+        }
+
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: modelToUse,
+            max_tokens: 1000,
+            messages: [
+              { role: 'user', content: aiPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text()
+          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
+        }
+
+        const result = await anthropicResponse.json()
+        response = result.content?.[0]?.text || ''
+      } else {
+        const apiKey = userApiKeys.openai_api_key
+        if (!apiKey) {
+          throw new Error('OpenAI API key not found')
+        }
+
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: modelToUse,
+            messages: [
+              { role: 'user', content: aiPrompt }
+            ],
+            max_tokens: 1000,
+            temperature: 0.3,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text()
+          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
+        }
+
+        const result = await openaiResponse.json()
+        response = result.choices?.[0]?.message?.content || ''
+      }
+
+      // Parse JSON array from response
+      let locationNames: string[] = []
+      try {
+        // Clean the response - remove markdown code blocks if present
+        let cleanResponse = response.trim()
+        if (cleanResponse.startsWith('```json')) {
+          cleanResponse = cleanResponse.replace(/^```json\s*/i, '').replace(/```\s*$/, '')
+        } else if (cleanResponse.startsWith('```')) {
+          cleanResponse = cleanResponse.replace(/^```\s*/, '').replace(/```\s*$/, '')
+        }
+        
+        const parsed = JSON.parse(cleanResponse)
+        if (Array.isArray(parsed)) {
+          locationNames = parsed
+            .map((name) => String(name || '').trim())
+            .filter((name) => name.length > 0)
+        } else if (typeof parsed === 'string') {
+          // Sometimes the API returns just a string
+          locationNames = [parsed.trim()].filter((name) => name.length > 0)
+        }
+      } catch (parseError) {
+        console.error('Failed to parse location detection response:', parseError, 'Response:', response)
+        // Try to extract array-like content manually
+        const arrayMatch = response.match(/\[(.*?)\]/s)
+        if (arrayMatch) {
+          try {
+            const parsed = JSON.parse(arrayMatch[0])
+            if (Array.isArray(parsed)) {
+              locationNames = parsed
+                .map((name) => String(name || '').trim())
+                .filter((name) => name.length > 0)
+            }
+          } catch (e) {
+            console.error('Failed to parse extracted array:', e)
+          }
+        }
+      }
+
+      if (locationNames.length === 0) {
+        toast({
+          title: "No Locations Found",
+          description: "AI did not detect any locations in the treatment. They may need to be added manually.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      console.log('Detected locations:', locationNames)
+
+      // Add detected locations to scenes that don't have location data
+      // We'll update scenes in the UI by updating treatmentScenes state
+      // For now, just show success - user can save them manually or we can auto-update scenes
+      toast({
+        title: "Locations Detected!",
+        description: `Found ${locationNames.length} location${locationNames.length !== 1 ? 's' : ''}: ${locationNames.slice(0, 3).join(', ')}${locationNames.length > 3 ? '...' : ''}`,
+      })
+
+      // Refresh scenes to show updated locations
+      if (treatment?.id) {
+        const updatedScenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+        setTreatmentScenes(updatedScenes)
+      }
+
+    } catch (error) {
+      console.error('Error detecting locations:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      toast({
+        title: "Detection Failed",
+        description: `Failed to detect locations: ${errorMessage}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsDetectingLocations(false)
+    }
+  }
+
+  const saveLocationAsRecord = async (locationName: string) => {
+    if (!treatment?.project_id || !locationName.trim()) return
+
+    setSavingLocations(prev => [...prev, locationName])
+
+    try {
+      // Check if location already exists
+      const existingLocations = await LocationsService.getLocations(treatment.project_id)
+      const exists = existingLocations.some(loc => 
+        loc.name.toLowerCase() === locationName.trim().toLowerCase()
+      )
+
+      if (exists) {
+        toast({
+          title: "Location Already Exists",
+          description: `"${locationName}" already exists in locations.`,
+        })
+        return
+      }
+
+      const location = await LocationsService.createLocation({
+        project_id: treatment.project_id,
+        name: locationName.trim(),
+        description: `Location from treatment: ${treatment?.title || 'Untitled'}`,
+      })
+
+      // Refresh locations list
+      const updatedLocations = await LocationsService.getLocations(treatment.project_id)
+      setLocations(updatedLocations)
+
+      toast({
+        title: "Location Saved",
+        description: `"${locationName}" has been saved to locations. You can view it on the Locations page.`,
+      })
+    } catch (error) {
+      console.error('Error saving location:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      toast({
+        title: "Error",
+        description: `Failed to save location: ${errorMessage}`,
+        variant: "destructive",
+      })
+    } finally {
+      setSavingLocations(prev => prev.filter(name => name !== locationName))
     }
   }
 
@@ -4924,6 +5245,163 @@ Return ONLY the JSON object, no other text:`
                   </div>
                 </CardContent>
               </Card>
+            )}
+
+            {/* Locations - Collapsible */}
+            {treatment?.project_id && (
+              <Collapsible open={isLocationsExpanded} onOpenChange={setIsLocationsExpanded}>
+                <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
+                        {isLocationsExpanded ? (
+                          <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        )}
+                        <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                          <MapPin className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                          <span className="truncate">Locations</span>
+                        </CardTitle>
+                      </CollapsibleTrigger>
+                    </div>
+                  <CardDescription className="pt-1 pl-6">
+                    Aggregate locations from treatment scenes and manage location records.
+                  </CardDescription>
+                </CardHeader>
+                <CollapsibleContent>
+                  <CardContent>
+                    <div className="space-y-4">
+                      {/* Detected Locations Section */}
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <h3 className="text-sm font-medium flex items-center gap-2">
+                            <ListFilter className="h-4 w-4 flex-shrink-0" />
+                            Detected Locations ({detectedLocations.length})
+                          </h3>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={detectLocationsFromTreatment}
+                            disabled={isDetectingLocations || !treatment}
+                            className="gap-2 flex-shrink-0 whitespace-nowrap"
+                          >
+                            {isDetectingLocations ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                Detecting...
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-3 w-3" />
+                                Detect from Treatment
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                        <div className="space-y-2">
+                          {detectedLocations.length === 0 ? (
+                            <div className="text-sm text-muted-foreground">No locations found in scenes.</div>
+                          ) : (
+                            detectedLocations.map((loc) => {
+                              const alreadyExists = locations.some(
+                                (l) => l.name.toLowerCase() === loc.name.toLowerCase(),
+                              )
+                              const isSaving = savingLocations.includes(loc.name)
+                              
+                              return (
+                                <div key={loc.name} className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50">
+                                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <Badge variant="outline">{loc.count}</Badge>
+                                    <span className="flex-1">{loc.name}</span>
+                                  </div>
+                                  {alreadyExists ? (
+                                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-xs">
+                                      Saved
+                                    </Badge>
+                                  ) : (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={async () => {
+                                        await saveLocationAsRecord(loc.name)
+                                      }}
+                                      disabled={isSaving || !treatment?.project_id}
+                                      className="gap-1 h-8 text-xs"
+                                    >
+                                      {isSaving ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <>
+                                          <Save className="h-3 w-3" />
+                                          Save
+                                        </>
+                                      )}
+                                    </Button>
+                                  )}
+                                </div>
+                              )
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Saved Locations Section */}
+                      <div>
+                        <div className="flex items-center justify-between gap-2 mb-4">
+                          <h3 className="text-sm font-medium">
+                            Saved Locations ({locations.length})
+                          </h3>
+                          <Link href={`/locations?movie=${treatment.project_id}`}>
+                            <Button variant="outline" size="sm" className="gap-2">
+                              <MapPin className="h-4 w-4" />
+                              Manage Locations
+                            </Button>
+                          </Link>
+                        </div>
+                        {isLoadingLocations ? (
+                          <div className="flex items-center gap-2 py-4">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span className="text-sm text-muted-foreground">Loading locations...</span>
+                          </div>
+                        ) : locations.length === 0 ? (
+                          <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
+                            No locations saved yet. Use "Detect from Treatment" or "Save" to create location records.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {locations.map((location) => (
+                              <div
+                                key={location.id}
+                                className="p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted/50 transition-colors"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <h4 className="font-medium text-sm truncate">{location.name}</h4>
+                                    {location.description && (
+                                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                        {location.description}
+                                      </p>
+                                    )}
+                                    {location.type && (
+                                      <Badge variant="outline" className="mt-2 text-xs">
+                                        {location.type}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
             )}
 
             {/* Characters & Casting Integration - Collapsible */}
