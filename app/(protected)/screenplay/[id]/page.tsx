@@ -46,6 +46,16 @@ import { ScreenplayScenesService, type ScreenplayScene, type CreateScreenplaySce
 import { TimelineService, type CreateSceneData } from "@/lib/timeline-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { ShotListComponent } from "@/components/shot-list"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 // Screenplay page number calculation (standard: ~55 lines per page)
 const LINES_PER_PAGE = 55
@@ -151,6 +161,11 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
   const [editingScene, setEditingScene] = useState<Partial<ScreenplayScene>>({})
   const [isSavingScene, setIsSavingScene] = useState(false)
+  
+  // Delete confirmation states
+  const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false)
+  const [showDeleteEntireConfirm, setShowDeleteEntireConfirm] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set())
   const [isScenesCardExpanded, setIsScenesCardExpanded] = useState(false)
@@ -1004,6 +1019,215 @@ function ScreenplayPageClient({ id }: { id: string }) {
       title: "Content Pushed",
       description: `Last line(s) moved to page ${nextPageNum}.`,
     })
+  }
+
+  // Delete current page
+  const handleDeleteCurrentPage = async () => {
+    if (!userId || totalPages === 0) return
+    
+    try {
+      setIsDeleting(true)
+      
+      // If editing, save current page content first
+      if (isEditing && textareaRef.current) {
+        saveCurrentPageEdit(textareaRef.current.value)
+      }
+      
+      // Build new full script without the current page
+      const allPages: string[] = []
+      
+      // Collect all pages content
+      for (let i = 1; i <= totalPages; i++) {
+        if (i !== currentPage) {
+          let pageContent: string
+          if (isEditing) {
+            pageContent = editedPages.get(i) || pages[i - 1] || ""
+          } else {
+            pageContent = pages[i - 1] || ""
+          }
+          allPages.push(pageContent)
+        }
+      }
+      
+      // Rebuild fullScript by joining all remaining pages
+      const newFullScript = allPages.join('\n')
+      
+      // Check if all content is deleted
+      if (newFullScript.trim().length === 0) {
+        // All content deleted
+        setFullScript("")
+        setPages([])
+        setEditedPages(new Map())
+        setTotalPages(1)
+        setCurrentPage(1)
+        
+        // Delete the asset if it exists
+        if (activeScriptAsset) {
+          try {
+            await AssetService.deleteAsset(activeScriptAsset.id)
+            setActiveScriptAsset(null)
+            setScriptAssets([])
+          } catch (error) {
+            console.error('Error deleting asset:', error)
+          }
+        }
+        
+        toast({
+          title: "Page Deleted",
+          description: `Page ${currentPage} has been deleted. The script is now empty.`,
+        })
+        
+        setShowDeletePageConfirm(false)
+        return
+      }
+      
+      // Update fullScript - this will trigger the useEffect to rebuild pages
+      setFullScript(newFullScript)
+      
+      // Adjust current page if needed (will be recalculated by useEffect)
+      // If we deleted the last page or the current page is beyond the new total, go to the last page
+      if (currentPage >= totalPages) {
+        // Will be adjusted after pages are rebuilt by useEffect
+        // For now, set to a safe value - will be corrected after useEffect runs
+        setCurrentPage(Math.max(1, currentPage - 1))
+      }
+      
+      // Clear editedPages if we're not in editing mode
+      if (!isEditing) {
+        setEditedPages(new Map())
+      } else {
+        // Rebuild editedPages with adjusted page numbers
+        const newEditedPages = new Map<number, string>()
+        let newPageNum = 1
+        for (let i = 1; i <= totalPages; i++) {
+          if (i !== currentPage) {
+            const content = editedPages.get(i) || pages[i - 1] || ""
+            newEditedPages.set(newPageNum, content)
+            newPageNum++
+          }
+        }
+        setEditedPages(newEditedPages)
+      }
+      
+      // Save the updated script if we have an active asset
+      if (activeScriptAsset && newFullScript.trim()) {
+        try {
+          await AssetService.updateAsset(activeScriptAsset.id, {
+            content: newFullScript,
+          })
+          
+          toast({
+            title: "Page Deleted",
+            description: `Page ${currentPage} has been deleted and the script has been saved.`,
+          })
+        } catch (error) {
+          console.error('Error saving after page deletion:', error)
+          toast({
+            title: "Page Deleted",
+            description: `Page ${currentPage} has been deleted locally. There was an error saving to the database.`,
+            variant: "destructive",
+          })
+        }
+      } else if (newFullScript.trim()) {
+        // Create new asset if no active asset exists
+        try {
+          const newAsset = await AssetService.createAsset({
+            project_id: id,
+            title: `${movie?.name || 'Screenplay'} - Full Script`,
+            content_type: 'script',
+            content: newFullScript,
+            version_name: 'Full Script',
+          })
+          setActiveScriptAsset(newAsset)
+          setScriptAssets([newAsset])
+          
+          toast({
+            title: "Page Deleted",
+            description: `Page ${currentPage} has been deleted and the script has been saved.`,
+          })
+        } catch (error) {
+          console.error('Error creating asset after page deletion:', error)
+          toast({
+            title: "Page Deleted",
+            description: `Page ${currentPage} has been deleted locally. There was an error saving to the database.`,
+            variant: "destructive",
+          })
+        }
+      }
+      
+      setShowDeletePageConfirm(false)
+    } catch (error) {
+      console.error('Error deleting page:', error)
+      toast({
+        title: "Error",
+        description: "Failed to delete page. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  // Delete entire screenplay
+  const handleDeleteEntireScreenplay = async () => {
+    if (!userId) return
+    
+    try {
+      setIsDeleting(true)
+      
+      // Delete all script assets for this project
+      const scriptAssetIds = scriptAssets
+        .filter(asset => asset.content_type === 'script')
+        .map(asset => asset.id)
+      
+      // Also check for any other script assets we might have missed
+      const { data: allScriptAssets, error: fetchError } = await getSupabaseClient()
+        .from('assets')
+        .select('id')
+        .eq('project_id', id)
+        .eq('user_id', userId)
+        .eq('content_type', 'script')
+      
+      if (!fetchError && allScriptAssets) {
+        const allIds = allScriptAssets.map(a => a.id)
+        const uniqueIds = Array.from(new Set([...scriptAssetIds, ...allIds]))
+        
+        // Delete all script assets
+        for (const assetId of uniqueIds) {
+          try {
+            await AssetService.deleteAsset(assetId)
+          } catch (error) {
+            console.error(`Error deleting asset ${assetId}:`, error)
+          }
+        }
+      }
+      
+      // Clear all state
+      setFullScript("")
+      setPages([])
+      setTotalPages(1)
+      setCurrentPage(1)
+      setScriptAssets([])
+      setActiveScriptAsset(null)
+      setEditedPages(new Map())
+      setIsEditing(false)
+      
+      toast({
+        title: "Screenplay Deleted",
+        description: "The entire screenplay has been deleted.",
+      })
+      
+      setShowDeleteEntireConfirm(false)
+    } catch (error) {
+      console.error('Error deleting entire screenplay:', error)
+      toast({
+        title: "Error",
+        description: "Failed to delete screenplay. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
   // Helper functions for AI settings
@@ -2445,6 +2669,28 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       Export PDF
                     </Button>
                   )}
+                  {fullScript && fullScript.trim().length > 0 && totalPages > 0 && (
+                    <Button 
+                      onClick={() => setShowDeletePageConfirm(true)} 
+                      variant="outline" 
+                      className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                      disabled={isDeleting}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete Page
+                    </Button>
+                  )}
+                  {fullScript && fullScript.trim().length > 0 && (
+                    <Button 
+                      onClick={() => setShowDeleteEntireConfirm(true)} 
+                      variant="outline" 
+                      className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                      disabled={isDeleting}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete All
+                    </Button>
+                  )}
                   <Button onClick={handleEdit} variant="outline">
                     <Edit3 className="h-4 w-4 mr-2" />
                     Edit
@@ -3049,6 +3295,68 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             contentType="script"
           />
         )}
+
+        {/* Delete Page Confirmation Dialog */}
+        <AlertDialog open={showDeletePageConfirm} onOpenChange={setShowDeletePageConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Current Page?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete page {currentPage} of {totalPages}? 
+                This will permanently remove this page from your screenplay. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteCurrentPage}
+                disabled={isDeleting}
+                className="bg-red-500 hover:bg-red-600"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Page'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Delete Entire Screenplay Confirmation Dialog */}
+        <AlertDialog open={showDeleteEntireConfirm} onOpenChange={setShowDeleteEntireConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="text-red-400">Delete Entire Screenplay?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete the entire screenplay? 
+                This will permanently remove all {totalPages} page{totalPages !== 1 ? 's' : ''} from your screenplay. 
+                <br /><br />
+                <strong>This action cannot be undone.</strong>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDeleteEntireScreenplay}
+                disabled={isDeleting}
+                className="bg-red-500 hover:bg-red-600"
+              >
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Entire Screenplay'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* Quick Actions */}
         <div className="flex items-center gap-4">

@@ -138,6 +138,10 @@ export async function POST(request: NextRequest) {
     
     let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true } = body
 
+    // Set default width and height if not provided
+    if (!width) width = 1280
+    if (!height) height = 720
+
     if (!prompt || !service || !apiKey) {
       console.error('Missing required fields:', { prompt: !!prompt, service: !!service, apiKey: !!apiKey })
       return NextResponse.json(
@@ -337,7 +341,28 @@ export async function POST(request: NextRequest) {
       case 'runway':
         // Runway ML is primarily for video, but can generate images
         // Different request structure based on model type
-                let requestBody: any
+        
+        // Set default model if not provided
+        // Valid Runway ML image models: gen4_image, gen4_image_turbo, gemini_2.5_flash, gemini_3_pro
+        if (!model || Array.isArray(model)) {
+          model = 'gen4_image' // Default to gen4_image for text-to-image
+        }
+        
+        // Ensure model is a string, not an array
+        const runwayModel = Array.isArray(model) ? model[0] : model
+        
+        // Validate model is one of the supported values
+        const validModels = ['gen4_image', 'gen4_image_turbo', 'gemini_2.5_flash', 'gemini_3_pro']
+        if (!validModels.includes(runwayModel)) {
+          console.warn(`Invalid Runway ML model "${runwayModel}", defaulting to gen4_image`)
+          model = 'gen4_image'
+        } else {
+          model = runwayModel
+        }
+        
+        console.log('🎬 Using Runway ML model:', model)
+        
+        let requestBody: any
         
         if (model === 'gen4_image_turbo') {
           if (!file) {

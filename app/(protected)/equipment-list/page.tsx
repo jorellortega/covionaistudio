@@ -1022,3 +1022,6 @@ export default function EquipmentListPage() {
 }
 
 
+
+
+

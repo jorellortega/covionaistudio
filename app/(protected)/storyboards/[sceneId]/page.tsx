@@ -182,6 +182,8 @@ export default function SceneStoryboardsPage() {
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [shots, setShots] = useState<any[]>([])
+  const [isCreatingAllStoryboards, setIsCreatingAllStoryboards] = useState(false)
   const [formData, setFormData] = useState<CreateStoryboardData>({
     title: "",
     description: "",
@@ -1283,6 +1285,171 @@ export default function SceneStoryboardsPage() {
       candidate++
     }
     return candidate
+  }
+
+  // Helper function to create a storyboard from a shot (extracted for reuse)
+  const createStoryboardFromShot = async (shot: any) => {
+    // Parse scene number from metadata
+    let sceneNumber = 1
+    if (sceneInfo?.metadata?.sceneNumber) {
+      const parsed = typeof sceneInfo.metadata.sceneNumber === 'string' 
+        ? parseInt(sceneInfo.metadata.sceneNumber) 
+        : sceneInfo.metadata.sceneNumber
+      sceneNumber = isNaN(parsed) ? 1 : parsed
+    }
+    
+    // Map shot types to valid storyboard values
+    const mapShotType = (shotType: string): string => {
+      const oldValidTypes = ['wide', 'medium', 'close', 'extreme-close']
+      if (oldValidTypes.includes(shotType)) return shotType
+      if (['two-shot', 'over-the-shoulder'].includes(shotType)) return 'medium'
+      if (['point-of-view', 'establishing'].includes(shotType)) return 'wide'
+      if (['insert', 'cutaway'].includes(shotType)) return 'close'
+      return 'wide'
+    }
+    
+    // Map camera angles to valid storyboard values
+    const mapCameraAngle = (angle: string): string => {
+      const oldValidAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle']
+      if (oldValidAngles.includes(angle)) return angle
+      if (angle === 'bird-eye') return 'high-angle'
+      if (angle === 'worm-eye') return 'low-angle'
+      return 'eye-level'
+    }
+    
+    // Map movement to valid storyboard values
+    const mapMovement = (movement: string): string => {
+      const oldValidMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming']
+      if (oldValidMovements.includes(movement)) return movement
+      if (movement === 'dolly') return 'tracking'
+      if (['crane', 'handheld', 'steadicam'].includes(movement)) return 'static'
+      return 'static'
+    }
+    
+    // Try to preserve the shot's original shot_number, with retry logic for conflicts
+    const preferredShotNumber = shot.shot_number || 1
+    let attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+    let attempts = 0
+    const maxAttempts = 10
+    
+    while (attempts < maxAttempts) {
+      try {
+        // For retries, fetch fresh storyboards and recalculate available shot number
+        if (attempts > 0) {
+          attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+        }
+        
+        // Create storyboard from shot list data
+        const storyboardData: CreateStoryboardData = {
+          title: shot.description || `Shot ${attemptShotNumber}`,
+          description: shot.description || shot.action || '',
+          scene_number: sceneNumber,
+          shot_number: attemptShotNumber,
+          shot_type: mapShotType(shot.shot_type),
+          camera_angle: mapCameraAngle(shot.camera_angle),
+          movement: mapMovement(shot.movement),
+          dialogue: shot.dialogue || undefined,
+          action: shot.action || undefined,
+          visual_notes: shot.visual_notes || undefined,
+          scene_id: sceneId,
+          project_id: sceneInfo?.project_id || undefined,
+          sequence_order: shot.sequence_order || attemptShotNumber,
+          status: 'draft',
+        }
+        
+        const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
+        
+        // Refresh storyboards list after creation
+        await fetchStoryboards()
+        
+        return { success: true, shotNumber: attemptShotNumber, preferredShotNumber }
+      } catch (error: any) {
+        attempts++
+        
+        // Check if it's a 409 conflict error (shot number already taken)
+        const isConflictError = error?.code === '23505' || 
+                              error?.error?.code === '23505' ||
+                              error?.message?.includes('unique') ||
+                              error?.error?.message?.includes('unique') ||
+                              (error?.status === 409 || error?.error?.status === 409)
+        
+        if (isConflictError && attempts < maxAttempts) {
+          // Shot number conflict - try next available number
+          attemptShotNumber = getNextShotNumber()
+          continue
+        }
+        
+        // Not a conflict error or max attempts reached - return error
+        console.error('Error creating storyboard from shot list:', error)
+        return { 
+          success: false, 
+          error: error?.message || error?.error?.message || 'Failed to create storyboard from shot list.',
+          shotNumber: shot.shot_number 
+        }
+      }
+    }
+    
+    return { success: false, error: 'Max attempts reached', shotNumber: shot.shot_number }
+  }
+
+  // Create storyboards for all shots
+  const handleCreateAllStoryboards = async () => {
+    if (!shots || shots.length === 0) {
+      toast({
+        title: "No Shots Found",
+        description: "There are no shots to create storyboards for.",
+        variant: "destructive",
+      })
+      return
+    }
+    
+    try {
+      setIsCreatingAllStoryboards(true)
+      
+      let successCount = 0
+      let errorCount = 0
+      const errors: string[] = []
+      
+      // Process shots sequentially to avoid conflicts
+      for (const shot of shots) {
+        const result = await createStoryboardFromShot(shot)
+        if (result.success) {
+          successCount++
+          // Small delay between creations to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100))
+        } else {
+          errorCount++
+          errors.push(`Shot ${shot.shot_number}: ${result.error || 'Unknown error'}`)
+        }
+      }
+      
+      // Refresh storyboards list one final time
+      await fetchStoryboards()
+      
+      // Show summary toast
+      if (errorCount === 0) {
+        toast({
+          title: "Success!",
+          description: `Successfully created ${successCount} storyboard${successCount !== 1 ? 's' : ''} from all shots.`,
+        })
+      } else {
+        toast({
+          title: "Partially Complete",
+          description: `Created ${successCount} storyboard${successCount !== 1 ? 's' : ''}, but ${errorCount} failed. Check console for details.`,
+          variant: "destructive",
+        })
+        console.error('Errors creating storyboards:', errors)
+      }
+    } catch (error) {
+      console.error('Error creating all storyboards:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create storyboards. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCreatingAllStoryboards(false)
+    }
   }
 
   const resetForm = () => {
@@ -3242,136 +3409,61 @@ export default function SceneStoryboardsPage() {
       <div className="mt-12">
         <Card>
           <CardHeader>
-            <CardTitle>Shot List</CardTitle>
-            <CardDescription>
-              Break down this scene into individual shots with detailed technical specifications
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Shot List</CardTitle>
+                <CardDescription>
+                  Break down this scene into individual shots with detailed technical specifications
+                </CardDescription>
+              </div>
+              {shots && shots.length > 0 && (
+                <Button
+                  onClick={handleCreateAllStoryboards}
+                  disabled={isCreatingAllStoryboards}
+                  className="bg-green-500 hover:bg-green-600 text-white"
+                >
+                  {isCreatingAllStoryboards ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Creating Storyboards...
+                    </>
+                  ) : (
+                    <>
+                      <Film className="h-4 w-4 mr-2" />
+                      Create Storyboards for All Shots ({shots.length})
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <ShotListComponent
               sceneId={sceneId}
               projectId={sceneInfo?.project_id}
               showCreateStoryboardButton={true}
+              onShotsChange={(loadedShots) => {
+                setShots(loadedShots)
+              }}
               onCreateStoryboard={async (shot) => {
-                // Parse scene number from metadata
-                let sceneNumber = 1
-                if (sceneInfo?.metadata?.sceneNumber) {
-                  const parsed = typeof sceneInfo.metadata.sceneNumber === 'string' 
-                    ? parseInt(sceneInfo.metadata.sceneNumber) 
-                    : sceneInfo.metadata.sceneNumber
-                  sceneNumber = isNaN(parsed) ? 1 : parsed
-                }
+                const result = await createStoryboardFromShot(shot)
                 
-                // Map shot types to valid storyboard values
-                // Old storyboards constraints only allow: 'wide', 'medium', 'close', 'extreme-close'
-                // After migration 046 runs, all shot_lists values will be valid
-                const mapShotType = (shotType: string): string => {
-                  // Old constraint values (currently in database)
-                  const oldValidTypes = ['wide', 'medium', 'close', 'extreme-close']
-                  if (oldValidTypes.includes(shotType)) return shotType
-                  // Map new shot types to old valid types
-                  if (['two-shot', 'over-the-shoulder'].includes(shotType)) return 'medium'
-                  if (['point-of-view', 'establishing'].includes(shotType)) return 'wide'
-                  if (['insert', 'cutaway'].includes(shotType)) return 'close'
-                  return 'wide' // Default fallback
-                }
-                
-                // Map camera angles to valid storyboard values
-                // Old constraints only allow: 'eye-level', 'high-angle', 'low-angle', 'dutch-angle'
-                const mapCameraAngle = (angle: string): string => {
-                  const oldValidAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle']
-                  if (oldValidAngles.includes(angle)) return angle
-                  // Map new angles to old valid angles
-                  if (angle === 'bird-eye') return 'high-angle'
-                  if (angle === 'worm-eye') return 'low-angle'
-                  return 'eye-level' // Default fallback
-                }
-                
-                // Map movement to valid storyboard values
-                // Old constraints only allow: 'static', 'panning', 'tilting', 'tracking', 'zooming'
-                const mapMovement = (movement: string): string => {
-                  const oldValidMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming']
-                  if (oldValidMovements.includes(movement)) return movement
-                  // Map new movements to old valid movements
-                  if (movement === 'dolly') return 'tracking'
-                  if (['crane', 'handheld', 'steadicam'].includes(movement)) return 'static'
-                  return 'static' // Default fallback
-                }
-                
-                // Try to preserve the shot's original shot_number, with retry logic for conflicts
-                const preferredShotNumber = shot.shot_number || 1
-                let attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
-                let attempts = 0
-                const maxAttempts = 10
-                
-                while (attempts < maxAttempts) {
-                  try {
-                    // For retries, fetch fresh storyboards and recalculate available shot number
-                    if (attempts > 0) {
-                      attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
-                    }
-                    
-                    // Create storyboard from shot list data
-                    const storyboardData: CreateStoryboardData = {
-                      title: shot.description || `Shot ${attemptShotNumber}`,
-                      description: shot.description || shot.action || '',
-                      scene_number: sceneNumber,
-                      shot_number: attemptShotNumber, // Preserve shot number from shot list if available
-                      shot_type: mapShotType(shot.shot_type),
-                      camera_angle: mapCameraAngle(shot.camera_angle),
-                      movement: mapMovement(shot.movement),
-                      dialogue: shot.dialogue || undefined,
-                      action: shot.action || undefined,
-                      visual_notes: shot.visual_notes || undefined,
-                      scene_id: sceneId,
-                      project_id: sceneInfo?.project_id || undefined,
-                      sequence_order: shot.sequence_order || attemptShotNumber,
-                      status: 'draft',
-                    }
-                    
-                    const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
-                    
-                    // Refresh storyboards list
-                    await fetchStoryboards()
-                    
-                    // Show appropriate message based on whether we preserved the shot number
-                    const shotNumberMessage = attemptShotNumber === preferredShotNumber
-                      ? `Storyboard created from shot ${shot.shot_number} (preserved shot number).`
-                      : `Storyboard created from shot ${shot.shot_number} (assigned shot number ${attemptShotNumber} - ${preferredShotNumber} was taken).`
-                    
-                    toast({
-                      title: "Storyboard Created!",
-                      description: shotNumberMessage,
-                    })
-                    
-                    // Success - break out of retry loop
-                    break
-                  } catch (error: any) {
-                    attempts++
-                    
-                    // Check if it's a 409 conflict error (shot number already taken)
-                    const isConflictError = error?.code === '23505' || 
-                                          error?.error?.code === '23505' ||
-                                          error?.message?.includes('unique') ||
-                                          error?.error?.message?.includes('unique') ||
-                                          (error?.status === 409 || error?.error?.status === 409)
-                    
-                    if (isConflictError && attempts < maxAttempts) {
-                      // Shot number conflict - try next available number
-                      attemptShotNumber = getNextShotNumber()
-                      continue
-                    }
-                    
-                    // Not a conflict error or max attempts reached - throw the error
-                    console.error('Error creating storyboard from shot list:', error)
-                    const errorMessage = error?.message || error?.error?.message || 'Failed to create storyboard from shot list.'
-                    toast({
-                      title: "Error",
-                      description: errorMessage,
-                      variant: "destructive",
-                    })
-                    throw error
-                  }
+                if (result.success) {
+                  // Show appropriate message based on whether we preserved the shot number
+                  const shotNumberMessage = result.shotNumber === result.preferredShotNumber
+                    ? `Storyboard created from shot ${shot.shot_number} (preserved shot number).`
+                    : `Storyboard created from shot ${shot.shot_number} (assigned shot number ${result.shotNumber} - ${result.preferredShotNumber} was taken).`
+                  
+                  toast({
+                    title: "Storyboard Created!",
+                    description: shotNumberMessage,
+                  })
+                } else {
+                  toast({
+                    title: "Error",
+                    description: result.error || 'Failed to create storyboard from shot list.',
+                    variant: "destructive",
+                  })
                 }
               }}
             />

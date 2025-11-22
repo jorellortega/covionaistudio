@@ -17,7 +17,7 @@ export default function HomePage() {
               <span className="text-white font-bold text-sm">AI</span>
             </div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              Covion AI
+              Ai Cinema Studio
             </h1>
           </div>
 
@@ -39,7 +39,7 @@ export default function HomePage() {
         <section className="container mx-auto px-4 sm:px-6 py-16 sm:py-20 text-center">
           <div className="max-w-4xl mx-auto">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold mb-6 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent leading-tight">
-              COVION AI
+              Ai Cinema Studio
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground mb-4 max-w-2xl mx-auto leading-relaxed">
               The Future of Cinema Production
@@ -234,10 +234,10 @@ export default function HomePage() {
                 <span className="text-white font-bold text-sm">AI</span>
               </div>
               <span className="text-lg font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                Covion AI
+                Ai Cinema Studio
               </span>
             </div>
-            <div className="text-sm text-muted-foreground text-center md:text-right">© 2025 Covion AI. All rights reserved.</div>
+            <div className="text-sm text-muted-foreground text-center md:text-right">© 2025 Ai Cinema Studio. All rights reserved.</div>
           </div>
         </div>
       </footer>
