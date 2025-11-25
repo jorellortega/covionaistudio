@@ -22,6 +22,11 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <Link href="/features">
+              <Button variant="ghost" className="hover:bg-muted">
+                Features
+              </Button>
+            </Link>
             <Link href="/login">
               <Button variant="ghost" className="hover:bg-muted">
                 Sign In

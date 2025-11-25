@@ -19,11 +19,11 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "AI Cinema Production | Covion – Powered by Infinito AI",
-    template: "%s | AI Cinema Production – Covion",
+    default: "Ai Cinema Studio – AI-Powered Film Production Platform",
+    template: "%s | Ai Cinema Studio",
   },
   description:
-    "Covion is an AI cinema production platform powered by Infinito AI. Plan scenes, visualize mood, and move from idea to screen in one workspace.",
+    "Ai Cinema Studio is an AI-powered cinema production platform. Plan scenes, visualize mood, and move from idea to screen in one workspace. Powered by Infinito AI.",
   keywords: [
     "AI cinema production",
     "film production platform",
@@ -31,21 +31,23 @@ export const metadata: Metadata = {
     "story development",
     "scene timeline",
     "visual development",
-    "Covion",
+    "Ai Cinema Studio",
+    "AI filmmaking",
+    "cinema production software",
     "Infinito AI",
   ],
   openGraph: {
-    title: "AI Cinema Production | Covion – Powered by Infinito AI",
+    title: "Ai Cinema Studio – AI-Powered Film Production Platform",
     description:
-      "Plan, visualize, and build films faster. Treatments, mood boards, and timelines in one place.",
+      "Plan, visualize, and build films faster. Treatments, mood boards, and timelines in one place. From idea to screen in one workspace.",
     url: "https://cinema.covion.ai/",
-    siteName: "Covion",
+    siteName: "Ai Cinema Studio",
     images: [
       {
         url: "/quantum-heist-movie-poster.png",
         width: 1200,
         height: 630,
-        alt: "Covion – AI Cinema Production",
+        alt: "Ai Cinema Studio – AI-Powered Film Production",
       },
     ],
     locale: "en_US",
@@ -53,13 +55,13 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "AI Cinema Production | Covion – Powered by Infinito AI",
+    title: "Ai Cinema Studio – AI-Powered Film Production Platform",
     description:
       "From idea to screen—treatments, mood boards, and timelines in one workspace.",
     images: ["/quantum-heist-movie-poster.png"],
-    creator: "@covion",
+    creator: "@aicinemastudio",
   },
-  generator: "Covion",
+  generator: "Ai Cinema Studio",
 }
 
 export default function RootLayout({
@@ -85,11 +87,11 @@ html {
             __html: JSON.stringify({
               "@context": "https://schema.org",
               "@type": "SoftwareApplication",
-              name: "Covion",
+              name: "Ai Cinema Studio",
               applicationCategory: "CreativeWorkApplication",
               operatingSystem: "Web",
               description:
-                "AI cinema production platform powered by Infinito AI. Plan scenes, visualize mood, and build timelines.",
+                "AI-powered cinema production platform. Plan scenes, visualize mood, and build timelines. From idea to screen in one workspace.",
               url: "https://cinema.covion.ai/",
               offers: {
                 "@type": "Offer",
@@ -98,7 +100,7 @@ html {
               },
               brand: {
                 "@type": "Brand",
-                name: "Covion",
+                name: "Ai Cinema Studio",
               },
             }),
           }}

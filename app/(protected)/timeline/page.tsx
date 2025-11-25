@@ -650,7 +650,20 @@ export default function TimelinePage() {
       }
       
       let finalPrompt = ''
-      if (scriptContent) {
+      
+      // Priority: 1. Description, 2. Script content, 3. Scene name
+      if (scene.description && scene.description.trim()) {
+        // Use scene description as primary source
+        const sanitizedDescription = sanitizePromptForDALLE(scene.description)
+        finalPrompt = `Create a cinematic movie scene image: ${sanitizedDescription}`
+        console.log('🎬 DEBUG - Using scene description in prompt:', {
+          promptLength: finalPrompt.length,
+          promptPreview: finalPrompt.substring(0, 200) + '...',
+          fullPrompt: finalPrompt,
+          originalLength: scene.description.length,
+          sanitizedLength: sanitizedDescription.length
+        })
+      } else if (scriptContent) {
         // Sanitize the script content for DALL-E
         const sanitizedContent = sanitizePromptForDALLE(scriptContent)
         finalPrompt = `Create a cinematic movie scene image: ${sanitizedContent}`
@@ -672,7 +685,10 @@ export default function TimelinePage() {
       return finalPrompt
     } catch (error) {
       console.error('🎬 DEBUG - Error in createScenePrompt:', error)
-      const fallbackPrompt = `Create a cinematic movie scene image: ${scene.name}`
+      // Use description if available, otherwise scene name
+      const fallbackPrompt = scene.description && scene.description.trim()
+        ? `Create a cinematic movie scene image: ${scene.description}`
+        : `Create a cinematic movie scene image: ${scene.name}`
       console.log('🎬 DEBUG - Using error fallback prompt:', fallbackPrompt)
       return fallbackPrompt
     }
@@ -2083,8 +2099,76 @@ export default function TimelinePage() {
                     <Link href={`/timeline-scene/${scene.id}`}>
                       <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer overflow-hidden">
                         <CardHeader className="p-0">
-                          <div className="flex flex-col md:flex-row h-full min-h-[200px] md:min-h-[256px]">
-                            {/* Content Section */}
+                          <div className="flex flex-col">
+                            {/* Image Section - Top, Full Width */}
+                            {scene.metadata.thumbnail && (() => {
+                              const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                              return urlInfo && !urlInfo.isExpired
+                            })() && (
+                              <div className="w-full h-48 sm:h-64 relative bg-muted/20 overflow-hidden">
+                                <img
+                                  key={`${scene.id}-${scene.metadata.thumbnail}`}
+                                  src={scene.metadata.thumbnail}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                                
+                                {/* Scene number overlay */}
+                                <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                  {scene.metadata.sceneNumber || index + 1}
+                                </div>
+                                
+                                {/* Image status indicator */}
+                                {(() => {
+                                  const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                                  return urlInfo?.needsRefresh ? (
+                                    <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
+                                      ⚠️ Expired
+                                    </div>
+                                  ) : null
+                                })()}
+                                
+                                {/* Action buttons */}
+                                <div className="absolute bottom-2 left-2 flex gap-1">
+                                  {/* Refresh button for expired images */}
+                                  {(() => {
+                                    const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                                    return urlInfo?.needsRefresh ? (
+                                      <Button
+                                        size="sm"
+                                        variant="secondary"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          handleRefreshExpiredImage(scene)
+                                        }}
+                                        className="h-auto px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                        title="Refresh expired image"
+                                      >
+                                        <RefreshCw className="h-3 w-3" />
+                                      </Button>
+                                    ) : null
+                                  })()}
+                                  
+                                  {/* Upload Image Button */}
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      e.stopPropagation()
+                                      handleUploadImage(scene)
+                                    }}
+                                    className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                                  >
+                                    <ImageIcon className="h-3 w-3 mr-1" />
+                                    UPLOAD
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Content Section - Below Image */}
                             <div className="flex-1 p-4 md:p-6 min-w-0">
                               <div className="flex flex-col gap-2 mb-2 min-w-0">
                                 <div className="flex items-center gap-2 min-w-0">
@@ -2184,75 +2268,6 @@ export default function TimelinePage() {
                                   </Button>
                                 </div>
                               </div>
-
-                              {/* Mobile Thumbnail - Only show if thumbnail exists AND is valid */}
-                              {scene.metadata.thumbnail && (() => {
-                                const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                return urlInfo && !urlInfo.isExpired
-                              })() && (
-                                <div className="w-full h-32 md:w-40 md:h-64 relative bg-muted/20 border-t md:border-l md:border-t-0 border-border/30 flex-shrink-0 overflow-hidden">
-                                  <img
-                                    key={`${scene.id}-${scene.metadata.thumbnail}`}
-                                    src={scene.metadata.thumbnail}
-                                    alt=""
-                                    className="w-full h-full object-cover md:object-contain md:rounded-r-lg"
-
-                                  />
-                                  
-                                  {/* Scene number overlay */}
-                                  <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                                    {scene.metadata.sceneNumber || index + 1}
-                                  </div>
-                                  
-                                  {/* Image status indicator */}
-                                  {(() => {
-                                    const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                    return urlInfo?.needsRefresh ? (
-                                      <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
-                                        ⚠️ Expired
-                                      </div>
-                                    ) : null
-                                  })()}
-                                  
-                                  {/* Action buttons */}
-                                  <div className="absolute bottom-2 left-2 flex gap-1">
-                                    {/* Refresh button for expired images */}
-                                    {(() => {
-                                      const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                      return urlInfo?.needsRefresh ? (
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={(e) => {
-                                            e.preventDefault()
-                                            e.stopPropagation()
-                                            handleRefreshExpiredImage(scene)
-                                          }}
-                                          className="h-auto px-2 py-1 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
-                                          title="Refresh expired image"
-                                        >
-                                          <RefreshCw className="h-3 w-3" />
-                                        </Button>
-                                      ) : null
-                                    })()}
-                                    
-                                    {/* Upload Image Button */}
-                                    <Button
-                                      size="sm"
-                                      variant="secondary"
-                                      onClick={(e) => {
-                                        e.preventDefault()
-                                        e.stopPropagation()
-                                        handleUploadImage(scene)
-                                      }}
-                                      className="h-auto px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                                    >
-                                      <ImageIcon className="h-3 w-3 mr-1" />
-                                      UPLOAD
-                                    </Button>
-                                  </div>
-                                </div>
-                              )}
                             </div>
                           </CardHeader>
                         </Card>
@@ -2285,10 +2300,78 @@ export default function TimelinePage() {
                           <Link href={`/timeline-scene/${scene.id}`}>
                             <Card className="cinema-card hover:neon-glow transition-all duration-300 backdrop-blur-sm group hover:border-cyan-400 cursor-pointer">
                               <CardHeader className="p-0">
-                                <div className="flex h-full min-h-[256px]">
-                                  {/* Content Section - Left Side */}
+                                <div className="flex flex-col">
+                                  {/* Image Section - Top, Full Width */}
+                                  {scene.metadata.thumbnail && (() => {
+                                    const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                                    return urlInfo && !urlInfo.isExpired
+                                  })() && (
+                                    <div className="w-full h-64 lg:h-80 xl:h-96 relative bg-muted/20 overflow-hidden">
+                                      <img
+                                        key={`${scene.id}-${scene.metadata.thumbnail}`}
+                                        src={scene.metadata.thumbnail}
+                                        alt=""
+                                        className="w-full h-full object-cover"
+                                      />
+                                      
+                                      {/* Scene number overlay */}
+                                      <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                                        {scene.metadata.sceneNumber || index + 1}
+                                      </div>
+                                      
+                                      {/* Image status indicator */}
+                                      {(() => {
+                                        const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                                        return urlInfo?.needsRefresh ? (
+                                          <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
+                                            ⚠️ Expired
+                                          </div>
+                                        ) : null
+                                      })()}
+                                      
+                                      {/* Action buttons */}
+                                      <div className="absolute bottom-2 left-2 flex gap-1">
+                                        {/* Refresh button for expired images */}
+                                        {(() => {
+                                          const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
+                                          return urlInfo?.needsRefresh ? (
+                                            <Button
+                                              size="sm"
+                                              variant="secondary"
+                                              onClick={(e) => {
+                                                e.preventDefault()
+                                                e.stopPropagation()
+                                                handleRefreshExpiredImage(scene)
+                                              }}
+                                              className="h-auto px-2 py-2 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
+                                              title="Refresh expired image"
+                                            >
+                                              <RefreshCw className="h-3 w-3" />
+                                            </Button>
+                                          ) : null
+                                        })()}
+                                        
+                                        {/* Upload Image Button */}
+                                        <Button
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            handleUploadImage(scene)
+                                          }}
+                                          className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
+                                        >
+                                          <ImageIcon className="h-3 w-3 mr-1" />
+                                          UPLOAD
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Content Section - Below Image */}
                                   <div className="flex-1 p-4 lg:p-6 min-w-0">
-                                                                        <div className="flex flex-col gap-3 mb-2 min-w-0">
+                                    <div className="flex flex-col gap-3 mb-2 min-w-0">
                                       <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
                                       <div className="flex flex-wrap gap-1">
                                         <Badge
@@ -2311,10 +2394,6 @@ export default function TimelinePage() {
                                       </div>
                                     </div>
                                     <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
-
-
-
-
 
                                     {scene.metadata.notes && (
                                       <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
@@ -2389,75 +2468,6 @@ export default function TimelinePage() {
                                       </Button>
                                     </div>
                                   </div>
-
-                                  {/* Desktop Thumbnail - Only show if thumbnail exists AND is valid */}
-                                  {scene.metadata.thumbnail && (() => {
-                                    const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                    return urlInfo && !urlInfo.isExpired
-                                  })() && (
-                                    <div className="w-40 h-64 relative bg-muted/20 border-l border-border/30 flex-shrink-0 overflow-hidden">
-                                      <img
-                                        key={`${scene.id}-${scene.metadata.thumbnail}`}
-                                        src={scene.metadata.thumbnail}
-                                        alt=""
-                                        className="w-full h-full object-contain rounded-r-lg"
-
-                                      />
-                                      
-                                      {/* Scene number overlay */}
-                                      <div className="absolute top-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                                        {scene.metadata.sceneNumber || index + 1}
-                                      </div>
-                                      
-                                      {/* Image status indicator */}
-                                      {(() => {
-                                        const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                        return urlInfo?.needsRefresh ? (
-                                          <div className="absolute bottom-2 right-2 text-white text-xs px-2 py-1 rounded max-w-32 truncate bg-orange-600/90">
-                                            ⚠️ Expired
-                                          </div>
-                                        ) : null
-                                      })()}
-                                      
-                                      {/* Action buttons */}
-                                      <div className="absolute bottom-2 left-2 flex gap-1">
-                                        {/* Refresh button for expired images */}
-                                        {(() => {
-                                          const urlInfo = analyzeImageUrl(scene.metadata.thumbnail)
-                                          return urlInfo?.needsRefresh ? (
-                                            <Button
-                                              size="sm"
-                                              variant="secondary"
-                                              onClick={(e) => {
-                                                e.preventDefault()
-                                                e.stopPropagation()
-                                                handleRefreshExpiredImage(scene)
-                                              }}
-                                              className="h-auto px-2 py-2 bg-orange-600 hover:bg-orange-700 text-white shadow-lg border-2 border-white text-xs font-medium"
-                                              title="Refresh expired image"
-                                            >
-                                              <RefreshCw className="h-3 w-3" />
-                                            </Button>
-                                          ) : null
-                                        })()}
-                                        
-                                        {/* Upload Image Button */}
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={(e) => {
-                                            e.preventDefault()
-                                            e.stopPropagation()
-                                            handleUploadImage(scene)
-                                          }}
-                                          className="h-auto px-2 py-2 bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-2 border-white text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                                        >
-                                          <ImageIcon className="h-3 w-3 mr-1" />
-                                          UPLOAD
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  )}
                                 </div>
                               </CardHeader>
                             </Card>

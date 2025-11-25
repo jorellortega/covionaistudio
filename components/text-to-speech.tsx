@@ -290,6 +290,15 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         // Extract movie title (everything before " - Treatment")
         const movieTitle = title.split(' - Treatment')[0].trim()
         downloadFileName = `${movieTitle} - Treatment audio.mp3`
+      } else if (titleLower.includes('scene page')) {
+        // Extract page number from "Scene Page X Audio"
+        const pageMatch = title.match(/scene\s+page\s+(\d+)/i)
+        if (pageMatch) {
+          const pageNumber = pageMatch[1]
+          downloadFileName = `Scene Page ${pageNumber} Audio.mp3`
+        } else {
+          downloadFileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech.mp3`
+        }
       } else {
         // For other cases, use the original logic
         downloadFileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech.mp3`
@@ -349,8 +358,8 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
       const result = await response.json()
       if (result.success) {
-        // Filter audio files based on the title prop to separate synopsis and treatment audio
-        // The title prop contains either "Synopsis" or "Treatment" to distinguish them
+        // Filter audio files based on the title prop to separate synopsis, treatment, and page audio
+        // The title prop contains either "Synopsis", "Treatment", or "Page X Audio" to distinguish them
         let filteredAudioFiles = result.data.audioFiles
         
         if (title) {
@@ -366,6 +375,33 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             filteredAudioFiles = result.data.audioFiles.filter((file: any) => 
               file.name.toLowerCase().includes('treatment') && !file.name.toLowerCase().includes('synopsis')
             )
+          } else if (titleLower.includes('scene page')) {
+            // Extract page number from title (e.g., "Scene Page 1 Audio" -> "1")
+            const pageMatch = title.match(/scene\s+page\s+(\d+)/i)
+            if (pageMatch) {
+              const pageNumber = pageMatch[1]
+              // Only show audio files that match this specific page number
+              filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+                const fileName = file.name.toLowerCase()
+                // Match "scene page X" or "scene_page_X" patterns
+                const filePageMatch = fileName.match(/scene[\s_]+page[\s_]+(\d+)/i)
+                return filePageMatch && filePageMatch[1] === pageNumber
+              })
+            }
+          } else if (titleLower.includes('page')) {
+            // Handle legacy "Page X Audio" format (without "Scene" prefix)
+            const pageMatch = title.match(/page\s+(\d+)/i)
+            if (pageMatch) {
+              const pageNumber = pageMatch[1]
+              // Only show audio files that match this specific page number
+              filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+                const fileName = file.name.toLowerCase()
+                // Match "page X" or "page_X" patterns (but not "scene page X")
+                const filePageMatch = fileName.match(/page[\s_]+(\d+)/i)
+                const hasScenePrefix = fileName.includes('scene')
+                return filePageMatch && filePageMatch[1] === pageNumber && !hasScenePrefix
+              })
+            }
           }
         }
         
@@ -469,6 +505,30 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         const safeMovieTitle = movieTitle.replace(/[^a-z0-9]/gi, '_').toLowerCase()
         fileName = `${safeMovieTitle}_treatment_audio`
         audioTitle = `${movieTitle} - Treatment audio`
+      } else if (titleLower.includes('scene page')) {
+        // Extract page number from title (e.g., "Scene Page 1 Audio" -> "scene_page_1_audio")
+        const pageMatch = title.match(/scene\s+page\s+(\d+)/i)
+        if (pageMatch) {
+          const pageNumber = pageMatch[1]
+          fileName = `scene_page_${pageNumber}_audio`
+          audioTitle = title // Use the full title as-is (e.g., "Scene Page 1 Audio")
+        } else {
+          // Fallback if page number not found
+          fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+          audioTitle = `${title} audio`
+        }
+      } else if (titleLower.includes('page')) {
+        // Handle legacy "Page X Audio" format (without "Scene" prefix)
+        const pageMatch = title.match(/page\s+(\d+)/i)
+        if (pageMatch) {
+          const pageNumber = pageMatch[1]
+          fileName = `page_${pageNumber}_audio`
+          audioTitle = title // Use the full title as-is (e.g., "Page 1 Audio")
+        } else {
+          // Fallback if page number not found
+          fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+          audioTitle = `${title} audio`
+        }
       } else {
         // For other cases, use the original logic
         fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`

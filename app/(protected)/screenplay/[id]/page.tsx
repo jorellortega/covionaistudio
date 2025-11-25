@@ -156,6 +156,7 @@ function ScreenplayPageClient({ id }: { id: string }) {
   
   // Screenplay scenes states
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
+  const [sceneBoundaries, setSceneBoundaries] = useState<Array<{sceneNumber: string, sceneName: string, position: number}>>([])
   const [isLoadingScenes, setIsLoadingScenes] = useState(false)
   const [isGeneratingScenes, setIsGeneratingScenes] = useState(false)
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
@@ -166,6 +167,14 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false)
   const [showDeleteEntireConfirm, setShowDeleteEntireConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  
+  // Text enhancer states
+  const [textEnhancerSettings, setTextEnhancerSettings] = useState<{model: string; prefix: string}>({
+    model: 'gpt-4o-mini',
+    prefix: ''
+  })
+  const [userApiKeys, setUserApiKeys] = useState<{openai_api_key?: string; anthropic_api_key?: string}>({})
+  const [isEnhancingText, setIsEnhancingText] = useState(false)
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
   const [expandedScenes, setExpandedScenes] = useState<Set<string>>(new Set())
   const [isScenesCardExpanded, setIsScenesCardExpanded] = useState(false)
@@ -203,6 +212,13 @@ function ScreenplayPageClient({ id }: { id: string }) {
       loadTimelineScenes(id)
     }
   }, [id, ready, userId])
+
+  // Load text enhancer settings and API keys
+  useEffect(() => {
+    if (!ready || !userId) return
+    fetchTextEnhancerSettings()
+    fetchUserApiKeys()
+  }, [ready, userId])
 
   // Load AI settings
   useEffect(() => {
@@ -415,7 +431,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
       console.log(`✅ fetchScriptsFromScenes: Found ${scenesWithContent.length} scenes with content to combine`)
 
-      // Combine scripts in scene order
+      // Combine scripts in scene order and track scene info for visual separators
+      const sceneInfo: Array<{sceneNumber: string, sceneName: string, content: string}> = []
       const combinedScript = scenesWithContent
         .map(scene => {
           // Prioritize screenplay_content from scene, fall back to script asset
@@ -433,15 +450,26 @@ function ScreenplayPageClient({ id }: { id: string }) {
             return null
           }
           
-          const sceneNumber = scene.metadata?.sceneNumber || ''
-          if (sceneNumber) {
-            return `\n\n=== SCENE ${sceneNumber}: ${scene.name} ===\n\n${content}`
-          } else {
-            return `\n\n=== ${scene.name} ===\n\n${content}`
-          }
+          // Store scene info for visual separators
+          const sceneNumber = scene.metadata?.sceneNumber || scene.scene_number || ''
+          sceneInfo.push({
+            sceneNumber: sceneNumber,
+            sceneName: scene.name || '',
+            content: content
+          })
+          
+          // Return content without scene markers - they'll be displayed as visual separators in the UI
+          return content
         })
         .filter(Boolean)
         .join("\n\n")
+      
+      // Store scene info for display - this will be used to add separators
+      setSceneBoundaries(sceneInfo.map((info, index) => ({
+        sceneNumber: info.sceneNumber,
+        sceneName: info.sceneName,
+        position: index // Use index to identify scene position
+      })))
       
       if (combinedScript.trim().length === 0) {
         console.log('❌ fetchScriptsFromScenes: Combined script is empty')
@@ -919,6 +947,186 @@ function ScreenplayPageClient({ id }: { id: string }) {
       title: "Text Replaced",
       description: "The AI-generated text has been applied to your selection.",
     })
+  }
+
+  // Fetch text enhancer settings
+  const fetchTextEnhancerSettings = async () => {
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('system_ai_config')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['text_enhancer_model', 'text_enhancer_prefix'])
+
+      if (error) {
+        console.error('Error fetching text enhancer settings:', error)
+        return
+      }
+
+      const settings: { model: string; prefix: string } = {
+        model: 'gpt-4o-mini',
+        prefix: ''
+      }
+
+      data?.forEach((item) => {
+        if (item.setting_key === 'text_enhancer_model') {
+          settings.model = item.setting_value || 'gpt-4o-mini'
+        } else if (item.setting_key === 'text_enhancer_prefix') {
+          settings.prefix = item.setting_value || ''
+        }
+      })
+
+      setTextEnhancerSettings(settings)
+    } catch (error) {
+      console.error('Error fetching text enhancer settings:', error)
+    }
+  }
+
+  // Fetch user API keys
+  const fetchUserApiKeys = async () => {
+    if (!userId) return
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('openai_api_key, anthropic_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) {
+        console.error('Error fetching user API keys:', error)
+        return
+      }
+
+      setUserApiKeys({
+        openai_api_key: data?.openai_api_key || undefined,
+        anthropic_api_key: data?.anthropic_api_key || undefined
+      })
+    } catch (error) {
+      console.error('Error fetching user API keys:', error)
+    }
+  }
+
+  // Enhance current page
+  const enhanceCurrentPage = async () => {
+    if (!isEditing) {
+      toast({
+        title: "Error",
+        description: "Please enter edit mode first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const currentPageContent = getCurrentPageEditContent()
+    if (!currentPageContent || !currentPageContent.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to enhance",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEnhancingText(true)
+    
+    try {
+      const model = textEnhancerSettings.model
+      const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
+      const fullPrompt = `${prefix}\n\n${currentPageContent}`
+
+      // Determine which API to use based on model
+      const isAnthropic = model.startsWith('claude-')
+      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
+
+      if (!apiKey) {
+        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      }
+
+      let response
+      if (isAnthropic) {
+        // Use Anthropic API
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 4096,
+            messages: [{
+              role: 'user',
+              content: fullPrompt
+            }]
+          })
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorData = await anthropicResponse.json().catch(() => ({}))
+          throw new Error(errorData.error?.message || `Anthropic API error: ${anthropicResponse.status}`)
+        }
+
+        const data = await anthropicResponse.json()
+        response = data.content[0]?.text || ''
+      } else {
+        // Use OpenAI API
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [{
+              role: 'user',
+              content: fullPrompt
+            }],
+            temperature: 0.7
+          })
+        })
+
+        if (!openaiResponse.ok) {
+          const errorData = await openaiResponse.json().catch(() => ({}))
+          throw new Error(errorData.error?.message || `OpenAI API error: ${openaiResponse.status}`)
+        }
+
+        const data = await openaiResponse.json()
+        response = data.choices[0]?.message?.content || ''
+      }
+
+      if (!response || !response.trim()) {
+        throw new Error('Empty response from AI')
+      }
+
+      // Update the current page with enhanced text
+      saveCurrentPageEdit(response.trim())
+      
+      toast({
+        title: "Text Enhanced",
+        description: "The current page has been enhanced by AI.",
+      })
+    } catch (error: any) {
+      console.error('Error enhancing text:', error)
+      toast({
+        title: "Enhancement Failed",
+        description: error.message || "Failed to enhance text. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancingText(false)
+    }
   }
 
   // Get current page content
@@ -2832,9 +3040,25 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                     </div>
                   )}
                   <div className="flex items-center justify-between">
-                    <p className="text-xs text-muted-foreground">
-                      💡 Tip: Select text to see the AI edit button in the floating toolbar.
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={enhanceCurrentPage}
+                        disabled={isEnhancingText || saving}
+                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      >
+                        {isEnhancingText ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4 mr-2" />
+                        )}
+                        Enhance
+                      </Button>
+                      <p className="text-xs text-muted-foreground">
+                        💡 Tip: Select text to see the AI edit button in the floating toolbar.
+                      </p>
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -2849,9 +3073,58 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                 </div>
               ) : (
                 <div className="bg-muted/20 p-6 rounded-lg border">
-                  <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">
-                    {getCurrentPageContent()}
-                  </pre>
+                  <div className="font-mono text-sm leading-relaxed space-y-4">
+                    {(() => {
+                      const content = getCurrentPageContent()
+                      if (!content) return null
+                      
+                      // Split by double newlines (scene separators) and add visual separators
+                      const scenes = content.split('\n\n').filter(s => s.trim().length > 0)
+                      const result: JSX.Element[] = []
+                      
+                      console.log('🎬 Display - Scene boundaries:', sceneBoundaries.length, 'Scenes in content:', scenes.length)
+                      
+                      scenes.forEach((sceneContent, sceneIndex) => {
+                        // Add visual separator before each scene (including first if we have boundary info)
+                        if (sceneBoundaries.length > sceneIndex) {
+                          const boundary = sceneBoundaries[sceneIndex]
+                          if (boundary) {
+                            // Different color for each scene
+                            const colors = [
+                              'bg-green-500',
+                              'bg-blue-500',
+                              'bg-purple-500',
+                              'bg-orange-500',
+                              'bg-pink-500',
+                              'bg-cyan-500',
+                              'bg-yellow-500',
+                              'bg-red-500',
+                            ]
+                            const sceneColor = colors[sceneIndex % colors.length]
+                            
+                            result.push(
+                              <div key={`separator-${sceneIndex}`} className="relative my-6 flex items-center py-2">
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                                <div className="px-4 text-xs font-bold text-muted-foreground bg-muted/20 rounded">
+                                  {boundary.sceneNumber ? `SCENE ${boundary.sceneNumber}` : boundary.sceneName || 'Scene'}
+                                </div>
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                              </div>
+                            )
+                          }
+                        }
+                        
+                        // Add scene content
+                        result.push(
+                          <pre key={`scene-${sceneIndex}`} className="whitespace-pre-wrap">
+                            {sceneContent}
+                          </pre>
+                        )
+                      })
+                      
+                      return result.length > 0 ? result : <pre className="whitespace-pre-wrap">{content}</pre>
+                    })()}
+                  </div>
                 </div>
               )}
             </div>
@@ -3026,33 +3299,75 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               </div>
             ) : (
               <div className="space-y-4">
-                {sortScreenplayScenes(screenplayScenes).map((scene) => {
+                {sortScreenplayScenes(screenplayScenes).map((scene, index) => {
                   const isExpanded = expandedScenes.has(scene.id)
+                  const sceneNumber = scene.scene_number || scene.metadata?.sceneNumber || ''
+                  const sceneName = scene.name || ''
+                  
                   return (
-                    <Collapsible
-                      key={scene.id}
-                      open={isExpanded}
-                      onOpenChange={(open) => {
-                        setExpandedScenes((prev) => {
-                          const next = new Set(prev)
-                          if (open) {
-                            next.add(scene.id)
-                          } else {
-                            next.delete(scene.id)
-                          }
-                          return next
-                        })
-                      }}
-                    >
-                      <Card className="border-border">
+                    <div key={scene.id}>
+                      {/* Scene Separator - horizontal line with scene info */}
+                      {index > 0 && (
+                        <div className="relative my-6 flex flex-col items-center py-2">
+                          {(() => {
+                            // Different color for each scene
+                            const colors = [
+                              'bg-green-500',
+                              'bg-blue-500',
+                              'bg-purple-500',
+                              'bg-orange-500',
+                              'bg-pink-500',
+                              'bg-cyan-500',
+                              'bg-yellow-500',
+                              'bg-red-500',
+                            ]
+                            const sceneColor = colors[(index - 1) % colors.length]
+                            
+                            return (
+                              <div className="w-full flex items-center">
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                                <div className="px-4 text-sm font-bold text-muted-foreground bg-background">
+                                  {sceneNumber ? `SCENE ${sceneNumber}` : sceneName || 'Scene'}
+                                </div>
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      )}
+                      <Collapsible
+                        open={isExpanded}
+                        onOpenChange={(open) => {
+                          setExpandedScenes((prev) => {
+                            const next = new Set(prev)
+                            if (open) {
+                              next.add(scene.id)
+                            } else {
+                              next.delete(scene.id)
+                            }
+                            return next
+                          })
+                        }}
+                      >
+                        <Card className="border-border">
                         <CollapsibleTrigger asChild>
                           <CardHeader className="pb-3 cursor-pointer hover:bg-muted/50 transition-colors">
                             <div className="flex items-start justify-between">
                               <div className="flex-1">
                                 <div className="flex items-center gap-2 mb-2">
-                                  <Badge variant="outline" className="text-xs">
-                                    Scene {scene.scene_number || 'N/A'}
-                                  </Badge>
+                                  {editingSceneId === scene.id ? (
+                                    <Input
+                                      value={editingScene.scene_number || ''}
+                                      onChange={(e) => setEditingScene({ ...editingScene, scene_number: e.target.value })}
+                                      className="w-24 text-xs"
+                                      placeholder="Scene #"
+                                      onClick={(e) => e.stopPropagation()}
+                                    />
+                                  ) : (
+                                    <Badge variant="outline" className="text-xs">
+                                      Scene {scene.scene_number || 'N/A'}
+                                    </Badge>
+                                  )}
                                   {scene.status && (
                                     <Badge variant="outline" className="text-xs">
                                       {scene.status}
@@ -3272,6 +3587,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         </CollapsibleContent>
                       </Card>
                     </Collapsible>
+                    </div>
                   )
                 })}
               </div>

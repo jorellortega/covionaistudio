@@ -102,17 +102,73 @@ export class TreatmentScenesService {
   static async updateTreatmentScene(sceneId: string, updates: UpdateTreatmentSceneData): Promise<TreatmentScene> {
     const user = await this.ensureAuthenticated()
     
+    // First, verify the scene exists and belongs to the user
+    const { data: existingScene, error: fetchError } = await getSupabaseClient()
+      .from('treatment_scenes')
+      .select('id, user_id')
+      .eq('id', sceneId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    
+    if (fetchError) {
+      console.error('Error fetching treatment scene before update:', fetchError)
+      throw new Error(`Failed to verify treatment scene: ${fetchError.message}`)
+    }
+    
+    if (!existingScene) {
+      throw new Error(`Treatment scene ${sceneId} not found or you don't have permission to update it`)
+    }
+    
+    // Ensure characters array is properly formatted for PostgreSQL TEXT[]
+    const formattedUpdates: any = { ...updates }
+    if (updates.characters !== undefined) {
+      if (Array.isArray(updates.characters)) {
+        // Filter out any null/undefined values and ensure all are strings
+        formattedUpdates.characters = updates.characters
+          .filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+          .map(c => c.trim())
+        // If empty after filtering, set to empty array (not null/undefined)
+        if (formattedUpdates.characters.length === 0) {
+          formattedUpdates.characters = []
+        }
+      } else if (updates.characters === null) {
+        formattedUpdates.characters = null
+      }
+    }
+    
+    // Remove metadata if it's being updated separately to avoid conflicts
+    // Only update metadata if explicitly provided and different
+    if (formattedUpdates.metadata) {
+      // Ensure metadata is a valid object
+      if (typeof formattedUpdates.metadata !== 'object' || formattedUpdates.metadata === null) {
+        delete formattedUpdates.metadata
+      }
+    }
+    
     const { data, error } = await getSupabaseClient()
       .from('treatment_scenes')
-      .update(updates)
+      .update(formattedUpdates)
       .eq('id', sceneId)
       .eq('user_id', user.id)
       .select()
-      .single()
+      .maybeSingle() // Use maybeSingle() instead of single() to handle 0 or 1 rows
 
     if (error) {
       console.error('Error updating treatment scene:', error)
+      console.error('Update data:', JSON.stringify(formattedUpdates, null, 2))
+      console.error('Scene ID:', sceneId)
+      console.error('User ID:', user.id)
+      console.error('Error details:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      })
       throw error
+    }
+
+    if (!data) {
+      throw new Error(`Treatment scene ${sceneId} not found or update returned no data`)
     }
 
     return data

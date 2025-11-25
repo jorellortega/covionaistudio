@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List, Copy, Download, ChevronDown, ChevronUp, Wand2 } from "lucide-react"
+import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List, Copy, Download, ChevronDown, ChevronUp, Wand2, Eye } from "lucide-react"
 import { jsPDF } from "jspdf"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
@@ -2741,6 +2741,19 @@ Synopsis (2-3 paragraphs only):`
                       
                       {/* Action Buttons Section */}
                       <div className="flex flex-wrap gap-1.5 items-center">
+                        <Button
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            router.push(`/ideas/${idea.id}`)
+                          }}
+                          className="h-7 px-2 text-xs flex-shrink-0 bg-green-600 hover:bg-green-700 text-white"
+                          title="View Idea Details"
+                        >
+                          <Eye className="h-3 w-3 mr-1" />
+                          View
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"

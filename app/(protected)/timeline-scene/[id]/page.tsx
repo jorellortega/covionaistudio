@@ -211,7 +211,14 @@ function ScenePageClient({ id }: { id: string }) {
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isShotListExpanded, setIsShotListExpanded] = useState(false)
-  const [isUnlinkedAssetsExpanded, setIsUnlinkedAssetsExpanded] = useState(false)
+  
+  // Text enhancer states
+  const [textEnhancerSettings, setTextEnhancerSettings] = useState<{model: string; prefix: string}>({
+    model: 'gpt-4o-mini',
+    prefix: ''
+  })
+  const [userApiKeys, setUserApiKeys] = useState<{openai_api_key?: string; anthropic_api_key?: string}>({})
+  const [isEnhancingText, setIsEnhancingText] = useState(false)
   
   // Screenplay page number calculation (standard: ~55 lines per page)
   const LINES_PER_PAGE = 55
@@ -336,6 +343,8 @@ function ScenePageClient({ id }: { id: string }) {
     }
 
     fetchSceneData()
+    fetchTextEnhancerSettings()
+    fetchUserApiKeys()
 
     return () => {
       mounted = false
@@ -535,6 +544,184 @@ function ScenePageClient({ id }: { id: string }) {
       })
     } finally {
       setSavingScreenplay(false)
+    }
+  }
+
+  // Fetch text enhancer settings
+  const fetchTextEnhancerSettings = async () => {
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('system_ai_config')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['text_enhancer_model', 'text_enhancer_prefix'])
+
+      if (error) {
+        console.error('Error fetching text enhancer settings:', error)
+        return
+      }
+
+      const settings: { model: string; prefix: string } = {
+        model: 'gpt-4o-mini',
+        prefix: ''
+      }
+
+      data?.forEach((item) => {
+        if (item.setting_key === 'text_enhancer_model') {
+          settings.model = item.setting_value || 'gpt-4o-mini'
+        } else if (item.setting_key === 'text_enhancer_prefix') {
+          settings.prefix = item.setting_value || ''
+        }
+      })
+
+      setTextEnhancerSettings(settings)
+    } catch (error) {
+      console.error('Error fetching text enhancer settings:', error)
+    }
+  }
+
+  // Fetch user API keys
+  const fetchUserApiKeys = async () => {
+    if (!userId) return
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select('openai_api_key, anthropic_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) {
+        console.error('Error fetching user API keys:', error)
+        return
+      }
+
+      setUserApiKeys({
+        openai_api_key: data?.openai_api_key || undefined,
+        anthropic_api_key: data?.anthropic_api_key || undefined
+      })
+    } catch (error) {
+      console.error('Error fetching user API keys:', error)
+    }
+  }
+
+  // Enhance current page
+  const enhanceCurrentPage = async () => {
+    if (!isEditingScreenplay) {
+      toast({
+        title: "Error",
+        description: "Please enter edit mode first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const currentPageContent = getCurrentPageEditContent()
+    if (!currentPageContent || !currentPageContent.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to enhance",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEnhancingText(true)
+    
+    try {
+      const model = textEnhancerSettings.model
+      const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
+      const fullPrompt = `${prefix}\n\n${currentPageContent}`
+
+      // Determine which API to use based on model
+      const isAnthropic = model.startsWith('claude-')
+      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
+
+      if (!apiKey) {
+        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      }
+
+      let response
+      if (isAnthropic) {
+        // Use Anthropic API
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 4000,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorData = await anthropicResponse.json()
+          throw new Error(errorData.error?.message || 'Failed to enhance text')
+        }
+
+        const data = await anthropicResponse.json()
+        response = data.content[0].text
+      } else {
+        // Use OpenAI API
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+            temperature: 0.7,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorData = await openaiResponse.json()
+          throw new Error(errorData.error?.message || 'Failed to enhance text')
+        }
+
+        const data = await openaiResponse.json()
+        response = data.choices[0].message.content
+      }
+
+      // Update the current page with enhanced version
+      if (screenplayTextareaRef.current) {
+        screenplayTextareaRef.current.value = response
+        saveCurrentPageEdit(response)
+      }
+      
+      toast({
+        title: "Text Enhanced",
+        description: "Successfully enhanced the current page",
+      })
+      
+    } catch (error) {
+      console.error('Error enhancing text:', error)
+      toast({
+        title: "Enhancement Failed",
+        description: error instanceof Error ? error.message : 'Failed to enhance text',
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancingText(false)
     }
   }
 
@@ -768,8 +955,9 @@ function ScenePageClient({ id }: { id: string }) {
     name: scene?.name || "",
     description: scene?.description || "",
     start_time_seconds: scene?.start_time_seconds || 0,
-    duration_seconds: scene?.duration_seconds || 0,
-    scene_type: scene?.scene_type || "video",
+    duration_seconds: scene?.duration_seconds || undefined,
+    scene_type: scene?.scene_type || undefined,
+    sceneNumber: scene?.metadata?.sceneNumber || "",
   })
 
   // Helper functions
@@ -838,8 +1026,31 @@ function ScenePageClient({ id }: { id: string }) {
     setLoading(true)
     if (scene) {
       try {
-        // For now, just update local state since we don't have updateScene method yet
-        setScene((prev) => prev ? { ...prev, ...editForm } : null)
+        // Update scene using TimelineService
+        const sceneUpdate: any = {
+          name: editForm.name,
+          description: editForm.description,
+          start_time_seconds: editForm.start_time_seconds,
+          metadata: {
+            ...scene.metadata,
+            sceneNumber: editForm.sceneNumber,
+          }
+        }
+        
+        // Only include optional fields if they have values
+        if (editForm.duration_seconds !== undefined) {
+          sceneUpdate.duration_seconds = editForm.duration_seconds
+        }
+        if (editForm.scene_type !== undefined) {
+          sceneUpdate.scene_type = editForm.scene_type
+        }
+        
+        const updatedScene = await TimelineService.updateScene(scene.id, sceneUpdate)
+        setScene(updatedScene)
+        
+        // Also update in allScenes array
+        setAllScenes(prev => prev.map(s => s.id === scene.id ? updatedScene : s))
+        
         setIsEditing(false)
         toast({
           title: "Scene Updated",
@@ -862,8 +1073,9 @@ function ScenePageClient({ id }: { id: string }) {
       name: scene?.name || "",
       description: scene?.description || "",
       start_time_seconds: scene?.start_time_seconds || 0,
-      duration_seconds: scene?.duration_seconds || 0,
-      scene_type: scene?.scene_type || "video",
+      duration_seconds: scene?.duration_seconds || undefined,
+      scene_type: scene?.scene_type || undefined,
+      sceneNumber: scene?.metadata?.sceneNumber || "",
     })
     setIsEditing(true)
   }
@@ -1917,97 +2129,6 @@ function ScenePageClient({ id }: { id: string }) {
 
 
 
-        {/* Unlinked Assets Section */}
-        {assets.length === 0 && (
-          <Collapsible open={isUnlinkedAssetsExpanded} onOpenChange={setIsUnlinkedAssetsExpanded} className="mb-6">
-            <Card className="bg-card border-orange-500/20">
-              <CollapsibleTrigger asChild>
-                <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
-                  <CardTitle className="text-orange-500 flex items-center justify-between">
-                    Link Existing Assets
-                    {isUnlinkedAssetsExpanded ? (
-                      <ChevronUp className="h-4 w-4" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4" />
-                    )}
-                  </CardTitle>
-                </CardHeader>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <CardContent>
-                  <p className="text-muted-foreground mb-4">
-                    You have assets that aren't linked to this scene. Would you like to link them?
-                  </p>
-                  <Button
-                    onClick={async () => {
-                      if (!userId) {
-                        toast({
-                          title: "Error",
-                          description: "You must be logged in to link assets.",
-                          variant: "destructive",
-                        })
-                        return
-                      }
-
-                      try {
-                        const supabase = getSupabaseClient()
-                        
-                        // Get all assets for the user
-                        const { data: allAssets } = await supabase
-                          .from('assets')
-                          .select('*')
-                          .eq('user_id', userId)
-                          .is('scene_id', null)
-                        
-                        if (allAssets && allAssets.length > 0) {
-                          // Link them to this scene
-                          const { error } = await supabase
-                            .from('assets')
-                            .update({ scene_id: id })
-                            .eq('user_id', userId)
-                            .is('scene_id', null)
-                            .eq('project_id', allAssets[0].project_id) // Only link assets from same project
-                          
-                          if (error) {
-                            console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
-                            toast({
-                              title: "Error",
-                              description: "Failed to link assets to scene.",
-                              variant: "destructive",
-                            })
-                          } else {
-                            toast({
-                              title: "Assets Linked!",
-                              description: `${allAssets.length} assets have been linked to this scene.`,
-                            })
-                            // Refresh the assets
-                            refreshAssets()
-                          }
-                        } else {
-                          toast({
-                            title: "No Assets Found",
-                            description: "There are no unlinked assets to link to this scene.",
-                          })
-                        }
-                      } catch (error) {
-                        console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
-                        toast({
-                          title: "Error",
-                          description: "Failed to link assets to scene.",
-                          variant: "destructive",
-                        })
-                      }
-                    }}
-                    className="bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-90"
-                  >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Link Existing Assets to Scene
-                  </Button>
-                </CardContent>
-              </CollapsibleContent>
-            </Card>
-          </Collapsible>
-        )}
 
         {/* Quick Actions */}
         <div className="flex items-center justify-end">
@@ -2067,6 +2188,12 @@ function ScenePageClient({ id }: { id: string }) {
               className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Shot List
+            </TabsTrigger>
+            <TabsTrigger
+              value="link-assets"
+              className="data-[state=active]:bg-orange-500/20 data-[state=active]:text-orange-500"
+            >
+              Link Assets
             </TabsTrigger>
           </TabsList>
 
@@ -2144,15 +2271,6 @@ function ScenePageClient({ id }: { id: string }) {
                   </Button>
                 )}
 
-                <Button
-                  size="sm"
-                  className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
-                  onClick={() => router.push('/ai-studio')}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  Generate Script
-                </Button>
-                
                 <Button
                   size="lg"
                   className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
@@ -3321,7 +3439,61 @@ function ScenePageClient({ id }: { id: string }) {
               </div>
             )}
             {/* Screenplay Section */}
-            {(screenplayContent || scene?.screenplay_content) && (
+            {!screenplayContent && !scene?.screenplay_content && !isEditingScreenplay && (
+              <Card className="bg-card border-purple-500/20">
+                <CardContent className="py-12 text-center">
+                  <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">No Screenplay Yet</h3>
+                  <p className="text-muted-foreground mb-6">
+                    Create a blank page to start writing manually, or generate a screenplay using AI.
+                  </p>
+                  <div className="flex flex-wrap gap-3 justify-center">
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50"
+                      onClick={() => {
+                        // Create a blank page and enter edit mode
+                        // Use a single newline so it's not empty (falsy) but appears blank
+                        const blankContent = "\n"
+                        setScreenplayContent(blankContent)
+                        setEditedPages(new Map([[1, ""]]))
+                        setTotalPages(1)
+                        setCurrentPage(1)
+                        setIsEditingScreenplay(true)
+                        toast({
+                          title: "Blank Page Created",
+                          description: "You can now start writing your screenplay manually.",
+                        })
+                      }}
+                    >
+                      <Plus className="h-5 w-5 mr-2" />
+                      Create Blank Page
+                    </Button>
+                    <Button
+                      size="lg"
+                      className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
+                      onClick={generateScreenplay}
+                      disabled={isGeneratingScreenplay || !treatmentId}
+                      title={!treatmentId ? "Treatment not found for this project" : "Generate screenplay from scene description and treatment"}
+                    >
+                      {isGeneratingScreenplay ? (
+                        <>
+                          <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                          Generating Screenplay...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="h-5 w-5 mr-2" />
+                          Generate Screenplay
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {(screenplayContent || scene?.screenplay_content || isEditingScreenplay) && (
               <>
                 {/* Fix Formatting Button */}
                 <div className="mt-6 mb-3 flex justify-end">
@@ -3540,6 +3712,29 @@ function ScenePageClient({ id }: { id: string }) {
                 </CardHeader>
                 <CardContent>
                   {isEditingScreenplay ? (
+                    <div className="mb-4 flex items-center justify-between pb-3 border-b border-purple-500/20">
+                      <Label className="text-sm font-medium text-muted-foreground">
+                        Editing Page {currentPage} of {totalPages}
+                      </Label>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={enhanceCurrentPage}
+                          disabled={isEnhancingText}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          {isEnhancingText ? (
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-4 w-4 mr-1" />
+                          )}
+                          Enhance
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+                  {isEditingScreenplay ? (
                     <div className="space-y-4">
                       {totalPages > 1 && (
                         <div className="flex items-center justify-center gap-2 pb-2 border-b border-purple-500/20">
@@ -3647,6 +3842,19 @@ function ScenePageClient({ id }: { id: string }) {
                         <div className="flex gap-2">
                           <Button
                             variant="outline"
+                            onClick={enhanceCurrentPage}
+                            disabled={isEnhancingText || savingScreenplay}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            {isEnhancingText ? (
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4 mr-2" />
+                            )}
+                            Enhance
+                          </Button>
+                          <Button
+                            variant="outline"
                             onClick={handleCancelEditScreenplay}
                             disabled={savingScreenplay}
                             className="border-red-500/30 text-red-400 hover:bg-red-500/10"
@@ -3672,6 +3880,18 @@ function ScenePageClient({ id }: { id: string }) {
                           </Button>
                         </div>
                       </div>
+                      {/* Audio Generation for Current Page (Editing Mode) */}
+                      {getCurrentPageEditContent() && getCurrentPageEditContent().trim() && (
+                        <div className="mt-4">
+                          <TextToSpeech 
+                            text={getCurrentPageEditContent()}
+                            title={`Scene Page ${currentPage} Audio`}
+                            className="w-full"
+                            projectId={projectId}
+                            sceneId={id}
+                          />
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-4">
@@ -3716,6 +3936,18 @@ function ScenePageClient({ id }: { id: string }) {
                           {getCurrentPageContent()}
                         </pre>
                       </div>
+                      {/* Audio Generation for Current Page */}
+                      {getCurrentPageContent() && getCurrentPageContent().trim() && (
+                        <div className="mt-4">
+                          <TextToSpeech 
+                            text={getCurrentPageContent()}
+                            title={`Scene Page ${currentPage} Audio`}
+                            className="w-full"
+                            projectId={projectId}
+                            sceneId={id}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -4375,6 +4607,89 @@ function ScenePageClient({ id }: { id: string }) {
             </Card>
           </TabsContent>
 
+          {/* Link Assets Tab Content */}
+          <TabsContent value="link-assets" className="space-y-6">
+            <Card className="bg-card border-orange-500/20">
+              <CardHeader>
+                <CardTitle className="text-orange-500">
+                  Link Existing Assets
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-muted-foreground mb-4">
+                  You have assets that aren't linked to this scene. Would you like to link them?
+                </p>
+                <Button
+                  onClick={async () => {
+                    if (!userId) {
+                      toast({
+                        title: "Error",
+                        description: "You must be logged in to link assets.",
+                        variant: "destructive",
+                      })
+                      return
+                    }
+
+                    try {
+                      const supabase = getSupabaseClient()
+                      
+                      // Get all assets for the user
+                      const { data: allAssets } = await supabase
+                        .from('assets')
+                        .select('*')
+                        .eq('user_id', userId)
+                        .is('scene_id', null)
+                      
+                      if (allAssets && allAssets.length > 0) {
+                        // Link them to this scene
+                        const { error } = await supabase
+                          .from('assets')
+                          .update({ scene_id: id })
+                          .eq('user_id', userId)
+                          .is('scene_id', null)
+                          .eq('project_id', allAssets[0].project_id) // Only link assets from same project
+                        
+                        if (error) {
+                          console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
+                          toast({
+                            title: "Error",
+                            description: "Failed to link assets to scene.",
+                            variant: "destructive",
+                          })
+                        } else {
+                          toast({
+                            title: "Assets Linked!",
+                            description: `${allAssets.length} assets have been linked to this scene.`,
+                          })
+                          // Refresh the assets
+                          refreshAssets()
+                          // Switch to a different tab after linking
+                          setActiveTab("scripts")
+                        }
+                      } else {
+                        toast({
+                          title: "No Assets Found",
+                          description: "There are no unlinked assets to link to this scene.",
+                        })
+                      }
+                    } catch (error) {
+                      console.error('🎬 TIMELINE-SCENE - Error linking assets:', error)
+                      toast({
+                        title: "Error",
+                        description: "Failed to link assets to scene.",
+                        variant: "destructive",
+                      })
+                    }
+                  }}
+                  className="bg-gradient-to-r from-orange-500 to-red-500 hover:opacity-90"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Link Existing Assets to Scene
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Versions Tab Content */}
           <TabsContent value="versions" className="space-y-6">
             {/* Version Management Header */}
@@ -4850,7 +5165,7 @@ function ScenePageClient({ id }: { id: string }) {
 
         {/* Edit Scene Dialog */}
         <Dialog open={isEditing} onOpenChange={setIsEditing}>
-          <DialogContent className="bg-background border-primary/20 max-w-2xl">
+          <DialogContent className="bg-background border-primary/20 max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-primary">Edit Scene</DialogTitle>
             </DialogHeader>
@@ -4864,6 +5179,15 @@ function ScenePageClient({ id }: { id: string }) {
                 />
               </div>
               <div>
+                <Label className="text-muted-foreground">Scene Number</Label>
+                <Input
+                  value={editForm.sceneNumber}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, sceneNumber: e.target.value }))}
+                  className="bg-card border-primary/30 text-foreground"
+                  placeholder="e.g., 1, 2, 3A"
+                />
+              </div>
+              <div>
                 <Label className="text-muted-foreground">Description</Label>
                 <Textarea
                   value={editForm.description}
@@ -4873,28 +5197,44 @@ function ScenePageClient({ id }: { id: string }) {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-muted-foreground">Duration</Label>
+                  <Label className="text-muted-foreground">Duration (optional)</Label>
                   <Input
-                    value={editForm.duration_seconds}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, duration_seconds: parseInt(e.target.value, 10) || 0 }))}
+                    type="number"
+                    value={editForm.duration_seconds ?? ''}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, duration_seconds: e.target.value ? parseInt(e.target.value, 10) : undefined }))}
                     className="bg-card border-primary/30 text-foreground"
+                    placeholder="Enter duration in seconds"
                   />
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Status</Label>
-                  <Select
-                    value={editForm.scene_type}
-                    onValueChange={(value) => setEditForm((prev) => ({ ...prev, scene_type: value }))}
-                  >
-                    <SelectTrigger className="bg-card border-primary/30">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="bg-card border-primary/30">
-                      <SelectItem value="video">Video</SelectItem>
-                      <SelectItem value="audio">Audio</SelectItem>
-                      <SelectItem value="text">Text</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-muted-foreground">Status (optional)</Label>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={editForm.scene_type || undefined}
+                      onValueChange={(value) => setEditForm((prev) => ({ ...prev, scene_type: value }))}
+                    >
+                      <SelectTrigger className="bg-card border-primary/30 flex-1">
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-card border-primary/30">
+                        <SelectItem value="video">Video</SelectItem>
+                        <SelectItem value="audio">Audio</SelectItem>
+                        <SelectItem value="text">Text</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {editForm.scene_type && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditForm((prev) => ({ ...prev, scene_type: undefined }))}
+                        className="h-10 px-2"
+                        title="Clear status"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="flex gap-2 pt-4">

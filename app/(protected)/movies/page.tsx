@@ -656,7 +656,7 @@ export default function MoviesPage() {
       .trim()
 
     // Check prompt length for DALL-E 3 (1000 character limit)
-    const fullPrompt = `Cinematic Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+    const fullPrompt = `Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
     if (fullPrompt.length > 1000) {
       toast({
         title: "Prompt Too Long",
@@ -706,7 +706,7 @@ export default function MoviesPage() {
       // Use the service to use for cover generation
       switch (normalizedService) {
         case "dalle":
-          actualPromptUsed = `Cinematic Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
+          actualPromptUsed = `Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
           console.log('Making DALL-E request with prompt:', actualPromptUsed)
           
           const dalleResponse = await fetch('/api/ai/generate-image', {
@@ -730,7 +730,7 @@ export default function MoviesPage() {
           break
           
         case "openart":
-          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
+          actualPromptUsed = `Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const openartResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -752,7 +752,7 @@ export default function MoviesPage() {
           break
           
         case "leonardo":
-          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
+          actualPromptUsed = `Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const leonardoResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -771,7 +771,7 @@ export default function MoviesPage() {
           
         default:
           // Fallback to DALL-E
-          actualPromptUsed = `Cinematic Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
+          actualPromptUsed = `Movie Art Cover: ${aiPrompt}. Cinematic style, high quality, dramatic lighting.`
           const fallbackResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -812,11 +812,11 @@ export default function MoviesPage() {
               content_type: 'image' as const,
               content: '', // No text content for images
               content_url: supabaseUrl,
-              prompt: actualPromptUsed || `Cinematic Movie Art Cover: ${aiPrompt}`,
+              prompt: actualPromptUsed || `Movie Art Cover: ${aiPrompt}`,
               model: normalizedService,
               generation_settings: {
                 service: normalizedService,
-                prompt: actualPromptUsed || `Cinematic Movie Art Cover: ${aiPrompt}`,
+                prompt: actualPromptUsed || `Movie Art Cover: ${aiPrompt}`,
                 timestamp: new Date().toISOString(),
               },
               metadata: {

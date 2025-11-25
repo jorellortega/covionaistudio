@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2 } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -24,6 +24,7 @@ import { sanitizeFilename } from '@/lib/utils'
 import { AssetService, type Asset } from '@/lib/asset-service'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneData } from '@/lib/treatment-scenes-service'
 import { CastingService, type CastingSetting } from '@/lib/casting-service'
 import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
@@ -62,6 +63,14 @@ export default function TreatmentDetailPage() {
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [selectedScriptAIService, setSelectedScriptAIService] = useState<string>('')
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Text enhancement states
+  const [textEnhancerSettings, setTextEnhancerSettings] = useState<{
+    model: string
+    prefix: string
+  }>({ model: 'gpt-4o-mini', prefix: '' })
+  const [isEnhancingText, setIsEnhancingText] = useState(false)
+  const [isFormattingAsTreatment, setIsFormattingAsTreatment] = useState(false)
   
   // Cover image editing states
   const [isEditingCover, setIsEditingCover] = useState(false)
@@ -116,6 +125,7 @@ export default function TreatmentDetailPage() {
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
   const [isDetectingLocations, setIsDetectingLocations] = useState(false)
   const [savingLocations, setSavingLocations] = useState<string[]>([])
+  const [aiDetectedLocations, setAiDetectedLocations] = useState<string[]>([])
   const [editingCharacterName, setEditingCharacterName] = useState<string | null>(null)
   const [editedCharacterNames, setEditedCharacterNames] = useState<Record<string, string>>({})
   const [savingCharacters, setSavingCharacters] = useState<string[]>([])
@@ -124,6 +134,7 @@ export default function TreatmentDetailPage() {
     if (id) {
       loadTreatment(id as string)
       fetchUserApiKeys()
+      fetchTextEnhancerSettings()
     }
   }, [id])
 
@@ -140,6 +151,264 @@ export default function TreatmentDetailPage() {
       setUserApiKeys(data || {})
     } catch (error) {
       console.error('Error fetching user API keys:', error)
+    }
+  }
+
+  const fetchTextEnhancerSettings = async () => {
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('system_ai_config')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['text_enhancer_model', 'text_enhancer_prefix'])
+
+      if (error) {
+        console.error('Error fetching text enhancer settings:', error)
+        return
+      }
+
+      const settings: { model: string; prefix: string } = {
+        model: 'gpt-4o-mini',
+        prefix: ''
+      }
+
+      data?.forEach((item) => {
+        if (item.setting_key === 'text_enhancer_model') {
+          settings.model = item.setting_value || 'gpt-4o-mini'
+        } else if (item.setting_key === 'text_enhancer_prefix') {
+          settings.prefix = item.setting_value || ''
+        }
+      })
+
+      setTextEnhancerSettings(settings)
+    } catch (error) {
+      console.error('Error fetching text enhancer settings:', error)
+    }
+  }
+
+  const enhanceTreatmentText = async () => {
+    if (!editingPrompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to enhance",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEnhancingText(true)
+    
+    try {
+      const model = textEnhancerSettings.model
+      const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
+      const fullPrompt = `${prefix}\n\n${editingPrompt}`
+
+      // Determine which API to use based on model
+      const isAnthropic = model.startsWith('claude-')
+      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
+
+      if (!apiKey) {
+        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      }
+
+      let response
+      if (isAnthropic) {
+        // Use Anthropic API
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 4000,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text()
+          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
+        }
+
+        const result = await anthropicResponse.json()
+        response = result.content?.[0]?.text || ''
+      } else {
+        // Use OpenAI API
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+            max_tokens: 4000,
+            temperature: 0.7,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text()
+          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
+        }
+
+        const result = await openaiResponse.json()
+        response = result.choices?.[0]?.message?.content || ''
+      }
+
+      if (response) {
+        setEditingPrompt(response.trim())
+        toast({
+          title: "Success",
+          description: "Text enhanced successfully",
+        })
+      } else {
+        throw new Error('No response from AI')
+      }
+    } catch (error) {
+      console.error('Error enhancing text:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to enhance text',
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancingText(false)
+    }
+  }
+
+  const formatAsTreatment = async () => {
+    if (!editingPrompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to format",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!ready || !userId) {
+      toast({
+        title: "Error",
+        description: "You must be logged in to format treatment",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsFormattingAsTreatment(true)
+
+      // Get AI service settings (same as generateTreatmentFromScript)
+      let normalizedService = 'openai'
+      try {
+        const treatmentSetting = await AISettingsService.getTabSetting(userId, 'treatment')
+        if (treatmentSetting?.selected_service) {
+          normalizedService = treatmentSetting.selected_service === 'anthropic' ? 'anthropic' : 'openai'
+        }
+      } catch (err) {
+        console.error('Error getting treatment AI settings:', err)
+      }
+
+      const aiPrompt = `Write a comprehensive movie treatment based on the following text.
+
+REQUIREMENTS:
+- Create a full treatment document (similar to a professional pitch document)
+- Structure should include:
+  * TITLE
+  [Title of the film]
+  
+  * LOGLINE
+  [One-sentence summary]
+  
+  * SYNOPSIS
+  [2-3 paragraph summary of the story]
+  
+  * CHARACTERS
+  [Brief descriptions of main characters]
+  
+  * ACT I
+  [Detailed scene-by-scene narrative description of Act I in prose form, describing what happens visually and emotionally]
+  
+  * ACT II
+  [Detailed scene-by-scene narrative description of Act II in prose form, describing what happens visually and emotionally]
+  
+  * ACT III
+  [Detailed scene-by-scene narrative description of Act III in prose form, describing what happens visually and emotionally]
+  
+  * THEMES
+  [Key themes and messages]
+  
+  * VISUAL STYLE
+  [Description of visual approach, tone, and aesthetic]
+- Write in present tense, third person
+- Be detailed and cinematic in description
+- Focus on story structure, character arcs, and narrative flow
+- Include genre and tone descriptions
+- NO markdown formatting (no #, *, **, etc.)
+- Write as a professional treatment document that could be used for pitching
+
+Text to convert:
+${editingPrompt}
+
+Treatment:`
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          field: 'treatment',
+          service: normalizedService,
+          apiKey: 'configured',
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to format treatment')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.text) {
+        setEditingPrompt(result.text.trim())
+        toast({
+          title: "Success",
+          description: "Treatment formatted successfully",
+        })
+      } else {
+        throw new Error('No response from AI')
+      }
+    } catch (error) {
+      console.error('Error formatting as treatment:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to format as treatment',
+        variant: "destructive",
+      })
+    } finally {
+      setIsFormattingAsTreatment(false)
     }
   }
 
@@ -2582,12 +2851,23 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
   const detectedLocations = (() => {
     const set = new Set<string>()
     const counts = new Map<string, number>()
+    
+    // First add locations from scenes
     for (const s of treatmentScenes) {
       const location = (s.location || s.metadata?.location || "").trim()
       if (!location) continue
       set.add(location)
       counts.set(location, (counts.get(location) || 0) + 1)
     }
+    
+    // Then add AI-detected locations that aren't already in scenes
+    for (const locationName of aiDetectedLocations) {
+      if (!set.has(locationName)) {
+        set.add(locationName)
+        counts.set(locationName, 0) // Mark as AI-detected but not in scenes yet
+      }
+    }
+    
     const list = Array.from(set.values()).map((name) => ({
       name,
       count: counts.get(name) || 0,
@@ -3146,6 +3426,9 @@ Return the character names as a JSON array:`
         const charactersPerScene = Math.ceil(characterNames.length / treatmentScenes.length)
         let updatedCount = 0
         
+        // Check if these are timeline scenes (when project_id exists) or treatment scenes
+        const isTimelineScenes = !!treatment.project_id
+        
         for (let i = 0; i < treatmentScenes.length; i++) {
           const scene = treatmentScenes[i]
           const startIdx = i * charactersPerScene
@@ -3158,16 +3441,30 @@ Return the character names as a JSON array:`
             
             console.log(`Updating scene ${scene.id} (${scene.name}) with characters:`, mergedCharacters)
             try {
-              await TreatmentScenesService.updateTreatmentScene(scene.id, {
-                characters: mergedCharacters,
-                metadata: {
-                  ...scene.metadata,
+              if (isTimelineScenes) {
+                // These are timeline scenes - update via TimelineService with metadata.characters
+                const existingMetadata = scene.metadata || {}
+                await TimelineService.updateScene(scene.id, {
+                  metadata: {
+                    ...existingMetadata,
+                    characters: mergedCharacters,
+                  },
+                })
+              } else {
+                // These are treatment scenes - update via TreatmentScenesService with characters column
+                await TreatmentScenesService.updateTreatmentScene(scene.id, {
                   characters: mergedCharacters,
-                },
-              })
+                })
+              }
               updatedCount++
-            } catch (error) {
+            } catch (error: any) {
               console.error(`Error updating scene ${scene.id}:`, error)
+              console.error('Error details:', {
+                message: error?.message,
+                details: error?.details,
+                hint: error?.hint,
+                code: error?.code,
+              })
               // Continue with other scenes even if one fails
             }
           }
@@ -3399,19 +3696,13 @@ Return the location names as a JSON array:`
 
       console.log('Detected locations:', locationNames)
 
-      // Add detected locations to scenes that don't have location data
-      // We'll update scenes in the UI by updating treatmentScenes state
-      // For now, just show success - user can save them manually or we can auto-update scenes
+      // Store detected locations in state so they can be displayed and saved
+      setAiDetectedLocations(locationNames)
+
       toast({
         title: "Locations Detected!",
-        description: `Found ${locationNames.length} location${locationNames.length !== 1 ? 's' : ''}: ${locationNames.slice(0, 3).join(', ')}${locationNames.length > 3 ? '...' : ''}`,
+        description: `Found ${locationNames.length} location${locationNames.length !== 1 ? 's' : ''}: ${locationNames.slice(0, 3).join(', ')}${locationNames.length > 3 ? '...' : ''}. Review and save them below.`,
       })
-
-      // Refresh scenes to show updated locations
-      if (treatment?.id) {
-        const updatedScenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
-        setTreatmentScenes(updatedScenes)
-      }
 
     } catch (error) {
       console.error('Error detecting locations:', error)
@@ -3443,6 +3734,7 @@ Return the location names as a JSON array:`
           title: "Location Already Exists",
           description: `"${locationName}" already exists in locations.`,
         })
+        setSavingLocations(prev => prev.filter(l => l !== locationName))
         return
       }
 
@@ -3451,6 +3743,9 @@ Return the location names as a JSON array:`
         name: locationName.trim(),
         description: `Location from treatment: ${treatment?.title || 'Untitled'}`,
       })
+
+      // Remove from AI-detected locations since it's now saved
+      setAiDetectedLocations(prev => prev.filter(l => l.toLowerCase() !== locationName.toLowerCase()))
 
       // Refresh locations list
       const updatedLocations = await LocationsService.getLocations(treatment.project_id)
@@ -4231,74 +4526,49 @@ Return ONLY the JSON object, no other text:`
   return (
     <>
       <Header />
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
-        {/* Back Button */}
-        <div className="mb-6">
-          <Button variant="ghost" asChild className="mb-4">
-            <Link href="/treatments" className="flex items-center gap-2">
-              <ArrowLeft className="h-4 w-4" />
-              Back to Treatments
-            </Link>
-          </Button>
-        </div>
-
-        {/* Treatment Header */}
-        <div className="mb-8">
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex-1">
-              <h1 className="text-4xl font-bold mb-2">{treatment.title}</h1>
-              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                <Badge variant="outline" className="text-lg px-3 py-1">
-                  {treatment.genre}
-                </Badge>
-                <Badge className={`text-lg px-3 py-1 ${getStatusColor(treatment.status)}`}>
-                  {treatment.status.replace('-', ' ')}
-                </Badge>
-                {treatment.project_id && movie && (
-                  <Badge variant="secondary" className="text-lg px-3 py-1">
-                    <Film className="h-3 w-3 mr-1" />
-                    Linked to: {movie.name}
-                  </Badge>
-                )}
-              </div>
-              {treatment.project_id && movie && (
-                <div className="mt-2">
-                  <Button variant="outline" size="sm" asChild>
-                    <Link href={`/screenplay/${movie.id}`}>
-                      <Eye className="h-4 w-4 mr-2" />
-                      View Screenplay
-                    </Link>
-                  </Button>
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm">
-                <Edit className="h-4 w-4 mr-2" />
-                Edit
-              </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={handleDelete}
-                disabled={isDeleting}
-              >
-                <Trash2 className="h-4 w-4 mr-2" />
-                {isDeleting ? 'Deleting...' : 'Delete'}
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Cover Image */}
-          <Card className="mb-8 overflow-hidden">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-2 flex-1 min-w-0">
-                <ImageIcon className="h-5 w-5 flex-shrink-0" />
-                <span className="truncate">Cover Image</span>
-              </CardTitle>
-              <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+      
+      {/* Hero Section with Cover Image */}
+      <div className="relative w-full">
+        {/* Cover Image Background */}
+        {(coverImageAssets.length > 0 || treatment.cover_image_url) ? (
+          <div className="relative h-[400px] md:h-[500px] w-full overflow-hidden bg-gradient-to-b from-muted to-background group">
+            <div 
+              className="relative h-full w-full"
+              onMouseEnter={() => setIsSlideshowPaused(true)}
+              onMouseLeave={() => {
+                const hasDefaultCover = coverImageAssets.some(asset => asset.is_default_cover)
+                if (!hasDefaultCover) {
+                  setIsSlideshowPaused(false)
+                }
+              }}
+            >
+              {coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex] ? (
+                <img
+                  src={coverImageAssets[currentCoverIndex].content_url || treatment.cover_image_url}
+                  alt={`${treatment.title} cover ${currentCoverIndex + 1}`}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                  }}
+                />
+              ) : treatment.cover_image_url ? (
+                <img
+                  src={treatment.cover_image_url}
+                  alt={`${treatment.title} cover`}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                  }}
+                />
+              ) : null}
+              
+              {/* Gradient Overlay */}
+              <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0" />
+              
+              {/* Cover Management Buttons - Always visible on cover */}
+              <div className="absolute top-4 right-4 flex gap-2 z-20">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
@@ -4308,7 +4578,7 @@ Return ONLY the JSON object, no other text:`
                         size="sm"
                         onClick={generateQuickAICover}
                         disabled={isGeneratingCover || !aiSettingsLoaded}
-                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
                       >
                         {isGeneratingCover ? (
                           <>
@@ -4318,7 +4588,7 @@ Return ONLY the JSON object, no other text:`
                         ) : (
                           <>
                             <Zap className="h-4 w-4 mr-2" />
-                            Quick Generate AI
+                            Quick Generate
                           </>
                         )}
                       </Button>
@@ -4327,336 +4597,287 @@ Return ONLY the JSON object, no other text:`
                       variant="outline"
                       size="sm"
                       onClick={() => setIsEditingCover(true)}
+                      className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
                     >
                       <Edit className="h-4 w-4 mr-2" />
-                      {treatment.cover_image_url ? 'Edit' : 'Add Cover'}
+                      {treatment.cover_image_url || coverImageAssets.length > 0 ? 'Edit Cover' : 'Add Cover'}
                     </Button>
                   </>
                 ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setIsEditingCover(false)
+                      setGeneratedCoverUrl('')
+                    }}
+                    className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Cancel
+                  </Button>
+                )}
+              </div>
+              
+              {/* Navigation Arrows for Cover Slideshow */}
+              {coverImageAssets.length > 1 && (
+                <>
+                  <button
+                    onClick={prevCover}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                    aria-label="Previous cover"
+                  >
+                    <ChevronLeft className="h-6 w-6" />
+                  </button>
+                  <button
+                    onClick={nextCover}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm"
+                    aria-label="Next cover"
+                  >
+                    <ChevronRight className="h-6 w-6" />
+                  </button>
+                  {coverImageAssets[currentCoverIndex]?.is_default_cover && (
+                    <button
+                      onClick={() => handleUnsetDefaultCover(coverImageAssets[currentCoverIndex].id)}
+                      disabled={isSettingDefaultCover}
+                      className="absolute top-4 left-4 bg-yellow-500/90 hover:bg-yellow-500 text-yellow-950 px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-sm"
+                    >
+                      <Star className="h-3 w-3 fill-current" />
+                      Default Cover
+                    </button>
+                  )}
+                </>
+              )}
+              
+              {/* Thumbnail Strip - Show in bottom-right near Edit/Delete buttons */}
+              {coverImageAssets.length > 1 && (
+                <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2 z-20">
+                  {/* Counter */}
+                  <div className="bg-black/70 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm">
+                    {currentCoverIndex + 1} / {coverImageAssets.length}
+                  </div>
+                  {/* Thumbnails */}
                   <div className="flex gap-2">
+                    {coverImageAssets.map((asset, index) => (
+                      <button
+                        key={asset.id}
+                        onClick={() => handleThumbnailClick(index)}
+                        className={`relative flex-shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 transition-all backdrop-blur-sm ${
+                          index === currentCoverIndex
+                            ? 'border-white ring-2 ring-white/50'
+                            : 'border-white/30 hover:border-white/60'
+                        }`}
+                      >
+                        <img
+                          src={asset.content_url || ''}
+                          alt={`Cover ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                        {asset.is_default_cover && (
+                          <div className="absolute top-0.5 right-0.5 bg-yellow-500 rounded-full p-0.5">
+                            <Star className="h-1.5 w-1.5 fill-yellow-950 text-yellow-950" />
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="h-[300px] md:h-[400px] w-full bg-gradient-to-br from-muted/50 to-muted/30 border-b group relative">
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center">
+                <ImageIcon className="h-20 w-20 mx-auto mb-4 text-muted-foreground/50" />
+                <p className="text-muted-foreground mb-4">No cover image</p>
+                {/* Cover Management Buttons - Always visible on placeholder */}
+                <div className="flex gap-2 justify-center">
+                  {(treatment.synopsis || treatment.prompt || treatment.logline || treatment.title) && (
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => {
-                        setIsEditingCover(false)
-                        setGeneratedCoverUrl('')
-                      }}
+                      onClick={generateQuickAICover}
+                      disabled={isGeneratingCover || !aiSettingsLoaded}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                     >
-                      <X className="h-4 w-4 mr-2" />
-                      Cancel
-                    </Button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {isEditingCover ? (
-              <div className="space-y-4">
-                {/* File Upload */}
-                <div>
-                  <Label htmlFor="cover-upload">Upload Image</Label>
-                  <Input
-                    id="cover-upload"
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0]
-                      if (file) {
-                        handleCoverUpload(file)
-                      }
-                    }}
-                    disabled={isGeneratingCover}
-                    className="mt-2"
-                  />
-                </div>
-                {/* URL Input */}
-                <div>
-                  <Label htmlFor="cover-url">Or Enter Image URL</Label>
-                  <div className="flex gap-2 mt-2">
-                    <Input
-                      id="cover-url"
-                      type="url"
-                      placeholder="https://example.com/image.jpg"
-                      onChange={(e) => setGeneratedCoverUrl(e.target.value)}
-                      disabled={isGeneratingCover}
-                    />
-                    <Button
-                      onClick={() => {
-                        if (generatedCoverUrl) {
-                          handleCoverUrlSave(generatedCoverUrl)
-                        }
-                      }}
-                      disabled={isGeneratingCover || !generatedCoverUrl}
-                    >
-                      <Save className="h-4 w-4 mr-2" />
-                      Save
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <>
-                {coverImageAssets.length > 0 ? (
-                  <div 
-                    className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden group"
-                    onMouseEnter={() => setIsSlideshowPaused(true)} // Pause on hover
-                    onMouseLeave={() => {
-                      // Resume only if there's no default cover
-                      const hasDefaultCover = coverImageAssets.some(asset => asset.is_default_cover)
-                      if (!hasDefaultCover) {
-                        setIsSlideshowPaused(false)
-                      }
-                    }}
-                  >
-                    {/* Slideshow Display */}
-                    {coverImageAssets[currentCoverIndex] && (
-                      <img
-                        src={coverImageAssets[currentCoverIndex].content_url || treatment.cover_image_url}
-                        alt={`${treatment.title} cover ${currentCoverIndex + 1}`}
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement;
-                          target.style.display = 'none';
-                          target.nextElementSibling?.classList.remove('hidden');
-                        }}
-                      />
-                    )}
-                    
-                    {/* Fallback for broken images */}
-                    <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
-                      <div className="text-center text-muted-foreground">
-                        <Film className="h-16 w-16 mx-auto mb-4" />
-                        <p className="text-lg">Cover Image</p>
-                      </div>
-                    </div>
-
-                    {/* Default Cover Badge - Clickable to unset */}
-                    {coverImageAssets[currentCoverIndex]?.is_default_cover && (
-                      <button
-                        onClick={() => handleUnsetDefaultCover(coverImageAssets[currentCoverIndex].id)}
-                        disabled={isSettingDefaultCover}
-                        className="absolute top-2 left-2 bg-yellow-500/90 hover:bg-yellow-500 text-yellow-950 px-2 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Click to remove default cover"
-                      >
-                        <Star className="h-3 w-3 fill-current" />
-                        Default Cover
-                      </button>
-                    )}
-
-                    {/* Navigation Arrows - Show when more than 1 image */}
-                    {coverImageAssets.length > 1 && (
-                      <>
-                        <button
-                          onClick={prevCover}
-                          className="absolute left-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                          aria-label="Previous cover"
-                        >
-                          <ChevronLeft className="h-5 w-5" />
-                        </button>
-                        <button
-                          onClick={nextCover}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                          aria-label="Next cover"
-                        >
-                          <ChevronRight className="h-5 w-5" />
-                        </button>
-                      </>
-                    )}
-
-                    {/* Image Counter */}
-                    {coverImageAssets.length > 1 && (
-                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 text-white px-3 py-1 rounded-full text-xs">
-                        {currentCoverIndex + 1} / {coverImageAssets.length}
-                      </div>
-                    )}
-
-                    {/* Action Buttons - Show on hover */}
-                    {coverImageAssets[currentCoverIndex] && (
-                      <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {/* Set as Default Button - Show when not default */}
-                        {!coverImageAssets[currentCoverIndex].is_default_cover && (
-                          <button
-                            onClick={() => handleSetDefaultCover(coverImageAssets[currentCoverIndex].id)}
-                            disabled={isSettingDefaultCover || isDeletingCover}
-                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 disabled:opacity-50"
-                          >
-                            {isSettingDefaultCover ? (
-                              <>
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                                Setting...
-                              </>
-                            ) : (
-                              <>
-                                <Star className="h-3 w-3" />
-                                Set as Default
-                              </>
-                            )}
-                          </button>
-                        )}
-                        {/* Delete Button */}
-                        <button
-                          onClick={() => handleDeleteCover(coverImageAssets[currentCoverIndex].id)}
-                          disabled={isDeletingCover || isSettingDefaultCover}
-                          className="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-xs font-medium flex items-center gap-1 disabled:opacity-50"
-                          title="Delete this cover image"
-                        >
-                          {isDeletingCover ? (
-                            <>
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              Deleting...
-                            </>
-                          ) : (
-                            <>
-                              <Trash2 className="h-3 w-3" />
-                              Delete
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ) : treatment.cover_image_url ? (
-                  <div className="relative h-64 md:h-80 bg-muted rounded-lg overflow-hidden group">
-                    <img
-                      src={treatment.cover_image_url}
-                      alt={`${treatment.title} cover`}
-                      className="w-full h-full object-cover"
-                      onError={(e) => {
-                        const target = e.target as HTMLImageElement;
-                        target.style.display = 'none';
-                        target.nextElementSibling?.classList.remove('hidden');
-                      }}
-                    />
-                    <div className="hidden absolute inset-0 flex items-center justify-center bg-muted">
-                      <div className="text-center text-muted-foreground">
-                        <Film className="h-16 w-16 mx-auto mb-4" />
-                        <p className="text-lg">Cover Image</p>
-                      </div>
-                    </div>
-                    {/* Delete Button for direct cover_image_url */}
-                    <button
-                      onClick={async () => {
-                        if (!confirm('Are you sure you want to delete this cover image? This action cannot be undone.')) {
-                          return
-                        }
-                        try {
-                          setIsDeletingCover(true)
-                          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
-                            cover_image_url: null,
-                          })
-                          setTreatment(updatedTreatment)
-                          toast({
-                            title: "Cover Deleted",
-                            description: "The cover image has been deleted successfully.",
-                          })
-                        } catch (error) {
-                          console.error('Error deleting cover:', error)
-                          toast({
-                            title: "Failed to Delete Cover",
-                            description: error instanceof Error ? error.message : "Failed to delete cover image.",
-                            variant: "destructive",
-                          })
-                        } finally {
-                          setIsDeletingCover(false)
-                        }
-                      }}
-                      disabled={isDeletingCover}
-                      className="absolute bottom-2 right-2 bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded-md text-xs font-medium opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 disabled:opacity-50"
-                      title="Delete this cover image"
-                    >
-                      {isDeletingCover ? (
+                      {isGeneratingCover ? (
                         <>
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Deleting...
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
                         </>
                       ) : (
                         <>
-                          <Trash2 className="h-3 w-3" />
-                          Delete
+                          <Zap className="h-4 w-4 mr-2" />
+                          Quick Generate
                         </>
                       )}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="border-2 border-dashed border-muted rounded-lg p-12 text-center">
-                    <ImageIcon className="h-16 w-16 mx-auto mb-4 text-muted-foreground" />
-                    <p className="text-muted-foreground mb-2">No cover image</p>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Add a cover image or generate one with AI
-                    </p>
-                  </div>
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsEditingCover(true)}
+                  >
+                    <Edit className="h-4 w-4 mr-2" />
+                    Add Cover
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Hero Content Overlay */}
+        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12">
+          <div className="container mx-auto max-w-7xl">
+            {/* Back Button */}
+            <div className="mb-4">
+              <Button variant="ghost" asChild className="text-white/90 hover:text-white hover:bg-white/20 backdrop-blur-sm">
+                <Link href="/treatments" className="flex items-center gap-2">
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to Treatments
+                </Link>
+              </Button>
+            </div>
+            
+            {/* Title and Meta */}
+            <div className="flex items-end justify-between gap-4 flex-wrap">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 drop-shadow-lg">
+                  {treatment.title}
+                </h1>
+                <div className="flex items-center gap-2 mb-4 flex-wrap">
+                  <Badge variant="secondary" className="text-base px-3 py-1 backdrop-blur-sm bg-white/20 text-white border-white/30">
+                    {treatment.genre}
+                  </Badge>
+                  <Badge className={`text-base px-3 py-1 backdrop-blur-sm ${getStatusColor(treatment.status)}`}>
+                    {treatment.status.replace('-', ' ')}
+                  </Badge>
+                  {treatment.project_id && movie && (
+                    <Badge variant="secondary" className="text-base px-3 py-1 backdrop-blur-sm bg-white/20 text-white border-white/30">
+                      <Film className="h-3 w-3 mr-1" />
+                      {movie.name}
+                    </Badge>
+                  )}
+                </div>
+                {treatment.logline && (
+                  <p className="text-white/90 text-lg md:text-xl max-w-3xl drop-shadow-md italic">
+                    "{treatment.logline}"
+                  </p>
                 )}
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <Button variant="outline" size="sm" className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30">
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="backdrop-blur-sm bg-red-500/20 text-white border-red-500/30 hover:bg-red-500/30"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {isDeleting ? 'Deleting...' : 'Delete'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-                {/* Thumbnail Strip - Show when there are cover assets */}
-                {coverImageAssets.length > 0 && (
-                  <div className="mt-4">
-                    <p className="text-xs text-muted-foreground mb-2">
-                      {coverImageAssets.length} {coverImageAssets.length === 1 ? 'cover' : 'covers'} available
-                    </p>
-                    <div className="flex gap-2 overflow-x-auto pb-2">
-                      {coverImageAssets.map((asset, index) => (
-                        <button
-                          key={asset.id}
-                          onClick={() => handleThumbnailClick(index)}
-                          className={`relative flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${
-                            index === currentCoverIndex
-                              ? 'border-blue-500 ring-2 ring-blue-500/50'
-                              : 'border-transparent hover:border-gray-400'
-                          }`}
-                        >
-                          <img
-                            src={asset.content_url || ''}
-                            alt={`Cover ${index + 1}`}
-                            className="w-full h-full object-cover"
-                          />
-                          {asset.is_default_cover && (
-                            <div className="absolute top-1 right-1 bg-yellow-500 rounded-full p-0.5">
-                              <Star className="h-2 w-2 fill-yellow-950 text-yellow-950" />
-                            </div>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </CardContent>
-          </Card>
+      {/* Cover Editing Dialog */}
+      <Dialog open={isEditingCover} onOpenChange={setIsEditingCover}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Manage Cover Image</DialogTitle>
+            <DialogDescription>
+              Upload a new cover image or enter an image URL
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* File Upload */}
+            <div>
+              <Label htmlFor="cover-upload-dialog">Upload Image</Label>
+              <Input
+                id="cover-upload-dialog"
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) {
+                    handleCoverUpload(file)
+                    setIsEditingCover(false)
+                  }
+                }}
+                disabled={isGeneratingCover}
+                className="mt-2"
+              />
+            </div>
+            {/* URL Input */}
+            <div>
+              <Label htmlFor="cover-url-dialog">Or Enter Image URL</Label>
+              <div className="flex gap-2 mt-2">
+                <Input
+                  id="cover-url-dialog"
+                  type="url"
+                  placeholder="https://example.com/image.jpg"
+                  value={generatedCoverUrl}
+                  onChange={(e) => setGeneratedCoverUrl(e.target.value)}
+                  disabled={isGeneratingCover}
+                />
+                <Button
+                  onClick={() => {
+                    if (generatedCoverUrl) {
+                      handleCoverUrlSave(generatedCoverUrl)
+                      setIsEditingCover(false)
+                      setGeneratedCoverUrl('')
+                    }
+                  }}
+                  disabled={isGeneratingCover || !generatedCoverUrl}
+                >
+                  <Save className="h-4 w-4 mr-2" />
+                  Save
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
-        {/* Main Content */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Left Column - Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Synopsis Card - Always show, but hide content if identical to prompt */}
-            {(() => {
-              // Check if synopsis and prompt are the same or very similar
-              const synopsisText = treatment.synopsis?.trim() || ''
-              const promptText = treatment.prompt?.trim() || ''
-              
-              // Only hide content if they are exactly the same (to avoid duplication)
-              // But always show the card so user can add/edit synopsis
-              const areIdentical = synopsisText && promptText && synopsisText === promptText
-              
-              console.log('📋 Treatment display check:', {
-                hasSynopsis: !!synopsisText,
-                synopsisLength: synopsisText.length,
-                hasPrompt: !!promptText,
-                promptLength: promptText.length,
-                areIdentical,
-                synopsisPreview: synopsisText.substring(0, 100),
-                promptPreview: promptText.substring(0, 100)
-              })
-              
-              // Always show the card, but hide content if identical to prompt
-              // This allows users to add a synopsis even when there's no synopsis yet
-              if (areIdentical) {
-                return null
-              }
-              
-              return (
-            <Card>
+      {/* Main Content */}
+      <div className="container mx-auto px-4 py-8 max-w-7xl">
+
+        {/* Synopsis - Full Width */}
+        {(() => {
+          // Check if synopsis and prompt are the same or very similar
+          const synopsisText = treatment.synopsis?.trim() || ''
+          const promptText = treatment.prompt?.trim() || ''
+          
+          // Only hide content if they are exactly the same (to avoid duplication)
+          // But always show the card so user can add/edit synopsis
+          const areIdentical = synopsisText && promptText && synopsisText === promptText
+          
+          console.log('📋 Treatment display check:', {
+            hasSynopsis: !!synopsisText,
+            synopsisLength: synopsisText.length,
+            hasPrompt: !!promptText,
+            promptLength: promptText.length,
+            areIdentical,
+            synopsisPreview: synopsisText.substring(0, 100),
+            promptPreview: promptText.substring(0, 100)
+          })
+          
+          // Always show the card, but hide content if identical to prompt
+          // This allows users to add a synopsis even when there's no synopsis yet
+          if (areIdentical) {
+            return null
+          }
+          
+          return (
+            <Card className="mb-8">
               <CardHeader>
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="flex items-center gap-2 flex-1 min-w-0">
@@ -4745,452 +4966,165 @@ Return ONLY the JSON object, no other text:`
                 </div>
               </CardContent>
             </Card>
-              )
-            })()}
+          )
+        })()}
 
-            {/* Script from Movie (if available) - Collapsible */}
-            {treatment.project_id && (
-              <Collapsible open={isScriptExpanded} onOpenChange={setIsScriptExpanded}>
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CollapsibleTrigger className="w-full">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          {isScriptExpanded ? (
-                            <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+        {/* Treatment (Full Document) - Full Width */}
+        <Collapsible open={isTreatmentExpanded} onOpenChange={setIsTreatmentExpanded}>
+          <Card className="mb-8">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-2">
+                <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
+                  {isTreatmentExpanded ? (
+                    <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  )}
+                  <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                    <FileText className="h-5 w-5 text-blue-500 flex-shrink-0" />
+                    <span className="truncate">Treatment</span>
+                  </CardTitle>
+                </CollapsibleTrigger>
+                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                  {!isEditingPrompt ? (
+                    <>
+                      {/* AI Regenerate Button */}
+                      {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={generateAITreatment}
+                          disabled={isGeneratingTreatment || !aiSettingsLoaded}
+                          className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Generate a new full treatment using AI from existing content"
+                        >
+                          {isGeneratingTreatment ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
                           ) : (
-                            <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                            <>
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              AI Regenerate
+                            </>
                           )}
-                          <CardTitle className="flex items-center gap-2 text-base min-w-0">
-                            <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                            <span className="truncate">Script from Movie</span>
-                          </CardTitle>
-                        </div>
-                        {!treatment.prompt && scriptContent && !isLoadingScript && (
-                          <Button
-                            variant="default"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              generateTreatmentFromScript()
-                            }}
-                            disabled={isGeneratingTreatmentFromScript || !aiSettingsLoaded || !scriptContent}
-                            className="bg-purple-500 hover:bg-purple-600 text-white flex-shrink-0"
-                          >
-                            {isGeneratingTreatmentFromScript ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Generating...
-                              </>
-                            ) : (
-                              <>
-                                <Sparkles className="h-4 w-4 mr-2" />
-                                Generate Treatment
-                              </>
-                            )}
-                          </Button>
-                        )}
-                      </div>
-                    </CollapsibleTrigger>
-                    <CardDescription className="pt-1 pl-6">
-                      {scriptContent 
-                        ? "Script content from the linked movie project"
-                        : isLoadingScript 
-                        ? "Fetching script content..."
-                        : "Click to view script from linked movie project"}
-                    </CardDescription>
-                  </CardHeader>
-                  <CollapsibleContent>
-                    <CardContent>
-                      <div className="space-y-4">
-                        {isLoadingScript ? (
-                          <div className="text-center py-8">
-                            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-muted-foreground" />
-                            <p className="text-muted-foreground">Loading script from movie project...</p>
-                          </div>
-                        ) : scriptContent ? (
-                          <>
-                            <div className="bg-muted/50 rounded-lg p-4 max-h-96 overflow-y-auto">
-                              <pre className="text-sm whitespace-pre-wrap font-mono text-muted-foreground">
-                                {scriptContent.length > 2000 
-                                  ? scriptContent.substring(0, 2000) + '\n\n... (script truncated for display)'
-                                  : scriptContent}
-                              </pre>
-                            </div>
-                            {scriptContent.length > 2000 && (
-                              <p className="text-xs text-muted-foreground text-center">
-                                Script preview (showing first 2000 characters). Full script will be used for treatment generation.
-                              </p>
-                            )}
-                            {!treatment.prompt && (
-                              <div className="border-t pt-4">
-                                <p className="text-sm text-muted-foreground mb-2">
-                                  No treatment document exists yet. Click "Generate Treatment" above to create one from this script.
-                                </p>
-                              </div>
-                            )}
-                          </>
-                        ) : (
-                          <div className="text-center py-8 border-2 border-dashed border-muted rounded-lg">
-                            <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                            <p className="text-muted-foreground mb-2">No script found</p>
-                            <p className="text-sm text-muted-foreground">
-                              No script assets found for this movie project. Upload a script to the movie project first.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </CardContent>
-                  </CollapsibleContent>
-                </Card>
-              </Collapsible>
-            )}
-
-            {/* Treatment (Full Document) - Collapsible */}
-            <Collapsible open={isTreatmentExpanded} onOpenChange={setIsTreatmentExpanded}>
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
-                      {isTreatmentExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      )}
-                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
-                        <FileText className="h-5 w-5 text-blue-500 flex-shrink-0" />
-                        <span className="truncate">Treatment</span>
-                      </CardTitle>
-                    </CollapsibleTrigger>
-                    <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                      {!isEditingPrompt ? (
-                        <>
-                          {/* AI Regenerate Button */}
-                          {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              onClick={generateAITreatment}
-                              disabled={isGeneratingTreatment || !aiSettingsLoaded}
-                              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                              title="Generate a new full treatment using AI from existing content"
-                            >
-                              {isGeneratingTreatment ? (
-                                <>
-                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                  Generating...
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles className="h-4 w-4 mr-2" />
-                                  AI Regenerate
-                                </>
-                              )}
-                            </Button>
-                          )}
-                          <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
-                            <Edit className="h-4 w-4 mr-2" />
-                            {treatment.prompt ? 'Edit' : 'Add Treatment'}
-                          </Button>
-                        </>
-                      ) : (
-                          <div className="flex gap-2">
-                            <Button variant="outline" size="sm" onClick={handleCancelEditPrompt}>
-                              <X className="h-4 w-4 mr-2" />
-                              Cancel
-                            </Button>
-                            <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt}>
-                              <Save className="h-4 w-4 mr-2" />
-                              {isSavingPrompt ? 'Saving...' : 'Save'}
-                            </Button>
-                          </div>
-                        )}
-                    </div>
-                  </div>
-                  <CardDescription className="pt-1 pl-6">
-                    Full treatment document - paste your complete treatment here (matches ideas.prompt field)
-                  </CardDescription>
-                </CardHeader>
-                <CollapsibleContent>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {isEditingPrompt ? (
-                        <Textarea
-                          value={editingPrompt}
-                          onChange={(e) => setEditingPrompt(e.target.value)}
-                          placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
-                          rows={25}
-                          className="text-base leading-relaxed font-mono min-h-[500px]"
-                        />
-                      ) : (
-                        <>
-                          {treatment.prompt ? (
-                            <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{treatment.prompt}</p>
-                          ) : (
-                            <div className="text-center py-12 border-2 border-dashed border-muted rounded-lg">
-                              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                              <p className="text-muted-foreground mb-2">No treatment document yet</p>
-                              <p className="text-sm text-muted-foreground mb-4">
-                                Click "Add Treatment" to paste your full treatment document
-                              </p>
-                              <Button variant="outline" onClick={handleStartEditPrompt}>
-                                <Edit className="h-4 w-4 mr-2" />
-                                Add Treatment
-                              </Button>
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </CardContent>
-                </CollapsibleContent>
-                {/* Text to Speech Component - Always visible outside collapsible */}
-                {treatment.prompt && !isEditingPrompt && (
-                  <CardContent className="pt-0">
-                    <div data-tts-prompt>
-                      <TextToSpeech 
-                        text={treatment.prompt}
-                        title={`${treatment.title} - Treatment`}
-                        projectId={treatment.project_id}
-                        sceneId={null}
-                        treatmentId={treatment.id}
-                        className="mt-4"
-                      />
-                    </div>
-                  </CardContent>
-                )}
-              </Card>
-            </Collapsible>
-
-            {/* Project Details Card - Collapsible */}
-            <Collapsible open={isTreatmentDetailsExpanded} onOpenChange={setIsTreatmentDetailsExpanded}>
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
-                      {isTreatmentDetailsExpanded ? (
-                        <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      ) : (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                      )}
-                      <CardTitle className="flex items-center gap-2 text-base min-w-0">
-                        <FileText className="h-5 w-5 text-purple-500 flex-shrink-0" />
-                        <span className="truncate">Project Details</span>
-                      </CardTitle>
-                    </CollapsibleTrigger>
-                    <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
-                      {!isEditingTreatment ? (
-                        <Button variant="outline" size="sm" onClick={handleStartEditTreatment}>
-                          <Edit className="h-4 w-4 mr-2" />
-                          Edit
                         </Button>
-                      ) : (
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm" onClick={handleCancelEditTreatment}>
-                            <X className="h-4 w-4 mr-2" />
-                            Cancel
-                          </Button>
-                          <Button variant="default" size="sm" onClick={handleSaveTreatment} disabled={isSavingTreatment}>
-                            <Save className="h-4 w-4 mr-2" />
-                            {isSavingTreatment ? 'Saving...' : 'Save'}
-                          </Button>
-                        </div>
                       )}
-                    </div>
-                  </div>
-                  <CardDescription className="pt-1 pl-6">
-                    Project information and metadata
-                  </CardDescription>
-                </CardHeader>
-                <CollapsibleContent>
-                  <CardContent>
-                <div className="space-y-6">
-                  {/* Project Details */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Target className="h-4 w-4 text-muted-foreground" />
-                        <Label className="font-medium text-sm">Target Audience</Label>
-                      </div>
-                      {isEditingTreatment ? (
-                        <Input
-                          value={editingTreatmentData.target_audience}
-                          onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, target_audience: e.target.value }))}
-                          placeholder="e.g., 18-35"
-                          className="ml-6"
-                        />
-                      ) : (
-                        <p className="text-sm text-muted-foreground pl-6">
-                          {treatment.target_audience || 'Not specified'}
-                        </p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="h-4 w-4 text-muted-foreground" />
-                        <Label className="font-medium text-sm">Estimated Budget</Label>
-                      </div>
-                      {isEditingTreatment ? (
-                        <Input
-                          value={editingTreatmentData.estimated_budget}
-                          onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_budget: e.target.value }))}
-                          placeholder="e.g., $10M"
-                          className="ml-6"
-                        />
-                      ) : (
-                        <p className="text-sm text-muted-foreground pl-6">
-                          {treatment.estimated_budget || 'Not specified'}
-                        </p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-muted-foreground" />
-                        <Label className="font-medium text-sm">Estimated Duration</Label>
-                      </div>
-                      {isEditingTreatment ? (
-                        <Input
-                          value={editingTreatmentData.estimated_duration}
-                          onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_duration: e.target.value }))}
-                          placeholder="e.g., 120 min"
-                          className="ml-6"
-                        />
-                      ) : (
-                        <p className="text-sm text-muted-foreground pl-6">
-                          {treatment.estimated_duration || 'Not specified'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Status and Genre */}
-                  <div className="flex items-center gap-4 pt-4 border-t">
-                    <div>
-                      <p className="text-sm font-medium mb-1">Status</p>
-                      {isEditingTreatment ? (
-                        <div className="pl-0 ml-0">
-                          <Select
-                            value={editingTreatmentData.status}
-                            onValueChange={(val) => setEditingTreatmentData(prev => ({ ...prev, status: val as any }))}
-                          >
-                            <SelectTrigger className="ml-0">
-                              <SelectValue placeholder="Select status" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="draft">Draft</SelectItem>
-                              <SelectItem value="in-progress">In Progress</SelectItem>
-                              <SelectItem value="completed">Completed</SelectItem>
-                              <SelectItem value="archived">Archived</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      ) : (
-                        <Badge className={getStatusColor(treatment.status)}>
-                          {treatment.status.replace('-', ' ')}
-                        </Badge>
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium mb-1">Genre</p>
-                      {isEditingTreatment ? (
-                        <Input
-                          value={editingTreatmentData.genre}
-                          onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, genre: e.target.value }))}
-                          placeholder="e.g., Sci-Fi"
-                          className="ml-0"
-                        />
-                      ) : (
-                        <Badge variant="outline">{treatment.genre}</Badge>
-                      )}
-                    </div>
-                    {treatment.project_id && movie && (
-                      <div>
-                        <p className="text-sm font-medium mb-1">Movie Project</p>
-                        <Badge variant="secondary">
-                          <Film className="h-3 w-3 mr-1" />
-                          {movie.name}
-                        </Badge>
+                      <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
+                        <Edit className="h-4 w-4 mr-2" />
+                        {treatment.prompt ? 'Edit' : 'Add Treatment'}
+                      </Button>
+                    </>
+                  ) : (
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={handleCancelEditPrompt}>
+                          <X className="h-4 w-4 mr-2" />
+                          Cancel
+                        </Button>
+                        <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt}>
+                          <Save className="h-4 w-4 mr-2" />
+                          {isSavingPrompt ? 'Saving...' : 'Save'}
+                        </Button>
                       </div>
                     )}
-                  </div>
-
-                  {/* Timeline */}
-                  <div className="pt-4 border-t">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="font-medium mb-1">Created</p>
-                        <p className="text-muted-foreground">
-                          {new Date(treatment.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="font-medium mb-1">Last Updated</p>
-                        <p className="text-muted-foreground">
-                          {new Date(treatment.updated_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
                 </div>
-                  </CardContent>
-                </CollapsibleContent>
-              </Card>
-            </Collapsible>
-
-            {/* Logline */}
-            {treatment.logline && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <CardTitle>Logline</CardTitle>
-                      <CardDescription>One-sentence summary</CardDescription>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {/* AI Regenerate Button */}
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={generateAILogline}
-                        disabled={isGeneratingLogline || !aiSettingsLoaded}
-                        className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                        title="Generate a new logline from treatment content using AI"
-                      >
-                        {isGeneratingLogline ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Generating...
-                          </>
-                        ) : (
-                          <>
-                            <Sparkles className="h-4 w-4 mr-2" />
-                            AI Regenerate
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <p className="text-lg font-medium italic">"{treatment.logline}"</p>
-                    
-                    {/* Text to Speech Component */}
-                    <div data-tts-logline>
-                      <TextToSpeech 
-                        text={treatment.logline}
-                        title={`${treatment.title} - Logline`}
-                        projectId={treatment.project_id}
-                        sceneId={null}
-                        treatmentId={treatment.id}
-                        className="mt-4"
+              </div>
+              <CardDescription className="pt-1 pl-6">
+                Full treatment document - paste your complete treatment here (matches ideas.prompt field)
+              </CardDescription>
+            </CardHeader>
+            <CollapsibleContent>
+              <CardContent>
+                <div className="space-y-4">
+                  {isEditingPrompt ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="treatment-textarea">Treatment Document</Label>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={enhanceTreatmentText}
+                            disabled={isEnhancingText || !editingPrompt.trim()}
+                            className="flex items-center gap-2"
+                          >
+                            {isEnhancingText ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Wand2 className="h-4 w-4" />
+                            )}
+                            {isEnhancingText ? "Enhancing..." : "Enhance Text"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={formatAsTreatment}
+                            disabled={isFormattingAsTreatment || !editingPrompt.trim()}
+                            className="flex items-center gap-2"
+                          >
+                            {isFormattingAsTreatment ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            {isFormattingAsTreatment ? "Formatting..." : "Format as Treatment"}
+                          </Button>
+                        </div>
+                      </div>
+                      <Textarea
+                        id="treatment-textarea"
+                        value={editingPrompt}
+                        onChange={(e) => setEditingPrompt(e.target.value)}
+                        placeholder="Paste your full treatment document here. This is the complete treatment (like ideas.prompt), separate from the synopsis above."
+                        rows={25}
+                        className="text-base leading-relaxed font-mono min-h-[500px]"
                       />
                     </div>
-                  </div>
-                </CardContent>
-              </Card>
+                  ) : (
+                    <>
+                      {treatment.prompt ? (
+                        <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{treatment.prompt}</p>
+                      ) : (
+                        <div className="text-center py-12 border-2 border-dashed border-muted rounded-lg">
+                          <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                          <p className="text-muted-foreground mb-2">No treatment document yet</p>
+                          <p className="text-sm text-muted-foreground mb-4">
+                            Click "Add Treatment" to paste your full treatment document
+                          </p>
+                          <Button variant="outline" onClick={handleStartEditPrompt}>
+                            <Edit className="h-4 w-4 mr-2" />
+                            Add Treatment
+                          </Button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </CollapsibleContent>
+            {/* Text to Speech Component - Always visible outside collapsible */}
+            {treatment.prompt && !isEditingPrompt && (
+              <CardContent className="pt-0">
+                <div data-tts-prompt>
+                  <TextToSpeech 
+                    text={treatment.prompt}
+                    title={`${treatment.title} - Treatment`}
+                    projectId={treatment.project_id}
+                    sceneId={null}
+                    treatmentId={treatment.id}
+                    className="mt-4"
+                  />
+                </div>
+              </CardContent>
             )}
+          </Card>
+        </Collapsible>
 
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          {/* Left Column - Main Content */}
+          <div className="lg:col-span-8 space-y-6">
             {/* Characters */}
             {treatment.characters && (
               <Card>
@@ -5301,7 +5235,11 @@ Return ONLY the JSON object, no other text:`
                         </div>
                         <div className="space-y-2">
                           {detectedLocations.length === 0 ? (
-                            <div className="text-sm text-muted-foreground">No locations found in scenes.</div>
+                            <div className="text-sm text-muted-foreground">
+                              {treatmentScenes.length === 0 
+                                ? "No locations found. Click 'Detect from Treatment' to find locations in your treatment content."
+                                : "No locations found in scenes."}
+                            </div>
                           ) : (
                             detectedLocations.map((loc) => {
                               const alreadyExists = locations.some(
@@ -5992,85 +5930,300 @@ Return ONLY the JSON object, no other text:`
               </Card>
             )}
 
-            {/* Notes */}
-            {treatment.notes && (
-              <Card>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle>Notes</CardTitle>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <p className="whitespace-pre-line">{treatment.notes}</p>
-                    
-                    {/* Text to Speech Component */}
-                    <div data-tts-notes>
-                      <TextToSpeech 
-                        text={treatment.notes}
-                        title={`${treatment.title} - Notes`}
-                        projectId={treatment.project_id}
-                        sceneId={null}
-                        treatmentId={treatment.id}
-                        className="mt-4"
-                      />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
           </div>
 
-          {/* Right Column - Details */}
-          <div className="space-y-6">
-            {/* Timeline */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Timeline</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Created</p>
-                    <p className="text-sm text-muted-foreground">
-                      {new Date(treatment.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
+          {/* Right Column - Details - Sticky Sidebar */}
+          <div className="lg:col-span-4">
+            <div className="lg:sticky lg:top-8 space-y-6">
+              {/* Project Details Card - Collapsible */}
+              <Collapsible open={isTreatmentDetailsExpanded} onOpenChange={setIsTreatmentDetailsExpanded}>
+                <Card id="treatment-details">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
+                        {isTreatmentDetailsExpanded ? (
+                          <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        )}
+                        <CardTitle className="flex items-center gap-2 text-base min-w-0">
+                          <FileText className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                          <span className="truncate">Project Details</span>
+                        </CardTitle>
+                      </CollapsibleTrigger>
+                      <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                        {!isEditingTreatment ? (
+                          <Button variant="outline" size="sm" onClick={handleStartEditTreatment}>
+                            <Edit className="h-4 w-4 mr-2" />
+                            Edit
+                          </Button>
+                        ) : (
+                          <div className="flex gap-2">
+                            <Button variant="outline" size="sm" onClick={handleCancelEditTreatment}>
+                              <X className="h-4 w-4 mr-2" />
+                              Cancel
+                            </Button>
+                            <Button variant="default" size="sm" onClick={handleSaveTreatment} disabled={isSavingTreatment}>
+                              <Save className="h-4 w-4 mr-2" />
+                              {isSavingTreatment ? 'Saving...' : 'Save'}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <CardDescription className="pt-1 pl-6">
+                      Project information and metadata
+                    </CardDescription>
+                  </CardHeader>
+                  <CollapsibleContent>
+                    <CardContent>
+                  <div className="space-y-6">
+                    {/* Project Details */}
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Target className="h-4 w-4 text-muted-foreground" />
+                          <Label className="font-medium text-sm">Target Audience</Label>
+                        </div>
+                        {isEditingTreatment ? (
+                          <Input
+                            value={editingTreatmentData.target_audience}
+                            onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, target_audience: e.target.value }))}
+                            placeholder="e.g., 18-35"
+                            className="ml-6"
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground pl-6">
+                            {treatment.target_audience || 'Not specified'}
+                          </p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="h-4 w-4 text-muted-foreground" />
+                          <Label className="font-medium text-sm">Estimated Budget</Label>
+                        </div>
+                        {isEditingTreatment ? (
+                          <Input
+                            value={editingTreatmentData.estimated_budget}
+                            onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_budget: e.target.value }))}
+                            placeholder="e.g., $10M"
+                            className="ml-6"
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground pl-6">
+                            {treatment.estimated_budget || 'Not specified'}
+                          </p>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          <Label className="font-medium text-sm">Estimated Duration</Label>
+                        </div>
+                        {isEditingTreatment ? (
+                          <Input
+                            value={editingTreatmentData.estimated_duration}
+                            onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_duration: e.target.value }))}
+                            placeholder="e.g., 120 min"
+                            className="ml-6"
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground pl-6">
+                            {treatment.estimated_duration || 'Not specified'}
+                          </p>
+                        )}
+                      </div>
+                    </div>
 
-                <div className="flex items-center gap-3">
-                  <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Last Updated</p>
-                    <p className="text-sm text-muted-foreground">
-                      {new Date(treatment.updated_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                    {/* Status and Genre */}
+                    <div className="flex flex-col gap-4 pt-4 border-t">
+                      <div>
+                        <p className="text-sm font-medium mb-1">Status</p>
+                        {isEditingTreatment ? (
+                          <div className="pl-0 ml-0">
+                            <Select
+                              value={editingTreatmentData.status}
+                              onValueChange={(val) => setEditingTreatmentData(prev => ({ ...prev, status: val as any }))}
+                            >
+                              <SelectTrigger className="ml-0">
+                                <SelectValue placeholder="Select status" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="draft">Draft</SelectItem>
+                                <SelectItem value="in-progress">In Progress</SelectItem>
+                                <SelectItem value="completed">Completed</SelectItem>
+                                <SelectItem value="archived">Archived</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : (
+                          <Badge className={getStatusColor(treatment.status)}>
+                            {treatment.status.replace('-', ' ')}
+                          </Badge>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium mb-1">Genre</p>
+                        {isEditingTreatment ? (
+                          <Input
+                            value={editingTreatmentData.genre}
+                            onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, genre: e.target.value }))}
+                            placeholder="e.g., Sci-Fi"
+                            className="ml-0"
+                          />
+                        ) : (
+                          <Badge variant="outline">{treatment.genre}</Badge>
+                        )}
+                      </div>
+                    </div>
 
-            {/* Actions */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Actions</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Button className="w-full" size="sm">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit Treatment
-                </Button>
-                <Button variant="outline" className="w-full" size="sm">
-                  <Eye className="h-4 w-4 mr-2" />
-                  View in Timeline
-                </Button>
-                <Button variant="outline" className="w-full" size="sm">
-                  <Film className="h-4 w-4 mr-2" />
-                  Create Movie Project
-                </Button>
-              </CardContent>
-            </Card>
+                    {/* Timeline & Quick Info */}
+                    <div className="pt-4 border-t space-y-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Calendar className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Created</span>
+                        </div>
+                        <p className="text-sm font-medium pl-6">
+                          {new Date(treatment.created_at).toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric' 
+                          })}
+                        </p>
+                      </div>
+
+                      <Separator />
+
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          <span className="text-muted-foreground">Last Updated</span>
+                        </div>
+                        <p className="text-sm font-medium pl-6">
+                          {new Date(treatment.updated_at).toLocaleDateString('en-US', { 
+                            year: 'numeric', 
+                            month: 'long', 
+                            day: 'numeric' 
+                          })}
+                        </p>
+                      </div>
+
+                      {treatment.project_id && movie && (
+                        <>
+                          <Separator />
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2 text-sm">
+                              <Film className="h-4 w-4 text-muted-foreground" />
+                              <span className="text-muted-foreground">Linked Project</span>
+                            </div>
+                            <Link href={`/screenplay/${movie.id}`} className="pl-6">
+                              <Button variant="link" className="p-0 h-auto font-medium text-green-400 hover:text-green-300" size="sm">
+                                {movie.name}
+                              </Button>
+                            </Link>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                    </CardContent>
+                  </CollapsibleContent>
+                </Card>
+              </Collapsible>
+
+              {/* Logline */}
+              {treatment.logline && (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <CardTitle>Logline</CardTitle>
+                        <CardDescription>One-sentence summary</CardDescription>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {/* AI Regenerate Button */}
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={generateAILogline}
+                          disabled={isGeneratingLogline || !aiSettingsLoaded}
+                          className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Generate a new logline from treatment content using AI"
+                        >
+                          {isGeneratingLogline ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-4 w-4 mr-2" />
+                              AI Regenerate
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="space-y-4">
+                      <p className="text-lg font-medium italic">"{treatment.logline}"</p>
+                      
+                      {/* Text to Speech Component */}
+                      <div data-tts-logline>
+                        <TextToSpeech 
+                          text={treatment.logline}
+                          title={`${treatment.title} - Logline`}
+                          projectId={treatment.project_id}
+                          sceneId={null}
+                          treatmentId={treatment.id}
+                          className="mt-4"
+                        />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Actions */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-lg">Actions</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button 
+                    variant="outline" 
+                    className="w-full justify-start" 
+                    size="sm"
+                    onClick={() => {
+                      const element = document.getElementById('treatment-details')
+                      element?.scrollIntoView({ behavior: 'smooth' })
+                    }}
+                  >
+                    <Edit className="h-4 w-4 mr-2" />
+                    Edit Details
+                  </Button>
+                  {treatment.project_id && (
+                    <Button variant="outline" className="w-full justify-start" size="sm" asChild>
+                      <Link href={`/screenplay/${treatment.project_id}`}>
+                        <Eye className="h-4 w-4 mr-2" />
+                        View Screenplay
+                      </Link>
+                    </Button>
+                  )}
+                  {treatment.project_id && (
+                    <Button variant="outline" className="w-full justify-start" size="sm" asChild>
+                      <Link href={`/timeline?movie=${treatment.project_id}`}>
+                        <Film className="h-4 w-4 mr-2" />
+                        View Timeline
+                      </Link>
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </div>
       </div>
