@@ -2636,7 +2636,7 @@ Synopsis (2-3 paragraphs only):`
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="ai-prompt" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
-            AI Prompt Studio
+            Ai Idea Studio
           </TabsTrigger>
           <TabsTrigger value="library" className="flex items-center gap-2">
             <Lightbulb className="h-4 w-4" />
@@ -2989,11 +2989,11 @@ Synopsis (2-3 paragraphs only):`
         <TabsContent value="ai-prompt" className="mt-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* AI Prompt Input */}
-            <Card>
+            <Card className={!aiResponse && !generatedImage ? "lg:col-span-2 lg:max-w-4xl lg:mx-auto" : ""}>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5 text-purple-500" />
-                  AI Prompt Studio
+                  Ai Idea Studio
                 </CardTitle>
                 <CardDescription>
                   Generate creative content to develop your movie ideas further
@@ -3343,41 +3343,6 @@ Synopsis (2-3 paragraphs only):`
                           </Button>
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* AI Status */}
-              {!aiResponse && !generatedImage && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Sparkles className="h-5 w-5 text-purple-500" />
-                      AI Status
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm">Script Generation:</span>
-                        <Badge variant={aiSettings.scripts?.is_locked ? "default" : "secondary"}>
-                          {aiSettings.scripts?.is_locked ? "Available" : "Not Available"}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm">Image Generation:</span>
-                        <Badge variant={aiSettings.images?.is_locked ? "default" : "secondary"}>
-                          {aiSettings.images?.is_locked ? "Available" : "Not Available"}
-                        </Badge>
-                      </div>
-                      {(!aiSettings.scripts?.is_locked || !aiSettings.images?.is_locked) && (
-                        <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-md">
-                          <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                            <strong>Setup Required:</strong> Lock AI models in Settings → AI Settings to enable generation.
-                          </p>
-                        </div>
-                      )}
                     </div>
                   </CardContent>
                 </Card>

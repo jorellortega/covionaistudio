@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
       mode: 'setup',
       payment_method_types: ['card'],
       customer: stripeCustomerId,
-      success_url: `${baseUrl}/settings/plans-credits?setup_success=true&customerId=${stripeCustomerId}`,
+      success_url: `${baseUrl}/settings/plans-credits?setup_success=true&customerId=${stripeCustomerId}&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/settings/plans-credits?setup_canceled=true`,
       metadata: {
         userId,

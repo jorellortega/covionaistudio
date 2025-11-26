@@ -34,9 +34,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    console.log('🔧 CHECKOUT: ========== CREATE CHECKOUT REQUEST ==========')
+    console.log('🔧 CHECKOUT: Timestamp:', new Date().toISOString())
+    
     const { planId, packageId, userId, userEmail, action, customAmount, credits } = await request.json()
 
-    console.log('Create checkout request:', { planId, packageId, userId, userEmail, action, customAmount, credits })
+    console.log('📋 CHECKOUT: Request payload:', { planId, packageId, userId, userEmail, action, customAmount, credits })
 
     if (!userId) {
       return NextResponse.json(
@@ -86,18 +89,46 @@ export async function POST(request: NextRequest) {
 
       // Get or create customer
       let customerId: string
-      // TODO: Get customer from database
-      // For now, create a new customer (you should store this in your database)
       const stripe = getStripe()
-      const customer = await stripe.customers.create({
-        metadata: { userId },
-      })
-      customerId = customer.id
+      
+      // Try to get customer ID from database first
+      const { createClient } = await import('@supabase/supabase-js')
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!
+      )
+      
+      const { data: userData } = await supabase
+        .from('users')
+        .select('stripe_customer_id')
+        .eq('id', userId)
+        .single()
+      
+      if (userData?.stripe_customer_id) {
+        console.log('📋 CHECKOUT: Using existing customer ID:', userData.stripe_customer_id)
+        customerId = userData.stripe_customer_id
+      } else {
+        // Create new customer
+        console.log('📋 CHECKOUT: Creating new customer...')
+        const customer = await stripe.customers.create({
+          email: userEmail || undefined, // Set email on customer
+          metadata: { userId },
+        })
+        customerId = customer.id
+        
+        // Save customer ID to database
+        console.log('📋 CHECKOUT: Saving customer ID to database...')
+        await supabase
+          .from('users')
+          .update({ stripe_customer_id: customerId })
+          .eq('id', userId)
+        console.log('✅ CHECKOUT: Customer ID saved to database')
+      }
 
       const session = await stripe.checkout.sessions.create({
         mode: 'payment',
         payment_method_types: ['card'],
-        customer: customerId,
+        customer: customerId, // Don't use customer_email when customer is specified
         line_items: [
           {
             price_data: {
@@ -111,7 +142,7 @@ export async function POST(request: NextRequest) {
             quantity: 1,
           },
         ],
-        success_url: `${baseUrl}/settings/plans-credits?success=true&type=credits&customerId=${customerId}`,
+        success_url: `${baseUrl}/settings/plans-credits?success=true&type=credits&customerId=${customerId}&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${baseUrl}/settings/plans-credits?canceled=true`,
         payment_intent_data: {
           setup_future_usage: 'off_session', // Save payment method for future use
@@ -130,16 +161,51 @@ export async function POST(request: NextRequest) {
     }
 
     if (planId) {
+      console.log('🔧 CHECKOUT: Creating subscription checkout session...')
+      console.log('📋 CHECKOUT: Plan ID:', planId)
+      console.log('📋 CHECKOUT: User ID:', userId)
+      console.log('📋 CHECKOUT: User Email:', userEmail)
+      
       const plan = plans[planId as keyof typeof plans]
       if (!plan) {
+        console.error('❌ CHECKOUT: Invalid plan ID:', planId)
         return NextResponse.json(
           { error: 'Invalid plan' },
           { status: 400 }
         )
       }
+      
+      console.log('📋 CHECKOUT: Plan details:', {
+        name: plan.name,
+        priceId: plan.priceId,
+        amount: plan.amount,
+      })
+      
+      console.log('📋 CHECKOUT: Environment variables check:')
+      console.log('  - STRIPE_PRICE_CREATOR:', process.env.STRIPE_PRICE_CREATOR ? `✅ ${process.env.STRIPE_PRICE_CREATOR.substring(0, 20)}...` : '❌ Missing')
+      console.log('  - STRIPE_PRICE_STUDIO:', process.env.STRIPE_PRICE_STUDIO ? `✅ ${process.env.STRIPE_PRICE_STUDIO.substring(0, 20)}...` : '❌ Missing')
+      console.log('  - STRIPE_PRICE_PRODUCTION:', process.env.STRIPE_PRICE_PRODUCTION ? `✅ ${process.env.STRIPE_PRICE_PRODUCTION.substring(0, 20)}...` : '❌ Missing')
+      console.log('  - Plan priceId matches env:', plan.priceId === process.env[`STRIPE_PRICE_${planId.toUpperCase()}`] ? '✅ Yes' : '❌ No')
 
       // Create checkout session for subscription
       const stripe = getStripe()
+      
+      const checkoutMetadata = {
+        userId,
+        type: action || 'subscribe',
+        planId,
+      }
+      
+      const subscriptionMetadata = {
+        userId,
+        planId,
+      }
+      
+      console.log('📋 CHECKOUT: Checkout session metadata:', JSON.stringify(checkoutMetadata, null, 2))
+      console.log('📋 CHECKOUT: Subscription metadata:', JSON.stringify(subscriptionMetadata, null, 2))
+      console.log('📋 CHECKOUT: Base URL:', baseUrl)
+      
+      console.log('🔧 CHECKOUT: Creating Stripe checkout session...')
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         payment_method_types: ['card'],
@@ -150,20 +216,22 @@ export async function POST(request: NextRequest) {
             quantity: 1,
           },
         ],
-        success_url: `${baseUrl}/settings/plans-credits?success=true&type=subscription`,
+        success_url: `${baseUrl}/settings/plans-credits?success=true&type=subscription&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${baseUrl}/settings/plans-credits?canceled=true`,
-        metadata: {
-          userId,
-          type: action || 'subscribe',
-          planId,
-        },
+        metadata: checkoutMetadata,
         subscription_data: {
-          metadata: {
-            userId,
-            planId,
-          },
+          metadata: subscriptionMetadata,
         },
       })
+      
+      console.log('✅ CHECKOUT: Checkout session created successfully!')
+      console.log('📋 CHECKOUT: Session ID:', session.id)
+      console.log('📋 CHECKOUT: Session URL:', session.url)
+      console.log('📋 CHECKOUT: Session metadata:', JSON.stringify(session.metadata, null, 2))
+      console.log('📋 CHECKOUT: Customer email:', session.customer_email)
+      console.log('📋 CHECKOUT: Customer ID:', session.customer)
+      console.log('📋 CHECKOUT: Subscription ID (if exists):', (session as any).subscription)
+      console.log('🔧 CHECKOUT: ========== CHECKOUT COMPLETE ==========')
 
       return NextResponse.json({ url: session.url })
     }

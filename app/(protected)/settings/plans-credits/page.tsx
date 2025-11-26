@@ -22,7 +22,8 @@ import {
   Infinity,
   Wallet,
   Trash2,
-  Plus
+  Plus,
+  Star
 } from 'lucide-react'
 import Link from 'next/link'
 import {
@@ -85,8 +86,32 @@ export default function PlansCreditsPage() {
   const loadPaymentMethods = async (customerIdToUse?: string) => {
     if (!userId) return
     
-    const customerId = customerIdToUse || stripeCustomerId
-    if (!customerId) return
+    // Try to get customer ID from database if not provided
+    let customerId = customerIdToUse || stripeCustomerId
+    
+    if (!customerId) {
+      try {
+        const supabase = getSupabaseClient()
+        const { data: userData } = await supabase
+          .from('users')
+          .select('stripe_customer_id')
+          .eq('id', userId)
+          .single()
+        
+        if (userData?.stripe_customer_id) {
+          customerId = userData.stripe_customer_id
+          setStripeCustomerId(customerId)
+          console.log('📋 Loaded customer ID from database:', customerId)
+        }
+      } catch (error) {
+        console.error('Error fetching customer ID:', error)
+      }
+    }
+    
+    if (!customerId) {
+      console.log('⚠️ No customer ID available, skipping payment methods load')
+      return
+    }
     
     try {
       setIsLoadingPaymentMethods(true)
@@ -105,6 +130,7 @@ export default function PlansCreditsPage() {
         if (!stripeCustomerId) {
           setStripeCustomerId(customerId)
         }
+        console.log('📋 Loaded payment methods:', data.paymentMethods?.length || 0)
       }
     } catch (error) {
       console.error('Error loading payment methods:', error)
@@ -181,31 +207,34 @@ export default function PlansCreditsPage() {
       // Get or create customer
       let customerId = stripeCustomerId
       
+      // Try to get customer ID from database first
       if (!customerId) {
-        // Create a setup intent which will create a customer if needed
-        const setupResponse = await fetch('/api/stripe/setup-intent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId }),
-        })
-        
-        const setupData = await setupResponse.json()
-        
-        if (!setupResponse.ok) {
-          throw new Error(setupData.error || 'Failed to create setup intent')
+        try {
+          const supabase = getSupabaseClient()
+          const { data: userData } = await supabase
+            .from('users')
+            .select('stripe_customer_id')
+            .eq('id', userId)
+            .single()
+          
+          if (userData?.stripe_customer_id) {
+            customerId = userData.stripe_customer_id
+            setStripeCustomerId(customerId)
+            console.log('📋 Found existing customer ID:', customerId)
+          }
+        } catch (error) {
+          console.error('Error fetching customer ID:', error)
         }
-        
-        customerId = setupData.customerId
-        setStripeCustomerId(customerId)
       }
-
-      // Create checkout session in setup mode
+      
+      // Create checkout session in setup mode (will create customer if needed)
+      console.log('🔧 Creating setup session...')
       const response = await fetch('/api/stripe/create-setup-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          customerId,
+          customerId: customerId || undefined,
         }),
       })
 
@@ -219,6 +248,7 @@ export default function PlansCreditsPage() {
         throw new Error('No setup URL received')
       }
 
+      console.log('✅ Setup session created, redirecting to Stripe...')
       // Redirect to Stripe Checkout setup page
       window.location.href = data.url
     } catch (error) {
@@ -229,6 +259,51 @@ export default function PlansCreditsPage() {
         variant: "destructive",
       })
       setIsProcessing(false)
+    }
+  }
+
+  const handleSetDefault = async (paymentMethodId: string, isCurrentlyDefault: boolean) => {
+    if (!userId || !stripeCustomerId) {
+      toast({
+        title: "Error",
+        description: "Customer information not available",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const response = await fetch('/api/stripe/payment-methods/set-default', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          paymentMethodId,
+          customerId: stripeCustomerId,
+          unset: isCurrentlyDefault, // If already default, unset it
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to update default payment method')
+      }
+
+      toast({
+        title: "Success",
+        description: isCurrentlyDefault 
+          ? "Default payment method removed" 
+          : "Default payment method updated",
+      })
+
+      loadPaymentMethods()
+    } catch (error) {
+      console.error('Error updating default payment method:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to update default payment method',
+        variant: "destructive",
+      })
     }
   }
 
@@ -285,9 +360,149 @@ export default function PlansCreditsPage() {
           // TODO: Save customerId to database
         }
         
+        // For credit purchases, try to sync immediately since webhook might not fire in local dev
+        if (type === 'credits' && userId) {
+          console.log('🔧 CREDITS-SYNC: Attempting to sync credits after checkout...')
+          console.log('📋 CREDITS-SYNC: User ID:', userId)
+          console.log('📋 CREDITS-SYNC: URL params:', Object.fromEntries(params.entries()))
+          
+          const syncCredits = async () => {
+            try {
+              const sessionId = params.get('session_id')
+              if (sessionId) {
+                console.log('📋 CREDITS-SYNC: Found session ID in URL:', sessionId)
+                const sessionResponse = await fetch(`/api/stripe/get-session?sessionId=${sessionId}`)
+                
+                if (sessionResponse.ok) {
+                  const sessionData = await sessionResponse.json()
+                  console.log('📋 CREDITS-SYNC: Session data:', sessionData)
+                  
+                  if (sessionData.metadata?.type === 'credits' && sessionData.metadata?.userId === userId) {
+                    const credits = parseInt(sessionData.metadata.credits || '0')
+                    const paymentIntentId = sessionData.paymentIntentId || null
+                    
+                    if (credits > 0) {
+                      console.log('📋 CREDITS-SYNC: Adding credits:', credits)
+                      
+                      // Call API to add credits
+                      const addCreditsResponse = await fetch('/api/stripe/add-credits', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          userId,
+                          credits,
+                          paymentIntentId,
+                          sessionId: sessionData.sessionId,
+                          metadata: sessionData.metadata,
+                        }),
+                      })
+                      
+                      if (addCreditsResponse.ok) {
+                        const result = await addCreditsResponse.json()
+                        console.log('✅ CREDITS-SYNC: Credits added successfully!', result)
+                        toast({
+                          title: "Credits Added",
+                          description: `${credits.toLocaleString()} credits have been added to your account`,
+                        })
+                      } else {
+                        const errorData = await addCreditsResponse.json()
+                        console.error('❌ CREDITS-SYNC: Failed to add credits:', errorData)
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (syncError) {
+              console.error('❌ CREDITS-SYNC: Error syncing credits:', syncError)
+            }
+          }
+          
+          syncCredits()
+        }
+        
+        // For subscriptions, try to sync immediately since webhook might not fire in local dev
+        if (type === 'subscription' && userId) {
+          console.log('🔧 SYNC: Attempting to sync subscription after checkout...')
+          console.log('📋 SYNC: User ID:', userId)
+          console.log('📋 SYNC: URL params:', Object.fromEntries(params.entries()))
+          
+          // Wrap async code in an async function
+          const syncSubscription = async () => {
+            try {
+              // Get the session ID from URL if available
+              const sessionId = params.get('session_id')
+              if (sessionId) {
+                console.log('📋 SYNC: Found session ID in URL:', sessionId)
+                // Fetch session to get subscription ID
+                const sessionResponse = await fetch(`/api/stripe/get-session?sessionId=${sessionId}`)
+                console.log('📋 SYNC: Session response status:', sessionResponse.status)
+                
+                if (sessionResponse.ok) {
+                  const sessionData = await sessionResponse.json()
+                  console.log('📋 SYNC: Session data:', sessionData)
+                  
+                  if (sessionData.subscriptionId) {
+                    console.log('📋 SYNC: Found subscription ID:', sessionData.subscriptionId)
+                    // Sync the subscription
+                    const syncResponse = await fetch('/api/stripe/sync-subscription', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        subscriptionId: sessionData.subscriptionId,
+                        userId,
+                      }),
+                    })
+                    
+                    console.log('📋 SYNC: Sync response status:', syncResponse.status)
+                    
+                    if (syncResponse.ok) {
+                      const syncData = await syncResponse.json()
+                      console.log('✅ SYNC: Subscription synced successfully')
+                      console.log('📋 SYNC: Sync data:', syncData)
+                      toast({
+                        title: "Subscription Synced",
+                        description: "Your subscription has been synced to your account",
+                      })
+                    } else {
+                      const errorData = await syncResponse.json()
+                      console.error('❌ SYNC: Failed to sync subscription:', errorData)
+                      toast({
+                        title: "Sync Failed",
+                        description: "Subscription created but sync failed. Please refresh or contact support.",
+                        variant: "destructive",
+                      })
+                    }
+                  } else {
+                    console.warn('⚠️ SYNC: No subscription ID in session data')
+                  }
+                } else {
+                  const errorData = await sessionResponse.json()
+                  console.error('❌ SYNC: Failed to fetch session:', errorData)
+                }
+              } else {
+                console.log('⚠️ SYNC: No session ID in URL, will rely on webhook or manual sync')
+                console.log('💡 SYNC: Tip: Use Stripe CLI for local testing: stripe listen --forward-to localhost:3000/api/webhook')
+              }
+            } catch (syncError) {
+              console.error('❌ SYNC: Error syncing subscription:', syncError)
+              toast({
+                title: "Sync Error",
+                description: "Subscription created but sync encountered an error. Please refresh the page.",
+                variant: "destructive",
+              })
+            }
+          }
+          
+          // Call the async function
+          syncSubscription()
+        }
+        
         // Reload subscription data and payment methods
         console.log('🔄 Reloading subscription data after successful checkout...')
-        loadSubscriptionData()
+        // Wait a bit for webhook to process, then reload
+        setTimeout(() => {
+          loadSubscriptionData()
+        }, 2000)
         if (customerId) {
           loadPaymentMethods(customerId)
         }
@@ -303,12 +518,60 @@ export default function PlansCreditsPage() {
         // Save customer ID if provided
         if (customerId) {
           setStripeCustomerId(customerId)
-          // TODO: Save customerId to database
+        }
+        
+        // Save payment method to database
+        if (userId && customerId) {
+          const sessionId = params.get('session_id')
+          if (sessionId) {
+            console.log('🔧 SETUP-SYNC: Saving payment method after setup...')
+            console.log('📋 SETUP-SYNC: Session ID:', sessionId)
+            console.log('📋 SETUP-SYNC: User ID:', userId)
+            console.log('📋 SETUP-SYNC: Customer ID:', customerId)
+            
+            const savePaymentMethod = async () => {
+              try {
+                const response = await fetch('/api/stripe/save-payment-method', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    sessionId,
+                    userId,
+                    customerId,
+                  }),
+                })
+                
+                if (response.ok) {
+                  const result = await response.json()
+                  console.log('✅ SETUP-SYNC: Payment method saved successfully!', result)
+                  toast({
+                    title: "Payment Method Saved",
+                    description: "Your payment method has been saved to your account",
+                  })
+                } else {
+                  const errorData = await response.json()
+                  console.error('❌ SETUP-SYNC: Failed to save payment method:', errorData)
+                  toast({
+                    title: "Setup Complete",
+                    description: "Payment method added but save to database failed. Please refresh.",
+                    variant: "default",
+                  })
+                }
+              } catch (saveError) {
+                console.error('❌ SETUP-SYNC: Error saving payment method:', saveError)
+              }
+            }
+            
+            savePaymentMethod()
+          }
         }
         
         // Reload payment methods
         if (customerId) {
-          loadPaymentMethods(customerId)
+          // Wait a bit for the save to complete, then reload
+          setTimeout(() => {
+            loadPaymentMethods(customerId)
+          }, 1000)
         }
         
         // Clean URL
@@ -347,34 +610,43 @@ export default function PlansCreditsPage() {
         .in('status', ['active', 'canceled'])
         .order('created_at', { ascending: false })
         .limit(1)
-        .single()
+        .maybeSingle()
 
       if (error) {
-        // If no subscription found, that's okay
-        if (error.code === 'PGRST116') {
-          console.log('ℹ️ No active subscription found')
-          setCurrentPlan(null)
-          setSubscriptionStatus('none')
-          setCancelAtPeriodEnd(false)
-        } else {
-          console.error('❌ Error fetching subscription:', error)
-          throw error
-        }
+        console.error('❌ Error fetching subscription:', error)
+        throw error
       } else if (subscription) {
         console.log('✅ Subscription found:', subscription)
         setCurrentPlan(subscription.plan_id)
         setSubscriptionStatus(subscription.status as 'active' | 'canceled' | 'none')
         setCancelAtPeriodEnd(subscription.cancel_at_period_end || false)
         console.log('📋 Subscription cancel_at_period_end:', subscription.cancel_at_period_end)
-        
-        // TODO: Fetch actual credits from credit_transactions table
-        // For now, set a default
-        setCurrentCredits(5000)
       } else {
         console.log('ℹ️ No subscription data returned')
         setCurrentPlan(null)
         setSubscriptionStatus('none')
         setCancelAtPeriodEnd(false)
+      }
+      
+      // Always fetch credits from users table (regardless of subscription status)
+      // Use maybeSingle() to handle cases where RLS might block the query
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('credits')
+        .eq('id', userId)
+        .maybeSingle()
+      
+      if (userError) {
+        console.error('❌ Error fetching user credits:', userError)
+        console.error('📋 Error details:', JSON.stringify(userError, null, 2))
+        setCurrentCredits(0)
+      } else if (userData) {
+        setCurrentCredits(userData.credits || 0)
+        console.log('📋 Current credits balance:', userData.credits || 0)
+      } else {
+        // No data returned (might be RLS blocking)
+        console.warn('⚠️ No user data returned, might be RLS policy issue')
+        setCurrentCredits(0)
       }
     } catch (error) {
       console.error('❌ Error loading subscription data:', error)
@@ -401,6 +673,7 @@ export default function PlansCreditsPage() {
         body: JSON.stringify({
           planId,
           userId,
+          userEmail: user?.email || undefined,
           action: 'upgrade',
         }),
       })
@@ -430,6 +703,7 @@ export default function PlansCreditsPage() {
         body: JSON.stringify({
           planId,
           userId,
+          userEmail: user?.email || undefined,
           action: 'downgrade',
         }),
       })
@@ -505,6 +779,7 @@ export default function PlansCreditsPage() {
         body: JSON.stringify({
           planId,
           userId,
+          userEmail: user?.email || undefined,
           action: 'subscribe',
         }),
       })
@@ -587,6 +862,7 @@ export default function PlansCreditsPage() {
           customAmount: customAmount || undefined,
           credits,
           userId,
+          userEmail: user?.email || undefined,
           action: 'buy-credits',
         }),
       })
@@ -884,14 +1160,22 @@ export default function PlansCreditsPage() {
                   {savedPaymentMethods.map((pm) => (
                     <div
                       key={pm.id}
-                      className="flex items-center justify-between p-4 border rounded-lg"
+                      className={`flex items-center justify-between p-4 border rounded-lg ${pm.is_default ? 'border-primary bg-primary/5' : ''}`}
                     >
                       <div className="flex items-center gap-3">
                         <CreditCard className="h-5 w-5 text-muted-foreground" />
                         <div>
-                          <p className="font-medium">
-                            {pm.card?.brand?.toUpperCase()} •••• {pm.card?.last4}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">
+                              {pm.card?.brand?.toUpperCase()} •••• {pm.card?.last4}
+                            </p>
+                            {pm.is_default && (
+                              <Badge variant="default" className="text-xs">
+                                <Star className="h-3 w-3 mr-1" />
+                                Default
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-sm text-muted-foreground">
                             Expires {pm.card?.exp_month}/{pm.card?.exp_year}
                           </p>
@@ -914,10 +1198,20 @@ export default function PlansCreditsPage() {
                           ))}
                         </div>
                         <Button
+                          variant={pm.is_default ? "secondary" : "outline"}
+                          size="sm"
+                          onClick={() => handleSetDefault(pm.id, pm.is_default)}
+                          className="text-xs"
+                        >
+                          <Star className={`h-3 w-3 mr-1 ${pm.is_default ? 'fill-current' : ''}`} />
+                          {pm.is_default ? 'Unset Default' : 'Set Default'}
+                        </Button>
+                        <Button
                           variant="ghost"
                           size="icon"
                           onClick={() => handleDeletePaymentMethod(pm.id)}
                           className="text-destructive hover:text-destructive"
+                          title="Delete payment method"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>

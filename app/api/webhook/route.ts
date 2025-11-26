@@ -48,11 +48,18 @@ function getPlanIdFromPriceId(priceId: string): { planId: string; planName: stri
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET!
 
 export async function POST(request: NextRequest) {
+  const startTime = Date.now()
   try {
-    console.log('📥 Webhook received!')
+    console.log('📥 ========== WEBHOOK RECEIVED ==========')
+    console.log('📥 Timestamp:', new Date().toISOString())
     const body = await request.text()
     const headersList = await headers()
     const signature = headersList.get('stripe-signature')
+    console.log('📥 Request headers:', {
+      'stripe-signature': signature ? 'Present' : 'Missing',
+      'content-type': headersList.get('content-type'),
+      'user-agent': headersList.get('user-agent'),
+    })
 
     if (!signature) {
       console.error('❌ Missing stripe-signature header')
@@ -92,6 +99,8 @@ export async function POST(request: NextRequest) {
 
     // Handle the event
     console.log('🔔 Received Stripe webhook event:', event.type, event.id)
+    console.log('🔔 Event created:', new Date(event.created * 1000).toISOString())
+    console.log('🔔 Event livemode:', event.livemode)
 
     switch (event.type) {
       case 'payment_intent.succeeded':
@@ -109,9 +118,45 @@ export async function POST(request: NextRequest) {
 
       case 'checkout.session.completed':
         const session = event.data.object as Stripe.Checkout.Session
-        console.log('Checkout session completed:', session.id)
-        // TODO: Handle successful checkout
-        // Example: await activateSubscription(session.customer, session.metadata.planId)
+        console.log('🔔 Checkout session completed:', session.id)
+        console.log('📋 Session metadata:', JSON.stringify(session.metadata, null, 2))
+        console.log('📋 Session mode:', session.mode)
+        
+        // Handle credit purchases
+        if (session.metadata?.type === 'credits' && session.metadata?.userId) {
+          console.log('🔧 Processing credit purchase...')
+          const supabase = getSupabaseAdmin()
+          const userId = session.metadata.userId
+          const credits = parseInt(session.metadata.credits || '0')
+          const paymentIntentId = typeof session.payment_intent === 'string' 
+            ? session.payment_intent 
+            : session.payment_intent?.id
+          
+          if (credits > 0) {
+            console.log('📋 Adding credits:', credits, 'to user:', userId)
+            console.log('📋 Payment intent ID:', paymentIntentId)
+            
+            // Use the add_credits function to add credits and create transaction
+            const { data, error } = await supabase.rpc('add_credits', {
+              p_user_id: userId,
+              p_amount: credits,
+              p_description: `Credit purchase: ${session.metadata.packageId || 'custom amount'}`,
+              p_stripe_payment_intent_id: paymentIntentId || null,
+              p_metadata: {
+                packageId: session.metadata.packageId,
+                amount: session.metadata.amount,
+                checkout_session_id: session.id,
+              }
+            })
+            
+            if (error) {
+              console.error('❌ Error adding credits:', error)
+            } else {
+              console.log('✅ Credits added successfully! New balance:', data)
+            }
+          }
+        }
+        // Note: Subscriptions are handled by customer.subscription.created/updated events
         break
 
       case 'customer.subscription.created':
@@ -128,21 +173,65 @@ export async function POST(request: NextRequest) {
           
           // Get user_id from subscription metadata (set during checkout)
           console.log('🔧 Step 2: Extracting userId from metadata...')
-          const userId = subscription.metadata?.userId
-          console.log('📋 Found userId:', userId)
+          console.log('📋 Full subscription metadata:', JSON.stringify(subscription.metadata, null, 2))
+          let userId = subscription.metadata?.userId
+          console.log('📋 Found userId from subscription metadata:', userId)
+          
+          // If userId not in metadata, try to get it from customer
           if (!userId) {
-            console.error('❌ No userId in subscription metadata!')
-            console.error('📋 Available metadata keys:', Object.keys(subscription.metadata || {}))
-            console.error('📋 Full subscription object:', JSON.stringify({
-              id: subscription.id,
-              customer: subscription.customer,
-              metadata: subscription.metadata,
-              items: subscription.items.data.map(item => ({
-                price: item.price.id,
-                product: item.price.product
-              }))
-            }, null, 2))
-            break
+            console.warn('⚠️ No userId in subscription metadata, trying to fetch from customer...')
+            try {
+              const stripe = getStripe()
+              const customerId = typeof subscription.customer === 'string' 
+                ? subscription.customer 
+                : (subscription.customer as Stripe.Customer).id
+              
+              console.log('📋 Fetching customer:', customerId)
+              const customer = await stripe.customers.retrieve(customerId)
+              
+              if (!customer.deleted && 'metadata' in customer) {
+                console.log('📋 Customer metadata:', JSON.stringify(customer.metadata, null, 2))
+                userId = customer.metadata?.userId
+                if (userId) {
+                  console.log('✅ Found userId in customer metadata:', userId)
+                } else {
+                  // Try to find user by email
+                  if (customer.email) {
+                    console.log('📋 Attempting to find user by email:', customer.email)
+                    const { data: userData } = await supabase
+                      .from('users')
+                      .select('id')
+                      .eq('email', customer.email)
+                      .single()
+                    
+                    if (userData?.id) {
+                      userId = userData.id
+                      console.log('✅ Found userId by email lookup:', userId)
+                    }
+                  }
+                }
+              }
+            } catch (customerError) {
+              console.error('❌ Error fetching customer:', customerError)
+            }
+            
+            if (!userId) {
+              console.error('❌ No userId found in subscription, customer metadata, or by email lookup!')
+              console.error('📋 Available subscription metadata keys:', Object.keys(subscription.metadata || {}))
+              console.error('📋 Subscription ID:', subscription.id)
+              console.error('📋 Customer ID:', subscription.customer)
+              console.error('📋 This subscription cannot be linked to a user without userId.')
+              console.error('📋 Full subscription object (limited):', JSON.stringify({
+                id: subscription.id,
+                customer: subscription.customer,
+                metadata: subscription.metadata,
+                items: subscription.items.data.map(item => ({
+                  price: item.price.id,
+                  product: item.price.product
+                }))
+              }, null, 2))
+              break
+            }
           }
 
           // Get plan info from the first price item
@@ -216,6 +305,64 @@ export async function POST(request: NextRequest) {
             console.log('📋 Subscription ID:', subscription.id)
             console.log('📋 User ID:', userId)
             console.log('📋 Plan:', planInfo.planName)
+
+            // Update user role based on subscription plan
+            if (status === 'active') {
+              console.log('🔧 Step 8: Updating user role based on subscription...')
+              console.log('📋 Step 8a: Plan ID from subscription:', planInfo.planId)
+              console.log('📋 Step 8b: Plan Name:', planInfo.planName)
+              
+              const roleMap: Record<string, string> = {
+                'creator': 'creator',
+                'studio': 'studio',
+                'production': 'production',
+              }
+              
+              console.log('📋 Step 8c: Role mapping table:', roleMap)
+              const newRole = roleMap[planInfo.planId] || 'user'
+              console.log('📋 Step 8d: Mapped plan', planInfo.planId, 'to role', newRole)
+              console.log('📋 Step 8e: User ID to update:', userId)
+              
+              // First, check current user role
+              const { data: currentUser, error: fetchError } = await supabase
+                .from('users')
+                .select('id, role, email')
+                .eq('id', userId)
+                .single()
+              
+              if (fetchError) {
+                console.error('❌ Error fetching current user:', fetchError)
+              } else {
+                console.log('📋 Step 8f: Current user role:', currentUser?.role)
+                console.log('📋 Step 8g: Current user email:', currentUser?.email)
+              }
+              
+              // Update user role (but preserve CEO role)
+              console.log('🔧 Step 8h: Executing role update query...')
+              const { data: updatedUser, error: roleError } = await supabase
+                .from('users')
+                .update({ role: newRole })
+                .eq('id', userId)
+                .neq('role', 'ceo') // Don't change CEO role
+                .select('id, role, email')
+              
+              if (roleError) {
+                console.error('❌ Error updating user role:', roleError)
+                console.error('📋 Role error details:', JSON.stringify(roleError, null, 2))
+              } else {
+                if (updatedUser && updatedUser.length > 0) {
+                  console.log('✅ User role updated successfully!')
+                  console.log('📋 Updated user data:', JSON.stringify(updatedUser[0], null, 2))
+                  console.log('📋 New role:', updatedUser[0].role)
+                } else {
+                  console.warn('⚠️ Role update query succeeded but no rows were updated')
+                  console.warn('📋 This might mean the user already has CEO role or user ID not found')
+                }
+              }
+            } else {
+              console.log('⚠️ Subscription status is not active:', status)
+              console.log('⚠️ Skipping role update (only update roles for active subscriptions)')
+            }
           }
         } catch (error) {
           console.error('❌ Exception caught while processing subscription!')
@@ -233,6 +380,13 @@ export async function POST(request: NextRequest) {
         try {
           const supabase = getSupabaseAdmin()
           
+          // Get user_id from subscription before updating
+          const { data: subscriptionData } = await supabase
+            .from('subscriptions')
+            .select('user_id')
+            .eq('stripe_subscription_id', deletedSubscription.id)
+            .single()
+          
           // Update subscription status to canceled
           const { error } = await supabase
             .from('subscriptions')
@@ -247,6 +401,22 @@ export async function POST(request: NextRequest) {
             console.error('Error updating canceled subscription:', error)
           } else {
             console.log('Subscription marked as canceled:', deletedSubscription.id)
+            
+            // Revert user role to 'user' if they had a subscription-based role
+            if (subscriptionData?.user_id) {
+              console.log('🔧 Reverting user role to "user"...')
+              const { error: roleError } = await supabase
+                .from('users')
+                .update({ role: 'user' })
+                .eq('id', subscriptionData.user_id)
+                .in('role', ['creator', 'studio', 'production']) // Only update subscription roles, preserve CEO
+              
+              if (roleError) {
+                console.error('❌ Error reverting user role:', roleError)
+              } else {
+                console.log('✅ User role reverted to "user"')
+              }
+            }
           }
         } catch (error) {
           console.error('Error processing subscription deletion:', error)
@@ -269,11 +439,21 @@ export async function POST(request: NextRequest) {
         console.log(`Unhandled event type: ${event.type}`)
     }
 
-    return NextResponse.json({ received: true })
+    const duration = Date.now() - startTime
+    console.log('✅ Webhook processed successfully in', duration, 'ms')
+    console.log('📥 ========== WEBHOOK COMPLETE ==========')
+    return NextResponse.json({ received: true, processed: true, duration })
   } catch (error) {
-    console.error('Error processing webhook:', error)
+    const duration = Date.now() - startTime
+    console.error('❌ ========== WEBHOOK ERROR ==========')
+    console.error('❌ Error processing webhook:', error)
+    console.error('❌ Error type:', error instanceof Error ? error.constructor.name : typeof error)
+    console.error('❌ Error message:', error instanceof Error ? error.message : String(error))
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace')
+    console.error('❌ Duration before error:', duration, 'ms')
+    console.error('❌ ====================================')
     return NextResponse.json(
-      { error: 'Webhook handler failed' },
+      { error: 'Webhook handler failed', details: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     )
   }

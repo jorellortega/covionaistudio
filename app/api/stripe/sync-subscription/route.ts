@@ -174,6 +174,46 @@ export async function POST(request: NextRequest) {
     console.log('📋 SYNC: User ID:', subUserId)
     console.log('📋 SYNC: Plan:', planInfo.planName)
 
+    // Update user role based on subscription plan
+    if (status === 'active') {
+      console.log('🔧 SYNC: Step 10: Updating user role based on subscription...')
+      const roleMap: Record<string, string> = {
+        'creator': 'creator',
+        'studio': 'studio',
+        'production': 'production',
+      }
+      
+      const newRole = roleMap[planInfo.planId] || 'user'
+      console.log('📋 SYNC: Mapping plan', planInfo.planId, 'to role', newRole)
+      
+      // Update user role (but preserve CEO role)
+      const { error: roleError } = await supabase
+        .from('users')
+        .update({ role: newRole })
+        .eq('id', subUserId)
+        .neq('role', 'ceo') // Don't change CEO role
+      
+      if (roleError) {
+        console.error('❌ SYNC: Error updating user role:', roleError)
+      } else {
+        console.log('✅ SYNC: User role updated to:', newRole)
+      }
+    } else {
+      // If subscription is not active, revert role to 'user'
+      console.log('🔧 SYNC: Subscription not active, reverting role to "user"...')
+      const { error: roleError } = await supabase
+        .from('users')
+        .update({ role: 'user' })
+        .eq('id', subUserId)
+        .in('role', ['creator', 'studio', 'production']) // Only update subscription roles, preserve CEO
+      
+      if (roleError) {
+        console.error('❌ SYNC: Error reverting user role:', roleError)
+      } else {
+        console.log('✅ SYNC: User role reverted to "user"')
+      }
+    }
+
     return NextResponse.json({
       success: true,
       subscription: data,

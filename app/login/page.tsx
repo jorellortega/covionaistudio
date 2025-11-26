@@ -4,10 +4,38 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { getSupabaseClient } from '@/lib/supabase';
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast';
 
 type Mode = 'signin' | 'signup' | 'reset';
+
+const plans = [
+  {
+    id: 'creator',
+    name: 'Creator',
+    price: 45,
+    description: 'For professional creators',
+    features: ['25,000 Studio Credits', '300s Standard Video', '60s Cinematic Video'],
+  },
+  {
+    id: 'studio',
+    name: 'Studio',
+    price: 150,
+    description: 'For production teams',
+    features: ['90,000 Studio Credits', '900s Standard Video', '240s Cinematic Video'],
+  },
+  {
+    id: 'production',
+    name: 'Production House',
+    price: 500,
+    description: 'For large production companies',
+    features: ['220,000 Studio Credits', '2,400s Standard Video', '600s Cinematic Video'],
+  },
+];
 
 export default function LoginPage() {
   return (
@@ -24,10 +52,12 @@ function LoginPageContent() {
   const next = sp.get('next') || '/dashboard';
   const supabase = useMemo(() => getSupabaseClient(), []);
 
+  const { toast } = useToast();
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [selectedPlan, setSelectedPlan] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -45,6 +75,7 @@ function LoginPageContent() {
     if (mode !== 'reset') {
       if (!password) return 'Password is required.';
       if (mode === 'signup') {
+        if (!selectedPlan) return 'Please select a subscription plan.';
         if (password.length < 8) return 'Password must be at least 8 characters.';
         if (password !== confirm) return 'Passwords do not match.';
       }
@@ -64,12 +95,96 @@ function LoginPageContent() {
         if (error) throw error;
         router.replace(next);
       } else if (mode === 'signup') {
-        const { error } = await supabase.auth.signUp({
+        // Sign up the user
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: `${window.location.origin}/reset` }
+          options: { 
+            emailRedirectTo: `${window.location.origin}/reset`,
+            data: {
+              selectedPlan, // Store selected plan in metadata
+            }
+          }
         });
-        if (error) throw error;
+        
+        if (signUpError) {
+          console.error('❌ SIGNUP: Error creating account:', signUpError)
+          throw signUpError
+        }
+        
+        console.log('✅ SIGNUP: User account created successfully')
+        console.log('📋 SIGNUP: User ID:', signUpData.user?.id)
+        console.log('📋 SIGNUP: User email:', signUpData.user?.email)
+        console.log('📋 SIGNUP: Selected plan:', selectedPlan)
+        
+        // Redirect to checkout with selected plan
+        if (selectedPlan && signUpData.user) {
+          console.log('🔧 SIGNUP: Creating checkout session...')
+          console.log('📋 SIGNUP: Checkout payload:', {
+            planId: selectedPlan,
+            userId: signUpData.user.id,
+            userEmail: email,
+            action: 'subscribe',
+          })
+          
+          try {
+            const checkoutPayload = {
+              planId: selectedPlan,
+              userId: signUpData.user.id,
+              userEmail: email,
+              action: 'subscribe',
+            }
+            
+            console.log('📤 SIGNUP: Sending checkout request to /api/stripe/create-checkout')
+            const response = await fetch('/api/stripe/create-checkout', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(checkoutPayload),
+            });
+
+            console.log('📥 SIGNUP: Checkout response received')
+            console.log('📋 SIGNUP: Response status:', response.status)
+            console.log('📋 SIGNUP: Response ok:', response.ok)
+
+            if (!response.ok) {
+              const errorData = await response.json();
+              console.error('❌ SIGNUP: Checkout error response:', errorData)
+              throw new Error(errorData.error || 'Failed to create checkout session');
+            }
+
+            const checkoutResponse = await response.json();
+            console.log('✅ SIGNUP: Checkout session created successfully')
+            console.log('📋 SIGNUP: Checkout response:', checkoutResponse)
+            
+            const { url } = checkoutResponse;
+            console.log('📋 SIGNUP: Checkout URL:', url)
+            
+            if (url) {
+              console.log('🔧 SIGNUP: Redirecting to Stripe Checkout...')
+              // Redirect to Stripe Checkout
+              window.location.href = url;
+              return;
+            } else {
+              console.error('❌ SIGNUP: No checkout URL in response')
+            }
+          } catch (checkoutError: any) {
+            console.error('❌ SIGNUP: Error creating checkout session:', checkoutError);
+            console.error('❌ SIGNUP: Error details:', {
+              message: checkoutError.message,
+              stack: checkoutError.stack,
+            })
+            toast({
+              title: "Account created",
+              description: "Your account was created successfully. You can subscribe to a plan later.",
+              variant: "default",
+            });
+          }
+        } else {
+          console.log('⚠️ SIGNUP: No plan selected or user not created, skipping checkout')
+        }
+        
         setMessage('Check your email to confirm your account, then sign in.');
         setMode('signin');
       } else {
@@ -149,6 +264,46 @@ function LoginPageContent() {
             <form onSubmit={onSubmit} className="space-y-4">
               <h1 className="text-2xl font-semibold">Create account</h1>
 
+              {/* Plan Selection - Required */}
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">
+                  Select a subscription plan <span className="text-red-500">*</span>
+                </Label>
+                <RadioGroup value={selectedPlan} onValueChange={setSelectedPlan} className="space-y-2" required>
+                  {plans.map((plan) => (
+                    <div key={plan.id} className="flex items-center space-x-2">
+                      <RadioGroupItem value={plan.id} id={plan.id} />
+                      <Label
+                        htmlFor={plan.id}
+                        className={`flex-1 rounded-md border-2 p-3 cursor-pointer transition-colors ${
+                          plan.id === selectedPlan 
+                            ? 'border-primary bg-primary/5' 
+                            : 'border-muted hover:bg-accent'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-sm font-semibold">{plan.name}</span>
+                              {plan.id === selectedPlan && (
+                                <Check className="h-4 w-4 text-primary" />
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground">{plan.description}</p>
+                          </div>
+                          <div className="text-right ml-4">
+                            <span className="text-sm font-semibold">${plan.price}<span className="text-xs text-muted-foreground">/mo</span></span>
+                          </div>
+                        </div>
+                      </Label>
+                    </div>
+                  ))}
+                </RadioGroup>
+                {!selectedPlan && mode === 'signup' && (
+                  <p className="text-xs text-red-500">Please select a subscription plan to continue.</p>
+                )}
+              </div>
+
               <label className="block">
                 <span className="text-sm">Email</span>
                 <input type="email" autoComplete="email"
@@ -174,8 +329,8 @@ function LoginPageContent() {
               {error && <p className="text-red-500 text-sm">{error}</p>}
               {message && <p className="text-green-500 text-sm">{message}</p>}
 
-              <button type="submit" disabled={submitting} className="w-full rounded-md border p-2">
-                {submitting ? 'Please wait…' : 'Create account'}
+              <button type="submit" disabled={submitting || !selectedPlan} className="w-full rounded-md border p-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                {submitting ? 'Please wait…' : selectedPlan ? `Continue to checkout - $${plans.find(p => p.id === selectedPlan)?.price}/mo` : 'Select a plan to continue'}
               </button>
             </form>
           </TabsContent>

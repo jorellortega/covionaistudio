@@ -1752,16 +1752,6 @@ export default function MoviesPage() {
                       Screenplay
                     </Button>
                   </Link>
-                  <Link href={`/ai-studio?project=${movie.id}`}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full border-cyan-500/30 bg-transparent hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 text-xs h-8"
-                    >
-                      <Sparkles className="mr-2 h-3.5 w-3.5" />
-                      AI Studio
-                    </Button>
-                  </Link>
                   <Link href={`/assets?project=${movie.id}`}>
                     <Button
                       variant="outline"

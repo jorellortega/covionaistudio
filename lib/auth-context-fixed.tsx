@@ -9,7 +9,7 @@ interface User {
   id: string
   email: string
   name: string
-  role: 'user' | 'cinema' | 'ceo'
+  role: 'user' | 'creator' | 'studio' | 'production' | 'ceo'
   openaiApiKey?: string
   anthropicApiKey?: string
   openartApiKey?: string
@@ -32,7 +32,8 @@ interface AuthContextType {
   signOut: () => Promise<void>
   isCeo: () => boolean
   hasCinemaSubscription: () => boolean
-  hasRole: (role: 'user' | 'cinema' | 'ceo') => boolean
+  hasSubscription: () => boolean
+  hasRole: (role: 'user' | 'creator' | 'studio' | 'production' | 'ceo') => boolean
   updateApiKey: (apiKey: string) => Promise<void>
   updateServiceApiKey: (service: string, apiKey: string) => Promise<void>
   refreshUser: () => Promise<void>
@@ -196,11 +197,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (data) {
+        // Sync role from subscription if user doesn't have CEO role
+        if (data.role !== 'ceo') {
+          try {
+            // Check for active subscription
+            const { data: subscription, error: subError } = await supabase
+              .from('subscriptions')
+              .select('plan_id')
+              .eq('user_id', userId)
+              .eq('status', 'active')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
+            
+            if (subError && subError.code !== 'PGRST116') {
+              console.error('Error checking subscription:', subError)
+            } else if (subscription) {
+              // Map plan_id to role
+              const roleMap: Record<string, 'creator' | 'studio' | 'production'> = {
+                'creator': 'creator',
+                'studio': 'studio',
+                'production': 'production',
+              }
+              
+              const subscriptionRole = roleMap[subscription.plan_id]
+              if (subscriptionRole && data.role !== subscriptionRole) {
+                console.log(`Syncing role from subscription: ${data.role} -> ${subscriptionRole}`)
+                // Update role in database
+                await supabase
+                  .from('users')
+                  .update({ role: subscriptionRole })
+                  .eq('id', userId)
+                
+                // Update data.role for return value
+                data.role = subscriptionRole
+              }
+            } else if (data.role !== 'user') {
+              // No active subscription, revert to 'user' if not already
+              console.log(`No active subscription, reverting role to 'user'`)
+              await supabase
+                .from('users')
+                .update({ role: 'user' })
+                .eq('id', userId)
+              
+              data.role = 'user'
+            }
+          } catch (error) {
+            console.error('Error syncing role from subscription:', error)
+            // Continue with existing role if sync fails
+          }
+        }
+        
         const userData: User = {
           id: data.id,
           email: data.email,
           name: data.name,
-          role: data.role as 'user' | 'cinema' | 'ceo',
+          role: data.role as 'user' | 'creator' | 'studio' | 'production' | 'ceo',
           openaiApiKey: data.openai_api_key,
           anthropicApiKey: data.anthropic_api_key,
           openartApiKey: data.openart_api_key,
@@ -611,10 +663,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const hasCinemaSubscription = () => {
-    return user?.role === 'cinema';
+    // Backward compatibility: check for any paid subscription
+    return user?.role === 'creator' || user?.role === 'studio' || user?.role === 'production' || user?.role === 'ceo';
   };
 
-  const hasRole = (role: 'user' | 'cinema' | 'ceo') => {
+  const hasSubscription = () => {
+    return user?.role === 'creator' || user?.role === 'studio' || user?.role === 'production' || user?.role === 'ceo';
+  };
+
+  const hasRole = (role: 'user' | 'creator' | 'studio' | 'production' | 'ceo') => {
     return user?.role === role;
   };
 
@@ -648,6 +705,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       isCeo,
       hasCinemaSubscription,
+      hasSubscription,
       hasRole,
       updateApiKey,
       updateServiceApiKey,
