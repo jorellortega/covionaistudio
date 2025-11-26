@@ -49,11 +49,18 @@ export class TreatmentsService {
   // Get all treatments for the current user
   static async getTreatments(): Promise<Treatment[]> {
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       console.log('Fetching treatments...')
       
       const { data, error } = await getSupabaseClient()
         .from('treatments')
         .select('*')
+        .eq('user_id', user.id)
         .order('updated_at', { ascending: false })
 
       if (error) {

@@ -31,9 +31,16 @@ export class ProjectsService {
   // Get all projects for the current user
   static async getProjects(): Promise<Project[]> {
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
+        .eq('user_id', user.id)
         .order('updated_at', { ascending: false })
 
       if (error) {
@@ -51,9 +58,16 @@ export class ProjectsService {
   // Get recent projects for dashboard (limited to 6)
   static async getRecentProjects(): Promise<DashboardProject[]> {
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       const { data, error } = await getSupabaseClient()
         .from('projects')
         .select('*')
+        .eq('user_id', user.id)
         .order('updated_at', { ascending: false })
         .limit(6)
 

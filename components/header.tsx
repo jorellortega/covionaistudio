@@ -1,11 +1,12 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
 import { Navigation } from "@/components/navigation"
 import { ThemeToggle } from "@/components/theme-provider"
-import { useAuth } from "@/components/AuthProvider"
+import { useAuthReady } from "@/components/auth-hooks"
 import { LogOut, User, Settings } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase"
 import {
@@ -18,7 +19,48 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function Header() {
-  const { session } = useAuth()
+  const { session, userId, ready } = useAuthReady()
+  const [userName, setUserName] = useState<string>('')
+  const [userEmail, setUserEmail] = useState<string>('')
+  const [isLoadingUser, setIsLoadingUser] = useState(true)
+
+  // Fetch user name and email from public users table
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!ready || !userId) {
+        setIsLoadingUser(false)
+        return
+      }
+
+      try {
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('name, email')
+          .eq('id', userId)
+          .single()
+
+        if (error) {
+          console.error('Error fetching user profile:', error)
+          // Fallback to auth data
+          setUserName(session?.user?.user_metadata?.name || session?.user?.email?.split('@')[0] || 'User')
+          setUserEmail(session?.user?.email || '')
+        } else if (data) {
+          setUserName(data.name || session?.user?.email?.split('@')[0] || 'User')
+          setUserEmail(data.email || session?.user?.email || '')
+        }
+      } catch (error) {
+        console.error('Error fetching user profile:', error)
+        // Fallback to auth data
+        setUserName(session?.user?.user_metadata?.name || session?.user?.email?.split('@')[0] || 'User')
+        setUserEmail(session?.user?.email || '')
+      } finally {
+        setIsLoadingUser(false)
+      }
+    }
+
+    fetchUserProfile()
+  }, [ready, userId, session])
 
   const handleLogout = async () => {
     try {
@@ -52,17 +94,17 @@ export default function Header() {
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                   <Avatar className="h-8 w-8">
-                                <AvatarImage src="/placeholder-user.jpg" alt={session?.user?.user_metadata?.name || session?.user?.email || 'User'} />
-            <AvatarFallback>{(session?.user?.user_metadata?.name || session?.user?.email || 'U').charAt(0).toUpperCase()}</AvatarFallback>
+                    <AvatarImage src="/placeholder-user.jpg" alt={userName || 'User'} />
+                    <AvatarFallback>{(userName || userEmail || 'U').charAt(0).toUpperCase()}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
                 <div className="flex items-center justify-start gap-2 p-2">
                   <div className="flex flex-col space-y-1 leading-none">
-                    <p className="font-medium">{session?.user?.user_metadata?.name || 'User'}</p>
+                    <p className="font-medium">{isLoadingUser ? 'Loading...' : (userName || 'User')}</p>
                     <p className="w-[200px] truncate text-sm text-muted-foreground">
-                      {session?.user?.email || 'No email'}
+                      {isLoadingUser ? 'Loading...' : (userEmail || 'No email')}
                     </p>
                   </div>
                 </div>

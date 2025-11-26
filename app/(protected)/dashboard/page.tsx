@@ -11,6 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { TreatmentsService } from "@/lib/treatments-service"
 import { ProjectsService, DashboardProject } from "@/lib/projects-service"
 import { MovieIdeasService } from "@/lib/movie-ideas-service"
+import { MovieService } from "@/lib/movie-service"
+import { MoodBoardsService } from "@/lib/mood-boards-service"
 import { useRouter } from "next/navigation"
 import { getSupabaseClient } from "@/lib/supabase"
 import Header from "@/components/header"
@@ -25,6 +27,10 @@ export default function DashboardPage() {
   const [totalScenes, setTotalScenes] = useState(0)
 
   const [ideasCount, setIdeasCount] = useState(0)
+  const [moviesCount, setMoviesCount] = useState(0)
+  const [videosCount, setVideosCount] = useState(0)
+  const [aiGenerationsCount, setAiGenerationsCount] = useState(0)
+  const [visualDevCount, setVisualDevCount] = useState(0)
   const [hasFetchedData, setHasFetchedData] = useState(false)
   const [userName, setUserName] = useState<string>('User')
 
@@ -64,7 +70,7 @@ export default function DashboardPage() {
 
   // Memoize the fetch data function to prevent unnecessary re-renders
   const fetchData = useCallback(async () => {
-    if (!ready || hasFetchedData) return
+    if (!ready || !userId || hasFetchedData) return
     
     console.log('🏠 DASHBOARD - Starting data fetch')
     setIsLoadingProjects(true)
@@ -89,6 +95,36 @@ export default function DashboardPage() {
       // Fetch ideas count
       const ideas = await MovieIdeasService.getUserIdeas(userId!)
       setIdeasCount(ideas.length)
+
+      // Fetch movies count
+      const movies = await MovieService.getMovies()
+      setMoviesCount(movies.length)
+
+      // Fetch videos count (projects with project_type='video')
+      const videos = allProjects.filter(p => p.project_type === 'video')
+      setVideosCount(videos.length)
+
+      // Fetch AI generations count (assets with content_type in ['image', 'video', 'audio'])
+      const { data: assetsData, error: assetsError } = await getSupabaseClient()
+        .from('assets')
+        .select('id', { count: 'exact', head: false })
+        .eq('user_id', userId!)
+        .in('content_type', ['image', 'video', 'audio'])
+      
+      if (!assetsError && assetsData) {
+        setAiGenerationsCount(assetsData.length)
+      } else if (assetsError) {
+        console.error('Error fetching AI generations count:', assetsError)
+      }
+
+      // Fetch visual development count (mood boards)
+      try {
+        const moodBoards = await MoodBoardsService.getAllForUser()
+        setVisualDevCount(moodBoards.length)
+      } catch (error) {
+        console.error('Error fetching mood boards:', error)
+        setVisualDevCount(0)
+      }
       
       setHasFetchedData(true)
     } catch (error) {
@@ -98,10 +134,19 @@ export default function DashboardPage() {
     }
   }, [ready, userId, hasFetchedData])
 
-  // Fetch data only once when user is available
+  // Reset fetch flag and fetch data when userId changes
   useEffect(() => {
-    fetchData()
-  }, [fetchData])
+    if (userId) {
+      setHasFetchedData(false)
+    }
+  }, [userId])
+
+  // Fetch data when ready and user is available
+  useEffect(() => {
+    if (ready && userId && !hasFetchedData) {
+      fetchData()
+    }
+  }, [ready, userId, hasFetchedData, fetchData])
 
   const handleSignOut = useCallback(async () => {
     console.log('🏠 DASHBOARD - Sign out initiated')
@@ -224,7 +269,7 @@ export default function DashboardPage() {
             <CardContent>
               <CardDescription className="mb-4">Manage your film projects</CardDescription>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-blue-500">3</span>
+                <span className="text-2xl font-bold text-blue-500">{moviesCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-500 transition-colors" />
               </div>
             </CardContent>
@@ -262,7 +307,7 @@ export default function DashboardPage() {
             <CardContent>
               <CardDescription className="mb-4">Generate content with AI</CardDescription>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-blue-600">8</span>
+                <span className="text-2xl font-bold text-blue-600">{aiGenerationsCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-600 transition-colors" />
               </div>
             </CardContent>
@@ -280,7 +325,7 @@ export default function DashboardPage() {
             <CardContent>
               <CardDescription className="mb-4">Design characters, environments & style guides</CardDescription>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-green-500">New</span>
+                <span className="text-2xl font-bold text-green-500">{visualDevCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-green-500 transition-colors" />
               </div>
             </CardContent>
@@ -298,7 +343,7 @@ export default function DashboardPage() {
             <CardContent>
               <CardDescription className="mb-4">Manage videos and reels</CardDescription>
               <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-cyan-500">12</span>
+                <span className="text-2xl font-bold text-cyan-500">{videosCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-cyan-500 transition-colors" />
               </div>
             </CardContent>
@@ -441,7 +486,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">Team Members</p>
-                <p className="text-2xl font-bold text-blue-600">8</p>
+                <p className="text-2xl font-bold text-blue-600">-</p>
               </div>
             </div>
           </CardContent>
@@ -455,7 +500,7 @@ export default function DashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">AI Generations</p>
-                <p className="text-2xl font-bold text-cyan-600">156</p>
+                <p className="text-2xl font-bold text-cyan-600">{aiGenerationsCount}</p>
               </div>
             </div>
           </CardContent>

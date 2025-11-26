@@ -252,8 +252,12 @@ function LoginPageContent() {
                 {submitting ? 'Please wait…' : 'Sign in'}
               </button>
 
-              <div className="text-center">
-                <button type="button" onClick={() => setMode('reset')} className="text-sm text-muted-foreground hover:text-foreground">
+              <div className="text-center pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setMode('reset')} 
+                  className="text-sm text-primary hover:text-primary/80 underline underline-offset-4 font-medium transition-colors"
+                >
                   Forgot password?
                 </button>
               </div>

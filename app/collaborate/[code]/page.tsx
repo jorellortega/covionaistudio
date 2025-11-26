@@ -1,0 +1,1622 @@
+"use client"
+import { useState, useEffect, useRef, useCallback } from "react"
+import { useParams, useRouter } from "next/navigation"
+import Link from "next/link"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { Separator } from "@/components/ui/separator"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  Edit3,
+  Save,
+  Trash2,
+  Plus,
+  Loader2,
+  Bot,
+  Users,
+  Clock,
+  Copy,
+  CheckCircle,
+  AlertCircle,
+  X,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  Download,
+  FileText as FileTextIcon,
+} from "lucide-react"
+import { useToast } from "@/hooks/use-toast"
+import { CollaborationService, type CollaborationSession } from "@/lib/collaboration-service"
+import { type SceneWithMetadata } from "@/lib/timeline-service"
+import { getSupabaseClient } from "@/lib/supabase"
+import AITextEditor from "@/components/ai-text-editor"
+import { Switch } from "@/components/ui/switch"
+import { CharactersService, type Character } from "@/lib/characters-service"
+import { createClient } from "@supabase/supabase-js"
+import { Database } from "@/lib/supabase"
+
+export default function CollaboratePage() {
+  const params = useParams()
+  const code = params.code as string
+
+  return <CollaboratePageClient code={code} />
+}
+
+function CollaboratePageClient({ code }: { code: string }) {
+  const { toast } = useToast()
+  const router = useRouter()
+  const [loading, setLoading] = useState(true)
+  const [session, setSession] = useState<CollaborationSession | null>(null)
+  const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null)
+  const [selectedScene, setSelectedScene] = useState<SceneWithMetadata | null>(null)
+  const [sceneContent, setSceneContent] = useState<string>("")
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [loadingCharacters, setLoadingCharacters] = useState(false)
+  const [selectedCharacter, setSelectedCharacter] = useState<Character | null>(null)
+  const [showCharacterDialog, setShowCharacterDialog] = useState(false)
+  const [characterForm, setCharacterForm] = useState({
+    name: "",
+    description: "",
+    archetype: "",
+  })
+  const [projectThumbnail, setProjectThumbnail] = useState<string | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [showSidebar, setShowSidebar] = useState(true)
+  const [enablePolling, setEnablePolling] = useState(() => {
+    // Load from localStorage, default to false (save database usage)
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('collab-polling-enabled')
+      return saved !== null ? saved === 'true' : false
+    }
+    return false
+  })
+  const [pollingAutoEnabled, setPollingAutoEnabled] = useState(false) // Track if polling was auto-enabled
+  
+  // AI editing states
+  const [showAITextEditor, setShowAITextEditor] = useState(false)
+  const [aiEditData, setAiEditData] = useState<{
+    selectedText: string
+    fullContent: string
+  } | null>(null)
+  const [selectedText, setSelectedText] = useState<string>("")
+  const [selectionStart, setSelectionStart] = useState<number>(0)
+  const [selectionEnd, setSelectionEnd] = useState<number>(0)
+  const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null)
+  
+  // Scene editing states
+  const [showSceneDialog, setShowSceneDialog] = useState(false)
+  const [editingScene, setEditingScene] = useState<SceneWithMetadata | null>(null)
+  const [sceneForm, setSceneForm] = useState({
+    name: "",
+    description: "",
+    sceneNumber: "",
+    location: "",
+  })
+  
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Load session and validate access
+  useEffect(() => {
+    const loadSession = async () => {
+      try {
+        console.log('🔐 [COLLAB] Loading session for code:', code)
+        setLoading(true)
+        const validation = await CollaborationService.validateAccessCode(code)
+        
+        console.log('🔐 [COLLAB] Validation result:', validation)
+        
+        if (!validation.valid || !validation.session) {
+          console.error('❌ [COLLAB] Invalid access code:', validation.reason)
+          toast({
+            title: "Invalid Access Code",
+            description: validation.reason || "This access code is invalid or has expired.",
+            variant: "destructive",
+          })
+          router.push("/")
+          return
+        }
+
+        console.log('✅ [COLLAB] Session loaded:', validation.session.id, 'Project:', validation.session.project_id)
+        setSession(validation.session)
+      } catch (error: any) {
+        console.error("❌ [COLLAB] Error loading session:", error)
+        toast({
+          title: "Error",
+          description: error.message || "Failed to load collaboration session",
+          variant: "destructive",
+        })
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadSession()
+  }, [code, router, toast])
+
+  // Load project thumbnail
+  const loadProjectThumbnail = async () => {
+    if (!session) return
+    
+    try {
+      const response = await fetch(
+        `/api/collaboration/project?access_code=${encodeURIComponent(session.access_code)}`
+      )
+      const result = await response.json()
+      
+      if (response.ok && result.project?.thumbnail) {
+        setProjectThumbnail(result.project.thumbnail)
+      }
+    } catch (error) {
+      console.error('Error loading project thumbnail:', error)
+    }
+  }
+
+  // Load scenes when session is available
+  useEffect(() => {
+    if (session) {
+      console.log('📋 [COLLAB] Session available, loading scenes for project:', session.project_id)
+      loadScenes()
+      loadCharacters()
+      loadProjectThumbnail()
+    } else {
+      console.log('⏳ [COLLAB] Waiting for session...')
+    }
+  }, [session])
+
+  // Load characters
+  const loadCharacters = async () => {
+    if (!session) {
+      console.log('⚠️ [COLLAB] Cannot load characters: no session')
+      return
+    }
+    
+    try {
+      setLoadingCharacters(true)
+      console.log('👥 [COLLAB] Loading characters for project:', session.project_id)
+      
+      // Use API route for guest access
+      const response = await fetch(
+        `/api/collaboration/characters?access_code=${encodeURIComponent(session.access_code)}`
+      )
+      const result = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to load characters")
+      }
+      
+      const chars = result.characters || []
+      setCharacters(chars)
+      console.log('✅ [COLLAB] Loaded characters:', chars.length)
+    } catch (error: any) {
+      console.error("❌ [COLLAB] Error loading characters:", error)
+      // Silently fail - characters are optional
+      setCharacters([])
+    } finally {
+      setLoadingCharacters(false)
+    }
+  }
+
+  // Load scene content when scene is selected
+  useEffect(() => {
+    if (selectedSceneId && session) {
+      console.log('📄 [COLLAB] Scene selected, loading content:', selectedSceneId)
+      loadSceneContent(selectedSceneId)
+    } else {
+      if (!selectedSceneId) console.log('⏳ [COLLAB] No scene selected yet')
+      if (!session) console.log('⏳ [COLLAB] No session available for loading content')
+    }
+  }, [selectedSceneId, session])
+
+  // Auto-focus textarea when entering edit mode
+  useEffect(() => {
+    if (isEditing && contentTextareaRef.current) {
+      // Small delay to ensure the textarea is rendered
+      setTimeout(() => {
+        contentTextareaRef.current?.focus()
+      }, 100)
+    }
+  }, [isEditing])
+
+  // Turn off polling when exiting edit mode (if it was auto-enabled)
+  useEffect(() => {
+    if (!isEditing && pollingAutoEnabled) {
+      setEnablePolling(false)
+      setPollingAutoEnabled(false)
+    }
+  }, [isEditing, pollingAutoEnabled])
+
+  // Load scenes
+  const loadScenes = async () => {
+    if (!session) {
+      console.log('⚠️ [COLLAB] Cannot load scenes: no session')
+      return
+    }
+    
+    try {
+      console.log('📋 [COLLAB] Fetching scenes with access code:', session.access_code)
+      const response = await fetch(
+        `/api/collaboration/scenes?access_code=${encodeURIComponent(session.access_code)}`
+      )
+      const result = await response.json()
+      
+      console.log('📋 [COLLAB] Scenes API response:', { ok: response.ok, scenesCount: result.scenes?.length || 0 })
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to load scenes")
+      }
+
+      const scenesData = result.scenes || []
+      console.log('✅ [COLLAB] Loaded', scenesData.length, 'scenes:', scenesData.map((s: any) => ({ id: s.id, name: s.name })))
+      setScenes(scenesData as SceneWithMetadata[])
+      
+      // Select first scene if available
+      if (scenesData.length > 0 && !selectedSceneId) {
+        const firstScene = scenesData[0]
+        console.log('🎬 [COLLAB] Auto-selecting first scene:', firstScene.id, firstScene.name)
+        setSelectedSceneId(firstScene.id)
+        setSelectedScene(firstScene as SceneWithMetadata)
+        await loadSceneContent(firstScene.id)
+      } else if (scenesData.length === 0) {
+        console.log('⚠️ [COLLAB] No scenes found for this project')
+      }
+    } catch (error: any) {
+      console.error("❌ [COLLAB] Error loading scenes:", error)
+      toast({
+        title: "Error",
+        description: "Failed to load scenes",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Load scene content
+  const loadSceneContent = async (sceneId: string) => {
+    if (!session) {
+      console.log('⚠️ [COLLAB] Cannot load scene content: no session')
+      return
+    }
+    
+    try {
+      console.log('📄 [COLLAB] Fetching scene content for:', sceneId)
+      console.log('📄 [COLLAB] Using access code:', session.access_code)
+      
+      const url = `/api/collaboration/scenes/${sceneId}?access_code=${encodeURIComponent(session.access_code)}`
+      console.log('📄 [COLLAB] Fetch URL:', url)
+      
+      const response = await fetch(url)
+      const result = await response.json()
+      
+      console.log('📄 [COLLAB] Scene content API response:', {
+        ok: response.ok,
+        status: response.status,
+        hasScene: !!result.scene,
+        contentLength: result.scene?.screenplay_content?.length || 0
+      })
+      
+      if (!response.ok) {
+        console.error('❌ [COLLAB] Scene content API error:', result.error)
+        throw new Error(result.error || "Failed to load scene content")
+      }
+
+      const content = result.scene?.screenplay_content || ""
+      console.log('✅ [COLLAB] Loaded scene content:', {
+        sceneId,
+        sceneName: result.scene?.name,
+        contentLength: content.length,
+        hasContent: content.length > 0,
+        preview: content.substring(0, 100) + (content.length > 100 ? '...' : '')
+      })
+      setSceneContent(content)
+    } catch (error: any) {
+      console.error("❌ [COLLAB] Error loading scene content:", error)
+      setSceneContent("")
+    }
+  }
+
+  // Save polling preference to localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('collab-polling-enabled', String(enablePolling))
+    }
+  }, [enablePolling])
+
+  // Setup real-time polling (since realtime subscriptions require auth)
+  useEffect(() => {
+    if (!selectedSceneId || !session || isEditing || !enablePolling) {
+      console.log('⏸️ [COLLAB] Polling paused:', { 
+        selectedSceneId: !!selectedSceneId, 
+        session: !!session, 
+        isEditing,
+        enablePolling 
+      })
+      return
+    }
+
+    console.log('🔄 [COLLAB] Starting live polling for scene:', selectedSceneId)
+    const pollInterval = setInterval(async () => {
+      try {
+        console.log('🔄 [COLLAB] Live polling for updates...')
+        await loadSceneContent(selectedSceneId)
+      } catch (error) {
+        console.error('❌ [COLLAB] Polling error (silent):', error)
+        // Silently fail polling
+      }
+    }, 2000) // Poll every 2 seconds
+
+    return () => {
+      console.log('🛑 [COLLAB] Stopping live polling')
+      clearInterval(pollInterval)
+    }
+  }, [selectedSceneId, session, isEditing, enablePolling, loadSceneContent])
+
+  // Setup secondary slow polling (every 5 minutes when live updates are off)
+  useEffect(() => {
+    if (!selectedSceneId || !session || isEditing || enablePolling) {
+      // Don't run secondary polling if:
+      // - No scene selected
+      // - No session
+      // - Currently editing
+      // - Live polling is enabled (only one should run at a time)
+      return
+    }
+
+    console.log('⏰ [COLLAB] Starting secondary slow polling for scene:', selectedSceneId)
+    const slowPollInterval = setInterval(async () => {
+      try {
+        console.log('⏰ [COLLAB] Slow polling for updates (5 min interval)...')
+        await loadSceneContent(selectedSceneId)
+      } catch (error) {
+        console.error('❌ [COLLAB] Slow polling error (silent):', error)
+        // Silently fail polling
+      }
+    }, 5 * 60 * 1000) // Poll every 5 minutes (300000ms)
+
+    return () => {
+      console.log('🛑 [COLLAB] Stopping secondary slow polling')
+      clearInterval(slowPollInterval)
+    }
+  }, [selectedSceneId, session, isEditing, enablePolling, loadSceneContent])
+
+  // Handle scene selection
+  const handleSceneSelect = async (sceneId: string) => {
+    console.log('🎬 [COLLAB] Scene selection changed to:', sceneId)
+    const scene = scenes.find((s) => s.id === sceneId)
+    console.log('🎬 [COLLAB] Found scene:', scene ? { id: scene.id, name: scene.name } : 'NOT FOUND')
+    
+    setSelectedSceneId(sceneId)
+    setSelectedScene(scene || null)
+    setIsEditing(false)
+    await loadSceneContent(sceneId)
+  }
+
+  // Update toolbar position based on textarea position
+  const updateToolbarPosition = (textarea: HTMLTextAreaElement) => {
+    const rect = textarea.getBoundingClientRect()
+    const scrollTop = window.scrollY || document.documentElement.scrollTop
+    const scrollLeft = window.scrollX || document.documentElement.scrollLeft
+    
+    // Position toolbar above the textarea, aligned to the left
+    setToolbarPosition({
+      top: rect.top + scrollTop - 50,
+      left: rect.left + scrollLeft + 10
+    })
+  }
+
+  // Handle text selection for AI editing
+  const handleTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    if (!isEditing) return
+    
+    const target = e.target as HTMLTextAreaElement
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    const selection = target.value.substring(start, end)
+    
+    if (selection.length > 0) {
+      setSelectedText(selection)
+      setSelectionStart(start)
+      setSelectionEnd(end)
+      
+      // Calculate toolbar position based on textarea position
+      updateToolbarPosition(target)
+    } else {
+      setSelectedText("")
+      setToolbarPosition(null)
+    }
+  }
+
+  // Update toolbar position on scroll
+  useEffect(() => {
+    if (!isEditing || !selectedText || !toolbarPosition) return
+    
+    const handleScroll = () => {
+      const textarea = document.querySelector('textarea[data-screenplay-editor]') as HTMLTextAreaElement
+      if (textarea) {
+        updateToolbarPosition(textarea)
+      }
+    }
+    
+    window.addEventListener('scroll', handleScroll, true)
+    return () => window.removeEventListener('scroll', handleScroll, true)
+  }, [isEditing, selectedText, toolbarPosition])
+
+  // Handle AI text edit
+  const handleAITextEdit = () => {
+    if (!selectedText) return
+    
+    setAiEditData({
+      selectedText,
+      fullContent: sceneContent,
+    })
+    setShowAITextEditor(true)
+  }
+
+  // Export scene to Word document
+  const exportToWord = async () => {
+    if (!selectedScene || !sceneContent) {
+      toast({
+        title: "Error",
+        description: "No scene content to export",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import('docx')
+      
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              text: selectedScene.name,
+              heading: HeadingLevel.HEADING_1,
+            }),
+            new Paragraph({
+              text: sceneContent,
+            }),
+          ],
+        }],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${selectedScene.name.replace(/[^a-z0-9]/gi, '_')}.docx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Exported!",
+        description: "Scene exported as Word document",
+      })
+    } catch (error: any) {
+      console.error("Error exporting to Word:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to export to Word",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Export scene to PDF
+  const exportToPDF = async () => {
+    if (!selectedScene || !sceneContent) {
+      toast({
+        title: "Error",
+        description: "No scene content to export",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { jsPDF } = await import('jspdf')
+      
+      const pdf = new jsPDF()
+      const pageWidth = pdf.internal.pageSize.getWidth()
+      const pageHeight = pdf.internal.pageSize.getHeight()
+      const margin = 20
+      const maxWidth = pageWidth - 2 * margin
+      
+      // Add title
+      pdf.setFontSize(16)
+      pdf.text(selectedScene.name, margin, margin)
+      
+      // Add content
+      pdf.setFontSize(10)
+      const lines = pdf.splitTextToSize(sceneContent, maxWidth)
+      let y = margin + 10
+      
+      lines.forEach((line: string) => {
+        if (y > pageHeight - margin) {
+          pdf.addPage()
+          y = margin
+        }
+        pdf.text(line, margin, y)
+        y += 7
+      })
+
+      pdf.save(`${selectedScene.name.replace(/[^a-z0-9]/gi, '_')}.pdf`)
+
+      toast({
+        title: "Exported!",
+        description: "Scene exported as PDF",
+      })
+    } catch (error: any) {
+      console.error("Error exporting to PDF:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to export to PDF",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Handle AI text replace
+  const handleAITextReplace = (newText: string) => {
+    if (!contentTextareaRef.current) return
+
+    const newContent =
+      sceneContent.substring(0, selectionStart) + newText + sceneContent.substring(selectionEnd)
+    
+    setSceneContent(newContent)
+    setSelectedText("")
+    setToolbarPosition(null)
+    setSelectionStart(0)
+    setSelectionEnd(0)
+    
+    // Focus back on textarea
+    setTimeout(() => {
+      if (contentTextareaRef.current) {
+        contentTextareaRef.current.focus()
+        // Set cursor position after the inserted text
+        const newPosition = selectionStart + newText.length
+        contentTextareaRef.current.setSelectionRange(newPosition, newPosition)
+      }
+    }, 0)
+  }
+
+  // Save scene content
+  const saveSceneContent = async () => {
+    if (!selectedSceneId || !session) {
+      console.log('⚠️ [COLLAB] Cannot save: missing sceneId or session')
+      return
+    }
+
+    try {
+      console.log('💾 [COLLAB] Saving scene content:', {
+        sceneId: selectedSceneId,
+        contentLength: sceneContent.length
+      })
+      setSaving(true)
+      
+      const response = await fetch(
+        `/api/collaboration/scenes/${selectedSceneId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            access_code: session.access_code,
+            screenplay_content: sceneContent,
+          }),
+        }
+      )
+
+      const result = await response.json()
+      
+      console.log('💾 [COLLAB] Save response:', { ok: response.ok, status: response.status })
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to save scene content")
+      }
+
+      console.log('✅ [COLLAB] Scene content saved successfully')
+      setIsEditing(false)
+      toast({
+        title: "Saved!",
+        description: "Scene content has been saved",
+      })
+    } catch (error: any) {
+      console.error("❌ [COLLAB] Error saving scene content:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save scene content",
+        variant: "destructive",
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Delete scene content
+  const deleteSceneContent = async () => {
+    if (!selectedSceneId || !session?.allow_delete) return
+
+    try {
+      setSaving(true)
+      
+      const response = await fetch(
+        `/api/collaboration/scenes/${selectedSceneId}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            access_code: session.access_code,
+            screenplay_content: "",
+          }),
+        }
+      )
+
+      const result = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to delete scene content")
+      }
+
+      setSceneContent("")
+      setIsEditing(false)
+      toast({
+        title: "Deleted!",
+        description: "Scene content has been deleted",
+      })
+    } catch (error: any) {
+      console.error("Error deleting scene content:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete scene content",
+        variant: "destructive",
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Add new scene
+  const handleAddScene = () => {
+    setEditingScene(null)
+    setSceneForm({
+      name: "",
+      description: "",
+      sceneNumber: "",
+      location: "",
+    })
+    setShowSceneDialog(true)
+  }
+
+  // Edit scene
+  const handleEditScene = (scene: SceneWithMetadata) => {
+    if (!session?.allow_edit_scenes) return
+    
+    setEditingScene(scene)
+    setSceneForm({
+      name: scene.name,
+      description: scene.description || "",
+      sceneNumber: scene.metadata?.sceneNumber || "",
+      location: scene.metadata?.location || "",
+    })
+    setShowSceneDialog(true)
+  }
+
+  // Save scene
+  const saveScene = async () => {
+    if (!session) return
+
+    try {
+      setSaving(true)
+      
+      if (editingScene) {
+        // Update existing scene
+        const response = await fetch(
+          `/api/collaboration/scenes/${editingScene.id}`,
+          {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              access_code: session.access_code,
+              name: sceneForm.name,
+              description: sceneForm.description,
+              metadata: {
+                ...editingScene.metadata,
+                sceneNumber: sceneForm.sceneNumber,
+                location: sceneForm.location,
+              },
+            }),
+          }
+        )
+
+        const result = await response.json()
+        if (!response.ok) {
+          throw new Error(result.error || "Failed to update scene")
+        }
+      } else {
+        // Create new scene
+        const response = await fetch("/api/collaboration/scenes", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            access_code: session.access_code,
+            name: sceneForm.name,
+            description: sceneForm.description,
+            scene_number: sceneForm.sceneNumber,
+            location: sceneForm.location,
+          }),
+        })
+
+        const result = await response.json()
+        if (!response.ok) {
+          throw new Error(result.error || "Failed to create scene")
+        }
+        
+        // Reload scenes and select new scene
+        await loadScenes()
+        if (result.scene) {
+          await handleSceneSelect(result.scene.id)
+        }
+      }
+
+      setShowSceneDialog(false)
+      await loadScenes()
+      toast({
+        title: "Scene Saved!",
+        description: editingScene ? "Scene updated successfully" : "Scene created successfully",
+      })
+    } catch (error: any) {
+      console.error("Error saving scene:", error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to save scene",
+        variant: "destructive",
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Delete scene - Note: This requires authentication, so we'll disable it for guests
+  // In a full implementation, you'd add a DELETE endpoint for collaboration
+  const handleDeleteScene = async (sceneId: string) => {
+    if (!session?.allow_delete) return
+
+    toast({
+      title: "Not Available",
+      description: "Scene deletion requires authentication. Please contact the session owner.",
+      variant: "default",
+    })
+  }
+
+  // Get current scene index
+  const currentSceneIndex = selectedSceneId
+    ? scenes.findIndex((s) => s.id === selectedSceneId)
+    : -1
+
+  // Debug: Log current state
+  useEffect(() => {
+    console.log('📊 [COLLAB] Current state:', {
+      loading,
+      hasSession: !!session,
+      sessionId: session?.id,
+      scenesCount: scenes.length,
+      selectedSceneId,
+      selectedSceneName: selectedScene?.name,
+      sceneContentLength: sceneContent.length,
+      isEditing,
+      saving
+    })
+  }, [loading, session, scenes.length, selectedSceneId, selectedScene, sceneContent.length, isEditing, saving])
+
+  if (loading) {
+    console.log('⏳ [COLLAB] Rendering loading state')
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <span className="text-lg">Loading collaboration session...</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!session) {
+    console.log('❌ [COLLAB] Rendering invalid session state')
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Invalid Access Code</h1>
+          <p className="text-muted-foreground mb-6">
+            This access code is invalid or has expired.
+          </p>
+          <Button onClick={() => router.push("/")}>Go Home</Button>
+        </div>
+      </div>
+    )
+  }
+
+  console.log('✅ [COLLAB] Rendering collaboration page')
+
+  return (
+    <div className="min-h-screen bg-background flex">
+      {/* Sidebar */}
+      {showSidebar && (
+        <div className="w-80 border-r border-border bg-muted/20 p-4 overflow-y-auto">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between mb-4">
+              <Link href="/">
+                <h2 className="text-lg font-semibold hover:text-primary transition-colors cursor-pointer">
+                  Ai Cinema Studio
+                </h2>
+              </Link>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowSidebar(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            
+            {/* Project Cover Thumbnail */}
+            {projectThumbnail && (
+              <div className="mb-4 rounded-lg overflow-hidden border border-border">
+                <img
+                  src={projectThumbnail}
+                  alt="Project cover"
+                  className="w-full h-auto object-cover"
+                  onError={(e) => {
+                    // Hide image if it fails to load
+                    e.currentTarget.style.display = 'none'
+                  }}
+                />
+              </div>
+            )}
+
+            {/* Scenes List */}
+            {scenes.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm">Scenes ({scenes.length})</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="max-h-[400px] overflow-y-auto">
+                    <div className="space-y-1 p-2">
+                      {scenes.map((scene) => (
+                        <button
+                          key={scene.id}
+                          onClick={() => handleSceneSelect(scene.id)}
+                          className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors border ${
+                            selectedSceneId === scene.id
+                              ? 'bg-primary text-primary-foreground border-primary'
+                              : 'bg-muted/50 hover:bg-muted border-border'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                              <FileText className="h-4 w-4 flex-shrink-0" />
+                              <span className="truncate font-medium">{scene.name}</span>
+                            </div>
+                            {scene.metadata?.sceneNumber && (
+                              <Badge variant="outline" className="text-xs ml-2 flex-shrink-0">
+                                {scene.metadata.sceneNumber}
+                              </Badge>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Characters List */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">
+                  Characters {loadingCharacters ? "(Loading...)" : `(${characters.length})`}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {loadingCharacters ? (
+                  <div className="p-4 text-center">
+                    <Loader2 className="h-4 w-4 animate-spin mx-auto text-muted-foreground" />
+                  </div>
+                ) : characters.length > 0 ? (
+                  <div className="max-h-[400px] overflow-y-auto">
+                    <div className="space-y-1 p-2">
+                      {characters.map((character) => (
+                        <button
+                          key={character.id}
+                          onClick={() => {
+                            setSelectedCharacter(character)
+                            setCharacterForm({
+                              name: character.name || "",
+                              description: character.description || "",
+                              archetype: character.archetype || "",
+                            })
+                            setShowCharacterDialog(true)
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors border ${
+                            selectedCharacter?.id === character.id
+                              ? 'bg-primary text-primary-foreground border-primary'
+                              : 'bg-muted/50 hover:bg-muted border-border'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <Users className="h-4 w-4 flex-shrink-0" />
+                            <span className="truncate font-medium">{character.name}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 text-center text-sm text-muted-foreground">
+                    No characters found
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
+        {/* Header */}
+        <div className="border-b border-border p-4 bg-background/95 backdrop-blur">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-4">
+              {!showSidebar && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowSidebar(true)}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              )}
+              <h1 className="text-2xl font-bold">
+                {session.title || "Collaborative Editing"}
+              </h1>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const url = window.location.href
+                  navigator.clipboard.writeText(url)
+                  toast({
+                    title: "Copied!",
+                    description: "Page URL copied to clipboard",
+                  })
+                }}
+                title="Copy page URL"
+              >
+                <Copy className="h-4 w-4 mr-2" />
+                Copy Link
+              </Button>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30">
+                <RefreshCw className={`h-4 w-4 ${enablePolling ? 'text-green-500' : 'text-muted-foreground'}`} />
+                <Label htmlFor="polling-toggle" className="text-sm font-normal cursor-pointer">
+                  Live Updates
+                </Label>
+                <Switch
+                  id="polling-toggle"
+                  checked={enablePolling}
+                  onCheckedChange={(checked) => {
+                    setEnablePolling(checked)
+                    // If manually toggled off, clear auto-enabled flag
+                    // If manually toggled on, clear auto-enabled flag (user wants it on)
+                    setPollingAutoEnabled(false)
+                  }}
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push("/")}
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Exit
+              </Button>
+            </div>
+          </div>
+
+          {/* Scene Selector */}
+          {scenes.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (selectedSceneId) {
+                    loadSceneContent(selectedSceneId)
+                  }
+                }}
+                title="Refresh current scene"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (currentSceneIndex > 0) {
+                    handleSceneSelect(scenes[currentSceneIndex - 1].id)
+                  }
+                }}
+                disabled={currentSceneIndex <= 0}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Previous
+              </Button>
+              
+              <Select
+                value={selectedSceneId || ""}
+                onValueChange={handleSceneSelect}
+              >
+                <SelectTrigger className="w-[300px]">
+                  <SelectValue>
+                    {selectedScene ? (
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{selectedScene.name}</span>
+                        {selectedScene.metadata?.sceneNumber && (
+                          <Badge variant="outline" className="text-xs">
+                            {selectedScene.metadata.sceneNumber}
+                          </Badge>
+                        )}
+                      </div>
+                    ) : (
+                      "Select Scene"
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {scenes.map((scene) => (
+                    <SelectItem key={scene.id} value={scene.id}>
+                      <div className="flex items-center justify-between w-full">
+                        <div className="flex items-center gap-2">
+                          <span>{scene.name}</span>
+                          {scene.metadata?.sceneNumber && (
+                            <Badge variant="outline" className="text-xs">
+                              {scene.metadata.sceneNumber}
+                            </Badge>
+                          )}
+                        </div>
+                        {scene.id === selectedSceneId && (
+                          <Badge variant="secondary" className="text-xs ml-2">
+                            Current
+                          </Badge>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (currentSceneIndex >= 0 && currentSceneIndex < scenes.length - 1) {
+                    handleSceneSelect(scenes[currentSceneIndex + 1].id)
+                  }
+                }}
+                disabled={currentSceneIndex < 0 || currentSceneIndex >= scenes.length - 1}
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+
+              <div className="flex items-center gap-2 ml-auto">
+                {session.allow_edit_scenes && selectedScene && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleEditScene(selectedScene)}
+                  >
+                    <Edit3 className="h-4 w-4 mr-2" />
+                    Edit Scene
+                  </Button>
+                )}
+                {session.allow_add_scenes && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddScene}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Scene
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Script Content Card */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {selectedScene ? (
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    {selectedScene.name}
+                    {selectedScene.metadata?.sceneNumber && (
+                      <Badge variant="outline">
+                        Scene {selectedScene.metadata.sceneNumber}
+                      </Badge>
+                    )}
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={!sceneContent.trim()}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Export
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={exportToWord}>
+                          <FileTextIcon className="h-4 w-4 mr-2" />
+                          Export as Word (.docx)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={exportToPDF}>
+                          <FileTextIcon className="h-4 w-4 mr-2" />
+                          Export as PDF (.pdf)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    {session.allow_delete && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={deleteSceneContent}
+                        disabled={saving || !sceneContent.trim()}
+                        className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {isEditing ? (
+                  <div className="space-y-4 relative">
+                    <Textarea
+                      ref={contentTextareaRef}
+                      data-screenplay-editor
+                      value={sceneContent}
+                      onChange={(e) => {
+                        setSceneContent(e.target.value)
+                        // Auto-save debounced (similar to screenplay page)
+                      }}
+                      onSelect={handleTextSelection}
+                      className="min-h-[600px] font-mono text-sm leading-relaxed resize-none"
+                      placeholder="Enter your screenplay content here..."
+                    />
+                    
+                    {/* Floating Selection Toolbar */}
+                    {selectedText && toolbarPosition && (
+                      <div
+                        data-selection-toolbar
+                        className="fixed z-50 flex items-center gap-2 p-2 bg-background border border-border rounded-lg shadow-lg"
+                        style={{
+                          top: `${toolbarPosition.top}px`,
+                          left: `${toolbarPosition.left}px`,
+                        }}
+                      >
+                        <Badge variant="outline" className="text-xs">
+                          {selectedText.length} chars
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={handleAITextEdit}
+                          className="bg-purple-500 hover:bg-purple-600 text-white"
+                        >
+                          <Bot className="h-3 w-3 mr-1" />
+                          AI Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setSelectedText("")
+                            setToolbarPosition(null)
+                            const textarea = document.querySelector('textarea[data-screenplay-editor]') as HTMLTextAreaElement
+                            if (textarea) {
+                              textarea.focus()
+                            }
+                          }}
+                          className="h-7 w-7 p-0"
+                          title="Clear selection"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-muted-foreground">
+                          💡 Tip: Select text to see the AI edit button in the floating toolbar.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setIsEditing(false)
+                            loadSceneContent(selectedScene.id)
+                          }}
+                          disabled={saving}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={saveSceneContent}
+                          disabled={saving}
+                        >
+                          {saving ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Saving...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="h-4 w-4 mr-2" />
+                              Save
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {sceneContent ? (
+                      <div className="bg-muted/20 p-6 rounded-lg border">
+                        <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                          {sceneContent}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="text-center py-12">
+                        <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                        <h3 className="text-lg font-medium mb-2">No Content</h3>
+                        <p className="text-muted-foreground mb-4">
+                          This scene doesn't have any content yet.
+                        </p>
+                      </div>
+                    )}
+                    
+                    {session.allow_edit && (
+                      <Button
+                        onClick={() => {
+                          setIsEditing(true)
+                          // Automatically enable live updates when editing
+                          if (!enablePolling) {
+                            setEnablePolling(true)
+                            setPollingAutoEnabled(true) // Mark as auto-enabled
+                          }
+                        }}
+                        className="w-full"
+                      >
+                        <Edit3 className="h-4 w-4 mr-2" />
+                        {sceneContent ? "Edit Content" : "Add Content"}
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="text-center py-12">
+              <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+              <h3 className="text-lg font-medium mb-2">No Scene Selected</h3>
+              <p className="text-muted-foreground mb-4">
+                {scenes.length === 0
+                  ? "No scenes available. Add a scene to get started."
+                  : "Select a scene from the dropdown above."}
+              </p>
+              {session.allow_add_scenes && scenes.length === 0 && (
+                <Button onClick={handleAddScene}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add First Scene
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* AI Text Editor */}
+      {showAITextEditor && aiEditData && (
+        <AITextEditor
+          isOpen={showAITextEditor}
+          onClose={() => {
+            setShowAITextEditor(false)
+            setAiEditData(null)
+          }}
+          selectedText={aiEditData.selectedText}
+          fullContent={aiEditData.fullContent}
+          onTextReplace={handleAITextReplace}
+          contentType="script"
+        />
+      )}
+
+      {/* Character Dialog */}
+      <Dialog open={showCharacterDialog} onOpenChange={setShowCharacterDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Character Details</DialogTitle>
+            <DialogDescription>
+              View and edit character information
+            </DialogDescription>
+          </DialogHeader>
+          {selectedCharacter && (
+            <div className="space-y-4">
+              <div>
+                <Label>Name *</Label>
+                <Input
+                  value={characterForm.name}
+                  onChange={(e) => setCharacterForm({ ...characterForm, name: e.target.value })}
+                  placeholder="Character name"
+                />
+              </div>
+              <div>
+                <Label>Description</Label>
+                <Textarea
+                  value={characterForm.description}
+                  onChange={(e) => setCharacterForm({ ...characterForm, description: e.target.value })}
+                  placeholder="Character description"
+                  rows={4}
+                />
+              </div>
+              <div>
+                <Label>Archetype</Label>
+                <Input
+                  value={characterForm.archetype}
+                  onChange={(e) => setCharacterForm({ ...characterForm, archetype: e.target.value })}
+                  placeholder="Character archetype"
+                />
+              </div>
+              
+              <div className="flex items-center justify-between pt-4">
+                <Button
+                  variant="destructive"
+                  onClick={async () => {
+                    if (!selectedCharacter || !session) return
+                    if (!confirm("Are you sure you want to delete this character?")) return
+                    
+                    try {
+                      const response = await fetch(
+                        `/api/collaboration/characters/${selectedCharacter.id}`,
+                        {
+                          method: "DELETE",
+                          headers: {
+                            "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({
+                            access_code: session.access_code,
+                          }),
+                        }
+                      )
+                      
+                      const result = await response.json()
+                      if (!response.ok) {
+                        throw new Error(result.error || "Failed to delete character")
+                      }
+                      
+                      toast({
+                        title: "Deleted!",
+                        description: "Character has been deleted",
+                      })
+                      
+                      setShowCharacterDialog(false)
+                      setSelectedCharacter(null)
+                      loadCharacters()
+                    } catch (error: any) {
+                      toast({
+                        title: "Error",
+                        description: error.message || "Failed to delete character",
+                        variant: "destructive",
+                      })
+                    }
+                  }}
+                  disabled={!session?.allow_edit}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete
+                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowCharacterDialog(false)
+                      setSelectedCharacter(null)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      if (!selectedCharacter || !session) return
+                      
+                      try {
+                        setSaving(true)
+                        const response = await fetch(
+                          `/api/collaboration/characters/${selectedCharacter.id}`,
+                          {
+                            method: "PATCH",
+                            headers: {
+                              "Content-Type": "application/json",
+                            },
+                            body: JSON.stringify({
+                              access_code: session.access_code,
+                              name: characterForm.name,
+                              description: characterForm.description,
+                              archetype: characterForm.archetype,
+                            }),
+                          }
+                        )
+                        
+                        const result = await response.json()
+                        if (!response.ok) {
+                          throw new Error(result.error || "Failed to save character")
+                        }
+                        
+                        toast({
+                          title: "Saved!",
+                          description: "Character has been updated",
+                        })
+                        
+                        setShowCharacterDialog(false)
+                        setSelectedCharacter(null)
+                        loadCharacters()
+                      } catch (error: any) {
+                        toast({
+                          title: "Error",
+                          description: error.message || "Failed to save character",
+                          variant: "destructive",
+                        })
+                      } finally {
+                        setSaving(false)
+                      }
+                    }}
+                    disabled={saving || !session?.allow_edit || !characterForm.name.trim()}
+                  >
+                    {saving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-4 w-4 mr-2" />
+                        Save
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Scene Dialog */}
+      <Dialog open={showSceneDialog} onOpenChange={setShowSceneDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {editingScene ? "Edit Scene" : "Add New Scene"}
+            </DialogTitle>
+            <DialogDescription>
+              {editingScene
+                ? "Update scene information"
+                : "Create a new scene for collaboration"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Scene Name *</Label>
+              <Input
+                value={sceneForm.name}
+                onChange={(e) =>
+                  setSceneForm({ ...sceneForm, name: e.target.value })
+                }
+                placeholder="Enter scene name"
+              />
+            </div>
+            <div>
+              <Label>Scene Number</Label>
+              <Input
+                value={sceneForm.sceneNumber}
+                onChange={(e) =>
+                  setSceneForm({ ...sceneForm, sceneNumber: e.target.value })
+                }
+                placeholder="e.g., 1, 2A, 3B"
+              />
+            </div>
+            <div>
+              <Label>Location</Label>
+              <Input
+                value={sceneForm.location}
+                onChange={(e) =>
+                  setSceneForm({ ...sceneForm, location: e.target.value })
+                }
+                placeholder="e.g., INT. OFFICE - DAY"
+              />
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Textarea
+                value={sceneForm.description}
+                onChange={(e) =>
+                  setSceneForm({ ...sceneForm, description: e.target.value })
+                }
+                placeholder="Enter scene description"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowSceneDialog(false)}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+            <Button onClick={saveScene} disabled={saving || !sceneForm.name.trim()}>
+              {saving ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+

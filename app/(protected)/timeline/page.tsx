@@ -149,18 +149,18 @@ export default function TimelinePage() {
         // Only check and repair table if it's the first time
         if (!aiSettingsLoaded) {
           console.log('🎬 TIMELINE - Checking AI settings table state...')
-          await AISettingsService.checkAndRepairTable(userId!)
+          await AISettingsService.checkAndRepairTable()
         }
         
         // Now try to load settings normally
-        const settings = await AISettingsService.getUserSettings(userId!)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
+          AISettingsService.getOrCreateDefaultTabSetting('videos'),
+          AISettingsService.getOrCreateDefaultTabSetting('audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -186,8 +186,8 @@ export default function TimelinePage() {
         if (mounted && !aiSettingsLoaded) {
           try {
             const basicSettings = await Promise.all([
-              AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
-              AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts')
+              AISettingsService.getOrCreateDefaultTabSetting('images'),
+              AISettingsService.getOrCreateDefaultTabSetting('scripts')
             ])
             setAiSettings(basicSettings)
             setAiSettingsLoaded(true)
@@ -846,7 +846,7 @@ export default function TimelinePage() {
       })
       
       // Get the locked AI service for timeline
-      const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
+      const timelineSetting = await AISettingsService.getTimelineSetting()
       
       console.log('🎬 DEBUG - Timeline AI setting found:', {
         timelineSetting: timelineSetting ? {
@@ -1522,7 +1522,7 @@ export default function TimelinePage() {
     if (!ready) return null
     
     try {
-              const setting = await AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images')
+      const setting = await AISettingsService.getOrCreateDefaultTabSetting('images')
       // Update local state if a new setting was created
       if (!aiSettings.find(s => s.tab_type === 'images')) {
         setAiSettings(prev => [...prev, setting])

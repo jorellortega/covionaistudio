@@ -28,6 +28,7 @@ import {
   Clock,
   Wand2,
   MessageSquare,
+  Share2,
 } from "lucide-react"
 
 export const metadata: Metadata = {
@@ -196,6 +197,12 @@ const featureCategories = [
         name: "AI Text Editor",
         description: "Context-aware text editing with AI-powered rewriting and enhancement",
         icon: Wand2,
+        href: null,
+      },
+      {
+        name: "Live Editor",
+        description: "Real-time collaborative editing with access codes. Share your projects with team members and guests for seamless live collaboration on scripts and scenes",
+        icon: Share2,
         href: null,
       },
       {

@@ -51,6 +51,10 @@ import {
   ChevronUp,
   Sparkles,
   X,
+  Share2,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -68,6 +72,9 @@ import { AISettingsService } from "@/lib/ai-settings-service"
 import { ShotListComponent } from "@/components/shot-list"
 import { ShotListService } from "@/lib/shot-list-service"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { CollaborationService, type CreateCollaborationSessionData } from "@/lib/collaboration-service"
+import { CharactersService } from "@/lib/characters-service"
+import { LocationsService } from "@/lib/locations-service"
 
 export default function ScenePage() {
   const params = useParams()
@@ -166,6 +173,19 @@ function ScenePageClient({ id }: { id: string }) {
   })
   const [projectId, setProjectId] = useState<string>("")
   
+  // Collaboration states
+  const [showCreateCollaborationDialog, setShowCreateCollaborationDialog] = useState(false)
+  const [newCollaborationTitle, setNewCollaborationTitle] = useState("")
+  const [newCollaborationDescription, setNewCollaborationDescription] = useState("")
+  const [newCollaborationExpiresAt, setNewCollaborationExpiresAt] = useState<string>("")
+  const [newCollaborationAllowGuests, setNewCollaborationAllowGuests] = useState(true)
+  const [newCollaborationAllowEdit, setNewCollaborationAllowEdit] = useState(true)
+  const [newCollaborationAllowDelete, setNewCollaborationAllowDelete] = useState(false)
+  const [newCollaborationAllowAddScenes, setNewCollaborationAllowAddScenes] = useState(true)
+  const [newCollaborationAllowEditScenes, setNewCollaborationAllowEditScenes] = useState(true)
+  const [creatingCollaboration, setCreatingCollaboration] = useState(false)
+  const [createdCollaborationCode, setCreatedCollaborationCode] = useState<string | null>(null)
+  
   // Enhanced text editing states
   const [inlineEditing, setInlineEditing] = useState<{
     assetId: string;
@@ -219,6 +239,12 @@ function ScenePageClient({ id }: { id: string }) {
   })
   const [userApiKeys, setUserApiKeys] = useState<{openai_api_key?: string; anthropic_api_key?: string}>({})
   const [isEnhancingText, setIsEnhancingText] = useState(false)
+  
+  // Characters and locations for screenplay toolbar
+  const [characters, setCharacters] = useState<Array<{id: string; name: string}>>([])
+  const [locations, setLocations] = useState<Array<{id: string; name: string; type?: string | null}>>([])
+  const [loadingCharacters, setLoadingCharacters] = useState(false)
+  const [loadingLocations, setLoadingLocations] = useState(false)
   
   // Screenplay page number calculation (standard: ~55 lines per page)
   const LINES_PER_PAGE = 55
@@ -359,6 +385,37 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }, [id, allScenes])
 
+  // Load characters and locations when projectId is available
+  useEffect(() => {
+    if (!projectId || !ready) return
+    
+    const loadData = async () => {
+      try {
+        setLoadingCharacters(true)
+        const chars = await CharactersService.getCharacters(projectId)
+        setCharacters(chars.map(c => ({ id: c.id, name: c.name })))
+      } catch (error) {
+        console.error('Error loading characters:', error)
+        setCharacters([])
+      } finally {
+        setLoadingCharacters(false)
+      }
+      
+      try {
+        setLoadingLocations(true)
+        const locs = await LocationsService.getLocations(projectId)
+        setLocations(locs.map(l => ({ id: l.id, name: l.name, type: l.type })))
+      } catch (error) {
+        console.error('Error loading locations:', error)
+        setLocations([])
+      } finally {
+        setLoadingLocations(false)
+      }
+    }
+    
+    loadData()
+  }, [projectId, ready])
+
   // Calculate pages from screenplay content
   useEffect(() => {
     const content = screenplayContent || scene?.screenplay_content
@@ -425,6 +482,262 @@ function ScenePageClient({ id }: { id: string }) {
       newMap.set(currentPage, content)
       return newMap
     })
+  }
+
+  // Insert text at cursor position in textarea
+  const insertTextAtCursor = (text: string) => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) return
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const currentContent = getCurrentPageEditContent()
+    const newContent = currentContent.substring(0, start) + text + currentContent.substring(end)
+    
+    // Update state
+    saveCurrentPageEdit(newContent)
+    
+    // Directly update textarea value and cursor position for immediate feedback
+    textarea.value = newContent
+    const newPosition = start + text.length
+    textarea.setSelectionRange(newPosition, newPosition)
+    textarea.focus()
+    
+    // Trigger onChange to sync with state
+    const event = new Event('input', { bubbles: true })
+    textarea.dispatchEvent(event)
+  }
+
+  // Insert action line
+  const insertActionLine = () => {
+    insertTextAtCursor('\n\n')
+  }
+
+  // Insert character name (with proper 22-space indentation)
+  const insertCharacter = (characterName: string) => {
+    const name = characterName.toUpperCase()
+    const spaces = ' '.repeat(22)
+    insertTextAtCursor(`\n${spaces}${name}\n`)
+  }
+
+  // Insert location (scene heading)
+  const insertLocation = (locationName: string, locationType?: string | null) => {
+    const intExt = locationType === 'interior' ? 'INT.' : locationType === 'exterior' ? 'EXT.' : 'INT.'
+    insertTextAtCursor(`\n${intExt} ${locationName.toUpperCase()} - DAY\n`)
+  }
+
+  // Insert scene heading (INT/EXT)
+  const insertSceneHeading = () => {
+    insertTextAtCursor('\nINT. LOCATION - DAY\n')
+  }
+
+  // Insert dialogue (with proper 12-space indentation)
+  const insertDialogue = () => {
+    insertTextAtCursor('\n            ') // Newline + 12 spaces for dialogue indentation
+  }
+
+  // Insert title page format (centered)
+  const insertTitlePage = () => {
+    // Center text on an 80-character line (standard screenplay width)
+    // Using explicit spacing for accurate centering
+    const centerText = (text: string) => {
+      const lineWidth = 80
+      const textLength = text.length
+      const leftPadding = Math.floor((lineWidth - textLength) / 2)
+      // Use explicit spaces to ensure proper centering
+      return '                                        '.substring(0, Math.max(0, leftPadding)) + text
+    }
+    
+    // Title page with proper vertical spacing (centered on page)
+    // Standard title page has ~20-25 blank lines before title
+    const titlePage = `
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+${centerText('TITLE HERE')}
+
+
+${centerText('Written by')}
+
+
+${centerText('AUTHOR NAME')}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+`
+    insertTextAtCursor(titlePage)
+  }
+
+  // Helper function to center text on an 80-character line
+  const centerText = (text: string) => {
+    const lineWidth = 80
+    const centerPosition = 40 // Center of 80-character line (0-indexed, between 39 and 40)
+    
+    // Remove any existing leading/trailing spaces from the text
+    const trimmed = text.trim()
+    const textLength = trimmed.length
+    
+    if (textLength > lineWidth) {
+      // Text is too long, just return it as-is
+      console.log('🎯 CENTER DEBUG: Text too long, returning as-is', { text, textLength, lineWidth })
+      return trimmed
+    }
+    
+    // Calculate where the center of the text should be positioned
+    // The center of the text is at textLength/2
+    // To center it at position 40, we need: leftPadding = 40 - textLength/2
+    // Round to nearest integer for best visual centering
+    const textCenter = textLength / 2
+    const leftPadding = Math.round(centerPosition - textCenter)
+    const rightPadding = lineWidth - leftPadding - textLength
+    
+    // Create spaces using String.repeat for reliability
+    const leftSpaces = ' '.repeat(leftPadding)
+    const rightSpaces = ' '.repeat(rightPadding)
+    
+    const result = leftSpaces + trimmed + rightSpaces
+    const resultLength = result.length
+    
+    // Verify the result
+    const leftSpacesCount = result.match(/^ */)?.[0].length || 0
+    const rightSpacesCount = result.match(/ *$/)?.[0].length || 0
+    
+    // Create a visual representation for debugging
+    const visualRep = '·'.repeat(leftSpacesCount) + trimmed + '·'.repeat(rightSpacesCount)
+    
+    // Create a reference line showing where center should be (character 40)
+    const referenceLine = '|'.repeat(39) + '^' + '|'.repeat(40) // ^ marks position 40 (center of 80)
+    
+    // Log in a more readable format
+    const totalPadding = leftPadding + rightPadding
+    const calculatedCenter = leftPadding + textCenter
+    console.log('🎯 CENTER DEBUG:')
+    console.log('  Original text:', `"${text}"`)
+    console.log('  Trimmed text:', `"${trimmed}"`)
+    console.log('  Text length:', textLength)
+    console.log('  Text center (char position):', textCenter)
+    console.log('  Line width:', lineWidth)
+    console.log('  Target center position:', centerPosition)
+    console.log('  Left padding:', leftPadding, 'spaces')
+    console.log('  Right padding:', rightPadding, 'spaces')
+    console.log('  Total padding:', totalPadding)
+    console.log('  Result length:', resultLength, '(expected:', lineWidth, ')')
+    console.log('  Actual left spaces:', leftSpacesCount)
+    console.log('  Actual right spaces:', rightSpacesCount)
+    console.log('  Calculated center position:', calculatedCenter, '(expected: 40)')
+    console.log('  Center offset from target:', Math.abs(calculatedCenter - centerPosition))
+    console.log('  Visual representation:', visualRep)
+    console.log('  Reference line (^ = center):', referenceLine)
+    console.log('  Is properly centered:', Math.abs(calculatedCenter - centerPosition) <= 0.5 && resultLength === lineWidth)
+    console.log('  Full result:', `"${result}"`)
+    
+    return result
+  }
+
+  // Helper function to right-align text on an 80-character line
+  const rightAlignText = (text: string) => {
+    const lineWidth = 80
+    const trimmed = text.trim()
+    const textLength = trimmed.length
+    const leftPadding = Math.max(0, lineWidth - textLength)
+    return ' '.repeat(leftPadding) + trimmed
+  }
+
+  // Align selected text or current line
+  const alignText = (alignment: 'left' | 'center' | 'right') => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) return
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const currentContent = getCurrentPageEditContent()
+    
+    console.log('🎯 ALIGN DEBUG - Start:')
+    console.log('  Alignment:', alignment)
+    console.log('  Selection start:', start)
+    console.log('  Selection end:', end)
+    console.log('  Content length:', currentContent.length)
+    
+    // Get the line containing the cursor or selection
+    const lines = currentContent.split('\n')
+    let startLine = 0
+    let endLine = 0
+    let charCount = 0
+    
+    for (let i = 0; i < lines.length; i++) {
+      const lineLength = lines[i].length + 1 // +1 for newline
+      if (charCount <= start && start < charCount + lineLength) {
+        startLine = i
+      }
+      if (charCount <= end && end <= charCount + lineLength) {
+        endLine = i
+        break
+      }
+      charCount += lineLength
+    }
+    
+    console.log('🎯 ALIGN DEBUG - Lines:')
+    console.log('  Start line:', startLine)
+    console.log('  End line:', endLine)
+    console.log('  Total lines:', lines.length)
+    console.log('  Selected lines:', lines.slice(startLine, endLine + 1).map(l => `"${l}"`))
+    
+    // Format the selected lines
+    for (let i = startLine; i <= endLine; i++) {
+      if (lines[i] && lines[i].trim()) {
+        const trimmed = lines[i].trim()
+        const original = lines[i]
+        if (alignment === 'center') {
+          lines[i] = centerText(trimmed)
+          console.log('🎯 ALIGN DEBUG - Centered line:')
+          console.log('  Original:', `"${original}"`)
+          console.log('  Trimmed:', `"${trimmed}"`)
+          console.log('  Result:', `"${lines[i]}"`)
+          console.log('  Result length:', lines[i].length)
+        } else if (alignment === 'right') {
+          lines[i] = rightAlignText(trimmed)
+        } else {
+          lines[i] = trimmed // Left align (flush left)
+        }
+      }
+    }
+    
+    const newContent = lines.join('\n')
+    saveCurrentPageEdit(newContent)
+    
+    // Update textarea
+    textarea.value = newContent
+    textarea.focus()
+    
+    // Trigger onChange
+    const event = new Event('input', { bubbles: true })
+    textarea.dispatchEvent(event)
   }
 
   // Handle screenplay editing
@@ -789,6 +1102,64 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }, [])
 
+  // Handle creating collaboration session
+  const handleCreateCollaborationSession = async () => {
+    if (!userId || !projectId) {
+      toast({
+        title: "Authentication Required",
+        description: "Please log in to create a collaboration session.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setCreatingCollaboration(true)
+    try {
+      const expiresAt = newCollaborationExpiresAt
+        ? new Date(newCollaborationExpiresAt).toISOString()
+        : null
+
+      const response = await fetch('/api/collaboration/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          project_id: projectId,
+          title: newCollaborationTitle || null,
+          description: newCollaborationDescription || null,
+          expires_at: expiresAt,
+          allow_guests: newCollaborationAllowGuests,
+          allow_edit: newCollaborationAllowEdit,
+          allow_delete: newCollaborationAllowDelete,
+          allow_add_scenes: newCollaborationAllowAddScenes,
+          allow_edit_scenes: newCollaborationAllowEditScenes,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to create collaboration session')
+      }
+
+      setCreatedCollaborationCode(result.session.access_code)
+      toast({
+        title: "Collaboration Session Created!",
+        description: `Share this code: ${result.session.access_code}`,
+      })
+    } catch (error: any) {
+      console.error('Error creating collaboration session:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create collaboration session",
+        variant: "destructive",
+      })
+    } finally {
+      setCreatingCollaboration(false)
+    }
+  }
+
   // Effect to fetch assets
   useEffect(() => {
     if (!ready) return
@@ -878,6 +1249,25 @@ function ScenePageClient({ id }: { id: string }) {
     window.addEventListener('scroll', handleScroll, true)
     return () => window.removeEventListener('scroll', handleScroll, true)
   }, [isEditingScreenplay, selectedText, toolbarPosition])
+
+  // Debug container dimensions when textarea is rendered or window resizes
+  useEffect(() => {
+    if (!isEditingScreenplay) return
+    
+    const debugOnMount = () => {
+      // Wait a bit for DOM to settle
+      setTimeout(() => {
+        debugContainerDimensions()
+      }, 100)
+    }
+    
+    debugOnMount()
+    window.addEventListener('resize', debugOnMount)
+    
+    return () => {
+      window.removeEventListener('resize', debugOnMount)
+    }
+  }, [isEditingScreenplay, currentPage])
 
   // Clear selection when clicking outside (for screenplay editing)
   useEffect(() => {
@@ -1523,6 +1913,70 @@ function ScenePageClient({ id }: { id: string }) {
     }
   }
 
+  // Debug function to log container and textarea dimensions
+  const debugContainerDimensions = () => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) {
+      console.log('📐 CONTAINER DEBUG: Textarea not found')
+      return
+    }
+    
+    const textareaRect = textarea.getBoundingClientRect()
+    const textareaStyles = window.getComputedStyle(textarea)
+    
+    // Find parent containers
+    const cardContent = textarea.closest('[class*="CardContent"]') || textarea.closest('.card-content')
+    const card = textarea.closest('[class*="Card"]') || textarea.closest('.card')
+    const container = textarea.closest('[class*="container"]')
+    
+    const cardContentRect = cardContent?.getBoundingClientRect()
+    const cardRect = card?.getBoundingClientRect()
+    const containerRect = container?.getBoundingClientRect()
+    
+    console.log('📐 CONTAINER DEBUG - Dimensions:')
+    console.log('  Textarea:')
+    console.log('    - Computed width:', textareaStyles.width)
+    console.log('    - Computed max-width:', textareaStyles.maxWidth)
+    console.log('    - Computed min-width:', textareaStyles.minWidth)
+    console.log('    - Actual width (getBoundingClientRect):', textareaRect.width, 'px')
+    console.log('    - Style width:', textarea.style.width)
+    console.log('    - Style maxWidth:', textarea.style.maxWidth)
+    console.log('    - Style minWidth:', textarea.style.minWidth)
+    console.log('    - Padding left:', textareaStyles.paddingLeft)
+    console.log('    - Padding right:', textareaStyles.paddingRight)
+    console.log('    - Font size:', textareaStyles.fontSize)
+    console.log('    - Font family:', textareaStyles.fontFamily)
+    
+    if (cardContentRect) {
+      console.log('  CardContent:')
+      console.log('    - Width:', cardContentRect.width, 'px')
+      console.log('    - Padding:', window.getComputedStyle(cardContent as Element).padding)
+    }
+    
+    if (cardRect) {
+      console.log('  Card:')
+      console.log('    - Width:', cardRect.width, 'px')
+      console.log('    - Max-width:', window.getComputedStyle(card as Element).maxWidth)
+    }
+    
+    if (containerRect) {
+      console.log('  Container:')
+      console.log('    - Width:', containerRect.width, 'px')
+      console.log('    - Max-width:', window.getComputedStyle(container as Element).maxWidth)
+    }
+    
+    // Calculate expected width for 80 characters
+    const fontSize = parseFloat(textareaStyles.fontSize)
+    const charWidth = fontSize * 0.6 // Approximate for monospace (Courier New)
+    const expectedWidth = (80 * charWidth) + 24 // 80 chars + 24px padding
+    console.log('  Calculations:')
+    console.log('    - Font size:', fontSize, 'px')
+    console.log('    - Estimated char width:', charWidth, 'px')
+    console.log('    - Expected width for 80ch + 24px:', expectedWidth, 'px')
+    console.log('    - Actual textarea width:', textareaRect.width, 'px')
+    console.log('    - Difference:', textareaRect.width - expectedWidth, 'px')
+  }
+
   // Update toolbar position based on textarea position
   const updateToolbarPosition = (textarea: HTMLTextAreaElement) => {
     const rect = textarea.getBoundingClientRect()
@@ -1861,256 +2315,213 @@ function ScenePageClient({ id }: { id: string }) {
       <div className="p-4 sm:p-6">
         <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
-          <div className="flex items-center gap-3 sm:gap-4">
-            <Link href={getTimelineUrl()}>
-              <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Back to Timeline</span>
-                <span className="sm:hidden">Back</span>
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-primary">
-                Scene: {scene.name}
-              </h1>
-              <p className="text-sm sm:text-base text-muted-foreground mt-1">{scene.description}</p>
+        <div className="mb-6">
+          {/* Top Row: Back Button and Title */}
+          <div className="flex items-start justify-between gap-4 mb-4">
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <Link href={getTimelineUrl()}>
+                <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10 shrink-0">
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">Back to Timeline</span>
+                  <span className="sm:hidden">Back</span>
+                </Button>
+              </Link>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-2xl sm:text-3xl font-bold text-primary mb-1">
+                  Scene: {scene.name}
+                </h1>
+                {scene.description && (
+                  <p className="text-sm sm:text-base text-muted-foreground line-clamp-2">
+                    {scene.description}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
-          
-          {/* Breadcrumb Navigation - Hidden on mobile */}
-          <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href="/dashboard" className="hover:text-primary transition-colors">
-              Dashboard
-            </Link>
-            <span>/</span>
-            <Link href={getTimelineUrl()} className="hover:text-primary transition-colors">
-              Timeline
-            </Link>
-            <span>/</span>
-            <span className="text-primary font-medium">Scene: {scene.name}</span>
-          </div>
-        </div>
-        
-        {/* Scene Navigation */}
-        {allScenes.length > 1 && (
-          <div className="flex items-center gap-2 mb-4 sm:mb-6">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (currentSceneIndex > 0) {
-                  const prevScene = allScenes[currentSceneIndex - 1]
-                  router.push(`/timeline-scene/${prevScene.id}`)
-                }
-              }}
-              disabled={currentSceneIndex <= 0}
-              className="border-primary/30 text-primary hover:bg-primary/10"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span className="hidden sm:inline ml-1">Previous</span>
-            </Button>
-            
-            <Select
-              value={id}
-              onValueChange={(value) => {
-                router.push(`/timeline-scene/${value}`)
-              }}
-            >
-              <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
-                <SelectValue>
-                  {scene ? (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{scene.name}</span>
-                      {scene.metadata?.sceneNumber && (
-                        <Badge variant="outline" className="text-xs">
-                          {scene.metadata.sceneNumber}
-                        </Badge>
-                      )}
-                    </div>
-                  ) : (
-                    'Select Scene'
-                  )}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {allScenes.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    <div className="flex items-center justify-between w-full">
-                      <div className="flex items-center gap-2">
-                        <span>{s.name}</span>
-                        {s.metadata?.sceneNumber && (
-                          <Badge variant="outline" className="text-xs">
-                            {s.metadata.sceneNumber}
-                          </Badge>
-                        )}
-                      </div>
-                      {s.id === id && (
-                        <Badge variant="secondary" className="text-xs ml-2">
-                          Current
-                        </Badge>
-                      )}
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (currentSceneIndex >= 0 && currentSceneIndex < allScenes.length - 1) {
-                  const nextScene = allScenes[currentSceneIndex + 1]
-                  router.push(`/timeline-scene/${nextScene.id}`)
-                }
-              }}
-              disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
-              className="border-primary/30 text-primary hover:bg-primary/10"
-            >
-              <span className="hidden sm:inline mr-1">Next</span>
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
-        
-        {/* Action Buttons */}
-        <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-4 sm:mb-6">
-          {/* Screenplay Button - Only show if projectId is available */}
-          {projectId && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
-              asChild
-            >
-              <Link href={`/screenplay/${projectId}`}>
-                <FileText className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">View Screenplay</span>
-                <span className="sm:hidden">Screenplay</span>
-              </Link>
-            </Button>
-          )}
-          
-          {/* Treatment Button */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
-            asChild
-          >
-            <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
-              <FileText className="h-4 w-4 mr-2" />
-              <span className="hidden sm:inline">View Movie</span>
-              <span className="sm:hidden">Movie</span>
-            </Link>
-          </Button>
-          
-          {/* Create New Script Version */}
-          {assets.filter(a => a.content_type === 'script').length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 bg-transparent"
-              onClick={async () => {
-                const scriptAssets = assets.filter(a => a.content_type === 'script')
-                const activeScript = scriptAssets.find(s => s.id === activeScriptId) || scriptAssets[0]
-                
-                try {
-                  setLoading(true)
-                  
-                  // Create a new version by duplicating the current script
-                  const newAssetData = {
-                    project_id: activeScript.project_id,
-                    scene_id: activeScript.scene_id,
-                    title: `${activeScript.title} (Copy)`,
-                    content_type: activeScript.content_type,
-                    content: activeScript.content,
-                    content_url: activeScript.content_url,
-                    prompt: activeScript.prompt,
-                    model: activeScript.model,
-                    version_name: `Version ${(activeScript.version || 0) + 1}`,
-                    generation_settings: activeScript.generation_settings,
-                    metadata: {
-                      ...activeScript.metadata,
-                      duplicated_from_version: activeScript.version,
-                      duplicated_at: new Date().toISOString(),
-                      duplicated_from_asset_id: activeScript.id,
-                      is_duplicate: true
+
+          {/* Second Row: Scene Navigation and Action Buttons */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            {/* Scene Navigation */}
+            {allScenes.length > 1 && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex > 0) {
+                      const prevScene = allScenes[currentSceneIndex - 1]
+                      router.push(`/timeline-scene/${prevScene.id}`)
                     }
-                  }
-                  
-                  // Save as new version
-                  await AssetService.createAsset(newAssetData)
-                  
-                  // Refresh assets
-                  refreshAssets()
-                  
-                  toast({
-                    title: "New Version Created!",
-                    description: `A copy of "${activeScript.title}" has been created as a new version.`,
-                  })
-                  
-                } catch (error) {
-                  console.error('🎬 TIMELINE-SCENE - Error creating new version:', error)
-                  toast({
-                    title: "Error",
-                    description: "Failed to create new version. Please try again.",
-                    variant: "destructive",
-                  })
-                } finally {
-                  setLoading(false)
-                }
-              }}
-              disabled={loading}
-            >
-              <Copy className="h-4 w-4 mr-2" />
-              Duplicate Script
-            </Button>
-          )}
+                  }}
+                  disabled={currentSceneIndex <= 0}
+                  className="border-primary/30 text-primary hover:bg-primary/10"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden sm:inline ml-1">Previous</span>
+                </Button>
+                
+                <Select
+                  value={id}
+                  onValueChange={(value) => {
+                    router.push(`/timeline-scene/${value}`)
+                  }}
+                >
+                  <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
+                    <SelectValue>
+                      {scene ? (
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{scene.name}</span>
+                          {scene.metadata?.sceneNumber && (
+                            <Badge variant="outline" className="text-xs">
+                              {scene.metadata.sceneNumber}
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        'Select Scene'
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {allScenes.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-2">
+                            <span>{s.name}</span>
+                            {s.metadata?.sceneNumber && (
+                              <Badge variant="outline" className="text-xs">
+                                {s.metadata.sceneNumber}
+                              </Badge>
+                            )}
+                          </div>
+                          {s.id === id && (
+                            <Badge variant="secondary" className="text-xs ml-2">
+                              Current
+                            </Badge>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex >= 0 && currentSceneIndex < allScenes.length - 1) {
+                      const nextScene = allScenes[currentSceneIndex + 1]
+                      router.push(`/timeline-scene/${nextScene.id}`)
+                    }
+                  }}
+                  disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
+                  className="border-primary/30 text-primary hover:bg-primary/10"
+                >
+                  <span className="hidden sm:inline mr-1">Next</span>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            
+            {/* Action Buttons - Grouped together */}
+            <div className="flex flex-wrap items-center gap-2 sm:gap-2">
+              {/* Start Collaboration Button */}
+              {projectId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setNewCollaborationTitle(scene.name ? `${scene.name} Collaboration` : '')
+                    setNewCollaborationDescription('')
+                    setNewCollaborationExpiresAt('')
+                    setShowCreateCollaborationDialog(true)
+                  }}
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                >
+                  <Users className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">Start Collaboration</span>
+                  <span className="sm:hidden">Collaborate</span>
+                </Button>
+              )}
+              
+              {/* Screenplay Button - Only show if projectId is available */}
+              {projectId && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+                  asChild
+                >
+                  <Link href={`/screenplay/${projectId}`}>
+                    <FileText className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">View Screenplay</span>
+                    <span className="sm:hidden">Screenplay</span>
+                  </Link>
+                </Button>
+              )}
           
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setActiveTab("import")}
-            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
-          >
-            <Upload className="h-4 w-4 mr-2" />
-            Import Files
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={startEditing}
-            className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
-          >
-            <Edit3 className="h-4 w-4 mr-2" />
-            Edit Scene
-          </Button>
-          
-          {/* AI Image Generation Button */}
-          {assets.filter(a => a.content_type === 'script').length > 0 && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowAIImageDialog(true)}
-              className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
-            >
-              <Bot className="h-4 w-4 mr-2" />
-              Generate AI Image
-            </Button>
-          )}
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
+              {/* Treatment Button */}
               <Button
                 variant="outline"
                 size="sm"
-                className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+                asChild
               >
-                <Trash2 className="h-4 w-4 mr-2" />
-                Delete
+                <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
+                  <Film className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">View Movie</span>
+                  <span className="sm:hidden">Movie</span>
+                </Link>
               </Button>
-            </AlertDialogTrigger>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setActiveTab("import")}
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+              >
+                <Upload className="h-4 w-4 mr-2" />
+                <span className="hidden sm:inline">Import Files</span>
+                <span className="sm:hidden">Import</span>
+              </Button>
+              
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={startEditing}
+                className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
+              >
+                <Edit3 className="h-4 w-4 mr-2" />
+                <span className="hidden sm:inline">Edit Scene</span>
+                <span className="sm:hidden">Edit</span>
+              </Button>
+              
+              {/* AI Image Generation Button */}
+              {assets.filter(a => a.content_type === 'script').length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAIImageDialog(true)}
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+                >
+                  <Bot className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">Generate AI Image</span>
+                  <span className="sm:hidden">AI Image</span>
+                </Button>
+              )}
+              
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    <span className="hidden sm:inline">Delete</span>
+                    <span className="sm:hidden">Delete</span>
+                  </Button>
+                </AlertDialogTrigger>
             <AlertDialogContent className="bg-background border-destructive/20">
               <AlertDialogHeader>
                 <AlertDialogTitle className="text-destructive">Delete Scene</AlertDialogTitle>
@@ -2124,30 +2535,29 @@ function ScenePageClient({ id }: { id: string }) {
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-
-        </div>
-
-
-
-
-        {/* Quick Actions */}
-        <div className="flex items-center justify-end">
-          <Button
-            variant="outline"
-            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-            onClick={() => {
-              const params = new URLSearchParams({
-                scope: 'scene',
-                targetId: id,
-              })
-              if (projectId) {
-                params.set('projectId', projectId)
-              }
-              router.push(`/mood-boards?${params.toString()}`)
-            }}
-          >
-            Scene Mood Board
-          </Button>
+              
+              {/* Scene Mood Board Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                onClick={() => {
+                  const params = new URLSearchParams({
+                    scope: 'scene',
+                    targetId: id,
+                  })
+                  if (projectId) {
+                    params.set('projectId', projectId)
+                  }
+                  router.push(`/mood-boards?${params.toString()}`)
+                }}
+              >
+                <ImageIcon className="h-4 w-4 mr-2" />
+                <span className="hidden sm:inline">Scene Mood Board</span>
+                <span className="sm:hidden">Mood Board</span>
+              </Button>
+            </div>
+          </div>
         </div>
 
         {/* Main Content Tabs */}
@@ -3712,88 +4122,250 @@ function ScenePageClient({ id }: { id: string }) {
                 </CardHeader>
                 <CardContent>
                   {isEditingScreenplay ? (
-                    <div className="mb-4 flex items-center justify-between pb-3 border-b border-purple-500/20">
-                      <Label className="text-sm font-medium text-muted-foreground">
-                        Editing Page {currentPage} of {totalPages}
-                      </Label>
-                      <div className="flex gap-2">
+                    <div className="space-y-4">
+                      {/* Page number and action buttons row */}
+                      <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
+                        <div className="flex items-center gap-4">
+                          <Label className="text-sm font-medium text-muted-foreground">
+                            Page {currentPage} of {totalPages}
+                          </Label>
+                          {totalPages > 1 && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => goToPage(currentPage - 1)}
+                                disabled={currentPage === 1}
+                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                              >
+                                <ChevronLeft className="h-4 w-4" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={totalPages}
+                                value={currentPage}
+                                onChange={(e) => {
+                                  const page = parseInt(e.target.value)
+                                  if (page && page >= 1 && page <= totalPages) {
+                                    goToPage(page)
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    const page = parseInt((e.target as HTMLInputElement).value)
+                                    if (page && page >= 1 && page <= totalPages) {
+                                      goToPage(page)
+                                    }
+                                  }
+                                }}
+                                className="w-20 text-center"
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => goToPage(currentPage + 1)}
+                                disabled={currentPage === totalPages}
+                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={enhanceCurrentPage}
+                            disabled={isEnhancingText}
+                            className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          >
+                            {isEnhancingText ? (
+                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-4 w-4 mr-1" />
+                            )}
+                            Enhance
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCancelEditScreenplay}
+                            disabled={savingScreenplay}
+                            className="h-8 px-3 text-sm border-red-500/30 text-red-400 hover:bg-red-500/10"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {/* Toolbar for inserting screenplay elements */}
+                      <div className="flex items-center gap-2 pb-2 border-b border-purple-500/20 flex-wrap">
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={enhanceCurrentPage}
-                          disabled={isEnhancingText}
+                          onClick={insertActionLine}
                           className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                         >
-                          {isEnhancingText ? (
-                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                          ) : (
-                            <Sparkles className="h-4 w-4 mr-1" />
-                          )}
-                          Enhance
+                          <FileText className="h-3 w-3 mr-1" />
+                          Action
+                        </Button>
+                        {loadingCharacters || characters.length === 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                          >
+                            {loadingCharacters ? "Loading..." : "No characters"}
+                          </Button>
+                        ) : (
+                          <Select onValueChange={insertCharacter}>
+                            <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                              <SelectValue placeholder="Character" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {characters.map((char) => (
+                                <SelectItem key={char.id} value={char.name}>
+                                  {char.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {loadingLocations || locations.length === 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                          >
+                            {loadingLocations ? "Loading..." : "No locations"}
+                          </Button>
+                        ) : (
+                          <Select onValueChange={(locationName) => {
+                            const location = locations.find(l => l.name === locationName)
+                            insertLocation(locationName, location?.type)
+                          }}>
+                            <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                              <SelectValue placeholder="Location" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {locations.map((loc) => (
+                                <SelectItem key={loc.id} value={loc.name}>
+                                  {loc.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertSceneHeading}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <MapPin className="h-3 w-3 mr-1" />
+                          INT/EXT
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertDialogue}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <MessageSquare className="h-3 w-3 mr-1" />
+                          Dialogue
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertTitlePage}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Title Page
+                        </Button>
+                        <div className="h-6 w-px bg-border mx-1" />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('left')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Left"
+                        >
+                          <AlignLeft className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('center')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Center"
+                        >
+                          <AlignCenter className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('right')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Right"
+                        >
+                          <AlignRight className="h-3 w-3" />
                         </Button>
                       </div>
-                    </div>
-                  ) : null}
-                  {isEditingScreenplay ? (
-                    <div className="space-y-4">
-                      {totalPages > 1 && (
-                        <div className="flex items-center justify-center gap-2 pb-2 border-b border-purple-500/20">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => goToPage(currentPage - 1)}
-                            disabled={currentPage === 1}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </Button>
-                          <Badge variant="outline" className="px-3 py-1">
-                            Page {currentPage} of {totalPages}
-                          </Badge>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={totalPages}
-                            value={currentPage}
-                            onChange={(e) => {
-                              const page = parseInt(e.target.value)
-                              if (page && page >= 1 && page <= totalPages) {
-                                goToPage(page)
-                              }
+                      
+                      <div className="space-y-2 relative w-full">
+                        <div className="relative w-full">
+                          {/* Visual ruler for 80-character line width with center marker */}
+                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
+                            <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                              <span className="absolute left-0 opacity-30">0</span>
+                              <span className="absolute left-[20%] opacity-30">16</span>
+                              <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
+                              <span className="absolute left-[80%] opacity-30">64</span>
+                              <span className="absolute right-0 opacity-30">80</span>
+                              {/* Center line indicator */}
+                              <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
+                            </div>
+                          </div>
+                          <Textarea
+                            key={`page-${currentPage}`}
+                            ref={screenplayTextareaRef}
+                            data-screenplay-editor
+                            value={getCurrentPageEditContent()}
+                            onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                            onSelect={handleScreenplayTextSelection}
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8"
+                            style={{ 
+                              fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              tabSize: 1,
+                              letterSpacing: '0px',
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'break-word',
+                              wordWrap: 'break-word',
+                              fontVariantNumeric: 'normal',
+                              fontFeatureSettings: 'normal',
+                              width: 'calc(80ch + 24px)',
+                              maxWidth: 'calc(80ch + 24px)',
+                              minWidth: 'calc(80ch + 24px)',
+                              margin: '0 auto',
+                              display: 'block',
+                              overflowX: 'hidden'
                             }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                const page = parseInt((e.target as HTMLInputElement).value)
-                                if (page && page >= 1 && page <= totalPages) {
-                                  goToPage(page)
-                                }
-                              }
+                            placeholder="Enter your screenplay here..."
+                            onFocus={() => {
+                              // Debug when textarea is focused
+                              setTimeout(() => debugContainerDimensions(), 100)
                             }}
-                            className="w-20 text-center"
                           />
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => goToPage(currentPage + 1)}
-                            disabled={currentPage === totalPages}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </Button>
                         </div>
-                      )}
-                      <div className="space-y-2 relative">
-                        <Textarea
-                          key={`page-${currentPage}`}
-                          ref={screenplayTextareaRef}
-                          data-screenplay-editor
-                          value={getCurrentPageEditContent()}
-                          onChange={(e) => saveCurrentPageEdit(e.target.value)}
-                          onSelect={handleScreenplayTextSelection}
-                          className="min-h-[600px] font-mono text-sm leading-relaxed"
-                          placeholder="Enter your screenplay here..."
-                        />
                         {/* Floating Selection Toolbar */}
                         {selectedText && toolbarPosition && (
                           <div
@@ -3835,50 +4407,24 @@ function ScenePageClient({ id }: { id: string }) {
                           </div>
                         )}
                       </div>
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs text-muted-foreground">
-                          💡 Editing page {currentPage} of {totalPages}
-                        </p>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            onClick={enhanceCurrentPage}
-                            disabled={isEnhancingText || savingScreenplay}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          >
-                            {isEnhancingText ? (
+                      <div className="flex items-center justify-end">
+                        <Button
+                          onClick={handleSaveScreenplay}
+                          disabled={savingScreenplay}
+                          className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold"
+                        >
+                          {savingScreenplay ? (
+                            <>
                               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            ) : (
-                              <Sparkles className="h-4 w-4 mr-2" />
-                            )}
-                            Enhance
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={handleCancelEditScreenplay}
-                            disabled={savingScreenplay}
-                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            onClick={handleSaveScreenplay}
-                            disabled={savingScreenplay}
-                            className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold"
-                          >
-                            {savingScreenplay ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Saving...
-                              </>
-                            ) : (
-                              <>
-                                <Save className="h-4 w-4 mr-2" />
-                                Save Screenplay
-                              </>
-                            )}
-                          </Button>
-                        </div>
+                              Saving...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="h-4 w-4 mr-2" />
+                              Save Screenplay
+                            </>
+                          )}
+                        </Button>
                       </div>
                       {/* Audio Generation for Current Page (Editing Mode) */}
                       {getCurrentPageEditContent() && getCurrentPageEditContent().trim() && (
@@ -5862,6 +6408,177 @@ function ScenePageClient({ id }: { id: string }) {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+      {/* Collaboration Dialog */}
+      <Dialog open={showCreateCollaborationDialog} onOpenChange={setShowCreateCollaborationDialog}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Start New Collaboration Session</DialogTitle>
+            <DialogDescription>
+              Create an access code for others to view and edit this project.
+            </DialogDescription>
+          </DialogHeader>
+          {!createdCollaborationCode ? (
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="collab-title" className="text-right">
+                  Title
+                </Label>
+                <Input
+                  id="collab-title"
+                  value={newCollaborationTitle}
+                  onChange={(e) => setNewCollaborationTitle(e.target.value)}
+                  className="col-span-3"
+                  placeholder="e.g., Scene Review"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="collab-description" className="text-right">
+                  Description
+                </Label>
+                <Textarea
+                  id="collab-description"
+                  value={newCollaborationDescription}
+                  onChange={(e) => setNewCollaborationDescription(e.target.value)}
+                  className="col-span-3 min-h-[80px]"
+                  placeholder="Brief description of this session"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="collab-expires" className="text-right">
+                  Expires At
+                </Label>
+                <Input
+                  id="collab-expires"
+                  type="datetime-local"
+                  value={newCollaborationExpiresAt}
+                  onChange={(e) => setNewCollaborationExpiresAt(e.target.value)}
+                  className="col-span-3"
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label className="text-right">Permissions</Label>
+                <div className="col-span-3 space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="allow-guests"
+                      checked={newCollaborationAllowGuests}
+                      onChange={(e) => setNewCollaborationAllowGuests(e.target.checked)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="allow-guests" className="font-normal">
+                      Allow Guest Access (no login required)
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="allow-edit"
+                      checked={newCollaborationAllowEdit}
+                      onChange={(e) => setNewCollaborationAllowEdit(e.target.checked)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="allow-edit" className="font-normal">
+                      Allow Text Editing
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="allow-add-scenes"
+                      checked={newCollaborationAllowAddScenes}
+                      onChange={(e) => setNewCollaborationAllowAddScenes(e.target.checked)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="allow-add-scenes" className="font-normal">
+                      Allow Adding New Scenes
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="allow-edit-scenes"
+                      checked={newCollaborationAllowEditScenes}
+                      onChange={(e) => setNewCollaborationAllowEditScenes(e.target.checked)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="allow-edit-scenes" className="font-normal">
+                      Allow Editing Scene Titles/Info
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="allow-delete"
+                      checked={newCollaborationAllowDelete}
+                      onChange={(e) => setNewCollaborationAllowDelete(e.target.checked)}
+                      className="rounded"
+                    />
+                    <Label htmlFor="allow-delete" className="font-normal">
+                      Allow Deleting Scenes
+                    </Label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-4 py-4">
+              <p className="text-sm text-muted-foreground">
+                Your collaboration session has been created! Share this access code or the direct link with your collaborators.
+              </p>
+              <div className="flex items-center space-x-2">
+                <Input readOnly value={createdCollaborationCode} className="flex-1 font-mono text-sm" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdCollaborationCode || '')
+                    toast({ title: "Copied!", description: "Access code copied to clipboard." })
+                  }}
+                >
+                  <Copy className="h-4 w-4 mr-2" /> Copy Code
+                </Button>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Input readOnly value={`${typeof window !== 'undefined' ? window.location.origin : ''}/collaborate/${createdCollaborationCode}`} className="flex-1 font-mono text-sm" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const url = `${typeof window !== 'undefined' ? window.location.origin : ''}/collaborate/${createdCollaborationCode}`
+                    navigator.clipboard.writeText(url)
+                    toast({ title: "Copied!", description: "Collaboration link copied to clipboard." })
+                  }}
+                >
+                  <Copy className="h-4 w-4 mr-2" /> Copy Link
+                </Button>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {!createdCollaborationCode ? (
+              <Button onClick={handleCreateCollaborationSession} disabled={creatingCollaboration || !projectId}>
+                {creatingCollaboration ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Creating...
+                  </>
+                ) : (
+                  'Create Session'
+                )}
+              </Button>
+            ) : (
+              <Button onClick={() => {
+                setShowCreateCollaborationDialog(false)
+                setCreatedCollaborationCode(null)
+                setNewCollaborationTitle("")
+                setNewCollaborationDescription("")
+                setNewCollaborationExpiresAt("")
+              }}>Done</Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
         </div>
       </div>

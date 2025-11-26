@@ -94,10 +94,10 @@ export default function AITextEditor({
       if (!userId) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Get or create default setting for scripts tab
-        const defaultSetting = await AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts')
+        const defaultSetting = await AISettingsService.getOrCreateDefaultTabSetting('scripts')
         
         // Merge with existing setting, preferring existing
         const existingSetting = settings.find(s => s.tab_type === 'scripts')

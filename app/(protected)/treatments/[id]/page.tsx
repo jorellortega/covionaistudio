@@ -1992,17 +1992,87 @@ Write the treatment now:`
         .getPublicUrl(filePath)
 
       if (urlData?.publicUrl) {
-        // Update treatment with new cover
-        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
-          cover_image_url: urlData.publicUrl,
-        })
+        // Create asset record for the cover image (instead of replacing)
+        try {
+          const assetData = {
+            project_id: treatment.project_id || null,
+            treatment_id: treatment.id, // Link to treatment
+            scene_id: null, // Treatment covers are project/treatment-level, not scene-level
+            title: `Treatment Cover - ${treatment.title} - ${new Date().toLocaleDateString()}`,
+            content_type: 'image' as const,
+            content: '', // No text content for images
+            content_url: urlData.publicUrl,
+            prompt: `Manual upload: ${safeFileName}`,
+            model: 'manual_upload',
+            generation_settings: {},
+            metadata: {
+              uploaded_at: new Date().toISOString(),
+              source: 'treatment_page_manual_upload',
+              treatment_title: treatment.title,
+              is_treatment_cover: true,
+              original_filename: file.name,
+            }
+          }
+
+          await AssetService.createAsset(assetData)
+          
+          // Only update treatment cover_image_url if this is the first cover (for backward compatibility)
+          const isFirstCover = coverImageAssets.length === 0
+          if (isFirstCover) {
+            const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+              cover_image_url: urlData.publicUrl,
+            })
+            setTreatment(updatedTreatment)
+          }
+          
+          // Reload cover assets to show the new one
+          let assets: Asset[] = []
+          if (treatment.project_id) {
+            assets = await AssetService.getCoverImageAssets(treatment.project_id)
+          }
+          const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+          
+          const assetMap = new Map<string, Asset>()
+          assets.forEach(asset => assetMap.set(asset.id, asset))
+          treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+          const mergedAssets = Array.from(assetMap.values())
+          mergedAssets.sort((a, b) => {
+            if (a.is_default_cover && !b.is_default_cover) return -1
+            if (!a.is_default_cover && b.is_default_cover) return 1
+            return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          })
+          setCoverImageAssets(mergedAssets)
+          
+          // Show the newly uploaded cover
+          if (mergedAssets.length > 0) {
+            const newCoverIndex = mergedAssets.findIndex(a => a.content_url === urlData.publicUrl)
+            if (newCoverIndex >= 0) {
+              setCurrentCoverIndex(newCoverIndex)
+            } else {
+              setCurrentCoverIndex(0) // Show most recent if not found
+            }
+            // Check if there's a default cover and pause slideshow if so
+            const hasDefaultCover = mergedAssets.some(asset => asset.is_default_cover)
+            if (hasDefaultCover) {
+              setIsSlideshowPaused(true)
+            } else {
+              setIsSlideshowPaused(false) // Resume auto-play if no default
+            }
+          }
+        } catch (assetError) {
+          console.error('Failed to create asset record for cover:', assetError)
+          // Fallback: update treatment directly if asset creation fails
+          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+            cover_image_url: urlData.publicUrl,
+          })
+          setTreatment(updatedTreatment)
+        }
         
-        setTreatment(updatedTreatment)
         setIsEditingCover(false)
         
         toast({
-          title: "Cover Updated!",
-          description: "Cover image has been uploaded successfully.",
+          title: "Cover Added!",
+          description: "Cover image has been uploaded and added to your collection.",
         })
       } else {
         throw new Error('Failed to get public URL')
@@ -2118,11 +2188,20 @@ Write the treatment now:`
       // Use full treatment content - no truncation to allow unlimited scene generation
       const contentForPrompt = treatmentContent
 
+      console.log('🎬 [Scene Generation] Starting scene generation:', {
+        treatmentId: treatment.id,
+        treatmentTitle: treatment.title,
+        contentLength: contentForPrompt.length,
+        service: normalizedService,
+        contentPreview: contentForPrompt.substring(0, 200) + '...'
+      })
+
       const aiPrompt = `Based on the following movie treatment, break it down into individual scene titles.
 
 REQUIREMENTS:
 - Analyze the treatment and create scene titles that naturally cover all the story beats
 - Create as many scenes as needed to properly break down the story - let the content determine the number
+- DO NOT limit yourself to 20 scenes - generate as many scenes as the story requires (could be 30, 40, 50, or more)
 - Each scene should have:
   * Scene number (e.g., "1", "2", "3")
   * Name/title (brief, descriptive, 2-5 words)
@@ -2138,6 +2217,18 @@ ${contentForPrompt}
 
 Return ONLY the JSON array, no other text:`
 
+      // Determine the model to use
+      const modelToUse = normalizedService === 'openai' 
+        ? 'gpt-4o' // Use gpt-4o for better quality and higher token limits
+        : 'claude-3-5-sonnet-20241022' // Use latest Claude for better quality
+
+      console.log('🎬 [Scene Generation] Sending request to API:', {
+        promptLength: aiPrompt.length,
+        maxTokens: 8000, // Increased from default 1000 to allow for 50+ scenes
+        service: normalizedService,
+        model: modelToUse
+      })
+
       const response = await fetch('/api/ai/generate-text', {
         method: 'POST',
         headers: {
@@ -2147,16 +2238,32 @@ Return ONLY the JSON array, no other text:`
           prompt: aiPrompt,
           field: 'scenes',
           service: normalizedService,
+          model: modelToUse, // Explicitly pass model for better control
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 8000, // Increased to allow for 50+ scenes (each scene ~100-150 tokens)
         }),
       })
 
       if (!response.ok) {
-        throw new Error('Failed to generate scenes')
+        const errorText = await response.text()
+        console.error('❌ [Scene Generation] API request failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText: errorText.substring(0, 500)
+        })
+        throw new Error(`Failed to generate scenes: ${response.status} ${response.statusText}`)
       }
 
       const data = await response.json()
+      console.log('✅ [Scene Generation] API response received:', {
+        hasText: !!data.text,
+        hasResponse: !!data.response,
+        hasContent: !!data.content,
+        textLength: (data.text || data.response || data.content || '').length,
+        rawResponsePreview: (data.text || data.response || data.content || '').substring(0, 500) + '...'
+      })
+      
       let scenes: any[] = []
 
       // Try to parse JSON from response
@@ -2188,8 +2295,9 @@ Return ONLY the JSON array, no other text:`
           
           if (scenes.length > 0) {
             // Successfully extracted scenes from individual objects
-            console.log(`Extracted ${scenes.length} scenes from partial JSON response`)
+            console.log(`✅ [Scene Generation] Extracted ${scenes.length} scenes from partial JSON response`)
           } else {
+            console.error('❌ [Scene Generation] No valid scene objects found in partial JSON')
             throw new Error('No valid scene objects found')
           }
         } else {
@@ -2237,15 +2345,24 @@ Return ONLY the JSON array, no other text:`
         
         // Ensure scenes is an array
         if (!Array.isArray(scenes)) {
+          console.warn('⚠️ [Scene Generation] Response is not an array, wrapping:', typeof scenes)
           scenes = [scenes]
         }
         
         // Filter out any null or invalid scenes
+        const beforeFilter = scenes.length
         scenes = scenes.filter(s => s && (s.name || s.scene_number || s.description))
+        const afterFilter = scenes.length
+        
+        if (beforeFilter !== afterFilter) {
+          console.warn(`⚠️ [Scene Generation] Filtered out ${beforeFilter - afterFilter} invalid scenes`)
+        }
+        
+        console.log(`✅ [Scene Generation] Successfully parsed ${scenes.length} scenes from JSON`)
         
       } catch (parseError) {
-        console.error('Error parsing scenes JSON:', parseError)
-        console.error('Raw response text:', data.text || data.response || data.content)
+        console.error('❌ [Scene Generation] Error parsing scenes JSON:', parseError)
+        console.error('❌ [Scene Generation] Raw response text:', data.text || data.response || data.content)
         
         // Try to extract scenes manually from text using regex
         try {
@@ -2299,15 +2416,17 @@ Return ONLY the JSON array, no other text:`
             }
             
             if (scenes.length > 0) {
-              console.log(`Extracted ${scenes.length} scenes using fallback parser`)
+              console.log(`✅ [Scene Generation] Extracted ${scenes.length} scenes using fallback parser`)
             } else {
+              console.error('❌ [Scene Generation] Could not extract scenes from response using fallback parser')
               throw new Error('Could not extract scenes from response')
             }
           } else {
             throw new Error('Could not extract scenes from response')
           }
         } catch (fallbackError) {
-          console.error('Fallback parsing also failed:', fallbackError)
+          console.error('❌ [Scene Generation] Fallback parsing also failed:', fallbackError)
+          console.error('❌ [Scene Generation] Final scenes count:', scenes.length)
           toast({
             title: "Error",
             description: `Failed to parse generated scenes. ${scenes.length > 0 ? `However, ${scenes.length} scenes were extracted.` : 'Please try again.'}`,
@@ -2317,6 +2436,11 @@ Return ONLY the JSON array, no other text:`
             return
           }
         }
+      }
+
+      console.log(`🎬 [Scene Generation] Final scenes count before saving: ${scenes.length}`)
+      if (scenes.length <= 20) {
+        console.warn(`⚠️ [Scene Generation] Only ${scenes.length} scenes generated. This might be due to token limits or response truncation.`)
       }
 
       // Create scenes directly in timeline (shared scenes table)
@@ -4225,22 +4349,93 @@ Return ONLY the JSON object, no other text:`
 
     try {
       setIsGeneratingCover(true)
-      const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
-        cover_image_url: url,
-      })
       
-      setTreatment(updatedTreatment)
+      // Create asset record for the cover image (instead of replacing)
+      try {
+        const assetData = {
+          project_id: treatment.project_id || null,
+          treatment_id: treatment.id, // Link to treatment
+          scene_id: null, // Treatment covers are project/treatment-level, not scene-level
+          title: `Treatment Cover - ${treatment.title} - ${new Date().toLocaleDateString()}`,
+          content_type: 'image' as const,
+          content: '', // No text content for images
+          content_url: url,
+          prompt: `Manual URL entry`,
+          model: 'manual_url',
+          generation_settings: {},
+          metadata: {
+            uploaded_at: new Date().toISOString(),
+            source: 'treatment_page_manual_url',
+            treatment_title: treatment.title,
+            is_treatment_cover: true,
+          }
+        }
+
+        await AssetService.createAsset(assetData)
+        
+        // Only update treatment cover_image_url if this is the first cover (for backward compatibility)
+        const isFirstCover = coverImageAssets.length === 0
+        if (isFirstCover) {
+          const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+            cover_image_url: url,
+          })
+          setTreatment(updatedTreatment)
+        }
+        
+        // Reload cover assets to show the new one
+        let assets: Asset[] = []
+        if (treatment.project_id) {
+          assets = await AssetService.getCoverImageAssets(treatment.project_id)
+        }
+        const treatmentAssets = await AssetService.getCoverImageAssetsForTreatment(treatment.id)
+        
+        const assetMap = new Map<string, Asset>()
+        assets.forEach(asset => assetMap.set(asset.id, asset))
+        treatmentAssets.forEach(asset => assetMap.set(asset.id, asset))
+        const mergedAssets = Array.from(assetMap.values())
+        mergedAssets.sort((a, b) => {
+          if (a.is_default_cover && !b.is_default_cover) return -1
+          if (!a.is_default_cover && b.is_default_cover) return 1
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        })
+        setCoverImageAssets(mergedAssets)
+        
+        // Show the newly added cover
+        if (mergedAssets.length > 0) {
+          const newCoverIndex = mergedAssets.findIndex(a => a.content_url === url)
+          if (newCoverIndex >= 0) {
+            setCurrentCoverIndex(newCoverIndex)
+          } else {
+            setCurrentCoverIndex(0) // Show most recent if not found
+          }
+          // Check if there's a default cover and pause slideshow if so
+          const hasDefaultCover = mergedAssets.some(asset => asset.is_default_cover)
+          if (hasDefaultCover) {
+            setIsSlideshowPaused(true)
+          } else {
+            setIsSlideshowPaused(false) // Resume auto-play if no default
+          }
+        }
+      } catch (assetError) {
+        console.error('Failed to create asset record for cover:', assetError)
+        // Fallback: update treatment directly if asset creation fails
+        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+          cover_image_url: url,
+        })
+        setTreatment(updatedTreatment)
+      }
+      
       setIsEditingCover(false)
       
       toast({
-        title: "Cover Updated!",
-        description: "Cover image has been updated successfully.",
+        title: "Cover Added!",
+        description: "Cover image has been added to your collection.",
       })
     } catch (error) {
       console.error('Error updating cover URL:', error)
       toast({
         title: "Update Failed",
-        description: "Failed to update cover image.",
+        description: "Failed to add cover image.",
         variant: "destructive",
       })
     } finally {
@@ -4565,10 +4760,10 @@ Return ONLY the JSON object, no other text:`
               ) : null}
               
               {/* Gradient Overlay */}
-              <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0" />
+              <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0 pointer-events-none" />
               
-              {/* Cover Management Buttons - Always visible on cover */}
-              <div className="absolute top-4 right-4 flex gap-2 z-20">
+              {/* Cover Management Buttons - Top right corner, always visible */}
+              <div className="absolute top-4 right-4 flex gap-2 z-50 pointer-events-auto">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
@@ -4576,9 +4771,14 @@ Return ONLY the JSON object, no other text:`
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={generateQuickAICover}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          console.log('🎬 Quick Generate button clicked')
+                          generateQuickAICover()
+                        }}
                         disabled={isGeneratingCover || !aiSettingsLoaded}
-                        className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
+                        className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
                       >
                         {isGeneratingCover ? (
                           <>
@@ -4596,8 +4796,13 @@ Return ONLY the JSON object, no other text:`
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setIsEditingCover(true)}
-                      className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        console.log('🎬 Edit/Add Cover button clicked')
+                        setIsEditingCover(true)
+                      }}
+                      className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
                     >
                       <Edit className="h-4 w-4 mr-2" />
                       {treatment.cover_image_url || coverImageAssets.length > 0 ? 'Edit Cover' : 'Add Cover'}
@@ -4607,11 +4812,13 @@ Return ONLY the JSON object, no other text:`
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
                       setIsEditingCover(false)
                       setGeneratedCoverUrl('')
                     }}
-                    className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30"
+                    className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
                   >
                     <X className="h-4 w-4 mr-2" />
                     Cancel
@@ -4729,7 +4936,7 @@ Return ONLY the JSON object, no other text:`
         )}
         
         {/* Hero Content Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12">
+        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12 z-10">
           <div className="container mx-auto max-w-7xl">
             {/* Back Button */}
             <div className="mb-4">

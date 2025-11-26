@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -73,12 +74,18 @@ const tabNames = {
 
 export default function AISettingsPage() {
   const { user, userId, ready } = useAuthReady()
+  const router = useRouter()
   const { toast } = useToast()
   const [settings, setSettings] = useState<AISetting[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
+
+  // CEO role check state
+  const [userRole, setUserRole] = useState<string>('user')
+  const [isCheckingRole, setIsCheckingRole] = useState(true)
+  const [isCEO, setIsCEO] = useState(false)
 
   // Password protection state
   const [isPasswordProtected, setIsPasswordProtected] = useState(false)
@@ -87,9 +94,95 @@ export default function AISettingsPage() {
   const [passwordInput, setPasswordInput] = useState('')
   const [passwordError, setPasswordError] = useState('')
 
-  // Check if settings are password protected
+  // Check if user is CEO - REQUIRED for access
   useEffect(() => {
-    if (!ready || !userId) return;
+    if (!ready || !userId || !user) return
+
+    const checkCEORole = async () => {
+      try {
+        setIsCheckingRole(true)
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', userId)
+          .single()
+
+        if (error) {
+          console.error('Error fetching user role:', error)
+          // Try by email as fallback
+          if (user.email) {
+            const { data: emailData, error: emailError } = await supabase
+              .from('users')
+              .select('role')
+              .eq('email', user.email)
+              .single()
+            
+            if (!emailError && emailData) {
+              const role = emailData?.role || 'user'
+              setUserRole(role)
+              if (role === 'ceo') {
+                setIsCEO(true)
+              } else {
+                console.log('❌ Access denied - user role:', role, '(required: ceo)')
+                toast({
+                  title: "Access Denied",
+                  description: "This page is restricted to CEO users only.",
+                  variant: "destructive",
+                })
+                router.push('/')
+              }
+              return
+            }
+          }
+          toast({
+            title: "Error",
+            description: "Failed to verify user permissions.",
+            variant: "destructive",
+          })
+          router.push('/')
+          return
+        }
+
+        const role = data?.role || 'user'
+        console.log('🔍 AI Settings Page - User role:', role)
+        setUserRole(role)
+
+        if (role === 'ceo') {
+          setIsCEO(true)
+        } else {
+          // Redirect non-CEO users
+          console.log('❌ Access denied - user role:', role, '(required: ceo)')
+          toast({
+            title: "Access Denied",
+            description: "This page is restricted to CEO users only.",
+            variant: "destructive",
+          })
+          router.push('/')
+        }
+      } catch (error) {
+        console.error('Error checking CEO role:', error)
+        toast({
+          title: "Error",
+          description: "Failed to verify user permissions.",
+          variant: "destructive",
+        })
+        router.push('/')
+      } finally {
+        setIsCheckingRole(false)
+      }
+    }
+
+    checkCEORole()
+  }, [ready, userId, user, router, toast])
+
+  // Check if settings are password protected (only if CEO)
+  // Always clear sessionStorage on page load to force password prompt every time
+  useEffect(() => {
+    if (!ready || !userId || !isCEO) return;
+    
+    // Clear any existing session storage to force password prompt every time
+    sessionStorage.removeItem('ai-settings-access')
     
     const checkPasswordProtection = async () => {
       try {
@@ -112,10 +205,9 @@ export default function AISettingsPage() {
           console.log('🔒 No password protection - granting access')
           setHasAccess(true)
         } else {
-          // Check if user already has access from session storage
-          const hasAccess = sessionStorage.getItem('ai-settings-access') === 'true'
-          console.log('🔒 Password protected - checking session storage access:', hasAccess)
-          setHasAccess(hasAccess)
+          // Password protection enabled - require password every time (no sessionStorage check)
+          console.log('🔒 Password protected - access will require password')
+          setHasAccess(false)
         }
       } catch (error) {
         console.error('Error checking password protection:', error)
@@ -126,7 +218,7 @@ export default function AISettingsPage() {
     }
     
     checkPasswordProtection()
-  }, [ready, userId])
+  }, [ready, userId, isCEO])
 
   // Password verification - check against stored password
   const verifyPassword = async (password: string) => {
@@ -148,7 +240,7 @@ export default function AISettingsPage() {
       if (data?.settings_password_hash === password) {
         console.log('🔐 Password correct - granting access')
         setHasAccess(true)
-        sessionStorage.setItem('ai-settings-access', 'true')
+        // Don't store in sessionStorage - require password every time
         setShowPasswordModal(false)
         setPasswordInput('')
         setPasswordError('')
@@ -182,7 +274,7 @@ export default function AISettingsPage() {
     }
   }
 
-  // Load user's AI settings
+  // Load system-wide AI settings
   useEffect(() => {
     const loadSettings = async () => {
       if (!ready) return
@@ -193,17 +285,17 @@ export default function AISettingsPage() {
         // Fetch API keys and settings in parallel
         await Promise.all([
           fetchUserApiKeys(),
-          AISettingsService.getUserSettings(userId!)
+          AISettingsService.getSystemSettings()
         ])
         
-        let userSettings = await AISettingsService.getUserSettings(userId!)
+        let systemSettings = await AISettingsService.getSystemSettings()
         
         // If no settings exist, initialize with defaults
-        if (userSettings.length === 0) {
-          console.log('No settings found, initializing defaults...')
+        if (systemSettings.length === 0) {
+          console.log('No settings found, initializing system-wide defaults...')
           try {
-            userSettings = await AISettingsService.initializeUserSettings(userId!)
-            console.log('Default settings initialized:', userSettings)
+            systemSettings = await AISettingsService.initializeSystemSettings()
+            console.log('Default system settings initialized:', systemSettings)
           } catch (initError) {
             console.error('Failed to initialize default settings:', initError)
             // Show error message to user
@@ -217,7 +309,7 @@ export default function AISettingsPage() {
         }
         
         // Ensure selected_model is set for scripts tab with ChatGPT/GPT-4/Claude
-        userSettings = userSettings.map(setting => {
+        systemSettings = systemSettings.map(setting => {
           if (setting.tab_type === 'scripts' && !setting.selected_model) {
             if (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4') {
               setting.selected_model = 'gpt-4o-mini'
@@ -228,34 +320,20 @@ export default function AISettingsPage() {
           return setting
         })
         
-        // Add timeline setting (temporarily using images setting) only if not already present
+        // Ensure timeline setting exists
         try {
-          const hasTimelineSetting = userSettings.some(s => s.tab_type === 'timeline')
+          const hasTimelineSetting = systemSettings.some(s => s.tab_type === 'timeline')
           if (!hasTimelineSetting) {
-            const timelineSetting = await AISettingsService.getTimelineSetting(userId!)
+            const timelineSetting = await AISettingsService.getTimelineSetting()
             if (timelineSetting) {
-              userSettings.push(timelineSetting)
+              systemSettings.push(timelineSetting)
             }
           }
         } catch (error) {
-          console.log('Timeline setting not available yet, will be added after DB migration')
+          console.log('Timeline setting not available yet')
         }
         
-        // Deduplicate settings by tab_type to prevent any duplicates
-        const uniqueSettings = userSettings.reduce((acc, setting) => {
-          const existingIndex = acc.findIndex(s => s.tab_type === setting.tab_type)
-          if (existingIndex >= 0) {
-            // Keep the most recent one (or the one with a real timeline id)
-            if (setting.tab_type === 'timeline' && !setting.id.includes('-timeline')) {
-              acc[existingIndex] = setting
-            }
-          } else {
-            acc.push(setting)
-          }
-          return acc
-        }, [] as AISetting[])
-        
-        setSettings(uniqueSettings)
+        setSettings(systemSettings)
       } catch (error) {
         console.error('Error loading AI settings:', error)
         
@@ -279,7 +357,7 @@ export default function AISettingsPage() {
     }
 
     loadSettings()
-  }, [ready, userId, toast])
+  }, [ready, toast])
 
   // Check if user has required API keys for selected models
   const checkModelAvailability = (tabType: string, model: string) => {
@@ -425,60 +503,32 @@ export default function AISettingsPage() {
       })
       
       // Auto-save immediately for toggle changes
-      if (ready && userId) {
+      if (ready) {
         // Get current setting BEFORE state update to build the save data
         const currentSetting = settings.find(s => s.tab_type === tabType)
         if (!currentSetting) return
         
-        // For timeline, save to images setting temporarily until DB migration
-        const saveTabType = tabType === 'timeline' ? 'images' : tabType
-        
         // Build update data - use the new value for the changed field
         const updateData: AISettingUpdate = {
-          tab_type: saveTabType,
+          tab_type: tabType,
           locked_model: field === 'locked_model' ? value as string : currentSetting.locked_model,
           selected_model: field === 'selected_model' ? (value as string) : (currentSetting.selected_model || null),
           is_locked: field === 'is_locked' ? value as boolean : currentSetting.is_locked,
         }
         
-        console.log(`Auto-saving ${tabType} (as ${saveTabType}):`, updateData)
+        console.log(`Auto-saving system-wide ${tabType}:`, updateData)
         
-        // Save to database
-        AISettingsService.upsertTabSetting(userId, updateData)
+        // Save to database (system-wide)
+        AISettingsService.upsertTabSetting(updateData)
           .then(result => {
             console.log(`Auto-save successful for ${tabType}:`, result)
             
             // Update state with the saved result to keep it in sync
-            setSettings(prevState => {
-              if (tabType === 'timeline') {
-                // Timeline was saved as images, so update both images and timeline
-                return prevState.map(s => {
-                  if (s.tab_type === 'images') {
-                    return { ...result, tab_type: 'images' }
-                  }
-                  if (s.tab_type === 'timeline' && s.id.includes('-timeline')) {
-                    return { ...result, tab_type: 'timeline', id: s.id }
-                  }
-                  return s
-                })
-              } else if (tabType === 'images') {
-                // Images was saved, update timeline to match
-                return prevState.map(s => {
-                  if (s.tab_type === 'images') {
-                    return { ...result }
-                  }
-                  if (s.tab_type === 'timeline' && s.id.includes('-timeline')) {
-                    return { ...result, tab_type: 'timeline', id: s.id }
-                  }
-                  return s
-                })
-              } else {
-                // Other tabs - just update the specific setting
-                return prevState.map(s => 
-                  s.tab_type === tabType ? { ...result } : s
-                )
-              }
-            })
+            setSettings(prevState => 
+              prevState.map(s => 
+                s.tab_type === tabType ? { ...result } : s
+              )
+            )
             
             setHasChanges(false)
           })
@@ -494,9 +544,9 @@ export default function AISettingsPage() {
     }
   }
 
-  // Save all settings
+  // Save all settings (system-wide)
   const handleSaveSettings = async () => {
-    if (!userId) return
+    if (!ready) return
     
     try {
       setSaving(true)
@@ -504,43 +554,8 @@ export default function AISettingsPage() {
       console.log('Current settings state:', settings)
       console.log('Settings that will be saved:')
       
-      // Update all settings
-      // Separate timeline from other settings since timeline saves as images
-      const timelineSetting = settings.find(s => s.tab_type === 'timeline' && s.id.includes('-timeline'))
-      const otherSettings = settings.filter(s => s.tab_type !== 'timeline' || !s.id.includes('-timeline'))
-      
-      // Save timeline first as images (if it exists)
-      if (timelineSetting) {
-        let selectedModel = timelineSetting.selected_model
-        const updateData: AISettingUpdate = {
-          tab_type: 'images', // Save timeline as images
-          locked_model: timelineSetting.locked_model,
-          selected_model: selectedModel,
-          is_locked: timelineSetting.is_locked,
-        }
-        
-        console.log(`Saving timeline (as images):`, updateData)
-        const result = await AISettingsService.upsertTabSetting(userId, updateData)
-        console.log(`Database result for timeline:`, result)
-        
-        // Update state: update images setting and sync timeline
-        setSettings(prev => prev.map(s => 
-          s.tab_type === 'images'
-            ? { ...result, tab_type: 'images' }
-            : s.tab_type === 'timeline' && s.id.includes('-timeline')
-            ? { ...result, tab_type: 'timeline', id: s.id }
-            : s
-        ))
-      }
-      
-      // Save all other settings (excluding timeline, but including images if timeline doesn't exist)
-      for (const setting of otherSettings) {
-        // Skip images if we already saved it as timeline
-        if (setting.tab_type === 'images' && timelineSetting) {
-          console.log(`Skipping images save (already saved as timeline)`)
-          continue
-        }
-        
+      // Save all settings (system-wide, including timeline)
+      for (const setting of settings) {
         // Ensure selected_model is set for scripts with ChatGPT/GPT-4/Claude
         let selectedModel = setting.selected_model
         if (setting.tab_type === 'scripts' && !selectedModel) {
@@ -565,7 +580,7 @@ export default function AISettingsPage() {
           is_locked: updateData.is_locked,
         })
         
-        const result = await AISettingsService.upsertTabSetting(userId, updateData)
+        const result = await AISettingsService.upsertTabSetting(updateData)
         console.log(`Database result for ${setting.tab_type}:`, result)
       }
       
@@ -588,13 +603,13 @@ export default function AISettingsPage() {
     }
   }
 
-  // Reset to defaults
+  // Reset to defaults (system-wide)
   const handleResetDefaults = async () => {
-    if (!userId) return
+    if (!ready) return
     
     try {
       setLoading(true)
-              const defaultSettings = await AISettingsService.initializeUserSettings(userId)
+      const defaultSettings = await AISettingsService.initializeSystemSettings()
       setSettings(defaultSettings)
       setHasChanges(false)
       
@@ -623,7 +638,7 @@ export default function AISettingsPage() {
       console.log('Testing database connection...')
       
       // Try to fetch current settings
-              const currentSettings = await AISettingsService.getUserSettings(userId)
+      const currentSettings = await AISettingsService.getSystemSettings()
       console.log('Current settings from DB:', currentSettings)
       
       // Try to update one setting
@@ -634,7 +649,7 @@ export default function AISettingsPage() {
       }
       
       console.log('Testing update with:', testSetting)
-              const result = await AISettingsService.upsertTabSetting(userId, testSetting)
+              const result = await AISettingsService.upsertTabSetting(testSetting)
       console.log('Test update result:', result)
       
       toast({
@@ -654,15 +669,59 @@ export default function AISettingsPage() {
 
   // Debug current state
   console.log('🔍 Settings-ai page state:', {
+    isCheckingRole,
+    isCEO,
+    userRole,
     isPasswordProtected,
     hasAccess,
     ready,
     userId
   })
 
-  // Show loading state while checking password protection
-  if (!ready || (isPasswordProtected === undefined)) {
-    console.log('🔍 Still loading - showing loading state')
+  // Show loading state while checking CEO role
+  if (!ready || isCheckingRole) {
+    console.log('🔍 Still loading - checking CEO role')
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-4xl px-6 py-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-blue-500 animate-pulse" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">Verifying Access...</h1>
+            <p className="text-muted-foreground mb-6">
+              Checking user permissions
+            </p>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // If not CEO, don't render (redirect happens in useEffect)
+  if (!isCEO) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto max-w-4xl px-6 py-8">
+          <div className="text-center">
+            <div className="mx-auto w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-4">
+              <Shield className="h-8 w-8 text-red-500" />
+            </div>
+            <h1 className="text-2xl font-bold mb-2">Access Denied</h1>
+            <p className="text-muted-foreground mb-6">
+              This page is restricted to CEO users only.
+            </p>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // Show loading state while checking password protection (only if CEO)
+  if (isPasswordProtected === undefined) {
+    console.log('🔍 Still loading - checking password protection status')
     return (
       <div className="min-h-screen bg-background">
         <Header />
@@ -681,7 +740,7 @@ export default function AISettingsPage() {
     )
   }
 
-  // Show password prompt if protected and no access
+  // Show password prompt if protected and no access (only shown to CEOs)
   if (isPasswordProtected && !hasAccess) {
     console.log('🔒 Showing password prompt - page is protected and user has no access')
     return (
@@ -754,12 +813,17 @@ export default function AISettingsPage() {
       <main className="container mx-auto max-w-4xl px-6 py-8">
         {/* Page Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-            <Settings className="h-8 w-8" />
-            AI Studio Settings
-          </h1>
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-3xl font-bold flex items-center gap-2">
+              <Settings className="h-8 w-8" />
+              AI Studio Settings
+            </h1>
+            <Badge variant="outline" className="text-xs">
+              CEO Only
+            </Badge>
+          </div>
           <p className="text-muted-foreground">
-            Configure your preferred AI models and lock them for each generation tab
+            Configure system-wide AI models and lock them for each generation tab (applies to all users)
           </p>
         </div>
 

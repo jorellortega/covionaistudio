@@ -148,10 +148,11 @@ export default function SetupAIPage() {
           console.log('🔒 No password protection - granting access')
           setHasAccess(true)
         } else {
-          // Check if user already has access from session storage
-          const hasAccess = sessionStorage.getItem('ai-setup-access') === 'true'
-          console.log('🔒 Password protected - checking session storage access:', hasAccess)
-          setHasAccess(hasAccess)
+          // Password protection enabled - require password every time (no sessionStorage check)
+          // Clear any existing session storage to force password prompt every time
+          sessionStorage.removeItem('ai-setup-access')
+          console.log('🔒 Password protected - access will require password')
+          setHasAccess(false)
         }
       } catch (error) {
         console.error('Error checking password protection:', error)
@@ -191,7 +192,7 @@ export default function SetupAIPage() {
       if (data?.settings_password_hash === password) {
         console.log('🔐 Password correct - granting access')
         setHasAccess(true)
-        sessionStorage.setItem('ai-setup-access', 'true')
+        // Don't store in sessionStorage - require password every time
         setShowPasswordModal(false)
         setPasswordInput('')
         setPasswordError('')

@@ -104,6 +104,17 @@ export class MoodBoardsService {
     return (data || []) as MoodBoard[]
   }
 
+  static async getAllForUser(): Promise<MoodBoard[]> {
+    const user = await this.ensureAuthenticated()
+    const { data, error } = await getSupabaseClient()
+      .from('mood_boards')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+    if (error) throw error
+    return (data || []) as MoodBoard[]
+  }
+
   static async createBoard(input: CreateMoodBoardInput): Promise<MoodBoard> {
     const user = await this.ensureAuthenticated()
     const insert: any = {

@@ -2,7 +2,7 @@ import { getSupabaseClient } from './supabase'
 
 export interface AISetting {
   id: string
-  user_id: string
+  user_id: string | null  // NULL for system-wide settings
   tab_type: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'
   locked_model: string
   selected_model?: string | null
@@ -41,13 +41,13 @@ export class AISettingsService {
     }
   }
 
-  // Check and repair AI settings table state
-  static async checkAndRepairTable(userId: string): Promise<boolean> {
+  // Check and repair AI settings table state (system-wide)
+  static async checkAndRepairTable(): Promise<boolean> {
     try {
-      console.log('Checking AI settings table state for user:', userId)
+      console.log('Checking AI settings table state (system-wide)')
       
       // First, try to get settings normally
-      const settings = await this.getUserSettings(userId)
+      const settings = await this.getSystemSettings()
       
       // If we have settings for all tabs, we're good
       if (settings.length >= 5) {
@@ -63,7 +63,7 @@ export class AISettingsService {
         const existingSetting = settings.find(s => s.tab_type === tabType)
         if (!existingSetting) {
           console.log(`Creating missing setting for ${tabType} tab`)
-          await this.getOrCreateDefaultTabSetting(userId, tabType)
+          await this.getOrCreateDefaultTabSetting(tabType)
         }
       }
       
@@ -75,15 +75,15 @@ export class AISettingsService {
     }
   }
 
-  // Get all AI settings for a user
-  static async getUserSettings(userId: string): Promise<AISetting[]> {
+  // Get all system-wide AI settings (replaces getUserSettings)
+  static async getSystemSettings(): Promise<AISetting[]> {
     try {
-      console.log('Fetching AI settings for user:', userId)
+      console.log('Fetching system-wide AI settings')
       
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('*')
-        .eq('user_id', userId)
+        .is('user_id', null)
         .order('tab_type')
 
       if (error) {
@@ -101,10 +101,11 @@ export class AISettingsService {
           try {
             // Try to create default settings for all tabs
             const defaultSettings = await Promise.all([
-              this.getOrCreateDefaultTabSetting(userId, 'scripts'),
-              this.getOrCreateDefaultTabSetting(userId, 'images'),
-              this.getOrCreateDefaultTabSetting(userId, 'videos'),
-              this.getOrCreateDefaultTabSetting(userId, 'audio')
+              this.getOrCreateDefaultTabSetting('scripts'),
+              this.getOrCreateDefaultTabSetting('images'),
+              this.getOrCreateDefaultTabSetting('videos'),
+              this.getOrCreateDefaultTabSetting('audio'),
+              this.getOrCreateDefaultTabSetting('timeline')
             ])
             console.log('Successfully created default AI settings after 406 error')
             return defaultSettings
@@ -120,18 +121,23 @@ export class AISettingsService {
       console.log('AI settings fetched:', data)
       return data || []
     } catch (error) {
-      console.error('Error in getUserSettings:', error)
+      console.error('Error in getSystemSettings:', error)
       throw error
     }
   }
 
-  // Get AI setting for a specific tab
-  static async getTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting | null> {
+  // Backward compatibility: alias for getSystemSettings
+  static async getUserSettings(_userId?: string): Promise<AISetting[]> {
+    return this.getSystemSettings()
+  }
+
+  // Get AI setting for a specific tab (system-wide)
+  static async getTabSetting(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting | null> {
     try {
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('*')
-        .eq('user_id', userId)
+        .is('user_id', null)
         .eq('tab_type', tabType)
         .single()
 
@@ -151,11 +157,11 @@ export class AISettingsService {
     }
   }
 
-  // Get or create default AI setting for a tab
-  static async getOrCreateDefaultTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting> {
+  // Get or create default AI setting for a tab (system-wide)
+  static async getOrCreateDefaultTabSetting(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<AISetting> {
     try {
       // Try to get existing setting
-      const existingSetting = await this.getTabSetting(userId, tabType)
+      const existingSetting = await this.getTabSetting(tabType)
       if (existingSetting) {
         return existingSetting
       }
@@ -169,7 +175,7 @@ export class AISettingsService {
         is_locked: false
       }
 
-      const newSetting = await this.upsertTabSetting(userId, defaultSetting)
+      const newSetting = await this.upsertTabSetting(defaultSetting)
       return newSetting
     } catch (error) {
       console.error('Error in getOrCreateDefaultTabSetting:', error)
@@ -210,47 +216,74 @@ export class AISettingsService {
     return null
   }
 
-  // Create or update AI setting for a tab
-  static async upsertTabSetting(userId: string, setting: AISettingUpdate): Promise<AISetting> {
+  // Create or update AI setting for a tab (system-wide)
+  static async upsertTabSetting(setting: AISettingUpdate): Promise<AISetting> {
     try {
-      console.log('Upserting AI setting:', { userId, setting })
+      console.log('Upserting system-wide AI setting:', setting)
       
-      const { data, error } = await getSupabaseClient()
+      // First, try to update existing setting
+      const { data: updateData, error: updateError } = await getSupabaseClient()
         .from('ai_settings')
-        .upsert({
-          user_id: userId,
-          tab_type: setting.tab_type,
+        .update({
           locked_model: setting.locked_model,
           selected_model: setting.selected_model ?? null,
           is_locked: setting.is_locked,
           quick_suggestions: setting.quick_suggestions || [],
           updated_at: new Date().toISOString()
-        }, {
-          onConflict: 'user_id,tab_type'
         })
+        .is('user_id', null)
+        .eq('tab_type', setting.tab_type)
         .select()
         .single()
 
-      if (error) {
-        console.error('Error upserting AI setting:', error)
-        throw error
+      // If update succeeded, return the updated data
+      if (updateData && !updateError) {
+        console.log('AI setting updated successfully:', updateData)
+        return updateData
       }
 
-      console.log('AI setting upserted successfully:', data)
-      return data
+      // If update failed because no row exists, insert new setting
+      if (updateError && updateError.code === 'PGRST116') {
+        const { data: insertData, error: insertError } = await getSupabaseClient()
+          .from('ai_settings')
+          .insert({
+            user_id: null,  // System-wide settings have NULL user_id
+            tab_type: setting.tab_type,
+            locked_model: setting.locked_model,
+            selected_model: setting.selected_model ?? null,
+            is_locked: setting.is_locked,
+            quick_suggestions: setting.quick_suggestions || [],
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single()
+
+        if (insertError) {
+          console.error('Error inserting AI setting:', insertError)
+          throw insertError
+        }
+
+        console.log('AI setting inserted successfully:', insertData)
+        return insertData
+      }
+
+      // If update failed for another reason, throw the error
+      console.error('Error updating AI setting:', updateError)
+      throw updateError
     } catch (error) {
       console.error('Error in upsertTabSetting:', error)
       throw error
     }
   }
 
-  // Delete AI setting for a tab
-  static async deleteTabSetting(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<void> {
+  // Delete AI setting for a tab (system-wide)
+  static async deleteTabSetting(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<void> {
     try {
       const { error } = await getSupabaseClient()
         .from('ai_settings')
         .delete()
-        .eq('user_id', userId)
+        .is('user_id', null)
         .eq('tab_type', tabType)
 
       if (error) {
@@ -263,10 +296,10 @@ export class AISettingsService {
     }
   }
 
-  // Update quick suggestions for a specific tab
-  static async updateQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', suggestions: string[]): Promise<AISetting> {
+  // Update quick suggestions for a specific tab (system-wide)
+  static async updateQuickSuggestions(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline', suggestions: string[]): Promise<AISetting> {
     try {
-      console.log('Updating quick suggestions:', { userId, tabType, suggestions })
+      console.log('Updating quick suggestions:', { tabType, suggestions })
       
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
@@ -274,7 +307,7 @@ export class AISettingsService {
           quick_suggestions: suggestions,
           updated_at: new Date().toISOString()
         })
-        .eq('user_id', userId)
+        .is('user_id', null)
         .eq('tab_type', tabType)
         .select()
         .single()
@@ -292,13 +325,13 @@ export class AISettingsService {
     }
   }
 
-  // Get quick suggestions for a specific tab
-  static async getQuickSuggestions(userId: string, tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<string[]> {
+  // Get quick suggestions for a specific tab (system-wide)
+  static async getQuickSuggestions(tabType: 'scripts' | 'images' | 'videos' | 'audio' | 'timeline'): Promise<string[]> {
     try {
       const { data, error } = await getSupabaseClient()
         .from('ai_settings')
         .select('quick_suggestions')
-        .eq('user_id', userId)
+        .is('user_id', null)
         .eq('tab_type', tabType)
         .single()
 
@@ -324,17 +357,17 @@ export class AISettingsService {
     ]
   }
 
-  // Get timeline setting (temporarily uses images until DB migration)
-  static async getTimelineSetting(userId: string): Promise<AISetting | null> {
+  // Get timeline setting (system-wide)
+  static async getTimelineSetting(): Promise<AISetting | null> {
     try {
       // First try to get timeline setting
-      const timelineSetting = await this.getTabSetting(userId, 'timeline')
+      const timelineSetting = await this.getTabSetting('timeline')
       if (timelineSetting) {
         return timelineSetting
       }
       
       // Fallback to images setting if timeline doesn't exist
-      const imagesSetting = await this.getTabSetting(userId, 'images')
+      const imagesSetting = await this.getTabSetting('images')
       if (imagesSetting) {
         // Return a modified version that represents timeline
         return {
@@ -351,21 +384,29 @@ export class AISettingsService {
     }
   }
 
-  // Initialize default settings for a user
-  static async initializeUserSettings(userId: string): Promise<AISetting[]> {
+  // Initialize default system-wide settings
+  static async initializeSystemSettings(): Promise<AISetting[]> {
     try {
       const defaultSettings = this.getDefaultSettings()
+      // Add timeline setting
+      defaultSettings.push({ tab_type: 'timeline', locked_model: 'DALL-E 3', selected_model: null, is_locked: false })
+      
       const settings: AISetting[] = []
 
       for (const setting of defaultSettings) {
-        const result = await this.upsertTabSetting(userId, setting)
+        const result = await this.upsertTabSetting(setting)
         settings.push(result)
       }
 
       return settings
     } catch (error) {
-      console.error('Error initializing user settings:', error)
+      console.error('Error initializing system settings:', error)
       throw error
     }
+  }
+
+  // Backward compatibility: alias for initializeSystemSettings
+  static async initializeUserSettings(_userId?: string): Promise<AISetting[]> {
+    return this.initializeSystemSettings()
   }
 }

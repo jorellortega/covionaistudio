@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     console.log('Received request body:', JSON.stringify(body, null, 2))
     
-    const { prompt, field, service, apiKey, model, selectedText, fullContent, sceneContext, contentType, userId } = body
+    const { prompt, field, service, apiKey, model, selectedText, fullContent, sceneContext, contentType, userId, maxTokens } = body
 
     // Handle both old format (field-based) and new format (AI text editing)
     if (!prompt || !service) {
@@ -212,11 +212,18 @@ Generate only the replacement text:`
         case 'openai':
           // Use provided model or default to gpt-4o-mini
           const openaiModel = model || 'gpt-4o-mini'
+          console.log('🔍 [API] Calling OpenAI with:', {
+            model: openaiModel,
+            promptLength: userPrompt.length,
+            maxTokens: maxTokens || 'default (1000)',
+            field
+          })
           const openaiResponse = await OpenAIService.generateScript({
             prompt: userPrompt,
             template: systemPrompt,
             model: openaiModel,
-            apiKey: actualApiKey
+            apiKey: actualApiKey,
+            maxTokens: maxTokens // Pass through maxTokens if provided
           })
           
           if (!openaiResponse.success) {
@@ -229,11 +236,18 @@ Generate only the replacement text:`
         case 'anthropic':
           // Use provided model or default to claude-3-5-sonnet-20241022
           const anthropicModel = model || 'claude-3-5-sonnet-20241022'
+          console.log('🔍 [API] Calling Anthropic with:', {
+            model: anthropicModel,
+            promptLength: userPrompt.length,
+            maxTokens: maxTokens || 'default (1000)',
+            field
+          })
           const claudeResponse = await AnthropicService.generateScript({
             prompt: userPrompt,
             template: systemPrompt,
             model: anthropicModel,
-            apiKey: actualApiKey
+            apiKey: actualApiKey,
+            maxTokens: maxTokens // Pass through maxTokens if provided
           })
           
           if (!claudeResponse.success) {
@@ -290,11 +304,18 @@ Generate only the replacement text:`
         case 'openai':
           // Use provided model or default to gpt-4o-mini for legacy calls
           const legacyOpenaiModel = model || 'gpt-4o-mini'
+          console.log('🔍 [API] Calling OpenAI (legacy) with:', {
+            model: legacyOpenaiModel,
+            promptLength: userPromptText.length,
+            maxTokens: maxTokens || 'default (1000)',
+            field
+          })
           const openaiResponse = await OpenAIService.generateScript({
             prompt: userPromptText,
             template: systemTemplate,
             model: legacyOpenaiModel,
-            apiKey: actualApiKey
+            apiKey: actualApiKey,
+            maxTokens: maxTokens // Pass through maxTokens if provided
           })
           
           if (!openaiResponse.success) {
@@ -307,11 +328,18 @@ Generate only the replacement text:`
         case 'anthropic':
           // Use provided model or default to claude-3-5-sonnet-20241022 for legacy calls
           const legacyAnthropicModel = model || 'claude-3-5-sonnet-20241022'
+          console.log('🔍 [API] Calling Anthropic (legacy) with:', {
+            model: legacyAnthropicModel,
+            promptLength: userPromptText.length,
+            maxTokens: maxTokens || 'default (1000)',
+            field
+          })
           const claudeResponse = await AnthropicService.generateScript({
             prompt: userPromptText,
             template: systemTemplate,
             model: legacyAnthropicModel,
-            apiKey: actualApiKey
+            apiKey: actualApiKey,
+            maxTokens: maxTokens // Pass through maxTokens if provided
           })
           
           if (!claudeResponse.success) {
@@ -379,6 +407,13 @@ Generate only the replacement text:`
       generatedText = cleanedText
     }
 
+    console.log('✅ [API] Generation complete:', {
+      service: service.toUpperCase(),
+      field,
+      textLength: generatedText.length,
+      textPreview: generatedText.substring(0, 200) + '...'
+    })
+    
     return NextResponse.json({ 
       success: true, 
       text: generatedText,

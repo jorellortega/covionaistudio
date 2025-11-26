@@ -55,9 +55,16 @@ export class StoryboardsService {
   // Get all storyboards for the current user
   static async getStoryboards(): Promise<Storyboard[]> {
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       const { data, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
+        .eq('user_id', user.id)
         .order('scene_number', { ascending: true })
         .order('shot_number', { ascending: true })
         .order('created_at', { ascending: false })
@@ -309,9 +316,16 @@ export class StoryboardsService {
   // Get storyboards count
   static async getStoryboardsCount(): Promise<number> {
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       const { count, error } = await getSupabaseClient()
         .from('storyboards')
         .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
 
       if (error) {
         console.error('Error getting storyboards count:', error)

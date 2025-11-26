@@ -20,6 +20,12 @@ export class MovieService {
     console.log('🎬 MovieService.getMovies() - Starting...')
     
     try {
+      // Get the current user
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
       console.log('🎬 MovieService.getMovies() - Making Supabase query...')
       
       // Make the Supabase query directly without race condition
@@ -27,6 +33,7 @@ export class MovieService {
         .from('projects')
         .select('*')
         .eq('project_type', 'movie')
+        .eq('user_id', user.id)
         .order('created_at', { ascending: false })
       
       console.log('🎬 MovieService.getMovies() - Query completed, data:', data?.length || 0, 'rows')
