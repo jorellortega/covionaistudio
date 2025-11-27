@@ -205,3 +205,5 @@ Currently implemented using polling (every 2 seconds) for simplicity and to work
 - The access code is 8 characters and auto-generated
 - Sessions can be revoked, renewed, or deleted by the owner
 
+
+

@@ -320,9 +320,28 @@ export class ShotListService {
     try {
       const user = await this.ensureAuthenticated()
       
+      // Get existing shots to determine next shot numbers and sequence orders
+      const firstShot = shotLists[0]
+      let existingShots: ShotList[] = []
+      
+      if (firstShot?.scene_id) {
+        existingShots = await this.getShotListsByScene(firstShot.scene_id)
+      } else if (firstShot?.screenplay_scene_id) {
+        existingShots = await this.getShotListsByScreenplayScene(firstShot.screenplay_scene_id)
+      } else if (firstShot?.storyboard_id) {
+        existingShots = await this.getShotListsByStoryboard(firstShot.storyboard_id)
+      }
+      
+      const maxShotNumber = existingShots.length > 0 
+        ? Math.max(...existingShots.map(s => s.shot_number || 0))
+        : 0
+      const maxSequenceOrder = existingShots.length > 0 
+        ? Math.max(...existingShots.map(s => s.sequence_order || 0))
+        : 0
+      
       // Process each shot list to ensure proper defaults
       const processedShotLists = await Promise.all(
-        shotLists.map(async (shotList) => {
+        shotLists.map(async (shotList, index) => {
           // Get project_id if not provided
           let projectId = shotList.project_id
           if (!projectId && shotList.scene_id) {
@@ -357,11 +376,77 @@ export class ShotListService {
             }
           }
 
+          // Ensure shot_number and sequence_order are set
+          const shotNumber = shotList.shot_number !== undefined && shotList.shot_number !== null
+            ? Number(shotList.shot_number)
+            : maxShotNumber + index + 1
+          
+          const sequenceOrder = shotList.sequence_order !== undefined && shotList.sequence_order !== null
+            ? Number(shotList.sequence_order)
+            : maxSequenceOrder + index + 1
+
+          // Validate and normalize enum values to match database constraints
+          const validShotTypes = ['wide', 'medium', 'close', 'extreme-close', 'two-shot', 'over-the-shoulder', 'point-of-view', 'establishing', 'insert', 'cutaway']
+          const validCameraAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle', 'bird-eye', 'worm-eye']
+          const validMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming', 'dolly', 'crane', 'handheld', 'steadicam']
+          
+          const normalizeShotType = (value: string | undefined): string => {
+            if (!value) return 'wide'
+            const normalized = value.toLowerCase().trim()
+            if (validShotTypes.includes(normalized)) return normalized
+            // Map common variations
+            if (normalized.includes('establishing')) return 'establishing'
+            if (normalized.includes('extreme') || normalized.includes('extreme-close')) return 'extreme-close'
+            if (normalized.includes('two') || normalized.includes('two-shot')) return 'two-shot'
+            if (normalized.includes('over') || normalized.includes('shoulder') || normalized.includes('ots')) return 'over-the-shoulder'
+            if (normalized.includes('point') || normalized.includes('pov')) return 'point-of-view'
+            if (normalized.includes('insert')) return 'insert'
+            if (normalized.includes('cutaway')) return 'cutaway'
+            if (normalized.includes('close')) return 'close'
+            if (normalized.includes('medium')) return 'medium'
+            return 'wide'
+          }
+          
+          const normalizeCameraAngle = (value: string | undefined): string => {
+            if (!value) return 'eye-level'
+            const normalized = value.toLowerCase().trim()
+            if (validCameraAngles.includes(normalized)) return normalized
+            // Map common variations
+            if (normalized.includes('bird') || normalized.includes('aerial') || normalized.includes('overhead')) return 'bird-eye'
+            if (normalized.includes('worm') || normalized.includes('ground')) return 'worm-eye'
+            if (normalized.includes('high') || normalized.includes('above')) return 'high-angle'
+            if (normalized.includes('low') || normalized.includes('below')) return 'low-angle'
+            if (normalized.includes('dutch') || normalized.includes('tilted')) return 'dutch-angle'
+            return 'eye-level'
+          }
+          
+          const normalizeMovement = (value: string | undefined): string => {
+            if (!value) return 'static'
+            const normalized = value.toLowerCase().trim()
+            if (validMovements.includes(normalized)) return normalized
+            // Map common variations
+            if (normalized.includes('sweep') || normalized.includes('sweeping')) return 'panning'
+            if (normalized.includes('pan') || normalized.includes('panning')) return 'panning'
+            if (normalized.includes('tilt') || normalized.includes('tilting')) return 'tilting'
+            if (normalized.includes('track') || normalized.includes('tracking') || normalized.includes('follow')) return 'tracking'
+            if (normalized.includes('zoom') || normalized.includes('zooming')) return 'zooming'
+            if (normalized.includes('dolly')) return 'dolly'
+            if (normalized.includes('crane')) return 'crane'
+            if (normalized.includes('handheld') || normalized.includes('hand-held')) return 'handheld'
+            if (normalized.includes('steadicam') || normalized.includes('steady')) return 'steadicam'
+            return 'static'
+          }
+
           return {
             ...shotList,
             user_id: user.id,
             project_id: projectId,
+            shot_number: shotNumber,
+            sequence_order: sequenceOrder,
             status: shotList.status || 'planned',
+            shot_type: normalizeShotType(shotList.shot_type),
+            camera_angle: normalizeCameraAngle(shotList.camera_angle),
+            movement: normalizeMovement(shotList.movement),
           }
         })
       )

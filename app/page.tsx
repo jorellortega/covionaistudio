@@ -181,28 +181,6 @@ export default function HomePage() {
         {/* Promo Section (refined, fewer buttons, stronger narrative) */}
         <section className="container mx-auto px-4 sm:px-6 pb-16 sm:pb-20 md:pb-24">
           <div className="max-w-6xl mx-auto">
-            {/* Visual banner */}
-            <div className="relative overflow-hidden rounded-xl sm:rounded-2xl border border-border/60 bg-gradient-to-br from-blue-600/10 via-purple-600/10 to-cyan-600/10">
-              <div className="absolute inset-0 opacity-[0.15] pointer-events-none"
-                   style={{ backgroundImage: 'radial-gradient(circle at 20% 20%, rgba(59,130,246,0.35) 0, transparent 40%), radial-gradient(circle at 80% 30%, rgba(168,85,247,0.35) 0, transparent 45%), radial-gradient(circle at 50% 80%, rgba(34,211,238,0.35) 0, transparent 50%)' }} />
-              <div className="relative p-6 sm:p-8 md:p-12 lg:p-16">
-                <h3 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-extrabold tracking-tight mb-3 sm:mb-4">
-                  From Idea to Screen — in One Workspace
-                </h3>
-                <p className="text-sm sm:text-base md:text-lg text-muted-foreground max-w-3xl mb-4 sm:mb-6">
-                  Draft stories with AI, shape the look with mood boards, organize scenes on a cinematic timeline, and keep assets in sync. Purpose-built for filmmakers.
-                </p>
-                <div className="flex flex-col sm:flex-row flex-wrap gap-3">
-                  <Link href="/signup" className="w-full sm:w-auto">
-                    <Button className="gradient-button neon-glow text-white w-full sm:w-auto">Start Free</Button>
-                  </Link>
-                  <Link href="/timeline" className="w-full sm:w-auto">
-                    <Button variant="secondary" className="w-full sm:w-auto">Explore Timeline</Button>
-                  </Link>
-                </div>
-              </div>
-            </div>
-
             {/* Cinematic strip (auto-scroll) */}
             <div className="mt-4 sm:mt-6 overflow-hidden rounded-lg sm:rounded-xl border border-border/50 bg-background/50">
               <div className="whitespace-nowrap will-change-transform marquee-track">

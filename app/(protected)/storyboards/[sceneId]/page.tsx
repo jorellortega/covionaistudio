@@ -650,17 +650,17 @@ export default function SceneStoryboardsPage() {
         // Load API keys and AI settings in parallel
         await Promise.all([
           fetchUserApiKeys(),
-          AISettingsService.getUserSettings(userId)
+          AISettingsService.getSystemSettings()
         ])
         
-        const settings = await AISettingsService.getUserSettings(userId)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
+          AISettingsService.getOrCreateDefaultTabSetting('videos'),
+          AISettingsService.getOrCreateDefaultTabSetting('audio')
         ])
         
         // Merge existing settings with default ones, preferring existing
@@ -3420,17 +3420,18 @@ export default function SceneStoryboardsPage() {
                 <Button
                   onClick={handleCreateAllStoryboards}
                   disabled={isCreatingAllStoryboards}
-                  className="bg-green-500 hover:bg-green-600 text-white"
+                  size="lg"
+                  className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold shadow-lg"
                 >
                   {isCreatingAllStoryboards ? (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="h-5 w-5 mr-2 animate-spin" />
                       Creating Storyboards...
                     </>
                   ) : (
                     <>
-                      <Film className="h-4 w-4 mr-2" />
-                      Create Storyboards for All Shots ({shots.length})
+                      <Film className="h-5 w-5 mr-2" />
+                      Create All Storyboards ({shots.length})
                     </>
                   )}
                 </Button>
@@ -3438,6 +3439,28 @@ export default function SceneStoryboardsPage() {
             </div>
           </CardHeader>
           <CardContent>
+            {shots && shots.length > 0 && (
+              <div className="mb-6 flex justify-center">
+                <Button
+                  onClick={handleCreateAllStoryboards}
+                  disabled={isCreatingAllStoryboards}
+                  size="lg"
+                  className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold shadow-lg w-full max-w-md"
+                >
+                  {isCreatingAllStoryboards ? (
+                    <>
+                      <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                      Creating {shots.length} Storyboards...
+                    </>
+                  ) : (
+                    <>
+                      <Film className="h-5 w-5 mr-2" />
+                      Convert All {shots.length} Shots to Storyboards
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
             <ShotListComponent
               sceneId={sceneId}
               projectId={sceneInfo?.project_id}

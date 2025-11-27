@@ -79,14 +79,14 @@ export default function TreatmentsPage() {
       if (!ready) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId!)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Ensure default settings exist for all tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId!, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
+          AISettingsService.getOrCreateDefaultTabSetting('videos'),
+          AISettingsService.getOrCreateDefaultTabSetting('audio')
         ])
         
         // Merge existing settings with default ones, preferring existing

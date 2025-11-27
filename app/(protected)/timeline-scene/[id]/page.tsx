@@ -4457,24 +4457,6 @@ ${centerText('AUTHOR NAME')}
                             <Film className="h-4 w-4 mr-2" />
                             View Storyboards
                           </Button>
-                          <Button
-                            size="sm"
-                            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
-                            onClick={generateShotListFromPage}
-                            disabled={isGeneratingShotList || !getCurrentPageContent()}
-                          >
-                            {isGeneratingShotList ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Generating Shot List...
-                              </>
-                            ) : (
-                              <>
-                                <Film className="h-4 w-4 mr-2" />
-                                Generate Shot List from This Page
-                              </>
-                            )}
-                          </Button>
                         </div>
                       </div>
                       <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
@@ -4553,24 +4535,45 @@ ${centerText('AUTHOR NAME')}
             {!isEditingScreenplay && screenplayContent && (
               <Collapsible open={isShotListExpanded} onOpenChange={setIsShotListExpanded} className="mt-6">
                 <Card className="bg-card border-primary/20">
-                  <CollapsibleTrigger asChild>
-                    <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
+                  <CardHeader>
+                    <div className="flex items-center justify-between mb-3">
+                      <CollapsibleTrigger asChild>
+                        <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
                           <Film className="h-5 w-5 text-blue-400" />
                           <CardTitle>Shot List</CardTitle>
+                          {isShotListExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground ml-2" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground ml-2" />
+                          )}
                         </div>
-                        {isShotListExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                      </CollapsibleTrigger>
+                      <Button
+                        size="sm"
+                        className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          generateShotListFromPage()
+                        }}
+                        disabled={isGeneratingShotList || !getCurrentPageContent()}
+                      >
+                        {isGeneratingShotList ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Generating Shot List...
+                          </>
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          <>
+                            <Film className="h-4 w-4 mr-2" />
+                            Generate Shot List from This Page
+                          </>
                         )}
-                      </div>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Shots generated from this scene's screenplay. Use "Generate Shot List from This Page" above to create shots for the current page.
-                      </p>
-                    </CardHeader>
-                  </CollapsibleTrigger>
+                      </Button>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Shots generated from this scene's screenplay. Use the button above to create shots for the current page.
+                    </p>
+                  </CardHeader>
                   <CollapsibleContent>
                     <CardContent>
                       <ShotListComponent

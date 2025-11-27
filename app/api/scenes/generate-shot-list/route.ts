@@ -409,14 +409,66 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
       }
     }
 
+    // Validation functions to ensure values match database constraints
+    const validShotTypes = ['wide', 'medium', 'close', 'extreme-close', 'two-shot', 'over-the-shoulder', 'point-of-view', 'establishing', 'insert', 'cutaway']
+    const validCameraAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle', 'bird-eye', 'worm-eye']
+    const validMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming', 'dolly', 'crane', 'handheld', 'steadicam']
+    
+    const normalizeShotType = (value: string | undefined): string => {
+      if (!value) return 'wide'
+      const normalized = value.toLowerCase().trim()
+      // Map common variations to valid values
+      if (normalized.includes('establishing')) return 'establishing'
+      if (normalized.includes('extreme') || normalized.includes('extreme-close')) return 'extreme-close'
+      if (normalized.includes('two') || normalized.includes('two-shot')) return 'two-shot'
+      if (normalized.includes('over') || normalized.includes('shoulder') || normalized.includes('ots')) return 'over-the-shoulder'
+      if (normalized.includes('point') || normalized.includes('pov')) return 'point-of-view'
+      if (normalized.includes('insert')) return 'insert'
+      if (normalized.includes('cutaway')) return 'cutaway'
+      if (normalized.includes('close')) return 'close'
+      if (normalized.includes('medium')) return 'medium'
+      if (normalized.includes('wide')) return 'wide'
+      return validShotTypes.includes(normalized) ? normalized : 'wide'
+    }
+    
+    const normalizeCameraAngle = (value: string | undefined): string => {
+      if (!value) return 'eye-level'
+      const normalized = value.toLowerCase().trim()
+      // Map common variations
+      if (normalized.includes('bird') || normalized.includes('aerial') || normalized.includes('overhead')) return 'bird-eye'
+      if (normalized.includes('worm') || normalized.includes('ground')) return 'worm-eye'
+      if (normalized.includes('high') || normalized.includes('above')) return 'high-angle'
+      if (normalized.includes('low') || normalized.includes('below')) return 'low-angle'
+      if (normalized.includes('dutch') || normalized.includes('tilted')) return 'dutch-angle'
+      if (normalized.includes('eye') || normalized.includes('level')) return 'eye-level'
+      return validCameraAngles.includes(normalized) ? normalized : 'eye-level'
+    }
+    
+    const normalizeMovement = (value: string | undefined): string => {
+      if (!value) return 'static'
+      const normalized = value.toLowerCase().trim()
+      // Map common variations
+      if (normalized.includes('sweep') || normalized.includes('sweeping')) return 'panning'
+      if (normalized.includes('pan') || normalized.includes('panning')) return 'panning'
+      if (normalized.includes('tilt') || normalized.includes('tilting')) return 'tilting'
+      if (normalized.includes('track') || normalized.includes('tracking') || normalized.includes('follow')) return 'tracking'
+      if (normalized.includes('zoom') || normalized.includes('zooming')) return 'zooming'
+      if (normalized.includes('dolly')) return 'dolly'
+      if (normalized.includes('crane')) return 'crane'
+      if (normalized.includes('handheld') || normalized.includes('hand-held')) return 'handheld'
+      if (normalized.includes('steadicam') || normalized.includes('steady')) return 'steadicam'
+      if (normalized.includes('static') || normalized.includes('fixed') || normalized.includes('still')) return 'static'
+      return validMovements.includes(normalized) ? normalized : 'static'
+    }
+
     // Validate and format shot list data
     const formattedShots = shotListData.map((shot, index) => ({
       scene_id: sceneId,
       project_id: projectId,
       shot_number: index + 1,
-      shot_type: shot.shot_type || 'wide',
-      camera_angle: shot.camera_angle || 'eye-level',
-      movement: shot.movement || 'static',
+      shot_type: normalizeShotType(shot.shot_type),
+      camera_angle: normalizeCameraAngle(shot.camera_angle),
+      movement: normalizeMovement(shot.movement),
       lens: shot.lens || undefined,
       framing: shot.framing || undefined,
       duration_seconds: shot.duration_seconds || undefined,

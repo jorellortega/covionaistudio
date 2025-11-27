@@ -319,9 +319,14 @@ export default function TreatmentDetailPage() {
       // Get AI service settings (same as generateTreatmentFromScript)
       let normalizedService = 'openai'
       try {
-        const treatmentSetting = await AISettingsService.getTabSetting(userId, 'treatment')
-        if (treatmentSetting?.selected_service) {
-          normalizedService = treatmentSetting.selected_service === 'anthropic' ? 'anthropic' : 'openai'
+        const scriptsSetting = await AISettingsService.getTabSetting('scripts')
+        if (scriptsSetting?.selected_model) {
+          // Determine service from model
+          if (scriptsSetting.selected_model.includes('claude')) {
+            normalizedService = 'anthropic'
+          } else {
+            normalizedService = 'openai'
+          }
         }
       } catch (err) {
         console.error('Error getting treatment AI settings:', err)
@@ -555,15 +560,15 @@ Treatment:`
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!ready || !userId) return
+      if (!ready) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Ensure default settings exist for scripts and images tabs
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
         ])
         
         // Merge existing settings with default ones, preferring existing

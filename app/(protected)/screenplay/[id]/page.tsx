@@ -285,13 +285,13 @@ function ScreenplayPageClient({ id }: { id: string }) {
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!ready || !userId) return
+      if (!ready) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId)
+        const settings = await AISettingsService.getSystemSettings()
         
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
         ])
         
         const mergedSettings = defaultSettings.map(defaultSetting => {

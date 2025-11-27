@@ -26,6 +26,7 @@ export interface Character {
   } | null
   age?: number | null
   gender?: string | null
+  species?: string | null
   relationships?: any | null
   image_url?: string | null
   created_at: string

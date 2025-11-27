@@ -1693,49 +1693,6 @@ export default function TimelinePage() {
           </div>
         </div>
 
-        {/* Movie Info & Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-8">
-          <Card className="cinema-card">
-            <CardHeader className="pb-2 lg:pb-3">
-              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Current Movie</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <p className="text-sm lg:text-lg font-semibold text-blue-500 truncate">{movie.name}</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cinema-card">
-            <CardHeader className="pb-2 lg:pb-3">
-              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Total Scenes</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <p className="text-xl lg:text-2xl font-bold">{scenes.length}</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cinema-card">
-            <CardHeader className="pb-2 lg:pb-3">
-              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Total Duration</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <p className="text-xl lg:text-2xl font-bold">{formatTotalDuration(totalDuration)}</p>
-            </CardContent>
-          </Card>
-
-          <Card className="cinema-card">
-            <CardHeader className="pb-2 lg:pb-3">
-              <CardTitle className="text-xs lg:text-sm font-medium text-muted-foreground">Completion</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <p className="text-xl lg:text-2xl font-bold text-green-400">
-                {scenes.length > 0 
-                  ? Math.round((scenes.filter((s) => s.metadata.status === "Completed").length / scenes.length) * 100)
-                  : 0}%
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
         {/* Add Scene Button and Clear Scenes Button */}
         <div className="flex justify-center gap-4 mb-8">
           {scenes.length > 0 && (

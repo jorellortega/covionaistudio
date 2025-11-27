@@ -12,7 +12,7 @@ import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2 } from "lucide-react"
+import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -22,15 +22,19 @@ import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-
 import { CastingService, type CastingSetting } from "@/lib/casting-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { OpenAIService } from "@/lib/ai-services"
-import { AISettingsService } from "@/lib/ai-settings-service"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { useAuthReady } from "@/components/auth-hooks"
 
 export default function CharactersPage() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialProject = searchParams.get("movie") || ""
+  const { user, userId, ready } = useAuthReady()
 
   const [projectId, setProjectId] = useState<string>(initialProject)
   const [loading, setLoading] = useState(false)
@@ -47,6 +51,8 @@ export default function CharactersPage() {
   const [isCreatingCharacter, setIsCreatingCharacter] = useState(false)
   const [newCharName, setNewCharName] = useState("")
   const [newCharArchetype, setNewCharArchetype] = useState("")
+  const [newCharGender, setNewCharGender] = useState("")
+  const [newCharSpecies, setNewCharSpecies] = useState("")
   const [newCharDescription, setNewCharDescription] = useState("")
   const [newCharBackstory, setNewCharBackstory] = useState("")
   const [newCharGoals, setNewCharGoals] = useState("")
@@ -184,6 +190,17 @@ export default function CharactersPage() {
   const [characterAssets, setCharacterAssets] = useState<Asset[]>([])
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
+  const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null)
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
+  
+  // Image generation state
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const [isGeneratingQuickImage, setIsGeneratingQuickImage] = useState(false)
+  const [isGenerateImageDialogOpen, setIsGenerateImageDialogOpen] = useState(false)
+  const [imagePrompt, setImagePrompt] = useState("")
+  const [selectedImageService, setSelectedImageService] = useState("dalle")
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
 
   // Load data for selected project
   useEffect(() => {
@@ -261,6 +278,43 @@ export default function CharactersPage() {
     }
     loadAssets()
   }, [selectedCharacterId, toast])
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!ready) return
+      try {
+        const settings = await AISettingsService.getSystemSettings()
+        setAiSettings(settings)
+        setAiSettingsLoaded(true)
+        
+        // Auto-select locked model for images if available
+        const imagesSetting = settings.find(setting => setting.tab_type === 'images')
+        if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+          setSelectedImageService(imagesSetting.locked_model.toLowerCase())
+        }
+      } catch (err) {
+        console.error('Failed to load AI settings:', err)
+      }
+    }
+    loadAISettings()
+  }, [ready])
+
+  // Sync carousel with current index
+  useEffect(() => {
+    if (!carouselApi) return
+
+    const updateIndex = () => {
+      setCurrentImageIndex(carouselApi.selectedScrollSnap())
+    }
+
+    carouselApi.on('select', updateIndex)
+    updateIndex()
+
+    return () => {
+      carouselApi.off('select', updateIndex)
+    }
+  }, [carouselApi])
 
   // Aggregate distinct characters from all scenes
   const detectedCharacters = useMemo(() => {
@@ -342,6 +396,8 @@ export default function CharactersPage() {
     setEditingCharacterInFormId(ch.id)
     setNewCharName(ch.name || "")
     setNewCharArchetype(ch.archetype || "")
+    setNewCharGender(ch.gender || "")
+    setNewCharSpecies(ch.species || "")
     setNewCharDescription(ch.description || "")
     setNewCharBackstory(ch.backstory || "")
     setNewCharGoals(ch.goals || "")
@@ -478,6 +534,8 @@ export default function CharactersPage() {
     setEditingCharacterInFormId(null)
     setNewCharName("")
     setNewCharArchetype("")
+    setNewCharGender("")
+    setNewCharSpecies("")
     setNewCharDescription("")
     setNewCharBackstory("")
     setNewCharGoals("")
@@ -682,7 +740,7 @@ export default function CharactersPage() {
       // Determine model from AI settings (scripts tab)
       let model = 'gpt-4o-mini'
       try {
-        const scriptsSetting = await AISettingsService.getTabSetting(userId, 'scripts')
+        const scriptsSetting = await AISettingsService.getTabSetting('scripts')
         if (scriptsSetting?.selected_model) {
           model = scriptsSetting.selected_model
         }
@@ -869,7 +927,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       // Determine model
       let model = 'gpt-4o-mini'
       try {
-        const scriptsSetting = await AISettingsService.getTabSetting(userId, 'scripts')
+        const scriptsSetting = await AISettingsService.getTabSetting('scripts')
         if (scriptsSetting?.selected_model) {
           model = scriptsSetting.selected_model
         }
@@ -1269,6 +1327,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       const characterData: any = {
           name: name || undefined,
           archetype: newCharArchetype || undefined,
+          gender: newCharGender || undefined,
+          species: newCharSpecies || undefined,
           description: newCharDescription || undefined,
           backstory: newCharBackstory || undefined,
           goals: newCharGoals || undefined,
@@ -1487,6 +1547,15 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       const savedAsset = await AssetService.createAsset(assetData)
       setCharacterAssets(prev => [savedAsset, ...prev])
       
+      // Scroll to the newly uploaded image if it's an image (it's at index 0 since we prepend)
+      if (getFileContentType(file) === 'image') {
+        setTimeout(() => {
+          if (carouselApi) {
+            carouselApi.scrollTo(0)
+          }
+        }, 100)
+      }
+      
       toast({
         title: "Success",
         description: `${file.name} uploaded successfully!`,
@@ -1535,6 +1604,330 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         description: "Failed to delete asset.",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleGenerateCharacterImage = async () => {
+    if (!selectedCharacterId || !userId || !ready) {
+      toast({
+        title: "Error",
+        description: "Please select a character and ensure you're logged in.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) {
+      toast({
+        title: "Error",
+        description: "Character not found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!imagePrompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a prompt for the image.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingImage(true)
+
+      // Build character description for prompt enhancement
+      const characterDetails = [
+        selectedChar.name && `Character name: ${selectedChar.name}`,
+        selectedChar.archetype && `Archetype: ${selectedChar.archetype}`,
+        selectedChar.description && `Description: ${selectedChar.description}`,
+        selectedChar.visual_bible?.height && `Height: ${selectedChar.visual_bible.height}`,
+        selectedChar.visual_bible?.build && `Build: ${selectedChar.visual_bible.build}`,
+        selectedChar.visual_bible?.skin_tone && `Skin tone: ${selectedChar.visual_bible.skin_tone}`,
+        selectedChar.visual_bible?.eye_color && `Eye color: ${selectedChar.visual_bible.eye_color}`,
+        selectedChar.visual_bible?.hair_color_current && `Hair: ${selectedChar.visual_bible.hair_color_current}`,
+        selectedChar.visual_bible?.usual_clothing_style && `Clothing style: ${selectedChar.visual_bible.usual_clothing_style}`,
+      ].filter(Boolean).join(', ')
+
+      const enhancedPrompt = characterDetails 
+        ? `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality.`
+        : `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+
+      // Determine service and API key
+      let serviceToUse = selectedImageService
+      let apiKey = 'configured'
+
+      // Map service names
+      if (serviceToUse === 'dalle' || serviceToUse === 'DALL-E 3') {
+        serviceToUse = 'dalle'
+      } else if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
+        serviceToUse = 'openart'
+      }
+
+      const requestBody = {
+        prompt: enhancedPrompt,
+        service: serviceToUse,
+        apiKey: apiKey,
+        userId: userId,
+        model: serviceToUse === 'dalle' ? 'dall-e-3' : undefined,
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.imageUrl) {
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
+        
+        // Save as character asset
+        const assetData = {
+          project_id: projectId,
+          character_id: selectedCharacterId,
+          title: `${selectedChar.name} - AI Generated Image`,
+          content_type: 'image' as const,
+          content: '',
+          content_url: imageUrlToUse,
+          prompt: imagePrompt,
+          model: serviceToUse,
+          generation_settings: {
+            service: serviceToUse,
+            character_id: selectedCharacterId,
+            character_name: selectedChar.name,
+          },
+          metadata: {
+            character_name: selectedChar.name,
+            generated_at: new Date().toISOString(),
+            source: 'ai_generation',
+            service: serviceToUse,
+          }
+        }
+
+        const savedAsset = await AssetService.createAsset(assetData)
+        setCharacterAssets(prev => [savedAsset, ...prev])
+        
+        // Scroll to the newly generated image (it's at index 0 since we prepend)
+        setTimeout(() => {
+          if (carouselApi) {
+            carouselApi.scrollTo(0)
+          }
+        }, 100)
+        
+        toast({
+          title: "Image Generated!",
+          description: result.savedToBucket 
+            ? "AI image has been generated and saved to your bucket!" 
+            : "AI image has been generated and added to character assets.",
+        })
+
+        // Close dialog and reset prompt
+        setIsGenerateImageDialogOpen(false)
+        setImagePrompt("")
+      } else {
+        throw new Error('Failed to generate image')
+      }
+    } catch (error) {
+      console.error('Error generating character image:', error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate AI image",
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingImage(false)
+    }
+  }
+
+  const handleQuickGenerateCharacterImage = async () => {
+    if (!selectedCharacterId || !userId || !ready) {
+      toast({
+        title: "Error",
+        description: "Please select a character and ensure you're logged in.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) {
+      toast({
+        title: "Error",
+        description: "Character not found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Get the locked model from AI settings
+    if (!aiSettingsLoaded || aiSettings.length === 0) {
+      toast({
+        title: "Error",
+        description: "AI settings not loaded yet. Please wait a moment and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+    if (!imagesSetting) {
+      toast({
+        title: "Error",
+        description: "No image generation settings found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingQuickImage(true)
+
+      // Build safe character description for prompt (only visual characteristics)
+      const visualDetails = [
+        selectedChar.visual_bible?.height && selectedChar.visual_bible.height,
+        selectedChar.visual_bible?.build && selectedChar.visual_bible.build,
+        selectedChar.visual_bible?.skin_tone && selectedChar.visual_bible.skin_tone,
+        selectedChar.visual_bible?.eye_color && `${selectedChar.visual_bible.eye_color} eyes`,
+        selectedChar.visual_bible?.hair_color_current && `${selectedChar.visual_bible.hair_color_current} hair`,
+        selectedChar.visual_bible?.hair_length && selectedChar.visual_bible.hair_length,
+        selectedChar.visual_bible?.usual_clothing_style && selectedChar.visual_bible.usual_clothing_style,
+      ].filter(Boolean)
+
+      // Build a safe, generic prompt that avoids content policy issues
+      let autoPrompt = "A professional character portrait"
+      
+      if (visualDetails.length > 0) {
+        autoPrompt += ` featuring ${visualDetails.slice(0, 4).join(', ')}`
+      }
+      
+      // Add archetype if it's generic enough
+      if (selectedChar.archetype && 
+          !selectedChar.archetype.toLowerCase().includes('villain') && 
+          !selectedChar.archetype.toLowerCase().includes('antagonist') &&
+          !selectedChar.archetype.toLowerCase().includes('killer') &&
+          !selectedChar.archetype.toLowerCase().includes('murder')) {
+        autoPrompt += `, ${selectedChar.archetype.toLowerCase()} character type`
+      }
+      
+      autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
+
+      // Use the locked model from settings
+      let serviceToUse = imagesSetting.locked_model.toLowerCase()
+      let apiKey = 'configured'
+
+      // Map service names
+      if (serviceToUse === 'dalle' || serviceToUse === 'dall-e 3' || serviceToUse === 'dall-e-3') {
+        serviceToUse = 'dalle'
+      } else if (serviceToUse === 'openart') {
+        serviceToUse = 'openart'
+      }
+
+      const requestBody = {
+        prompt: autoPrompt,
+        service: serviceToUse,
+        apiKey: apiKey,
+        userId: userId,
+        model: serviceToUse === 'dalle' ? 'dall-e-3' : undefined,
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        const errorMessage = errorData.error || 'Failed to generate image'
+        
+        // Check if it's a content policy violation
+        if (errorMessage.toLowerCase().includes('copyrighted') || 
+            errorMessage.toLowerCase().includes('content policy') ||
+            errorMessage.toLowerCase().includes('cannot be generated')) {
+          throw new Error('Content policy violation. Try using "Generate Image" with a custom prompt, or modify the character description to be more generic.')
+        }
+        
+        throw new Error(errorMessage)
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.imageUrl) {
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
+        
+        // Save as character asset
+        const assetData = {
+          project_id: projectId,
+          character_id: selectedCharacterId,
+          title: `${selectedChar.name} - AI Generated Image`,
+          content_type: 'image' as const,
+          content: '',
+          content_url: imageUrlToUse,
+          prompt: autoPrompt,
+          model: serviceToUse,
+          generation_settings: {
+            service: serviceToUse,
+            character_id: selectedCharacterId,
+            character_name: selectedChar.name,
+            quick_generate: true,
+          },
+          metadata: {
+            character_name: selectedChar.name,
+            generated_at: new Date().toISOString(),
+            source: 'ai_generation_quick',
+            service: serviceToUse,
+          }
+        }
+
+        const savedAsset = await AssetService.createAsset(assetData)
+        setCharacterAssets(prev => [savedAsset, ...prev])
+        
+        // Scroll to the newly generated image (it's at index 0 since we prepend)
+        setTimeout(() => {
+          if (carouselApi) {
+            carouselApi.scrollTo(0)
+          }
+        }, 100)
+        
+        toast({
+          title: "Image Generated!",
+          description: result.savedToBucket 
+            ? "AI image has been generated and saved to your bucket!" 
+            : "AI image has been generated and added to character assets.",
+        })
+      } else {
+        throw new Error('Failed to generate image')
+      }
+    } catch (error) {
+      console.error('Error generating character image:', error)
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate AI image"
+      toast({
+        title: "Generation Failed",
+        description: errorMessage,
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingQuickImage(false)
     }
   }
 
@@ -1641,6 +2034,235 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     
                     return (
                       <div className="space-y-4 p-4 bg-muted/20 rounded-lg border border-border">
+                        {/* Character Assets Section */}
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm font-medium">Assets</Label>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleQuickGenerateCharacterImage}
+                                disabled={isGeneratingQuickImage || !selectedCharacterId || !aiSettingsLoaded}
+                                className="gap-2"
+                                title="Quick generate using system locked AI model"
+                              >
+                                {isGeneratingQuickImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Generating...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-4 w-4" />
+                                    Quick Generate
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setIsGenerateImageDialogOpen(true)}
+                                disabled={isGeneratingImage || isGeneratingQuickImage}
+                                className="gap-2"
+                              >
+                                {isGeneratingImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Generating...
+                                  </>
+                                ) : (
+                                  <>
+                                    <ImageIcon className="h-4 w-4" />
+                                    Generate Image
+                                  </>
+                                )}
+                              </Button>
+                              <input
+                                id="character-asset-upload"
+                                type="file"
+                                multiple
+                                accept="image/*,video/*,audio/*,.pdf,.txt,.doc,.docx,.md"
+                                onChange={handleFileSelect}
+                                className="hidden"
+                                disabled={isUploadingAsset}
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => document.getElementById('character-asset-upload')?.click()}
+                                disabled={isUploadingAsset}
+                                className="gap-2"
+                              >
+                                {isUploadingAsset ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    Uploading...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Upload className="h-4 w-4" />
+                                    Upload Assets
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          
+                          {isLoadingAssets ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Loading assets...
+                            </div>
+                          ) : characterAssets.length === 0 ? (
+                            <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
+                              No assets uploaded yet. Generate or upload images, videos, or files to help build up this character.
+                            </div>
+                          ) : (() => {
+                            const imageAssets = characterAssets.filter(a => a.content_type === 'image' && a.content_url)
+                            const nonImageAssets = characterAssets.filter(a => a.content_type !== 'image' || !a.content_url)
+                            
+                            return (
+                              <div className="space-y-4">
+                                {/* Image Slideshow */}
+                                {imageAssets.length > 0 && (
+                                  <div className="space-y-3">
+                                    <Label className="text-xs text-muted-foreground">Images ({imageAssets.length})</Label>
+                                    <div className="relative">
+                                      <Carousel className="w-full" setApi={setCarouselApi}>
+                                        <CarouselContent>
+                                          {imageAssets.map((asset, index) => (
+                                            <CarouselItem key={asset.id}>
+                                              <div className="relative group aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                                                <img
+                                                  src={asset.content_url}
+                                                  alt={asset.title}
+                                                  className="w-full h-full object-cover"
+                                                />
+                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={() => window.open(asset.content_url!, '_blank')}
+                                                    className="h-8"
+                                                  >
+                                                    <ExternalLink className="h-3 w-3 mr-1" />
+                                                    View
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={() => handleDeleteAsset(asset.id)}
+                                                    className="h-8"
+                                                  >
+                                                    <Trash2 className="h-3 w-3 text-white" />
+                                                  </Button>
+                                                </div>
+                                                <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm">
+                                                  {index + 1} / {imageAssets.length}
+                                                </div>
+                                                <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm max-w-[80%] truncate">
+                                                  {asset.title}
+                                                </div>
+                                              </div>
+                                            </CarouselItem>
+                                          ))}
+                                        </CarouselContent>
+                                        {imageAssets.length > 1 && (
+                                          <>
+                                            <CarouselPrevious className="left-2 z-10" />
+                                            <CarouselNext className="right-2 z-10" />
+                                          </>
+                                        )}
+                                      </Carousel>
+                                      
+                                      {/* Thumbnail Navigation */}
+                                      {imageAssets.length > 1 && (
+                                        <div className="mt-3 flex items-center justify-center gap-2 overflow-x-auto pb-2">
+                                          {imageAssets.map((asset, index) => (
+                                            <button
+                                              key={asset.id}
+                                              onClick={() => {
+                                                carouselApi?.scrollTo(index)
+                                              }}
+                                              className={`relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                                                index === currentImageIndex
+                                                  ? 'border-primary ring-2 ring-primary/50'
+                                                  : 'border-border hover:border-primary/50'
+                                              }`}
+                                            >
+                                              <img
+                                                src={asset.content_url}
+                                                alt={asset.title}
+                                                className="w-full h-full object-cover"
+                                              />
+                                              {index === currentImageIndex && (
+                                                <div className="absolute inset-0 bg-primary/20" />
+                                              )}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {/* Non-Image Assets */}
+                                {nonImageAssets.length > 0 && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">Other Files ({nonImageAssets.length})</Label>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {nonImageAssets.map((asset) => (
+                                        <div
+                                          key={asset.id}
+                                          className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
+                                        >
+                                          <div className="p-4">
+                                            <div className="flex items-start gap-3">
+                                              <div className="p-2 rounded-lg bg-primary/10">
+                                                {getAssetIcon(asset)}
+                                              </div>
+                                              <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium truncate">{asset.title}</p>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                  {asset.content_type}
+                                                </p>
+                                              </div>
+                                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {asset.content_url && (
+                                                  <Button
+                                                    size="icon"
+                                                    variant="ghost"
+                                                    onClick={() => window.open(asset.content_url!, '_blank')}
+                                                    className="h-7 w-7"
+                                                  >
+                                                    <ExternalLink className="h-3 w-3" />
+                                                  </Button>
+                                                )}
+                                                <Button
+                                                  size="icon"
+                                                  variant="ghost"
+                                                  onClick={() => handleDeleteAsset(asset.id)}
+                                                  className="h-7 w-7 text-destructive"
+                                                >
+                                                  <Trash2 className="h-3 w-3" />
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
+                        </div>
+                        
+                        <Separator />
+                        
+                        {/* Character Details Section */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
                             <Label className="text-xs text-muted-foreground">Name</Label>
@@ -1650,6 +2272,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             <div>
                               <Label className="text-xs text-muted-foreground">Archetype</Label>
                               <p className="font-medium">{selectedChar.archetype}</p>
+                            </div>
+                          )}
+                          {selectedChar.gender && (
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Gender</Label>
+                              <p className="font-medium">{selectedChar.gender}</p>
+                            </div>
+                          )}
+                          {selectedChar.species && (
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Species</Label>
+                              <p className="font-medium">{selectedChar.species}</p>
                             </div>
                           )}
                         </div>
@@ -1696,128 +2330,6 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             </div>
                           </div>
                         )}
-                        
-                        <Separator />
-                        
-                        {/* Character Assets Section */}
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <Label className="text-sm font-medium">Assets</Label>
-                            <div className="flex items-center gap-2">
-                              <input
-                                id="character-asset-upload"
-                                type="file"
-                                multiple
-                                accept="image/*,video/*,audio/*,.pdf,.txt,.doc,.docx,.md"
-                                onChange={handleFileSelect}
-                                className="hidden"
-                                disabled={isUploadingAsset}
-                              />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => document.getElementById('character-asset-upload')?.click()}
-                                disabled={isUploadingAsset}
-                                className="gap-2"
-                              >
-                                {isUploadingAsset ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    Uploading...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Upload className="h-4 w-4" />
-                                    Upload Assets
-                                  </>
-                                )}
-                              </Button>
-                            </div>
-                          </div>
-                          
-                          {isLoadingAssets ? (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                              Loading assets...
-                            </div>
-                          ) : characterAssets.length === 0 ? (
-                            <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
-                              No assets uploaded yet. Upload images, videos, or files to help build up this character.
-                            </div>
-                          ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {characterAssets.map((asset) => (
-                                <div
-                                  key={asset.id}
-                                  className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
-                                >
-                                  {asset.content_type === 'image' && asset.content_url ? (
-                                    <div className="aspect-video relative">
-                                      <img
-                                        src={asset.content_url}
-                                        alt={asset.title}
-                                        className="w-full h-full object-cover"
-                                      />
-                                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={() => window.open(asset.content_url!, '_blank')}
-                                          className="h-8"
-                                        >
-                                          <ExternalLink className="h-3 w-3 mr-1" />
-                                          View
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={() => handleDeleteAsset(asset.id)}
-                                          className="h-8 text-destructive"
-                                        >
-                                          <Trash2 className="h-3 w-3" />
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="p-4">
-                                      <div className="flex items-start gap-3">
-                                        <div className="p-2 rounded-lg bg-primary/10">
-                                          {getAssetIcon(asset)}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-sm font-medium truncate">{asset.title}</p>
-                                          <p className="text-xs text-muted-foreground mt-1">
-                                            {asset.content_type}
-                                          </p>
-                                        </div>
-                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                          {asset.content_url && (
-                                            <Button
-                                              size="icon"
-                                              variant="ghost"
-                                              onClick={() => window.open(asset.content_url!, '_blank')}
-                                              className="h-7 w-7"
-                                            >
-                                              <ExternalLink className="h-3 w-3" />
-                                            </Button>
-                                          )}
-                                          <Button
-                                            size="icon"
-                                            variant="ghost"
-                                            onClick={() => handleDeleteAsset(asset.id)}
-                                            className="h-7 w-7 text-destructive"
-                                          >
-                                            <Trash2 className="h-3 w-3" />
-                                          </Button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
                         
                         <Separator />
                         
@@ -1887,6 +2399,53 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   <div className="space-y-2">
                     <Label htmlFor="char-archetype">Archetype</Label>
                     <Input id="char-archetype" value={newCharArchetype} onChange={(e) => setNewCharArchetype(e.target.value)} className="bg-input border-border" placeholder="Protagonist, Mentor, Antagonist..." />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="char-gender">Gender</Label>
+                    <Select value={newCharGender} onValueChange={setNewCharGender}>
+                      <SelectTrigger id="char-gender" className="bg-input border-border">
+                        <SelectValue placeholder="Select gender..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Male">Male</SelectItem>
+                        <SelectItem value="Female">Female</SelectItem>
+                        {newCharSpecies && newCharSpecies !== "Human" && (
+                          <>
+                            <SelectItem value="Other">Other</SelectItem>
+                            <SelectItem value="Unknown">Unknown</SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="char-species">Species</Label>
+                    <Select 
+                      value={newCharSpecies} 
+                      onValueChange={(value) => {
+                        setNewCharSpecies(value)
+                        // Clear gender if it's "Other" or "Unknown" and species is changed to "Human"
+                        if (value === "Human" && (newCharGender === "Other" || newCharGender === "Unknown")) {
+                          setNewCharGender("")
+                        }
+                      }}
+                    >
+                      <SelectTrigger id="char-species" className="bg-input border-border">
+                        <SelectValue placeholder="Select species..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Human">Human</SelectItem>
+                        <SelectItem value="Alien">Alien</SelectItem>
+                        <SelectItem value="Android">Android</SelectItem>
+                        <SelectItem value="Robot">Robot</SelectItem>
+                        <SelectItem value="AI">AI</SelectItem>
+                        <SelectItem value="Cyborg">Cyborg</SelectItem>
+                        <SelectItem value="Mutant">Mutant</SelectItem>
+                        <SelectItem value="Hybrid">Hybrid</SelectItem>
+                        <SelectItem value="Synthetic">Synthetic</SelectItem>
+                        <SelectItem value="Unknown">Unknown</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label htmlFor="char-description">Description</Label>
@@ -2876,6 +3435,82 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           </>
         )}
       </main>
+
+      {/* Generate Image Dialog */}
+      <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Generate Character Image</DialogTitle>
+            <DialogDescription>
+              Create an AI-generated image for {selectedCharacterId ? characters.find(c => c.id === selectedCharacterId)?.name || 'this character' : 'the selected character'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="image-prompt">Image Prompt</Label>
+              <Textarea
+                id="image-prompt"
+                value={imagePrompt}
+                onChange={(e) => setImagePrompt(e.target.value)}
+                placeholder="e.g., portrait of a confident detective, cinematic lighting, professional headshot"
+                className="bg-input border-border min-h-[100px]"
+              />
+              <p className="text-xs text-muted-foreground">
+                Character details will be automatically added to your prompt.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="image-service">AI Service</Label>
+              <Select
+                value={selectedImageService}
+                onValueChange={setSelectedImageService}
+                disabled={aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked)}
+              >
+                <SelectTrigger id="image-service" className="bg-input border-border">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dalle">DALL-E 3</SelectItem>
+                  <SelectItem value="openart">OpenArt</SelectItem>
+                </SelectContent>
+              </Select>
+              {aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked) && (
+                <p className="text-xs text-muted-foreground">
+                  Service is locked in AI Settings
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsGenerateImageDialogOpen(false)
+                setImagePrompt("")
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateCharacterImage}
+              disabled={isGeneratingImage || !imagePrompt.trim() || !selectedCharacterId}
+              className="gap-2"
+            >
+              {isGeneratingImage ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Generate Image
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

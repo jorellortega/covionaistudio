@@ -60,10 +60,10 @@ export default function MoodBoardsPage() {
       if (!ready || !userId) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId)
+        const settings = await AISettingsService.getSystemSettings()
         
         // Ensure default settings exist for images tab
-        const imagesSetting = await AISettingsService.getOrCreateDefaultTabSetting(userId, 'images')
+        const imagesSetting = await AISettingsService.getOrCreateDefaultTabSetting('images')
         
         // Merge existing settings with default, preferring existing
         const existingImagesSetting = settings.find(s => s.tab_type === 'images')
