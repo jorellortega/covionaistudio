@@ -603,6 +603,20 @@ export class TimelineService {
       console.log('Primary timeline:', primaryTimeline.id)
       console.log('Duplicate timelines:', duplicateTimelines.map(t => t.id))
 
+      // Get the current max order_index from the primary timeline
+      const { data: primaryScenes, error: primaryScenesError } = await getSupabaseClient()
+        .from('scenes')
+        .select('order_index')
+        .eq('timeline_id', primaryTimeline.id)
+        .eq('user_id', user.id)
+        .order('order_index', { ascending: false })
+        .limit(1)
+
+      let nextOrderIndex = 1
+      if (!primaryScenesError && primaryScenes && primaryScenes.length > 0) {
+        nextOrderIndex = (primaryScenes[0].order_index || 0) + 1
+      }
+
       // Move all scenes from duplicate timelines to the primary timeline
       for (const duplicateTimeline of duplicateTimelines) {
         console.log(`Moving scenes from timeline ${duplicateTimeline.id} to ${primaryTimeline.id}`)
@@ -612,24 +626,34 @@ export class TimelineService {
           .select('*')
           .eq('timeline_id', duplicateTimeline.id)
           .eq('user_id', user.id)
+          .order('order_index', { ascending: true })
 
         if (scenesError) {
           console.error('Error fetching scenes from duplicate timeline:', scenesError)
           continue
         }
 
-        // Update each scene to point to the primary timeline
-        for (const scene of scenes) {
-          const { error: updateError } = await getSupabaseClient()
-            .from('scenes')
-            .update({ timeline_id: primaryTimeline.id })
-            .eq('id', scene.id)
-            .eq('user_id', user.id)
+        if (!scenes || scenes.length === 0) {
+          console.log(`No scenes to move from timeline ${duplicateTimeline.id}`)
+        } else {
+          // Update each scene to point to the primary timeline with a new order_index
+          // This prevents unique constraint violations on (timeline_id, order_index)
+          for (const scene of scenes) {
+            const { error: updateError } = await getSupabaseClient()
+              .from('scenes')
+              .update({ 
+                timeline_id: primaryTimeline.id,
+                order_index: nextOrderIndex
+              })
+              .eq('id', scene.id)
+              .eq('user_id', user.id)
 
-          if (updateError) {
-            console.error('Error updating scene:', updateError)
-          } else {
-            console.log(`Moved scene ${scene.id} to primary timeline`)
+            if (updateError) {
+              console.error('Error updating scene:', updateError)
+            } else {
+              console.log(`Moved scene ${scene.id} to primary timeline with order_index ${nextOrderIndex}`)
+              nextOrderIndex++
+            }
           }
         }
 
@@ -645,6 +669,15 @@ export class TimelineService {
         } else {
           console.log(`Deleted duplicate timeline ${duplicateTimeline.id}`)
         }
+      }
+
+      // After moving all scenes, reorder by scene number to maintain proper order
+      try {
+        await this.reorderScenesBySceneNumber(primaryTimeline.id)
+        console.log('Reordered scenes by scene number after consolidation')
+      } catch (reorderError) {
+        console.warn('Failed to reorder scenes by scene number after consolidation:', reorderError)
+        // Non-fatal error, continue
       }
 
       console.log('Timeline cleanup completed successfully')
