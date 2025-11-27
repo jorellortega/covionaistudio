@@ -74,7 +74,7 @@ function CollaboratePageClient({ code }: { code: string }) {
   const [projectThumbnail, setProjectThumbnail] = useState<string | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [showSidebar, setShowSidebar] = useState(true)
+  const [showSidebar, setShowSidebar] = useState(true) // Show by default, will adjust for mobile
   const [enablePolling, setEnablePolling] = useState(() => {
     // Load from localStorage, default to false (save database usage)
     if (typeof window !== 'undefined') {
@@ -815,6 +815,28 @@ function CollaboratePageClient({ code }: { code: string }) {
     ? scenes.findIndex((s) => s.id === selectedSceneId)
     : -1
 
+  // Handle window resize - auto-hide sidebar on mobile, show on desktop
+  useEffect(() => {
+    const handleResize = () => {
+      if (typeof window !== 'undefined') {
+        // On desktop (md and up), show sidebar by default
+        // On mobile, hide it
+        if (window.innerWidth >= 768) {
+          setShowSidebar(true)
+        } else {
+          setShowSidebar(false)
+        }
+      }
+    }
+    
+    // Set initial state based on screen size
+    if (typeof window !== 'undefined') {
+      handleResize()
+      window.addEventListener('resize', handleResize)
+      return () => window.removeEventListener('resize', handleResize)
+    }
+  }, [])
+
   // Debug: Log current state
   useEffect(() => {
     console.log('📊 [COLLAB] Current state:', {
@@ -860,10 +882,17 @@ function CollaboratePageClient({ code }: { code: string }) {
   console.log('✅ [COLLAB] Rendering collaboration page')
 
   return (
-    <div className="min-h-screen bg-background flex">
-      {/* Sidebar */}
+    <div className="min-h-screen bg-background flex flex-col md:flex-row">
+      {/* Sidebar - Mobile: Full screen overlay, Desktop: Sidebar */}
       {showSidebar && (
-        <div className="w-80 border-r border-border bg-muted/20 p-4 overflow-y-auto">
+        <>
+          {/* Mobile overlay */}
+          <div 
+            className="fixed inset-0 bg-black/50 z-40 md:hidden"
+            onClick={() => setShowSidebar(false)}
+          />
+          {/* Sidebar */}
+          <div className="fixed md:relative inset-y-0 left-0 z-50 md:z-auto w-80 border-r border-border bg-muted/20 p-4 overflow-y-auto md:block">
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-4">
               <Link href="/">
@@ -983,28 +1012,30 @@ function CollaboratePageClient({ code }: { code: string }) {
             </Card>
           </div>
         </div>
+        </>
       )}
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <div className="border-b border-border p-4 bg-background/95 backdrop-blur">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
+        <div className="border-b border-border p-3 md:p-4 bg-background/95 backdrop-blur">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3 md:mb-4">
+            <div className="flex items-center gap-2 md:gap-4 min-w-0">
               {!showSidebar && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setShowSidebar(true)}
+                  className="flex-shrink-0"
                 >
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               )}
-              <h1 className="text-2xl font-bold">
+              <h1 className="text-lg md:text-2xl font-bold truncate">
                 {session.title || "Collaborative Editing"}
               </h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 md:gap-3 flex-wrap">
               <Button
                 variant="outline"
                 size="sm"
@@ -1017,13 +1048,14 @@ function CollaboratePageClient({ code }: { code: string }) {
                   })
                 }}
                 title="Copy page URL"
+                className="flex-shrink-0"
               >
-                <Copy className="h-4 w-4 mr-2" />
-                Copy Link
+                <Copy className="h-4 w-4 md:mr-2" />
+                <span className="hidden md:inline">Copy Link</span>
               </Button>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted/30">
+              <div className="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded-md border border-border bg-muted/30 flex-shrink-0">
                 <RefreshCw className={`h-4 w-4 ${enablePolling ? 'text-green-500' : 'text-muted-foreground'}`} />
-                <Label htmlFor="polling-toggle" className="text-sm font-normal cursor-pointer">
+                <Label htmlFor="polling-toggle" className="text-xs md:text-sm font-normal cursor-pointer hidden md:block">
                   Live Updates
                 </Label>
                 <Switch
@@ -1031,8 +1063,6 @@ function CollaboratePageClient({ code }: { code: string }) {
                   checked={enablePolling}
                   onCheckedChange={(checked) => {
                     setEnablePolling(checked)
-                    // If manually toggled off, clear auto-enabled flag
-                    // If manually toggled on, clear auto-enabled flag (user wants it on)
                     setPollingAutoEnabled(false)
                   }}
                 />
@@ -1041,108 +1071,115 @@ function CollaboratePageClient({ code }: { code: string }) {
                 variant="outline"
                 size="sm"
                 onClick={() => router.push("/")}
+                className="flex-shrink-0"
               >
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Exit
+                <ArrowLeft className="h-4 w-4 md:mr-2" />
+                <span className="hidden md:inline">Exit</span>
               </Button>
             </div>
           </div>
 
           {/* Scene Selector */}
           {scenes.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectedSceneId) {
-                    loadSceneContent(selectedSceneId)
-                  }
-                }}
-                title="Refresh current scene"
-              >
-                <RefreshCw className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (currentSceneIndex > 0) {
-                    handleSceneSelect(scenes[currentSceneIndex - 1].id)
-                  }
-                }}
-                disabled={currentSceneIndex <= 0}
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Previous
-              </Button>
-              
-              <Select
-                value={selectedSceneId || ""}
-                onValueChange={handleSceneSelect}
-              >
-                <SelectTrigger className="w-[300px]">
-                  <SelectValue>
-                    {selectedScene ? (
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{selectedScene.name}</span>
-                        {selectedScene.metadata?.sceneNumber && (
-                          <Badge variant="outline" className="text-xs">
-                            {selectedScene.metadata.sceneNumber}
-                          </Badge>
-                        )}
-                      </div>
-                    ) : (
-                      "Select Scene"
-                    )}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {scenes.map((scene) => (
-                    <SelectItem key={scene.id} value={scene.id}>
-                      <div className="flex items-center justify-between w-full">
-                        <div className="flex items-center gap-2">
-                          <span>{scene.name}</span>
-                          {scene.metadata?.sceneNumber && (
-                            <Badge variant="outline" className="text-xs">
-                              {scene.metadata.sceneNumber}
+            <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2">
+              <div className="flex items-center gap-2 flex-1 min-w-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectedSceneId) {
+                      loadSceneContent(selectedSceneId)
+                    }
+                  }}
+                  title="Refresh current scene"
+                  className="flex-shrink-0"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex > 0) {
+                      handleSceneSelect(scenes[currentSceneIndex - 1].id)
+                    }
+                  }}
+                  disabled={currentSceneIndex <= 0}
+                  className="flex-shrink-0"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden md:inline ml-1">Previous</span>
+                </Button>
+                
+                <Select
+                  value={selectedSceneId || ""}
+                  onValueChange={handleSceneSelect}
+                >
+                  <SelectTrigger className="flex-1 min-w-0 md:w-[300px]">
+                    <SelectValue>
+                      {selectedScene ? (
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium truncate">{selectedScene.name}</span>
+                          {selectedScene.metadata?.sceneNumber && (
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                              {selectedScene.metadata.sceneNumber}
                             </Badge>
                           )}
                         </div>
-                        {scene.id === selectedSceneId && (
-                          <Badge variant="secondary" className="text-xs ml-2">
-                            Current
-                          </Badge>
-                        )}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (currentSceneIndex >= 0 && currentSceneIndex < scenes.length - 1) {
-                    handleSceneSelect(scenes[currentSceneIndex + 1].id)
-                  }
-                }}
-                disabled={currentSceneIndex < 0 || currentSceneIndex >= scenes.length - 1}
-              >
-                Next
-                <ChevronRight className="h-4 w-4" />
-              </Button>
+                      ) : (
+                        "Select Scene"
+                      )}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {scenes.map((scene) => (
+                      <SelectItem key={scene.id} value={scene.id}>
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="truncate">{scene.name}</span>
+                            {scene.metadata?.sceneNumber && (
+                              <Badge variant="outline" className="text-xs flex-shrink-0">
+                                {scene.metadata.sceneNumber}
+                              </Badge>
+                            )}
+                          </div>
+                          {scene.id === selectedSceneId && (
+                            <Badge variant="secondary" className="text-xs ml-2 flex-shrink-0">
+                              Current
+                            </Badge>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (currentSceneIndex >= 0 && currentSceneIndex < scenes.length - 1) {
+                      handleSceneSelect(scenes[currentSceneIndex + 1].id)
+                    }
+                  }}
+                  disabled={currentSceneIndex < 0 || currentSceneIndex >= scenes.length - 1}
+                  className="flex-shrink-0"
+                >
+                  <span className="hidden md:inline mr-1">Next</span>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
 
-              <div className="flex items-center gap-2 ml-auto">
+              <div className="flex items-center gap-2 md:ml-auto">
                 {session.allow_edit_scenes && selectedScene && (
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleEditScene(selectedScene)}
+                    className="flex-1 md:flex-initial"
                   >
-                    <Edit3 className="h-4 w-4 mr-2" />
-                    Edit Scene
+                    <Edit3 className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">Edit Scene</span>
                   </Button>
                 )}
                 {session.allow_add_scenes && (
@@ -1150,9 +1187,10 @@ function CollaboratePageClient({ code }: { code: string }) {
                     variant="outline"
                     size="sm"
                     onClick={handleAddScene}
+                    className="flex-1 md:flex-initial"
                   >
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Scene
+                    <Plus className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">Add Scene</span>
                   </Button>
                 )}
               </div>
@@ -1161,21 +1199,21 @@ function CollaboratePageClient({ code }: { code: string }) {
         </div>
 
         {/* Script Content Card */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 md:p-6">
           {selectedScene ? (
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <FileText className="h-5 w-5" />
-                    {selectedScene.name}
+              <CardHeader className="p-4 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <CardTitle className="flex items-center gap-2 min-w-0">
+                    <FileText className="h-5 w-5 flex-shrink-0" />
+                    <span className="truncate">{selectedScene.name}</span>
                     {selectedScene.metadata?.sceneNumber && (
-                      <Badge variant="outline">
+                      <Badge variant="outline" className="flex-shrink-0">
                         Scene {selectedScene.metadata.sceneNumber}
                       </Badge>
                     )}
                   </CardTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -1225,7 +1263,7 @@ function CollaboratePageClient({ code }: { code: string }) {
                         // Auto-save debounced (similar to screenplay page)
                       }}
                       onSelect={handleTextSelection}
-                      className="min-h-[600px] font-mono text-sm leading-relaxed resize-none"
+                      className="min-h-[400px] md:min-h-[600px] font-mono text-sm leading-relaxed resize-none w-full"
                       placeholder="Enter your screenplay content here..."
                     />
                     
@@ -1233,10 +1271,12 @@ function CollaboratePageClient({ code }: { code: string }) {
                     {selectedText && toolbarPosition && (
                       <div
                         data-selection-toolbar
-                        className="fixed z-50 flex items-center gap-2 p-2 bg-background border border-border rounded-lg shadow-lg"
+                        className="fixed z-50 flex items-center gap-1 md:gap-2 p-2 bg-background border border-border rounded-lg shadow-lg max-w-[calc(100vw-2rem)]"
                         style={{
                           top: `${toolbarPosition.top}px`,
-                          left: `${toolbarPosition.left}px`,
+                          left: typeof window !== 'undefined' 
+                            ? `${Math.min(toolbarPosition.left, window.innerWidth - 200)}px`
+                            : `${toolbarPosition.left}px`,
                         }}
                       >
                         <Badge variant="outline" className="text-xs">
@@ -1248,8 +1288,8 @@ function CollaboratePageClient({ code }: { code: string }) {
                           onClick={handleAITextEdit}
                           className="bg-purple-500 hover:bg-purple-600 text-white"
                         >
-                          <Bot className="h-3 w-3 mr-1" />
-                          AI Edit
+                          <Bot className="h-3 w-3 md:mr-1" />
+                          <span className="hidden md:inline">AI Edit</span>
                         </Button>
                         <Button
                           size="sm"
@@ -1270,13 +1310,13 @@ function CollaboratePageClient({ code }: { code: string }) {
                       </div>
                     )}
                     
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                       <div className="flex items-center gap-2">
                         <p className="text-xs text-muted-foreground">
                           💡 Tip: Select text to see the AI edit button in the floating toolbar.
                         </p>
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 w-full md:w-auto">
                         <Button
                           variant="outline"
                           onClick={() => {
@@ -1284,21 +1324,23 @@ function CollaboratePageClient({ code }: { code: string }) {
                             loadSceneContent(selectedScene.id)
                           }}
                           disabled={saving}
+                          className="flex-1 md:flex-initial"
                         >
                           Cancel
                         </Button>
                         <Button
                           onClick={saveSceneContent}
                           disabled={saving}
+                          className="flex-1 md:flex-initial"
                         >
                           {saving ? (
                             <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Saving...
+                              <Loader2 className="h-4 w-4 md:mr-2 animate-spin" />
+                              <span className="hidden md:inline">Saving...</span>
                             </>
                           ) : (
                             <>
-                              <Save className="h-4 w-4 mr-2" />
+                              <Save className="h-4 w-4 md:mr-2" />
                               Save
                             </>
                           )}
@@ -1309,8 +1351,8 @@ function CollaboratePageClient({ code }: { code: string }) {
                 ) : (
                   <div className="space-y-4">
                     {sceneContent ? (
-                      <div className="bg-muted/20 p-6 rounded-lg border">
-                        <pre className="font-mono text-sm leading-relaxed whitespace-pre-wrap">
+                      <div className="bg-muted/20 p-3 md:p-6 rounded-lg border overflow-x-auto">
+                        <pre className="font-mono text-xs md:text-sm leading-relaxed whitespace-pre-wrap break-words">
                           {sceneContent}
                         </pre>
                       </div>
@@ -1381,7 +1423,7 @@ function CollaboratePageClient({ code }: { code: string }) {
 
       {/* Character Dialog */}
       <Dialog open={showCharacterDialog} onOpenChange={setShowCharacterDialog}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[90vh] md:max-h-[80vh] overflow-y-auto w-[95vw] md:w-full">
           <DialogHeader>
             <DialogTitle>Character Details</DialogTitle>
             <DialogDescription>
@@ -1541,7 +1583,7 @@ function CollaboratePageClient({ code }: { code: string }) {
 
       {/* Scene Dialog */}
       <Dialog open={showSceneDialog} onOpenChange={setShowSceneDialog}>
-        <DialogContent>
+        <DialogContent className="w-[95vw] md:w-full max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {editingScene ? "Edit Scene" : "Add New Scene"}

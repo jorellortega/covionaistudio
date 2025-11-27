@@ -710,7 +710,7 @@ export default function SettingsPage() {
                 <h2 className="text-2xl font-bold text-amber-600 dark:text-amber-400">Admin Controls</h2>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {/* AI System Prompt Admin */}
                 <Card className="border-2 border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/30">
                   <CardHeader>
@@ -748,6 +748,27 @@ export default function SettingsPage() {
                       <Link href="/ai-settings-admin" className="flex items-center justify-center gap-2">
                         <Cog className="h-4 w-4" />
                         Manage Provider Settings
+                      </Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* Users & Invites Admin */}
+                <Card className="border-2 border-amber-500/50 bg-amber-50/50 dark:bg-amber-950/20 dark:border-amber-500/30">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
+                      <Shield className="h-5 w-5" />
+                      Users & Invites
+                    </CardTitle>
+                    <CardDescription className="text-amber-600 dark:text-amber-300">
+                      Manage users and create invite codes for free signups
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <Button asChild className="w-full bg-amber-600 hover:bg-amber-700 text-white">
+                      <Link href="/admin/users-invites" className="flex items-center justify-center gap-2">
+                        <Shield className="h-4 w-4" />
+                        Manage Users & Invites
                       </Link>
                     </Button>
                   </CardContent>

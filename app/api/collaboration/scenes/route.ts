@@ -44,27 +44,32 @@ export async function GET(request: NextRequest) {
       }
     )
 
-    // Get timeline for the project
-    console.log('📋 [API] Fetching timeline for project:', validation.session.project_id)
-    const { data: timeline, error: timelineError } = await supabaseAdmin
+    // Get all timelines for the project (there can be multiple)
+    console.log('📋 [API] Fetching timelines for project:', validation.session.project_id)
+    const { data: timelines, error: timelineError } = await supabaseAdmin
       .from('timelines')
       .select('id')
       .eq('project_id', validation.session.project_id)
-      .single()
 
-    if (timelineError || !timeline) {
-      console.log('⚠️ [API] No timeline found for project:', timelineError?.message)
+    if (timelineError) {
+      console.error('❌ [API] Error fetching timelines:', timelineError)
       return NextResponse.json({ success: true, scenes: [] })
     }
 
-    console.log('📋 [API] Timeline found:', timeline.id)
+    if (!timelines || timelines.length === 0) {
+      console.log('⚠️ [API] No timelines found for project - returning empty scenes')
+      return NextResponse.json({ success: true, scenes: [] })
+    }
 
-    // Get all scenes for the timeline
-    console.log('📋 [API] Fetching scenes for timeline:', timeline.id)
+    console.log('📋 [API] Found', timelines.length, 'timeline(s) for project')
+
+    // Get all scenes from all timelines for this project
+    const timelineIds = timelines.map(t => t.id)
+    console.log('📋 [API] Fetching scenes for timelines:', timelineIds)
     const { data: scenes, error: scenesError } = await supabaseAdmin
       .from('scenes')
       .select('id, name, description, screenplay_content, metadata, order_index, created_at, updated_at')
-      .eq('timeline_id', timeline.id)
+      .in('timeline_id', timelineIds)
       .order('order_index', { ascending: true })
 
     if (scenesError) {
@@ -135,30 +140,84 @@ export async function POST(request: NextRequest) {
       }
     )
 
-    // Get timeline for the project
-    const { data: timeline, error: timelineError } = await supabaseAdmin
+    // Get project owner to use as user_id for timeline and scenes
+    const { data: project, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('user_id')
+      .eq('id', validation.session.project_id)
+      .single()
+
+    if (projectError || !project) {
+      return NextResponse.json(
+        { error: 'Project not found' },
+        { status: 404 }
+      )
+    }
+
+    const userId = project.user_id
+
+    // Get or create timeline for the project
+    let { data: timeline, error: timelineError } = await supabaseAdmin
       .from('timelines')
       .select('id')
       .eq('project_id', validation.session.project_id)
       .single()
 
+    // If timeline doesn't exist, create one
     if (timelineError || !timeline) {
-      return NextResponse.json(
-        { error: 'Timeline not found for this project' },
-        { status: 404 }
-      )
+      console.log('📋 [API] Timeline not found, creating one for project:', validation.session.project_id)
+      
+      // Create timeline
+      const { data: newTimeline, error: createTimelineError } = await supabaseAdmin
+        .from('timelines')
+        .insert({
+          project_id: validation.session.project_id,
+          user_id: userId,
+          name: 'Main Timeline',
+          description: 'Default timeline for collaboration',
+        })
+        .select('id')
+        .single()
+
+      if (createTimelineError || !newTimeline) {
+        console.error('❌ [API] Error creating timeline:', createTimelineError)
+        return NextResponse.json(
+          { error: 'Failed to create timeline for this project' },
+          { status: 500 }
+        )
+      }
+
+      timeline = newTimeline
+      console.log('✅ [API] Created timeline:', timeline.id)
     }
+
+    // Get the next order_index for this timeline
+    const { data: existingScenes, error: scenesCountError } = await supabaseAdmin
+      .from('scenes')
+      .select('order_index')
+      .eq('timeline_id', timeline.id)
+      .order('order_index', { ascending: false })
+      .limit(1)
+
+    // Calculate next order_index (start at 1 if no scenes exist)
+    const nextOrderIndex = existingScenes && existingScenes.length > 0
+      ? (existingScenes[0].order_index || 0) + 1
+      : 1
+
+    console.log('📋 [API] Creating scene with order_index:', nextOrderIndex)
 
     // Create new scene
     const { data: newScene, error: createError } = await supabaseAdmin
       .from('scenes')
       .insert({
         timeline_id: timeline.id,
+        user_id: userId, // Required field - use project owner's user_id
         name,
         description,
         start_time_seconds: 0,
         duration_seconds: 0,
         scene_type: 'text',
+        order_index: nextOrderIndex, // Required field - must be > 0
         metadata: {
           sceneNumber: scene_number || '',
           location: location || '',
@@ -168,8 +227,20 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (createError) {
+      console.error('❌ [API] Error creating scene:', createError)
+      console.error('❌ [API] Error details:', JSON.stringify(createError, null, 2))
+      console.error('❌ [API] Scene data attempted:', {
+        timeline_id: timeline.id,
+        user_id: userId,
+        name,
+        description,
+        start_time_seconds: 0,
+        duration_seconds: 0,
+        scene_type: 'text',
+        order_index: nextOrderIndex,
+      })
       return NextResponse.json(
-        { error: 'Failed to create scene' },
+        { error: 'Failed to create scene', details: createError.message },
         { status: 500 }
       )
     }
