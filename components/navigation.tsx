@@ -102,16 +102,6 @@ const navigationCategories: NavCategory[] = [
   },
 ]
 
-const mobileNavigation = [
-  { name: "Home", href: "/dashboard", icon: Home },
-  { name: "Movies", href: "/movies", icon: Film },
-  { name: "Ideas", href: "/ideas", icon: Lightbulb },
-  { name: "Writers", href: "/writers-page", icon: PenTool },
-  { name: "Visual Dev", href: "/visdev", icon: Palette },
-  { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
-  { name: "Settings", href: "/settings", icon: Settings },
-]
-
 function isPathActive(pathname: string, href: string): boolean {
   if (href === "/dashboard") {
     return pathname === href
@@ -128,30 +118,97 @@ export function Navigation() {
   const isMobile = useIsMobile()
   
   if (isMobile) {
+    // Mobile: Use same category structure as desktop but with dropdowns
+    const DashboardIcon = dashboardItem.icon
+    const isDashboardActive = isPathActive(pathname, dashboardItem.href)
+
     return (
       <nav className="flex items-center gap-1 overflow-x-auto pb-2">
-        {mobileNavigation.map((item) => {
-          const isActive = pathname === item.href
-          const Icon = item.icon
+        {/* Dashboard link */}
+        <Link
+          href={dashboardItem.href}
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+            isDashboardActive ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
+          )}
+        >
+          <DashboardIcon className="h-4 w-4" />
+        </Link>
+
+        {/* Category dropdowns */}
+        {navigationCategories.map((category) => {
+          const CategoryIcon = category.icon
+          const categoryActive = isCategoryActive(pathname, category)
+          
+          // If category has only one item, render as a direct link
+          if (category.items.length === 1) {
+            const item = category.items[0]
+            const isActive = isPathActive(pathname, item.href)
+            const ItemIcon = item.icon
+            
+            return (
+              <Link
+                key={category.name}
+                href={item.href}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                  isActive ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
+                )}
+              >
+                <ItemIcon className="h-4 w-4" />
+              </Link>
+            )
+          }
+          
+          // Render as dropdown for categories with multiple items
           return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-                isActive ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
-              )}
-            >
-              <Icon className="h-4 w-4" />
-              <span className={cn(
-                "hidden md:inline",
-                item.name === "Home" ? "hidden" : "hidden md:inline"
-              )}>
-                {item.name}
-              </span>
-            </Link>
+            <DropdownMenu key={category.name}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                    categoryActive ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
+                  )}
+                >
+                  <CategoryIcon className="h-4 w-4" />
+                  <ChevronDown className="h-3 w-3 ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48">
+                {category.items.map((item) => {
+                  const isActive = isPathActive(pathname, item.href)
+                  const ItemIcon = item.icon
+                  return (
+                    <DropdownMenuItem key={item.name} asChild>
+                      <Link
+                        href={item.href}
+                        className={cn(
+                          "flex items-center gap-2 w-full cursor-pointer",
+                          isActive && "bg-accent"
+                        )}
+                      >
+                        <ItemIcon className="h-4 w-4" />
+                        <span>{item.name}</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
           )
         })}
+
+        {/* Settings link */}
+        <Link
+          href="/settings"
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+            pathname === "/settings" ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
+          )}
+        >
+          <Settings className="h-4 w-4" />
+        </Link>
       </nav>
     )
   }

@@ -190,10 +190,10 @@ export default function DashboardPage() {
               <User className="h-8 w-8 text-white" />
             </div>
             <div>
-              <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
                 Welcome back, {userName}! 🎬
               </h1>
-              <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
+              <p className="text-sm text-muted-foreground">Signed in as {user.email}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
