@@ -24,11 +24,8 @@ export default function HomePage() {
         <div className="container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-2">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0">
-              <span className="text-white font-bold text-sm">AI</span>
+              <span className="text-white font-bold text-sm">ACS</span>
             </div>
-            <h1 className="text-base sm:text-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              Ai Cinema Studio
-            </h1>
           </div>
 
           {/* Desktop Navigation */}
@@ -48,37 +45,49 @@ export default function HomePage() {
             </Link>
           </div>
 
-          {/* Mobile Menu */}
-          <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-            <SheetTrigger asChild className="md:hidden">
-              <Button variant="ghost" size="icon" className="md:hidden">
-                <Menu className="h-6 w-6" />
-                <span className="sr-only">Toggle menu</span>
+          {/* Mobile Navigation - Login/Signup visible */}
+          <div className="flex md:hidden items-center gap-2">
+            <Link href="/login">
+              <Button variant="ghost" size="sm" className="text-sm">
+                Login
               </Button>
-            </SheetTrigger>
-            <SheetContent side="right" className="w-[300px] sm:w-[400px]">
-              <SheetHeader>
-                <SheetTitle>Menu</SheetTitle>
-              </SheetHeader>
-              <nav className="flex flex-col gap-4 mt-8">
-                <Link href="/features" onClick={() => setMobileMenuOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start">
-                    Features
-                  </Button>
-                </Link>
-                <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
-                  <Button variant="ghost" className="w-full justify-start">
-                    Sign In
-                  </Button>
-                </Link>
-                <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
-                  <Button className="gradient-button neon-glow text-white w-full">
-                    Get Started
-                  </Button>
-                </Link>
-              </nav>
-            </SheetContent>
-          </Sheet>
+            </Link>
+            <Link href="/login">
+              <Button size="sm" className="gradient-button neon-glow text-white text-sm">
+                Sign Up
+              </Button>
+            </Link>
+            <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <Menu className="h-6 w-6" />
+                  <span className="sr-only">Toggle menu</span>
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-[300px] sm:w-[400px]">
+                <SheetHeader>
+                  <SheetTitle>Menu</SheetTitle>
+                </SheetHeader>
+                <nav className="flex flex-col gap-4 mt-8">
+                  <Link href="/features" onClick={() => setMobileMenuOpen(false)}>
+                    <Button variant="ghost" className="w-full justify-start">
+                      Features
+                    </Button>
+                  </Link>
+                  <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
+                    <Button variant="ghost" className="w-full justify-start">
+                      Sign In
+                    </Button>
+                  </Link>
+                  <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
+                    <Button className="gradient-button neon-glow text-white w-full">
+                      Get Started
+                    </Button>
+                  </Link>
+                </nav>
+              </SheetContent>
+            </Sheet>
+          </div>
         </div>
       </header>
 
@@ -257,7 +266,7 @@ export default function HomePage() {
           <div className="flex flex-col md:flex-row justify-between items-center gap-3 sm:gap-4">
             <div className="flex items-center gap-2">
               <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0">
-                <span className="text-white font-bold text-xs sm:text-sm">AI</span>
+                <span className="text-white font-bold text-xs sm:text-sm">ACS</span>
               </div>
               <span className="text-base sm:text-lg font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
                 Ai Cinema Studio

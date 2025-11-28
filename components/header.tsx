@@ -5,9 +5,10 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
 import { Navigation } from "@/components/navigation"
+import { MobileNav } from "@/components/mobile-nav"
 import { ThemeToggle } from "@/components/theme-provider"
 import { useAuthReady } from "@/components/auth-hooks"
-import { LogOut, User, Settings } from "lucide-react"
+import { LogOut, User, Settings, Menu } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase"
 import {
   DropdownMenu,
@@ -17,12 +18,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 export default function Header() {
   const { session, userId, ready } = useAuthReady()
   const [userName, setUserName] = useState<string>('')
   const [userEmail, setUserEmail] = useState<string>('')
   const [isLoadingUser, setIsLoadingUser] = useState(true)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const isMobile = useIsMobile()
 
   // Fetch user name and email from public users table
   useEffect(() => {
@@ -77,7 +81,7 @@ export default function Header() {
         <div className="flex items-center gap-4">
           <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
             <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center">
-              <span className="text-white font-bold text-sm">AI</span>
+              <span className="text-white font-bold text-sm">ACS</span>
             </div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
               Cinema Studio
@@ -86,7 +90,21 @@ export default function Header() {
 
         </div>
         <div className="flex items-center gap-4">
-          <Navigation />
+          {!isMobile && <Navigation />}
+          {isMobile && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileMenuOpen(true)}
+                className="md:hidden"
+              >
+                <Menu className="h-6 w-6" />
+                <span className="sr-only">Toggle menu</span>
+              </Button>
+              <MobileNav open={mobileMenuOpen} onOpenChange={setMobileMenuOpen} />
+            </>
+          )}
           <ThemeToggle />
           
           {session?.user ? (

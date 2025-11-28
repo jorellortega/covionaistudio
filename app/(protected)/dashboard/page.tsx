@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb, Palette } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb, Palette, Settings } from "lucide-react"
 import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -16,6 +16,14 @@ import { MoodBoardsService } from "@/lib/mood-boards-service"
 import { useRouter } from "next/navigation"
 import { getSupabaseClient } from "@/lib/supabase"
 import Header from "@/components/header"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function DashboardPage() {
   const { session, user, userId, ready } = useAuthReady()
@@ -184,40 +192,49 @@ export default function DashboardPage() {
       <div className="container mx-auto px-4 sm:px-6 py-8">
         {/* Header with User Info */}
         <div className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-4">
-            <div className="p-3 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400">
-              <User className="h-8 w-8 text-white" />
-            </div>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="relative h-10 w-10 sm:h-12 sm:w-12 rounded-full p-0 hover:opacity-80 transition-opacity bg-gradient-to-br from-blue-500 to-cyan-400">
+                  <Avatar className="h-10 w-10 sm:h-12 sm:w-12 border-0">
+                    <AvatarImage src="/placeholder-user.jpg" alt={userName || 'User'} />
+                    <AvatarFallback className="bg-transparent text-white">
+                      <User className="h-6 w-6 sm:h-8 sm:w-8 text-white" />
+                    </AvatarFallback>
+                  </Avatar>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-56" align="end" forceMount>
+                <div className="flex items-center justify-start gap-2 p-2">
+                  <div className="flex flex-col space-y-1 leading-none">
+                    <p className="font-medium">{userName || 'User'}</p>
+                    <p className="w-[200px] truncate text-sm text-muted-foreground">
+                      {user?.email || 'No email'}
+                    </p>
+                  </div>
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/settings" className="flex items-center gap-2">
+                    <Settings className="h-4 w-4" />
+                    Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={handleSignOut} className="flex items-center gap-2">
+                  <LogOut className="h-4 w-4" />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                Welcome back, {userName}! 🎬
+              <h1 className="text-base sm:text-lg font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+                {userName}! 🎬
               </h1>
-              <p className="text-sm text-muted-foreground">Signed in as {user.email}</p>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button 
-              asChild
-              variant="outline" 
-              className="flex items-center gap-2 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-colors"
-            >
-              <Link href="/">
-                <Film className="h-4 w-4" />
-                Homepage
-              </Link>
-            </Button>
-            <Button 
-              onClick={handleSignOut}
-              variant="outline" 
-              className="flex items-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-300 transition-colors"
-            >
-              <LogOut className="h-4 w-4" />
-              Sign Out
-            </Button>
           </div>
         </div>
-        <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
 
       {/* Ideas Card - Prominent at Top */}

@@ -3907,7 +3907,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           <Card className="mb-6">
             <CollapsibleTrigger asChild>
               <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-3">
                     <div>
                       <CardTitle className="flex items-center gap-2">
@@ -3924,16 +3924,17 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       <ChevronDown className="h-5 w-5 text-foreground font-semibold" />
                     )}
                   </div>
-                  <div className="flex items-center gap-2 ml-4" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
                     {screenplayScenes.length > 0 && (
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={pushAllScenesToTimeline}
-                        className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                        className="border-green-500/30 text-green-400 hover:bg-green-500/10 flex-shrink-0"
                       >
-                        <Film className="h-4 w-4 mr-2" />
-                        Push All to Timeline
+                        <Film className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Push All to Timeline</span>
+                        <span className="sm:hidden">Push All</span>
                       </Button>
                     )}
                     {screenplayScenes.length > 0 && (
@@ -3942,18 +3943,19 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         size="sm"
                         onClick={generateAllSceneDetails}
                         disabled={isGeneratingScenes || !aiSettingsLoaded}
-                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 flex-shrink-0"
                         title="Generate full details (description, location, etc.) for all scenes"
                       >
                         {isGeneratingScenes ? (
                           <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Generating...
+                            <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                            <span className="hidden sm:inline">Generating...</span>
                           </>
                         ) : (
                           <>
-                            <Sparkles className="h-4 w-4 mr-2" />
-                            Generate All Details
+                            <Sparkles className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Generate All Details</span>
+                            <span className="sm:hidden">All Details</span>
                           </>
                         )}
                       </Button>
@@ -3963,17 +3965,18 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       size="sm"
                       onClick={generateScenesFromScreenplay}
                       disabled={isGeneratingScenes || !aiSettingsLoaded || !fullScript}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
                     >
                       {isGeneratingScenes ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Generating...
+                          <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                          <span className="hidden sm:inline">Generating...</span>
                         </>
                       ) : (
                         <>
-                          <Sparkles className="h-4 w-4 mr-2" />
-                          Generate Scene Titles
+                          <Sparkles className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">Generate Scene Titles</span>
+                          <span className="sm:hidden">Scene Titles</span>
                         </>
                       )}
                     </Button>
