@@ -1797,22 +1797,63 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       setIsGeneratingQuickImage(true)
 
-      // Build safe character description for prompt (only visual characteristics)
-      const visualDetails = [
-        selectedChar.visual_bible?.height && selectedChar.visual_bible.height,
-        selectedChar.visual_bible?.build && selectedChar.visual_bible.build,
-        selectedChar.visual_bible?.skin_tone && selectedChar.visual_bible.skin_tone,
-        selectedChar.visual_bible?.eye_color && `${selectedChar.visual_bible.eye_color} eyes`,
-        selectedChar.visual_bible?.hair_color_current && `${selectedChar.visual_bible.hair_color_current} hair`,
-        selectedChar.visual_bible?.hair_length && selectedChar.visual_bible.hair_length,
-        selectedChar.visual_bible?.usual_clothing_style && selectedChar.visual_bible.usual_clothing_style,
-      ].filter(Boolean)
-
-      // Build a safe, generic prompt that avoids content policy issues
+      // Build comprehensive character description for prompt using ALL available character details
+      const characterDetails: string[] = []
+      
+      // Basic Info
+      if (selectedChar.name) characterDetails.push(`Character name: ${selectedChar.name}`)
+      if (selectedChar.age) characterDetails.push(`Age: ${selectedChar.age}`)
+      if (selectedChar.gender) characterDetails.push(`Gender: ${selectedChar.gender}`)
+      if (selectedChar.species) characterDetails.push(`Species: ${selectedChar.species}`)
+      
+      // Visual Bible - Physical Appearance
+      if (selectedChar.height) characterDetails.push(`Height: ${selectedChar.height}`)
+      if (selectedChar.build) characterDetails.push(`Build: ${selectedChar.build}`)
+      if (selectedChar.skin_tone) characterDetails.push(`Skin tone: ${selectedChar.skin_tone}`)
+      if (selectedChar.eye_color) characterDetails.push(`Eye color: ${selectedChar.eye_color}`)
+      if (selectedChar.eye_shape) characterDetails.push(`Eye shape: ${selectedChar.eye_shape}`)
+      if (selectedChar.eye_expression) characterDetails.push(`Eye expression: ${selectedChar.eye_expression}`)
+      if (selectedChar.hair_color_current) characterDetails.push(`Hair color: ${selectedChar.hair_color_current}`)
+      if (selectedChar.hair_length) characterDetails.push(`Hair length: ${selectedChar.hair_length}`)
+      if (selectedChar.hair_texture) characterDetails.push(`Hair texture: ${selectedChar.hair_texture}`)
+      if (selectedChar.usual_hairstyle) characterDetails.push(`Hairstyle: ${selectedChar.usual_hairstyle}`)
+      if (selectedChar.face_shape) characterDetails.push(`Face shape: ${selectedChar.face_shape}`)
+      if (selectedChar.distinguishing_marks) characterDetails.push(`Distinguishing marks: ${selectedChar.distinguishing_marks}`)
+      
+      // Visual Bible - Style & Presentation
+      if (selectedChar.usual_clothing_style) characterDetails.push(`Clothing style: ${selectedChar.usual_clothing_style}`)
+      if (selectedChar.typical_color_palette && Array.isArray(selectedChar.typical_color_palette) && selectedChar.typical_color_palette.length > 0) {
+        characterDetails.push(`Color palette: ${selectedChar.typical_color_palette.join(', ')}`)
+      }
+      if (selectedChar.accessories) characterDetails.push(`Accessories: ${selectedChar.accessories}`)
+      if (selectedChar.posture) characterDetails.push(`Posture: ${selectedChar.posture}`)
+      if (selectedChar.body_language) characterDetails.push(`Body language: ${selectedChar.body_language}`)
+      
+      // Core Identity (if relevant to appearance)
+      if (selectedChar.nationality) characterDetails.push(`Nationality: ${selectedChar.nationality}`)
+      if (selectedChar.ethnicity) characterDetails.push(`Ethnicity: ${selectedChar.ethnicity}`)
+      if (selectedChar.occupation) characterDetails.push(`Occupation: ${selectedChar.occupation}`)
+      
+      // Description and context
+      if (selectedChar.description) characterDetails.push(`Description: ${selectedChar.description}`)
+      if (selectedChar.archetype) characterDetails.push(`Archetype: ${selectedChar.archetype}`)
+      
+      // Build a comprehensive prompt
       let autoPrompt = "A professional character portrait"
       
-      if (visualDetails.length > 0) {
-        autoPrompt += ` featuring ${visualDetails.slice(0, 4).join(', ')}`
+      // Add visual characteristics first (most important for image generation)
+      const visualTraits: string[] = []
+      if (selectedChar.height) visualTraits.push(selectedChar.height)
+      if (selectedChar.build) visualTraits.push(selectedChar.build)
+      if (selectedChar.skin_tone) visualTraits.push(selectedChar.skin_tone)
+      if (selectedChar.eye_color) visualTraits.push(`${selectedChar.eye_color} eyes`)
+      if (selectedChar.hair_color_current) visualTraits.push(`${selectedChar.hair_color_current} hair`)
+      if (selectedChar.hair_length) visualTraits.push(selectedChar.hair_length)
+      if (selectedChar.face_shape) visualTraits.push(selectedChar.face_shape)
+      if (selectedChar.usual_clothing_style) visualTraits.push(selectedChar.usual_clothing_style)
+      
+      if (visualTraits.length > 0) {
+        autoPrompt += ` featuring ${visualTraits.join(', ')}`
       }
       
       // Add archetype if it's generic enough
@@ -1822,6 +1863,16 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           !selectedChar.archetype.toLowerCase().includes('killer') &&
           !selectedChar.archetype.toLowerCase().includes('murder')) {
         autoPrompt += `, ${selectedChar.archetype.toLowerCase()} character type`
+      }
+      
+      // Add additional context from description if available
+      if (selectedChar.description && selectedChar.description.length < 200) {
+        autoPrompt += `. ${selectedChar.description}`
+      }
+      
+      // Add occupation/role context if available
+      if (selectedChar.occupation) {
+        autoPrompt += `. ${selectedChar.occupation}`
       }
       
       autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
@@ -2516,7 +2567,27 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="char-birthdate">Birthdate</Label>
-                            <Input id="char-birthdate" type="date" value={newCharBirthdate} onChange={(e) => setNewCharBirthdate(e.target.value)} className="bg-input border-border" />
+                            <div className="relative">
+                              <Input 
+                                id="char-birthdate" 
+                                type="date" 
+                                value={newCharBirthdate} 
+                                onChange={(e) => setNewCharBirthdate(e.target.value)} 
+                                className={`bg-input border-border ${newCharBirthdate ? 'pr-8' : ''}`}
+                              />
+                              {newCharBirthdate && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setNewCharBirthdate("")}
+                                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 p-0 hover:bg-destructive/10 z-10"
+                                  title="Clear date"
+                                >
+                                  <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                </Button>
+                              )}
+                            </div>
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="char-nationality">Nationality</Label>

@@ -45,6 +45,8 @@ import { Switch } from "@/components/ui/switch"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { createClient } from "@supabase/supabase-js"
 import { Database } from "@/lib/supabase"
+import { useAuthReady } from "@/components/auth-hooks"
+import { Wand2 } from "lucide-react"
 
 export default function CollaboratePage() {
   const params = useParams()
@@ -100,6 +102,15 @@ function CollaboratePageClient({ code }: { code: string }) {
   const [selectionEnd, setSelectionEnd] = useState<number>(0)
   const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null)
   
+  // Text enhancer states
+  const [textEnhancerSettings, setTextEnhancerSettings] = useState<{
+    model: string
+    prefix: string
+  }>({ model: 'gpt-4o-mini', prefix: '' })
+  const [isEnhancingText, setIsEnhancingText] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
+  const { user, userId, ready } = useAuthReady()
+  
   // Scene editing states
   const [showSceneDialog, setShowSceneDialog] = useState(false)
   const [editingScene, setEditingScene] = useState<SceneWithMetadata | null>(null)
@@ -111,6 +122,200 @@ function CollaboratePageClient({ code }: { code: string }) {
   })
   
   const contentTextareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Fetch user API keys
+  const fetchUserApiKeys = async () => {
+    if (!ready || !userId) return
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key, anthropic_api_key')
+        .eq('id', userId)
+        .single()
+
+      if (error) throw error
+      setUserApiKeys(data || {})
+    } catch (error) {
+      console.error('Error fetching user API keys:', error)
+    }
+  }
+
+  // Fetch text enhancer settings
+  const fetchTextEnhancerSettings = async () => {
+    try {
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('system_ai_config')
+        .select('setting_key, setting_value')
+        .in('setting_key', ['text_enhancer_model', 'text_enhancer_prefix'])
+
+      if (error) {
+        console.error('Error fetching text enhancer settings:', error)
+        return
+      }
+
+      const settings: { model: string; prefix: string } = {
+        model: 'gpt-4o-mini',
+        prefix: ''
+      }
+
+      data?.forEach((item) => {
+        if (item.setting_key === 'text_enhancer_model') {
+          settings.model = item.setting_value || 'gpt-4o-mini'
+        } else if (item.setting_key === 'text_enhancer_prefix') {
+          settings.prefix = item.setting_value || ''
+        }
+      })
+
+      setTextEnhancerSettings(settings)
+    } catch (error) {
+      console.error('Error fetching text enhancer settings:', error)
+    }
+  }
+
+  // Enhance selected text
+  const enhanceSelectedText = async () => {
+    if (!selectedText.trim()) {
+      toast({
+        title: "Error",
+        description: "Please select some text to enhance",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
+      toast({
+        title: "API Key Missing",
+        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsEnhancingText(true)
+    
+    try {
+      const model = textEnhancerSettings.model
+      const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
+      const fullPrompt = `${prefix}\n\n${selectedText}`
+
+      // Determine which API to use based on model
+      const isAnthropic = model.startsWith('claude-')
+      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
+
+      if (!apiKey) {
+        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      }
+
+      let response
+      if (isAnthropic) {
+        // Use Anthropic API
+        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: model,
+            max_tokens: 4000,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+          }),
+        })
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text()
+          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
+        }
+
+        const result = await anthropicResponse.json()
+        response = result.content?.[0]?.text || ''
+      } else {
+        // Use OpenAI API
+        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              { role: 'user', content: fullPrompt }
+            ],
+            max_tokens: 4000,
+            temperature: 0.7,
+          }),
+        })
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text()
+          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
+        }
+
+        const result = await openaiResponse.json()
+        response = result.choices?.[0]?.message?.content || ''
+      }
+
+      if (response) {
+        // Replace selected text with enhanced version
+        const newContent =
+          sceneContent.substring(0, selectionStart) + response.trim() + sceneContent.substring(selectionEnd)
+        
+        setSceneContent(newContent)
+        setSelectedText("")
+        setToolbarPosition(null)
+        setSelectionStart(0)
+        setSelectionEnd(0)
+        setHasUnsavedChanges(true)
+        
+        // Auto-save after enhancement
+        if (autoSaveTimeoutRef.current) {
+          clearTimeout(autoSaveTimeoutRef.current)
+        }
+        autoSaveTimeoutRef.current = setTimeout(() => {
+          saveSceneContent(true) // Silent save
+        }, 500)
+        
+        // Focus back on textarea and set cursor position after the enhanced text
+        setTimeout(() => {
+          if (contentTextareaRef.current) {
+            contentTextareaRef.current.focus()
+            const newPosition = selectionStart + response.trim().length
+            contentTextareaRef.current.setSelectionRange(newPosition, newPosition)
+          }
+        }, 0)
+        
+        toast({
+          title: "Text Enhanced",
+          description: "Selected text has been enhanced",
+        })
+      } else {
+        throw new Error('No response from AI')
+      }
+    } catch (error) {
+      console.error('Error enhancing text:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to enhance text',
+        variant: "destructive",
+      })
+    } finally {
+      setIsEnhancingText(false)
+    }
+  }
+
+  // Fetch API keys and settings when ready
+  useEffect(() => {
+    if (ready && userId) {
+      fetchUserApiKeys()
+      fetchTextEnhancerSettings()
+    }
+  }, [ready, userId])
 
   // Load session and validate access
   useEffect(() => {
@@ -1367,6 +1572,25 @@ function CollaboratePageClient({ code }: { code: string }) {
                         <Button
                           size="sm"
                           variant="default"
+                          onClick={enhanceSelectedText}
+                          disabled={isEnhancingText}
+                          className="bg-blue-500 hover:bg-blue-600 text-white"
+                        >
+                          {isEnhancingText ? (
+                            <>
+                              <Loader2 className="h-3 w-3 md:mr-1 animate-spin" />
+                              <span className="hidden md:inline">Enhancing...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Wand2 className="h-3 w-3 md:mr-1" />
+                              <span className="hidden md:inline">Enhance</span>
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="default"
                           onClick={handleAITextEdit}
                           className="bg-purple-500 hover:bg-purple-600 text-white"
                         >
@@ -1394,13 +1618,19 @@ function CollaboratePageClient({ code }: { code: string }) {
                     
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                       <div className="flex items-center gap-2">
-                        {hasUnsavedChanges && (
-                          <p className="text-xs text-muted-foreground">
-                            💾 Auto-saving changes...
+                        {hasUnsavedChanges ? (
+                          <p className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Autosaving...
+                          </p>
+                        ) : (
+                          <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1">
+                            <CheckCircle className="h-3 w-3" />
+                            All changes saved
                           </p>
                         )}
-                        <p className="text-xs text-muted-foreground">
-                          💡 Tip: Select text to see the AI edit button in the floating toolbar. Changes auto-save as you type.
+                        <p className="text-xs text-muted-foreground hidden md:block">
+                          💡 Tip: Select text to see the AI edit and enhance buttons in the floating toolbar.
                         </p>
                       </div>
                       <div className="flex gap-2 w-full md:w-auto">
@@ -1414,23 +1644,6 @@ function CollaboratePageClient({ code }: { code: string }) {
                           className="flex-1 md:flex-initial"
                         >
                           Cancel
-                        </Button>
-                        <Button
-                          onClick={saveSceneContent}
-                          disabled={saving}
-                          className="flex-1 md:flex-initial"
-                        >
-                          {saving ? (
-                            <>
-                              <Loader2 className="h-4 w-4 md:mr-2 animate-spin" />
-                              <span className="hidden md:inline">Saving...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Save className="h-4 w-4 md:mr-2" />
-                              Save
-                            </>
-                          )}
                         </Button>
                       </div>
                     </div>

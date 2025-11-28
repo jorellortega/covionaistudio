@@ -38,6 +38,7 @@ import {
   RefreshCw,
   CheckCircle,
   FileText,
+  Film,
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
@@ -47,6 +48,7 @@ import { analyzeImageUrl } from "@/lib/image-utils"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { AssetService } from "@/lib/asset-service"
 import { ProjectSelector } from "@/components/project-selector"
+import { TreatmentsService } from "@/lib/treatments-service"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -62,6 +64,7 @@ export default function TimelinePage() {
   const router = useRouter()
   const movieId = searchParams.get("movie") || searchParams.get("project")
   const [movie, setMovie] = useState<any>(null)
+  const [treatmentId, setTreatmentId] = useState<string | null>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [loading, setLoading] = useState(false) // Start with false so page shows immediately
   const [scenesLoading, setScenesLoading] = useState(false) // Separate loading state for scenes
@@ -223,6 +226,17 @@ export default function TimelinePage() {
       }
       setMovie(movieData)
       console.log('🎬 TIMELINE - Movie loaded:', movieData)
+      
+      // Fetch treatment linked to this movie
+      try {
+        const treatment = await TreatmentsService.getTreatmentByProjectId(movieId)
+        if (treatment) {
+          setTreatmentId(treatment.id)
+          console.log('🎬 TIMELINE - Treatment found:', treatment.id)
+        }
+      } catch (error) {
+        console.warn('🎬 TIMELINE - No treatment found for this movie:', error)
+      }
       
       // Now load scenes (slower, show loading state)
       setScenesLoading(true)
@@ -1658,19 +1672,21 @@ export default function TimelinePage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 lg:gap-4">
-            <Link href={`/ai-studio?project=${movieId}`}>
-              <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
-                <Sparkles className="mr-2 h-4 w-4" />
-                AI Studio
-              </Button>
-            </Link>
-
             <Link href={`/assets?project=${movie.id}`}>
               <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
                 <FolderOpen className="mr-2 h-4 w-4" />
                 Assets
               </Button>
             </Link>
+
+            {treatmentId && (
+              <Link href={`/treatments/${treatmentId}`}>
+                <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
+                  <Film className="mr-2 h-4 w-4" />
+                  Movie
+                </Button>
+              </Link>
+            )}
 
 
 
