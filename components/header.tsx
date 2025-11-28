@@ -1,12 +1,14 @@
 "use client"
 
+import { useState } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
 import { Navigation } from "@/components/navigation"
+import { MobileNav } from "@/components/mobile-nav"
 import { ThemeToggle } from "@/components/theme-provider"
 import { useAuth } from "@/components/AuthProvider"
-import { LogOut, User, Settings } from "lucide-react"
+import { LogOut, User, Settings, Menu } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase"
 import {
   DropdownMenu,
@@ -19,6 +21,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function Header() {
   const { session } = useAuth()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const handleLogout = async () => {
     try {
@@ -44,7 +47,24 @@ export default function Header() {
 
         </div>
         <div className="flex items-center gap-4">
-          <Navigation />
+          {/* Desktop Navigation */}
+          <div className="hidden md:block">
+            <Navigation />
+          </div>
+          
+          {/* Mobile Hamburger Menu */}
+          <div className="md:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileMenuOpen(true)}
+            >
+              <Menu className="h-6 w-6" />
+              <span className="sr-only">Toggle menu</span>
+            </Button>
+            <MobileNav open={mobileMenuOpen} onOpenChange={setMobileMenuOpen} />
+          </div>
+          
           <ThemeToggle />
           
           {session?.user ? (
