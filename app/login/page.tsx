@@ -192,6 +192,21 @@ function LoginPageContent() {
             console.log('✅ SIGNUP: User role updated to:', finalRole);
           }
 
+          // Check if email confirmation is required
+          const needsEmailConfirmation = !signUpData.session && signUpData.user;
+          
+          // If session exists (email confirmation disabled), redirect to dashboard
+          if (signUpData.session) {
+            toast({
+              title: "Account created successfully",
+              description: `Your account has been created with ${finalRole} role.`,
+              variant: "default",
+            });
+            router.replace(next);
+            return;
+          }
+          
+          // Email confirmation required
           toast({
             title: "Account created successfully",
             description: `Your account has been created with ${finalRole} role. Please check your email to confirm your account.`,
@@ -271,6 +286,13 @@ function LoginPageContent() {
           console.log('⚠️ SIGNUP: No plan selected or user not created, skipping checkout')
         }
         
+        // If session exists (email confirmation disabled), redirect to dashboard
+        if (signUpData.session) {
+          router.replace(next);
+          return;
+        }
+        
+        // Email confirmation required
         setMessage('Check your email to confirm your account, then sign in.');
         setMode('signin');
       } else {
