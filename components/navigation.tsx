@@ -35,6 +35,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Button } from "@/components/ui/button"
+import { useAuthReady } from "@/components/auth-hooks"
+import { useEffect, useState } from "react"
+import { getSupabaseClient } from "@/lib/supabase"
 
 interface NavItem {
   name: string
@@ -115,8 +118,47 @@ function isCategoryActive(pathname: string, category: NavCategory): boolean {
 
 export function Navigation() {
   const pathname = usePathname()
+  const { user, userId, ready } = useAuthReady()
+  const [userRole, setUserRole] = useState<string | null>(null)
+
+  // Fetch user role from users table
+  useEffect(() => {
+    if (!ready || !userId) {
+      setUserRole(null)
+      return
+    }
+
+    const fetchUserRole = async () => {
+      try {
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', userId)
+          .single()
+
+        if (!error && data) {
+          setUserRole(data.role || null)
+        }
+      } catch (error) {
+        console.error('Error fetching user role:', error)
+      }
+    }
+
+    fetchUserRole()
+  }, [ready, userId])
   
   // Desktop navigation only - mobile uses hamburger menu
+
+  // Filter categories based on user role - AI Tools only for ceo and production
+  const filteredCategories = userRole
+    ? navigationCategories.filter(category => {
+        if (category.name === "AI Tools") {
+          return userRole === 'ceo' || userRole === 'production'
+        }
+        return true
+      })
+    : navigationCategories
 
   // Render Dashboard as standalone link
   const DashboardIcon = dashboardItem.icon
@@ -137,7 +179,7 @@ export function Navigation() {
       </Link>
 
       {/* Category dropdowns */}
-      {navigationCategories.map((category) => {
+      {filteredCategories.map((category) => {
         const CategoryIcon = category.icon
         const categoryActive = isCategoryActive(pathname, category)
         

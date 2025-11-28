@@ -4767,8 +4767,8 @@ Return ONLY the JSON object, no other text:`
               {/* Gradient Overlay */}
               <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0 pointer-events-none" />
               
-              {/* Cover Management Buttons - Top right corner, always visible */}
-              <div className="absolute top-4 right-4 flex gap-2 z-50 pointer-events-auto">
+              {/* Cover Management Buttons - Above thumbnails on the right */}
+              <div className="absolute bottom-20 right-4 flex gap-2 z-50 pointer-events-auto">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
@@ -4973,11 +4973,6 @@ Return ONLY the JSON object, no other text:`
                     </Badge>
                   )}
                 </div>
-                {treatment.logline && (
-                  <p className="text-white/90 text-lg md:text-xl max-w-3xl drop-shadow-md italic">
-                    "{treatment.logline}"
-                  </p>
-                )}
               </div>
               <div className="flex gap-2 flex-shrink-0">
                 <Button variant="outline" size="sm" className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30">
@@ -5185,7 +5180,7 @@ Return ONLY the JSON object, no other text:`
         <Collapsible open={isTreatmentExpanded} onOpenChange={setIsTreatmentExpanded}>
           <Card className="mb-8">
             <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                 <CollapsibleTrigger className="flex items-center gap-2 flex-shrink-0 min-w-0 cursor-pointer hover:opacity-80 transition-opacity">
                   {isTreatmentExpanded ? (
                     <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0" />
@@ -5197,7 +5192,7 @@ Return ONLY the JSON object, no other text:`
                     <span className="truncate">Treatment</span>
                   </CardTitle>
                 </CollapsibleTrigger>
-                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
                   {!isEditingPrompt ? (
                     <>
                       {/* AI Regenerate Button */}
@@ -5207,36 +5202,39 @@ Return ONLY the JSON object, no other text:`
                           size="sm" 
                           onClick={generateAITreatment}
                           disabled={isGeneratingTreatment || !aiSettingsLoaded}
-                          className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
                           title="Generate a new full treatment using AI from existing content"
                         >
                           {isGeneratingTreatment ? (
                             <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generating...
+                              <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                              <span className="hidden sm:inline">Generating...</span>
                             </>
                           ) : (
                             <>
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              AI Regenerate
+                              <Sparkles className="h-4 w-4 sm:mr-2" />
+                              <span className="hidden sm:inline">AI Regenerate</span>
+                              <span className="sm:hidden">AI</span>
                             </>
                           )}
                         </Button>
                       )}
-                      <Button variant="outline" size="sm" onClick={handleStartEditPrompt}>
-                        <Edit className="h-4 w-4 mr-2" />
-                        {treatment.prompt ? 'Edit' : 'Add Treatment'}
+                      <Button variant="outline" size="sm" onClick={handleStartEditPrompt} className="flex-shrink-0">
+                        <Edit className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">{treatment.prompt ? 'Edit' : 'Add Treatment'}</span>
+                        <span className="sm:hidden">Edit</span>
                       </Button>
                     </>
                   ) : (
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={handleCancelEditPrompt}>
-                          <X className="h-4 w-4 mr-2" />
-                          Cancel
+                      <div className="flex gap-2 w-full sm:w-auto">
+                        <Button variant="outline" size="sm" onClick={handleCancelEditPrompt} className="flex-1 sm:flex-initial">
+                          <X className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">Cancel</span>
                         </Button>
-                        <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt}>
-                          <Save className="h-4 w-4 mr-2" />
-                          {isSavingPrompt ? 'Saving...' : 'Save'}
+                        <Button variant="default" size="sm" onClick={handleSavePrompt} disabled={isSavingPrompt} className="flex-1 sm:flex-initial">
+                          <Save className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">{isSavingPrompt ? 'Saving...' : 'Save'}</span>
+                          <span className="sm:hidden">{isSavingPrompt ? '...' : 'Save'}</span>
                         </Button>
                       </div>
                     )}

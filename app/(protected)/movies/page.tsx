@@ -1731,7 +1731,7 @@ export default function MoviesPage() {
                   </div>
                 </div>
 
-                <div className="flex flex-col gap-1 mt-2">
+                <div className="grid grid-cols-2 sm:flex sm:flex-col gap-1 mt-2">
                   <Link href={`/timeline?movie=${movie.id}`}>
                     <Button
                       variant="outline"

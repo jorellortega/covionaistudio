@@ -1639,7 +1639,7 @@ export default function TimelinePage() {
               <h1 className="text-2xl lg:text-3xl font-bold mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
                 {movie.name} - Timeline
               </h1>
-              <p className="text-muted-foreground">Organize and manage your film scenes</p>
+              <p className="text-muted-foreground">{scenes.length} {scenes.length === 1 ? 'scene' : 'scenes'}</p>
             </div>
           </div>
           

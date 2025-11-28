@@ -84,7 +84,7 @@ export default function Header() {
               <span className="text-white font-bold text-sm">ACS</span>
             </div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-              Cinema Studio
+              Ai Cinema Studio
             </h1>
           </Link>
 

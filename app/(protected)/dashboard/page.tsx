@@ -194,15 +194,18 @@ export default function DashboardPage() {
         <div className="mb-8">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
           <div className="flex items-center gap-3 sm:gap-4">
+            <div>
+              <h1 className="text-base sm:text-lg font-bold text-foreground">
+                {userName}! 🎬
+              </h1>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="relative h-10 w-10 sm:h-12 sm:w-12 rounded-full p-0 hover:opacity-80 transition-opacity bg-gradient-to-br from-blue-500 to-cyan-400">
-                  <Avatar className="h-10 w-10 sm:h-12 sm:w-12 border-0">
-                    <AvatarImage src="/placeholder-user.jpg" alt={userName || 'User'} />
-                    <AvatarFallback className="bg-transparent text-white">
-                      <User className="h-6 w-6 sm:h-8 sm:w-8 text-white" />
-                    </AvatarFallback>
-                  </Avatar>
+                <Button variant="ghost" size="sm" className="flex items-center gap-2 text-foreground">
+                  <User className="h-4 w-4" />
+                  <span className="hidden sm:inline">Account</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
@@ -228,11 +231,6 @@ export default function DashboardPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <div>
-              <h1 className="text-base sm:text-lg font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                {userName}! 🎬
-              </h1>
-            </div>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
@@ -32,10 +32,11 @@ import {
   Package,
   Sparkles,
   Box,
-  X,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useAuthReady } from "@/components/auth-hooks"
+import { getSupabaseClient } from "@/lib/supabase"
 
 interface NavItem {
   name: string
@@ -121,7 +122,36 @@ interface MobileNavProps {
 
 export function MobileNav({ open, onOpenChange }: MobileNavProps) {
   const pathname = usePathname()
+  const { user, userId, ready } = useAuthReady()
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set())
+  const [userRole, setUserRole] = useState<string | null>(null)
+
+  // Fetch user role from users table
+  useEffect(() => {
+    if (!ready || !userId) {
+      setUserRole(null)
+      return
+    }
+
+    const fetchUserRole = async () => {
+      try {
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('role')
+          .eq('id', userId)
+          .single()
+
+        if (!error && data) {
+          setUserRole(data.role || null)
+        }
+      } catch (error) {
+        console.error('Error fetching user role:', error)
+      }
+    }
+
+    fetchUserRole()
+  }, [ready, userId])
 
   const toggleCategory = (categoryName: string) => {
     const newExpanded = new Set(expandedCategories)
@@ -133,24 +163,24 @@ export function MobileNav({ open, onOpenChange }: MobileNavProps) {
     setExpandedCategories(newExpanded)
   }
 
+  // Filter categories based on user role - AI Tools only for ceo and production
+  const filteredCategories = userRole
+    ? navigationCategories.filter(category => {
+        if (category.name === "AI Tools") {
+          return userRole === 'ceo' || userRole === 'production'
+        }
+        return true
+      })
+    : navigationCategories
+
   const DashboardIcon = dashboardItem.icon
   const isDashboardActive = isPathActive(pathname, dashboardItem.href)
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0">
+      <SheetContent side="right" className="w-[300px] sm:w-[400px] p-0">
         <SheetHeader className="px-6 py-4 border-b">
-          <SheetTitle className="flex items-center justify-between">
-            <span>Menu</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => onOpenChange(false)}
-              className="h-6 w-6"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </SheetTitle>
+          <SheetTitle>Menu</SheetTitle>
         </SheetHeader>
         
         <nav className="flex flex-col overflow-y-auto">
@@ -170,7 +200,7 @@ export function MobileNav({ open, onOpenChange }: MobileNavProps) {
           </Link>
 
           {/* Categories */}
-          {navigationCategories.map((category) => {
+          {filteredCategories.map((category) => {
             const CategoryIcon = category.icon
             const categoryActive = isCategoryActive(pathname, category)
             const isExpanded = expandedCategories.has(category.name)

@@ -1947,22 +1947,23 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="container mx-auto max-w-7xl px-6 py-8">
-        <div className="flex items-center justify-between mb-6">
+      <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
           <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent">
               Characters
             </h1>
-            <p className="text-muted-foreground">
+            <p className="text-sm sm:text-base text-muted-foreground">
               Aggregate characters from scenes and manage casting roles.
             </p>
           </div>
           <div className="flex items-center gap-2">
             {projectId && (
               <Link href={`/casting/${projectId}`}>
-                <Button variant="outline" size="sm" className="gap-2">
+                <Button variant="outline" size="sm" className="gap-2 w-full sm:w-auto">
                   <Users className="h-4 w-4" />
-                  Open Casting
+                  <span className="hidden sm:inline">Open Casting</span>
+                  <span className="sm:hidden">Casting</span>
                 </Button>
               </Link>
             )}
@@ -2036,26 +2037,27 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                       <div className="space-y-4 p-4 bg-muted/20 rounded-lg border border-border">
                         {/* Character Assets Section */}
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <Label className="text-sm font-medium">Assets</Label>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={handleQuickGenerateCharacterImage}
                                 disabled={isGeneratingQuickImage || !selectedCharacterId || !aiSettingsLoaded}
-                                className="gap-2"
+                                className="gap-2 flex-shrink-0"
                                 title="Quick generate using system locked AI model"
                               >
                                 {isGeneratingQuickImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                    Generating...
+                                    <span className="hidden sm:inline">Generating...</span>
                                   </>
                                 ) : (
                                   <>
                                     <Sparkles className="h-4 w-4" />
-                                    Quick Generate
+                                    <span className="hidden sm:inline">Quick Generate</span>
+                                    <span className="sm:hidden">Quick</span>
                                   </>
                                 )}
                               </Button>
@@ -2064,17 +2066,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                 size="sm"
                                 onClick={() => setIsGenerateImageDialogOpen(true)}
                                 disabled={isGeneratingImage || isGeneratingQuickImage}
-                                className="gap-2"
+                                className="gap-2 flex-shrink-0"
                               >
                                 {isGeneratingImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                    Generating...
+                                    <span className="hidden sm:inline">Generating...</span>
                                   </>
                                 ) : (
                                   <>
                                     <ImageIcon className="h-4 w-4" />
-                                    Generate Image
+                                    <span className="hidden sm:inline">Generate Image</span>
+                                    <span className="sm:hidden">Generate</span>
                                   </>
                                 )}
                               </Button>
@@ -2333,26 +2336,28 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                         
                         <Separator />
                         
-                        <div className="flex items-center gap-2 pt-2">
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => {
                               loadCharacterIntoForm(selectedChar)
                             }}
-                            className="gap-2"
+                            className="gap-2 w-full sm:w-auto"
                           >
                             <Edit className="h-4 w-4" />
-                            Edit Character
+                            <span className="hidden sm:inline">Edit Character</span>
+                            <span className="sm:hidden">Edit</span>
                           </Button>
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => addRole(selectedChar.name)}
-                            className="gap-2"
+                            className="gap-2 w-full sm:w-auto"
                           >
                             <Plus className="h-4 w-4" />
-                            Add to Casting
+                            <span className="hidden sm:inline">Add to Casting</span>
+                            <span className="sm:hidden">Add to Cast</span>
                           </Button>
                         </div>
                       </div>
@@ -2384,9 +2389,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <Button variant="outline" size="sm" onClick={generateCharactersFromTreatment} disabled={isGeneratingFromTreatment || !treatmentId} className="gap-2">
+                  <Button variant="outline" size="sm" onClick={generateCharactersFromTreatment} disabled={isGeneratingFromTreatment || !treatmentId} className="gap-2 w-full sm:w-auto">
                     {isGeneratingFromTreatment ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                    {selectedCharacterId ? "Generate Details for Selected Character" : "Generate from Treatment"}
+                    <span className="hidden sm:inline">{selectedCharacterId ? "Generate Details for Selected Character" : "Generate from Treatment"}</span>
+                    <span className="sm:hidden">{selectedCharacterId ? "Generate Details" : "Generate from Treatment"}</span>
                   </Button>
                 </div>
                 <div className="space-y-4">
@@ -3153,13 +3159,14 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     </AccordionItem>
                   </Accordion>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button onClick={() => createCharacter()} disabled={isCreatingCharacter || !newCharName.trim()} className="gap-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <Button onClick={() => createCharacter()} disabled={isCreatingCharacter || !newCharName.trim()} className="gap-2 w-full sm:w-auto">
                     {isCreatingCharacter ? <Loader2 className="h-4 w-4 animate-spin" /> : editingCharacterInFormId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    {editingCharacterInFormId ? "Update Character" : "Create Character"}
+                    <span className="hidden sm:inline">{editingCharacterInFormId ? "Update Character" : "Create Character"}</span>
+                    <span className="sm:hidden">{editingCharacterInFormId ? "Update" : "Create"}</span>
                   </Button>
                   {editingCharacterInFormId && (
-                    <Button variant="outline" onClick={clearForm} disabled={isCreatingCharacter} className="gap-2">
+                    <Button variant="outline" onClick={clearForm} disabled={isCreatingCharacter} className="gap-2 w-full sm:w-auto">
                       <X className="h-4 w-4" />
                       Cancel
                     </Button>
@@ -3225,12 +3232,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                   <Input value={editTraits} onChange={(e) => setEditTraits(e.target.value)} className="bg-input border-border" />
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <Button size="sm" onClick={() => saveEdit(ch.id)} disabled={isSavingEdit}>
+                              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                <Button size="sm" onClick={() => saveEdit(ch.id)} disabled={isSavingEdit} className="w-full sm:w-auto">
                                   {isSavingEdit ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
                                   Save
                                 </Button>
-                                <Button variant="outline" size="sm" onClick={cancelEdit}>
+                                <Button variant="outline" size="sm" onClick={cancelEdit} className="w-full sm:w-auto">
                                   <X className="h-4 w-4 mr-2" />
                                   Cancel
                                 </Button>
