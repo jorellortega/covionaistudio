@@ -54,6 +54,9 @@ export default function TreatmentDetailPage() {
   const [isEditingSynopsis, setIsEditingSynopsis] = useState(false)
   const [editingSynopsis, setEditingSynopsis] = useState('')
   const [isSavingSynopsis, setIsSavingSynopsis] = useState(false)
+  const [isEditingMovieName, setIsEditingMovieName] = useState(false)
+  const [editingMovieName, setEditingMovieName] = useState('')
+  const [isSavingMovieName, setIsSavingMovieName] = useState(false)
   const [isEditingPrompt, setIsEditingPrompt] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState('')
   const [isSavingPrompt, setIsSavingPrompt] = useState(false)
@@ -1125,6 +1128,45 @@ Treatment:`
       })
     } finally {
       setIsSavingPrompt(false)
+    }
+  }
+
+  const handleStartEditMovieName = () => {
+    if (!movie) return
+    setEditingMovieName(movie.name || '')
+    setIsEditingMovieName(true)
+  }
+
+  const handleCancelEditMovieName = () => {
+    setIsEditingMovieName(false)
+    setEditingMovieName('')
+  }
+
+  const handleSaveMovieName = async () => {
+    if (!movie) return
+
+    try {
+      setIsSavingMovieName(true)
+      const updatedMovie = await MovieService.updateMovie(movie.id, {
+        name: editingMovieName,
+      })
+      
+      setMovie(updatedMovie)
+      setIsEditingMovieName(false)
+      
+      toast({
+        title: "Success",
+        description: "Movie name updated successfully",
+      })
+    } catch (error) {
+      console.error('Error updating movie name:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update movie name",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingMovieName(false)
     }
   }
 
@@ -4957,7 +4999,7 @@ Return ONLY the JSON object, no other text:`
             <div className="flex items-end justify-between gap-4 flex-wrap">
               <div className="flex-1 min-w-0">
                 <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 drop-shadow-lg">
-                  {treatment.title}
+                  {treatment.project_id && movie ? movie.name : treatment.title}
                 </h1>
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
                   <Badge variant="secondary" className="text-base px-3 py-1 backdrop-blur-sm bg-white/20 text-white border-white/30">
@@ -6324,15 +6366,58 @@ Return ONLY the JSON object, no other text:`
                         <>
                           <Separator />
                           <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-sm">
-                              <Film className="h-4 w-4 text-muted-foreground" />
-                              <span className="text-muted-foreground">Linked Project</span>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-sm">
+                                <Film className="h-4 w-4 text-muted-foreground" />
+                                <span className="text-muted-foreground">Linked Project</span>
+                              </div>
+                              {!isEditingMovieName && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={handleStartEditMovieName}
+                                  className="h-6 px-2"
+                                >
+                                  <Edit className="h-3 w-3" />
+                                </Button>
+                              )}
                             </div>
-                            <Link href={`/screenplay/${movie.id}`} className="pl-6">
-                              <Button variant="link" className="p-0 h-auto font-medium text-green-400 hover:text-green-300" size="sm">
-                                {movie.name}
-                              </Button>
-                            </Link>
+                            {isEditingMovieName ? (
+                              <div className="pl-6 space-y-2">
+                                <Input
+                                  value={editingMovieName}
+                                  onChange={(e) => setEditingMovieName(e.target.value)}
+                                  placeholder="Movie name"
+                                  className="max-w-xs"
+                                />
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleCancelEditMovieName}
+                                    disabled={isSavingMovieName}
+                                  >
+                                    <X className="h-3 w-3 mr-1" />
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    variant="default"
+                                    size="sm"
+                                    onClick={handleSaveMovieName}
+                                    disabled={isSavingMovieName}
+                                  >
+                                    <Save className="h-3 w-3 mr-1" />
+                                    {isSavingMovieName ? 'Saving...' : 'Save'}
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <Link href={`/screenplay/${movie.id}`} className="pl-6">
+                                <Button variant="link" className="p-0 h-auto font-medium text-green-400 hover:text-green-300" size="sm">
+                                  {movie.name}
+                                </Button>
+                              </Link>
+                            )}
                           </div>
                         </>
                       )}

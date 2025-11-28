@@ -73,6 +73,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Crew Sheet", href: "/crew-sheet", icon: Users },
       { name: "Equipment List", href: "/equipment-list", icon: Package },
       { name: "Props List", href: "/props-list", icon: Box },
+      { name: "Assets", href: "/assets", icon: FolderOpen },
     ],
   },
   {
@@ -85,13 +86,6 @@ const navigationCategories: NavCategory[] = [
       { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
       { name: "Locations", href: "/locations", icon: MapPin },
-    ],
-  },
-  {
-    name: "Assets",
-    icon: FolderOpen,
-    items: [
-      { name: "Assets", href: "/assets", icon: FolderOpen },
     ],
   },
   {
