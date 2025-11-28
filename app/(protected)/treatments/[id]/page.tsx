@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2 } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2, ArrowUp, ArrowDown } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -114,6 +114,7 @@ export default function TreatmentDetailPage() {
   const [isSavingScene, setIsSavingScene] = useState(false)
   const [isRegeneratingScene, setIsRegeneratingScene] = useState<string | null>(null)
   const [isClearingScenes, setIsClearingScenes] = useState(false)
+  const [isReorderingScenes, setIsReorderingScenes] = useState(false)
   // Characters and casting states
   const [castingSettings, setCastingSettings] = useState<CastingSetting | null>(null)
   const [charactersFilter, setCharactersFilter] = useState<string>("")
@@ -2623,6 +2624,292 @@ Return ONLY the JSON array, no other text:`
     setEditingScene({})
   }
 
+  // Add a new empty scene
+  const addNewScene = async () => {
+    if (!treatment || !userId || !ready) return
+
+    try {
+      // Calculate next scene number
+      const nextSceneNumber = treatmentScenes.length > 0
+        ? String(Math.max(...treatmentScenes.map(s => {
+            const num = parseInt(s.scene_number || '0')
+            return isNaN(num) ? 0 : num
+          })) + 1)
+        : '1'
+
+      if (treatment.project_id) {
+        // Create scene in timeline
+        let timeline = await TimelineService.getTimelineForMovie(treatment.project_id)
+        if (!timeline) {
+          // Create a default timeline if it doesn't exist
+          timeline = await TimelineService.createTimelineForMovie(treatment.project_id, {
+            name: 'Main Timeline',
+            description: 'Primary timeline for movie scenes',
+            duration_seconds: 0,
+            fps: 24,
+            resolution_width: 1920,
+            resolution_height: 1080,
+          })
+        }
+
+        // Get existing scenes to calculate start time
+        const existingScenes = await TimelineService.getScenesForTimeline(timeline.id)
+        const lastEndTime = existingScenes.length > 0
+          ? existingScenes[existingScenes.length - 1].start_time_seconds + existingScenes[existingScenes.length - 1].duration_seconds
+          : 0
+
+        const newSceneData: CreateSceneData = {
+          timeline_id: timeline.id,
+          name: `Scene ${nextSceneNumber}`,
+          description: '',
+          start_time_seconds: lastEndTime,
+          duration_seconds: 60, // Default 1 minute
+          metadata: {
+            sceneNumber: nextSceneNumber,
+            location: '',
+            characters: [],
+            shotType: '',
+            mood: '',
+            notes: '',
+            status: 'Planning',
+          }
+        }
+
+        const createdScene = await TimelineService.createScene(newSceneData)
+        
+        // Convert to treatment scene format
+        const treatmentSceneData = {
+          id: createdScene.id,
+          treatment_id: treatment.id,
+          user_id: userId,
+          name: createdScene.name,
+          description: createdScene.metadata?.description || createdScene.description || '',
+          scene_number: createdScene.metadata?.sceneNumber || nextSceneNumber,
+          location: createdScene.metadata?.location || '',
+          characters: createdScene.metadata?.characters || [],
+          shot_type: createdScene.metadata?.shotType || '',
+          mood: createdScene.metadata?.mood || '',
+          notes: createdScene.metadata?.notes || '',
+          status: createdScene.metadata?.status || 'Planning',
+          content: createdScene.description || '',
+          metadata: createdScene.metadata || {},
+          order_index: createdScene.order_index || 0,
+          created_at: createdScene.created_at,
+          updated_at: createdScene.updated_at,
+        }
+
+        const updatedScenes = [...treatmentScenes, treatmentSceneData as any]
+        setTreatmentScenes(updatedScenes)
+        
+        // Expand scenes card and start editing the new scene
+        setIsScenesExpanded(true)
+        setEditingSceneId(treatmentSceneData.id)
+        setEditingScene({
+          name: treatmentSceneData.name,
+          description: treatmentSceneData.description,
+          scene_number: treatmentSceneData.scene_number,
+          location: treatmentSceneData.location,
+          characters: treatmentSceneData.characters,
+          shot_type: treatmentSceneData.shot_type,
+          mood: treatmentSceneData.mood,
+          notes: treatmentSceneData.notes,
+          status: treatmentSceneData.status,
+          content: treatmentSceneData.content,
+        })
+      } else {
+        // Create scene in treatment_scenes table
+        const newSceneData: CreateTreatmentSceneData = {
+          treatment_id: treatment.id,
+          name: `Scene ${nextSceneNumber}`,
+          scene_number: nextSceneNumber,
+          description: '',
+          status: 'Planning',
+          order_index: treatmentScenes.length,
+        }
+
+        const createdScene = await TreatmentScenesService.createTreatmentScene(newSceneData)
+        const updatedScenes = [...treatmentScenes, createdScene]
+        setTreatmentScenes(updatedScenes)
+        
+        // Expand scenes card and start editing the new scene
+        setIsScenesExpanded(true)
+        setEditingSceneId(createdScene.id)
+        setEditingScene({
+          name: createdScene.name,
+          description: createdScene.description,
+          scene_number: createdScene.scene_number,
+          location: createdScene.location,
+          characters: createdScene.characters,
+          shot_type: createdScene.shot_type,
+          mood: createdScene.mood,
+          notes: createdScene.notes,
+          status: createdScene.status,
+          content: createdScene.content,
+        })
+      }
+
+      toast({
+        title: "Success",
+        description: "New scene added",
+      })
+    } catch (error) {
+      console.error('Error adding new scene:', error)
+      toast({
+        title: "Error",
+        description: "Failed to add new scene",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Move scene up in order and update scene numbers
+  const moveSceneUp = async (sceneId: string) => {
+    if (!treatment || !userId || !ready || isReorderingScenes) return
+
+    const currentIndex = treatmentScenes.findIndex(s => s.id === sceneId)
+    if (currentIndex <= 0) return // Already at the top
+
+    try {
+      setIsReorderingScenes(true)
+      const newScenes = [...treatmentScenes]
+      const sceneToMove = newScenes[currentIndex]
+      const sceneAbove = newScenes[currentIndex - 1]
+
+      // Swap positions
+      newScenes[currentIndex - 1] = sceneToMove
+      newScenes[currentIndex] = sceneAbove
+
+      // Update scene numbers based on new order (starting from 0)
+      const updatedScenes = newScenes.map((scene, index) => {
+        const newSceneNumber = String(index)
+        return {
+          ...scene,
+          scene_number: newSceneNumber,
+        }
+      })
+
+      // Save all updated scenes
+      if (treatment.project_id) {
+        // Update timeline scenes
+        for (const scene of updatedScenes) {
+          const existingScene = treatmentScenes.find(s => s.id === scene.id)
+          const sceneUpdate: Partial<CreateSceneData> = {
+            metadata: {
+              sceneNumber: scene.scene_number,
+              location: existingScene?.location || '',
+              characters: existingScene?.characters || [],
+              shotType: existingScene?.shot_type || '',
+              mood: existingScene?.mood || '',
+              notes: existingScene?.notes || '',
+              status: existingScene?.status || 'Planning',
+            }
+          }
+          await TimelineService.updateScene(scene.id, sceneUpdate)
+        }
+        // Reload scenes to get updated order
+        await loadTimelineScenes(treatment.project_id)
+      } else {
+        // Update treatment scenes
+        for (const scene of updatedScenes) {
+          await TreatmentScenesService.updateTreatmentScene(scene.id, {
+            scene_number: scene.scene_number,
+          })
+        }
+        // Reload scenes
+        const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+        setTreatmentScenes(scenes)
+      }
+
+      toast({
+        title: "Success",
+        description: "Scene moved up and scene numbers updated",
+      })
+    } catch (error) {
+      console.error('Error moving scene up:', error)
+      toast({
+        title: "Error",
+        description: "Failed to move scene",
+        variant: "destructive",
+      })
+    } finally {
+      setIsReorderingScenes(false)
+    }
+  }
+
+  // Move scene down in order and update scene numbers
+  const moveSceneDown = async (sceneId: string) => {
+    if (!treatment || !userId || !ready || isReorderingScenes) return
+
+    const currentIndex = treatmentScenes.findIndex(s => s.id === sceneId)
+    if (currentIndex < 0 || currentIndex >= treatmentScenes.length - 1) return // Already at the bottom
+
+    try {
+      setIsReorderingScenes(true)
+      const newScenes = [...treatmentScenes]
+      const sceneToMove = newScenes[currentIndex]
+      const sceneBelow = newScenes[currentIndex + 1]
+
+      // Swap positions
+      newScenes[currentIndex + 1] = sceneToMove
+      newScenes[currentIndex] = sceneBelow
+
+      // Update scene numbers based on new order
+      const updatedScenes = newScenes.map((scene, index) => {
+        const newSceneNumber = String(index)
+        return {
+          ...scene,
+          scene_number: newSceneNumber,
+        }
+      })
+
+      // Save all updated scenes
+      if (treatment.project_id) {
+        // Update timeline scenes
+        for (const scene of updatedScenes) {
+          const existingScene = treatmentScenes.find(s => s.id === scene.id)
+          const sceneUpdate: Partial<CreateSceneData> = {
+            metadata: {
+              sceneNumber: scene.scene_number,
+              location: existingScene?.location || '',
+              characters: existingScene?.characters || [],
+              shotType: existingScene?.shot_type || '',
+              mood: existingScene?.mood || '',
+              notes: existingScene?.notes || '',
+              status: existingScene?.status || 'Planning',
+            }
+          }
+          await TimelineService.updateScene(scene.id, sceneUpdate)
+        }
+        // Reload scenes to get updated order
+        await loadTimelineScenes(treatment.project_id)
+      } else {
+        // Update treatment scenes
+        for (const scene of updatedScenes) {
+          await TreatmentScenesService.updateTreatmentScene(scene.id, {
+            scene_number: scene.scene_number,
+          })
+        }
+        // Reload scenes
+        const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+        setTreatmentScenes(scenes)
+      }
+
+      toast({
+        title: "Success",
+        description: "Scene moved down and scene numbers updated",
+      })
+    } catch (error) {
+      console.error('Error moving scene down:', error)
+      toast({
+        title: "Error",
+        description: "Failed to move scene",
+        variant: "destructive",
+      })
+    } finally {
+      setIsReorderingScenes(false)
+    }
+  }
+
   // Save edited scene (updates timeline scene directly)
   const handleSaveScene = async () => {
     if (!editingSceneId || !treatment?.project_id) return
@@ -4809,8 +5096,8 @@ Return ONLY the JSON object, no other text:`
               {/* Gradient Overlay */}
               <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0 pointer-events-none" />
               
-              {/* Cover Management Buttons - Above thumbnails on the right */}
-              <div className="absolute bottom-20 right-4 flex gap-2 z-50 pointer-events-auto">
+              {/* Cover Management Buttons - Top right */}
+              <div className="absolute top-4 right-4 flex gap-2 z-50 pointer-events-auto">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
@@ -5897,6 +6184,16 @@ Return ONLY the JSON object, no other text:`
                       <Button
                         variant="outline"
                         size="sm"
+                        onClick={addNewScene}
+                        className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                        title="Add a new empty scene"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add Scene
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={generateScenesFromTreatment}
                         disabled={isGeneratingScenes || !aiSettingsLoaded}
                         className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
@@ -6008,6 +6305,36 @@ Return ONLY the JSON object, no other text:`
                                 </>
                               ) : (
                                 <>
+                                  <div className="flex flex-col gap-1">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => moveSceneUp(scene.id)}
+                                      disabled={treatmentScenes.findIndex(s => s.id === scene.id) === 0 || isReorderingScenes}
+                                      className="h-6 w-6 p-0 border-gray-300 hover:bg-gray-100"
+                                      title="Move scene up"
+                                    >
+                                      {isReorderingScenes ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <ArrowUp className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => moveSceneDown(scene.id)}
+                                      disabled={treatmentScenes.findIndex(s => s.id === scene.id) === treatmentScenes.length - 1 || isReorderingScenes}
+                                      className="h-6 w-6 p-0 border-gray-300 hover:bg-gray-100"
+                                      title="Move scene down"
+                                    >
+                                      {isReorderingScenes ? (
+                                        <Loader2 className="h-3 w-3 animate-spin" />
+                                      ) : (
+                                        <ArrowDown className="h-3 w-3" />
+                                      )}
+                                    </Button>
+                                  </div>
                                   <Button
                                     size="sm"
                                     variant="outline"

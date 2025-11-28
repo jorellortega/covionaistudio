@@ -146,22 +146,11 @@ export default function DashboardPage() {
             </div>
             <div>
               <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
-                Welcome back, {userName}! 🎬
+                {userName}! 🎬
               </h1>
-              <p className="text-lg text-muted-foreground">Signed in as {user.email}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <Button 
-              asChild
-              variant="outline" 
-              className="flex items-center gap-2 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-colors"
-            >
-              <Link href="/">
-                <Film className="h-4 w-4" />
-                Homepage
-              </Link>
-            </Button>
             <Button 
               onClick={handleSignOut}
               variant="outline" 
@@ -172,7 +161,6 @@ export default function DashboardPage() {
             </Button>
           </div>
         </div>
-        <p className="text-xl text-muted-foreground">Here's what's happening with your projects today</p>
       </div>
 
       {/* Ideas Card - Prominent at Top */}
