@@ -26,7 +26,7 @@ export default function StoryboardsPage() {
   const router = useRouter()
 
   useEffect(() => {
-    if (user) {
+    if (session?.user) {
       // Redirect to movies page since storyboards now belong to scenes
       router.push('/movies')
     }

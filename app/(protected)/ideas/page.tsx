@@ -1169,10 +1169,25 @@ Synopsis (2-3 paragraphs only):`
 
   const fetchAISettings = async () => {
     try {
-      let settings = await AISettingsService.getUserSettings(user!.id)
+      // Use system-wide AI settings (same as other pages)
+      let settings = await AISettingsService.getSystemSettings()
+      
+      // Ensure default settings exist for all tabs
+      const defaultSettings = await Promise.all([
+        AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+        AISettingsService.getOrCreateDefaultTabSetting('images'),
+        AISettingsService.getOrCreateDefaultTabSetting('videos'),
+        AISettingsService.getOrCreateDefaultTabSetting('audio')
+      ])
+      
+      // Merge existing settings with default ones, preferring existing
+      const mergedSettings = defaultSettings.map(defaultSetting => {
+        const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+        return existingSetting || defaultSetting
+      })
       
       // Ensure selected_model is set for scripts tab with ChatGPT/GPT-4/Claude
-      settings = settings.map(setting => {
+      const finalSettings = mergedSettings.map(setting => {
         if (setting.tab_type === 'scripts' && !setting.selected_model) {
           if (setting.locked_model === 'ChatGPT' || setting.locked_model === 'GPT-4') {
             setting.selected_model = 'gpt-4o-mini'
@@ -1183,7 +1198,7 @@ Synopsis (2-3 paragraphs only):`
         return setting
       })
       
-      const settingsMap = settings.reduce((acc, setting) => {
+      const settingsMap = finalSettings.reduce((acc, setting) => {
         acc[setting.tab_type] = setting
         return acc
       }, {} as any)
@@ -1197,13 +1212,24 @@ Synopsis (2-3 paragraphs only):`
 
   const fetchUserApiKeys = async () => {
     try {
+      console.log('🔑 IDEAS - Fetching user API keys for user:', user?.id)
       const { data, error } = await getSupabaseClient()
         .from('users')
         .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key, name')
         .eq('id', user!.id)
         .single()
 
-      if (error) throw error
+      if (error) {
+        console.error('❌ IDEAS - Error fetching user API keys:', error)
+        throw error
+      }
+      
+      console.log('🔑 IDEAS - API keys fetched:', {
+        hasOpenAIKey: !!data?.openai_api_key,
+        hasAnthropicKey: !!data?.anthropic_api_key,
+        userId: user?.id
+      })
+      
       setUserApiKeys(data || {})
       // Set user name if available
       if (data?.name) {
@@ -1215,7 +1241,8 @@ Synopsis (2-3 paragraphs only):`
         setUserName(user.email.split('@')[0])
       }
     } catch (error) {
-      console.error('Error fetching user API keys:', error)
+      console.error('❌ IDEAS - Error fetching user API keys:', error)
+      setUserApiKeys({}) // Set empty object on error
     }
   }
 
@@ -1678,71 +1705,107 @@ Synopsis (2-3 paragraphs only):`
       return
     }
 
+    // Wait for AI settings to load if not yet loaded
+    if (!aiSettingsLoaded) {
+      toast({
+        title: "Loading Settings",
+        description: "Please wait while AI settings are loading...",
+        variant: "default",
+      })
+      return
+    }
+
     const scriptsSetting = aiSettings.scripts
-    if (!scriptsSetting || !scriptsSetting.is_locked) {
+    console.log('🎬 IDEAS - Generate Script - AI Settings:', {
+      aiSettingsLoaded,
+      hasScriptsSetting: !!scriptsSetting,
+      scriptsSetting,
+      isLocked: scriptsSetting?.is_locked,
+      hasApiKey: !!userApiKeys.openai_api_key
+    })
+
+    if (!scriptsSetting) {
       toast({
-        title: "AI Not Available",
-        description: "Please lock a script model in AI Settings first",
+        title: "AI Settings Not Loaded",
+        description: "AI settings are still loading. Please wait a moment and try again.",
         variant: "destructive",
       })
       return
     }
 
-    if (!userApiKeys.openai_api_key) {
+    if (!scriptsSetting.is_locked) {
       toast({
-        title: "API Key Missing",
-        description: "Please add your OpenAI API key in Settings → Profile",
+        title: "AI Model Not Locked",
+        description: "Please go to Settings → AI Settings and lock a script model (ChatGPT, GPT-4, or Claude) for all users. System-wide settings apply to everyone.",
         variant: "destructive",
       })
       return
     }
 
+    console.log('✅ IDEAS - All checks passed, starting script generation...')
     setIsLoadingAI(true)
     setAiResponse("")
     setAiResponseRaw("")
     
     try {
-      // Get the actual model to use - prefer selected_model, fallback to mapping locked_model
+      // Determine which service to use based on locked model
+      let serviceToUse = 'openai'
       let modelToUse = scriptsSetting.selected_model
       
       // If no selected_model, map locked_model to default models
       if (!modelToUse) {
         if (scriptsSetting.locked_model === 'ChatGPT' || scriptsSetting.locked_model === 'GPT-4') {
+          serviceToUse = 'openai'
           modelToUse = 'gpt-4o-mini' // Default OpenAI model
         } else if (scriptsSetting.locked_model === 'Claude') {
-          // Claude uses Anthropic service, not OpenAI - this would need different handling
-          toast({
-            title: "Unsupported Model",
-            description: "Claude is not yet supported for script generation on this page. Please use ChatGPT or GPT-4.",
-            variant: "destructive",
-          })
-          setIsLoadingAI(false)
-          return
+          serviceToUse = 'anthropic'
+          modelToUse = 'claude-3-5-sonnet-20241022'
         } else {
+          serviceToUse = 'openai'
           modelToUse = 'gpt-4o-mini' // Fallback default
+        }
+      } else {
+        // Determine service from model name
+        if (modelToUse.startsWith('claude-')) {
+          serviceToUse = 'anthropic'
+        } else {
+          serviceToUse = 'openai'
         }
       }
       
-      // Validate that we have a valid OpenAI model
-      if (!modelToUse || (!modelToUse.startsWith('gpt-') && !modelToUse.startsWith('o1-'))) {
-        toast({
-          title: "Invalid Model",
-          description: `Invalid model configuration: ${modelToUse}. Please check your AI settings.`,
-          variant: "destructive",
-        })
-        setIsLoadingAI(false)
-        return
-      }
-      
-      const response = await OpenAIService.generateScript({
-        prompt: prompt,
-        template: "Generate a creative movie script outline or scene based on the user's idea. Focus on storytelling, character development, and cinematic elements. Do not use markdown formatting like **, *, ---, or ###. Use plain text with clear headings and paragraphs.",
+      console.log('🎬 IDEAS - Generating script with:', {
+        service: serviceToUse,
         model: modelToUse,
-        apiKey: userApiKeys.openai_api_key || ""
+        lockedModel: scriptsSetting.locked_model
+      })
+      
+      // Use API route that handles API keys server-side (same as treatment pages)
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          field: 'script', // Required field for API route legacy format
+          service: serviceToUse,
+          model: modelToUse,
+          apiKey: 'configured', // Server will fetch from system-wide keys or env vars
+          userId: userId, // Pass userId so server can check for API keys if needed
+          maxTokens: 2000, // Allow longer responses for script generation
+          contentType: 'script',
+        }),
       })
 
-      if (response.success && response.data) {
-        const content = response.data.choices?.[0]?.message?.content || "No response generated"
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate script')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.text) {
+        const content = result.text
         // Store raw response for genre extraction (before cleaning)
         setAiResponseRaw(content)
         // Clean the content when storing it
@@ -1760,7 +1823,7 @@ Synopsis (2-3 paragraphs only):`
           description: "AI script generated successfully",
         })
       } else {
-        throw new Error(response.error || "Failed to generate script")
+        throw new Error(result.error || "Failed to generate script")
       }
     } catch (error) {
       console.error('Error generating script:', error)
@@ -3030,9 +3093,21 @@ Synopsis (2-3 paragraphs only):`
                 
                 <div className="grid grid-cols-2 gap-2">
                   <Button 
-                    onClick={generateWithAI} 
-                    disabled={isLoadingAI || !prompt.trim()}
+                    onClick={() => {
+                      console.log('🎬 IDEAS - Generate Script button clicked')
+                      console.log('🎬 IDEAS - Current state:', {
+                        prompt: prompt.trim(),
+                        isLoadingAI,
+                        aiSettingsLoaded,
+                        hasScriptsSetting: !!aiSettings.scripts,
+                        scriptsSettingLocked: aiSettings.scripts?.is_locked,
+                        hasApiKey: !!userApiKeys.openai_api_key
+                      })
+                      generateWithAI()
+                    }} 
+                    disabled={isLoadingAI || !prompt.trim() || !aiSettingsLoaded}
                     className="flex items-center gap-2"
+                    title={!aiSettingsLoaded ? "Waiting for AI settings to load..." : ""}
                   >
                     {isLoadingAI ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>

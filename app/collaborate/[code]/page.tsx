@@ -76,14 +76,18 @@ function CollaboratePageClient({ code }: { code: string }) {
   const [saving, setSaving] = useState(false)
   const [showSidebar, setShowSidebar] = useState(true) // Show by default, will adjust for mobile
   const [enablePolling, setEnablePolling] = useState(() => {
-    // Load from localStorage, default to false (save database usage)
+    // Load from localStorage, default to true for live collaboration
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('collab-polling-enabled')
-      return saved !== null ? saved === 'true' : false
+      return saved !== null ? saved === 'true' : true // Default to true
     }
-    return false
+    return true // Default to true for live collaboration
   })
   const [pollingAutoEnabled, setPollingAutoEnabled] = useState(false) // Track if polling was auto-enabled
+  const [lastSavedContent, setLastSavedContent] = useState<string>("") // Track last saved content
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false) // Track if there are unsaved changes
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Ref for auto-save timeout
+  const lastRemoteContentRef = useRef<string>("") // Track last remote content to avoid unnecessary updates
   
   // AI editing states
   const [showAITextEditor, setShowAITextEditor] = useState(false)
@@ -230,13 +234,34 @@ function CollaboratePageClient({ code }: { code: string }) {
     }
   }, [isEditing])
 
-  // Turn off polling when exiting edit mode (if it was auto-enabled)
+  // Keep polling enabled when entering edit mode
   useEffect(() => {
-    if (!isEditing && pollingAutoEnabled) {
-      setEnablePolling(false)
-      setPollingAutoEnabled(false)
+    if (isEditing && !enablePolling) {
+      setEnablePolling(true)
+      setPollingAutoEnabled(true)
     }
-  }, [isEditing, pollingAutoEnabled])
+  }, [isEditing, enablePolling])
+  
+  // Cleanup auto-save timeout on unmount or when leaving edit mode
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+      }
+    }
+  }, [])
+  
+  // Save pending changes when exiting edit mode
+  useEffect(() => {
+    if (!isEditing && hasUnsavedChanges) {
+      // Clear auto-save timeout and save immediately
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current)
+        autoSaveTimeoutRef.current = null
+      }
+      saveSceneContent(true) // Silent save
+    }
+  }, [isEditing, hasUnsavedChanges])
 
   // Load scenes
   const loadScenes = async () => {
@@ -282,8 +307,8 @@ function CollaboratePageClient({ code }: { code: string }) {
     }
   }
 
-  // Load scene content
-  const loadSceneContent = async (sceneId: string) => {
+  // Load scene content with smart conflict resolution
+  const loadSceneContent = async (sceneId: string, skipUpdateIfEditing = false) => {
     if (!session) {
       console.log('⚠️ [COLLAB] Cannot load scene content: no session')
       return
@@ -311,18 +336,44 @@ function CollaboratePageClient({ code }: { code: string }) {
         throw new Error(result.error || "Failed to load scene content")
       }
 
-      const content = result.scene?.screenplay_content || ""
-      console.log('✅ [COLLAB] Loaded scene content:', {
-        sceneId,
-        sceneName: result.scene?.name,
-        contentLength: content.length,
-        hasContent: content.length > 0,
-        preview: content.substring(0, 100) + (content.length > 100 ? '...' : '')
-      })
-      setSceneContent(content)
+      const remoteContent = result.scene?.screenplay_content || ""
+      
+      // Skip update if we're currently editing and have unsaved changes
+      // Only update if the remote content is different from what we last saw
+      if (skipUpdateIfEditing && isEditing && hasUnsavedChanges) {
+        // Check if remote content matches our last saved content
+        // If remote is different, it means someone else made changes
+        if (remoteContent !== lastSavedContent && remoteContent !== lastRemoteContentRef.current) {
+          console.log('🔄 [COLLAB] Remote changes detected while editing - will merge after save')
+          // Store the remote content to merge later
+          lastRemoteContentRef.current = remoteContent
+        }
+        return // Don't overwrite local edits
+      }
+      
+      // Only update if content actually changed
+      if (remoteContent !== sceneContent && remoteContent !== lastRemoteContentRef.current) {
+        console.log('✅ [COLLAB] Updating scene content from remote:', {
+          sceneId,
+          sceneName: result.scene?.name,
+          contentLength: remoteContent.length,
+          hasContent: remoteContent.length > 0,
+          preview: remoteContent.substring(0, 100) + (remoteContent.length > 100 ? '...' : '')
+        })
+        setSceneContent(remoteContent)
+        setLastSavedContent(remoteContent)
+        lastRemoteContentRef.current = remoteContent
+      } else if (!skipUpdateIfEditing && remoteContent === sceneContent) {
+        // On initial load (not polling), ensure lastSavedContent is set even if content matches
+        setLastSavedContent(remoteContent)
+        lastRemoteContentRef.current = remoteContent
+        console.log('✅ [COLLAB] Scene content loaded (unchanged)')
+      } else {
+        console.log('⏭️ [COLLAB] Scene content unchanged, skipping update')
+      }
     } catch (error: any) {
       console.error("❌ [COLLAB] Error loading scene content:", error)
-      setSceneContent("")
+      // Don't clear content on error - keep existing content
     }
   }
 
@@ -333,62 +384,36 @@ function CollaboratePageClient({ code }: { code: string }) {
     }
   }, [enablePolling])
 
-  // Setup real-time polling (since realtime subscriptions require auth)
+  // Setup real-time polling (always active for live collaboration)
   useEffect(() => {
-    if (!selectedSceneId || !session || isEditing || !enablePolling) {
+    if (!selectedSceneId || !session || !enablePolling) {
       console.log('⏸️ [COLLAB] Polling paused:', { 
         selectedSceneId: !!selectedSceneId, 
         session: !!session, 
-        isEditing,
         enablePolling 
       })
       return
     }
 
-    console.log('🔄 [COLLAB] Starting live polling for scene:', selectedSceneId)
+    console.log('🔄 [COLLAB] Starting live polling for scene:', selectedSceneId, 'isEditing:', isEditing)
     const pollInterval = setInterval(async () => {
       try {
-        console.log('🔄 [COLLAB] Live polling for updates...')
-        await loadSceneContent(selectedSceneId)
+        // Skip update if editing and has unsaved changes (smart conflict resolution)
+        await loadSceneContent(selectedSceneId, true) // Pass true to skip update if editing
       } catch (error) {
         console.error('❌ [COLLAB] Polling error (silent):', error)
         // Silently fail polling
       }
-    }, 2000) // Poll every 2 seconds
+    }, 1000) // Poll every 1 second for more real-time feel
 
     return () => {
       console.log('🛑 [COLLAB] Stopping live polling')
       clearInterval(pollInterval)
     }
-  }, [selectedSceneId, session, isEditing, enablePolling, loadSceneContent])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSceneId, session?.access_code, enablePolling, isEditing, hasUnsavedChanges])
 
-  // Setup secondary slow polling (every 5 minutes when live updates are off)
-  useEffect(() => {
-    if (!selectedSceneId || !session || isEditing || enablePolling) {
-      // Don't run secondary polling if:
-      // - No scene selected
-      // - No session
-      // - Currently editing
-      // - Live polling is enabled (only one should run at a time)
-      return
-    }
-
-    console.log('⏰ [COLLAB] Starting secondary slow polling for scene:', selectedSceneId)
-    const slowPollInterval = setInterval(async () => {
-      try {
-        console.log('⏰ [COLLAB] Slow polling for updates (5 min interval)...')
-        await loadSceneContent(selectedSceneId)
-      } catch (error) {
-        console.error('❌ [COLLAB] Slow polling error (silent):', error)
-        // Silently fail polling
-      }
-    }, 5 * 60 * 1000) // Poll every 5 minutes (300000ms)
-
-    return () => {
-      console.log('🛑 [COLLAB] Stopping secondary slow polling')
-      clearInterval(slowPollInterval)
-    }
-  }, [selectedSceneId, session, isEditing, enablePolling, loadSceneContent])
+  // Note: Secondary slow polling removed since live polling is now enabled by default
 
   // Handle scene selection
   const handleSceneSelect = async (sceneId: string) => {
@@ -594,19 +619,29 @@ function CollaboratePageClient({ code }: { code: string }) {
     }, 0)
   }
 
-  // Save scene content
-  const saveSceneContent = async () => {
+  // Save scene content (called by auto-save and manual save)
+  const saveSceneContent = async (silent = false) => {
     if (!selectedSceneId || !session) {
       console.log('⚠️ [COLLAB] Cannot save: missing sceneId or session')
+      return
+    }
+
+    // Don't save if content hasn't changed
+    if (sceneContent === lastSavedContent && !silent) {
+      console.log('⏭️ [COLLAB] Content unchanged, skipping save')
       return
     }
 
     try {
       console.log('💾 [COLLAB] Saving scene content:', {
         sceneId: selectedSceneId,
-        contentLength: sceneContent.length
+        contentLength: sceneContent.length,
+        silent
       })
-      setSaving(true)
+      
+      if (!silent) {
+        setSaving(true)
+      }
       
       const response = await fetch(
         `/api/collaboration/scenes/${selectedSceneId}`,
@@ -631,20 +666,38 @@ function CollaboratePageClient({ code }: { code: string }) {
       }
 
       console.log('✅ [COLLAB] Scene content saved successfully')
-      setIsEditing(false)
-      toast({
-        title: "Saved!",
-        description: "Scene content has been saved",
-      })
+      setLastSavedContent(sceneContent)
+      setHasUnsavedChanges(false)
+      lastRemoteContentRef.current = sceneContent // Update remote content ref
+      
+      // Check if there were remote changes to merge
+      if (lastRemoteContentRef.current !== sceneContent && lastRemoteContentRef.current !== lastSavedContent) {
+        // Merge remote changes - for now, just reload after a brief delay
+        setTimeout(() => {
+          loadSceneContent(selectedSceneId, false)
+        }, 500)
+      }
+      
+      if (!silent) {
+        setIsEditing(false)
+        toast({
+          title: "Saved!",
+          description: "Scene content has been saved",
+        })
+      }
     } catch (error: any) {
       console.error("❌ [COLLAB] Error saving scene content:", error)
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save scene content",
-        variant: "destructive",
-      })
+      if (!silent) {
+        toast({
+          title: "Error",
+          description: error.message || "Failed to save scene content",
+          variant: "destructive",
+        })
+      }
     } finally {
-      setSaving(false)
+      if (!silent) {
+        setSaving(false)
+      }
     }
   }
 
@@ -1214,6 +1267,23 @@ function CollaboratePageClient({ code }: { code: string }) {
                     )}
                   </CardTitle>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {session.allow_edit && !isEditing && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setIsEditing(true)
+                          // Automatically enable live updates when editing
+                          if (!enablePolling) {
+                            setEnablePolling(true)
+                            setPollingAutoEnabled(true) // Mark as auto-enabled
+                          }
+                        }}
+                      >
+                        <Edit3 className="h-4 w-4 mr-2" />
+                        {sceneContent ? "Edit Content" : "Add Content"}
+                      </Button>
+                    )}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -1259,8 +1329,20 @@ function CollaboratePageClient({ code }: { code: string }) {
                       data-screenplay-editor
                       value={sceneContent}
                       onChange={(e) => {
-                        setSceneContent(e.target.value)
-                        // Auto-save debounced (similar to screenplay page)
+                        const newContent = e.target.value
+                        setSceneContent(newContent)
+                        setHasUnsavedChanges(true)
+                        
+                        // Clear existing timeout
+                        if (autoSaveTimeoutRef.current) {
+                          clearTimeout(autoSaveTimeoutRef.current)
+                        }
+                        
+                        // Auto-save after 1.5 seconds of inactivity
+                        autoSaveTimeoutRef.current = setTimeout(() => {
+                          console.log('💾 [COLLAB] Auto-saving after typing pause...')
+                          saveSceneContent(true) // Silent save
+                        }, 1500)
                       }}
                       onSelect={handleTextSelection}
                       className="min-h-[400px] md:min-h-[600px] font-mono text-sm leading-relaxed resize-none w-full"
@@ -1312,8 +1394,13 @@ function CollaboratePageClient({ code }: { code: string }) {
                     
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
                       <div className="flex items-center gap-2">
+                        {hasUnsavedChanges && (
+                          <p className="text-xs text-muted-foreground">
+                            💾 Auto-saving changes...
+                          </p>
+                        )}
                         <p className="text-xs text-muted-foreground">
-                          💡 Tip: Select text to see the AI edit button in the floating toolbar.
+                          💡 Tip: Select text to see the AI edit button in the floating toolbar. Changes auto-save as you type.
                         </p>
                       </div>
                       <div className="flex gap-2 w-full md:w-auto">

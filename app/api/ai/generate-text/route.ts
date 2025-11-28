@@ -23,142 +23,59 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Get actual API keys - try user's database keys first, then environment variables
+    // Get actual API keys - check system-wide keys first (set by CEO), then environment variables
+    // NOTE: Users cannot set their own API keys - only CEO can set system-wide keys
     let actualApiKey = apiKey
     if (apiKey === 'configured' || apiKey === 'use_env_vars' || !apiKey) {
-      // Try to get API key from user's database record
-      let targetUserId = userId
-      
-      // If no userId provided, try to get from authenticated session
-      if (!targetUserId) {
-        try {
-          const cookieStore = await cookies()
-          const supabaseAuth = createServerClient(
+      // FIRST: Check system-wide API keys from system_ai_config (set by CEO)
+      try {
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          const supabaseAdmin = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!,
             {
-              cookies: {
-                getAll() {
-                  return cookieStore.getAll()
-                },
-                setAll(cookiesToSet) {
-                  try {
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                      cookieStore.set(name, value, options)
-                    )
-                  } catch {
-                    // Ignore setAll errors in server components
-                  }
-                },
-              },
+              auth: {
+                autoRefreshToken: false,
+                persistSession: false
+              }
             }
           )
 
-          const { data: { user: authUser } } = await supabaseAuth.auth.getUser()
-          targetUserId = authUser?.id
-        } catch (authError) {
-          console.error('Error getting authenticated user:', authError)
-        }
-      }
+          // Get system-wide API keys using RPC function (bypasses RLS)
+          const { data: systemConfig, error: systemError } = await supabaseAdmin.rpc('get_system_ai_config')
+          
+          if (!systemError && systemConfig && Array.isArray(systemConfig)) {
+            const configMap: Record<string, string> = {}
+            systemConfig.forEach((item: any) => {
+              configMap[item.setting_key] = item.setting_value
+            })
 
-      // Fetch API keys from database using service role (bypasses RLS)
-      if (targetUserId) {
-        try {
-          // Use service role key to read user API keys (bypasses RLS)
-          if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-            const supabaseAdmin = createClient(
-              process.env.NEXT_PUBLIC_SUPABASE_URL!,
-              process.env.SUPABASE_SERVICE_ROLE_KEY!,
-              {
-                auth: {
-                  autoRefreshToken: false,
-                  persistSession: false
-                }
-              }
-            )
-
-            const { data, error } = await supabaseAdmin
-              .from('users')
-              .select('openai_api_key, anthropic_api_key')
-              .eq('id', targetUserId)
-              .single()
-
-            if (!error && data) {
-              if (service === 'openai' && data.openai_api_key) {
-                actualApiKey = data.openai_api_key.trim()
-                console.log('✅ Using user OpenAI API key from database')
-              } else if (service === 'anthropic' && data.anthropic_api_key) {
-                actualApiKey = data.anthropic_api_key.trim()
-                console.log('✅ Using user Anthropic API key from database')
-              } else {
-                console.log(`ℹ️ User doesn't have ${service} API key in database, will try environment variables`)
-              }
-            } else if (error) {
-              console.error('❌ Error fetching API keys from database:', error)
-              // If RLS error, try with authenticated client instead
-              if (error.code === '42501' || error.message?.includes('permission')) {
-                console.log('ℹ️ RLS blocked access, trying authenticated client...')
-                try {
-                  const cookieStore = await cookies()
-                  const supabaseAuth = createServerClient(
-                    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-                    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-                    {
-                      cookies: {
-                        getAll() {
-                          return cookieStore.getAll()
-                        },
-                        setAll(cookiesToSet) {
-                          try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                              cookieStore.set(name, value, options)
-                            )
-                          } catch {
-                            // Ignore setAll errors
-                          }
-                        },
-                      },
-                    }
-                  )
-
-                  const { data: authData, error: authError } = await supabaseAuth
-                    .from('users')
-                    .select('openai_api_key, anthropic_api_key')
-                    .eq('id', targetUserId)
-                    .single()
-
-                  if (!authError && authData) {
-                    if (service === 'openai' && authData.openai_api_key) {
-                      actualApiKey = authData.openai_api_key.trim()
-                      console.log('✅ Using user OpenAI API key from database (authenticated)')
-                    } else if (service === 'anthropic' && authData.anthropic_api_key) {
-                      actualApiKey = authData.anthropic_api_key.trim()
-                      console.log('✅ Using user Anthropic API key from database (authenticated)')
-                    }
-                  }
-                } catch (authDbError) {
-                  console.error('❌ Error with authenticated client:', authDbError)
-                }
-              }
+            if (service === 'openai' && configMap['openai_api_key']?.trim()) {
+              actualApiKey = configMap['openai_api_key'].trim()
+              console.log('✅ Using system-wide OpenAI API key from system_ai_config (CEO-set)')
+            } else if (service === 'anthropic' && configMap['anthropic_api_key']?.trim()) {
+              actualApiKey = configMap['anthropic_api_key'].trim()
+              console.log('✅ Using system-wide Anthropic API key from system_ai_config (CEO-set)')
+            } else {
+              console.log(`ℹ️ System-wide ${service} API key not found in system_ai_config, will try environment variables`)
             }
-          } else {
-            console.log('ℹ️ Service role key not available, will try environment variables')
+          } else if (systemError) {
+            console.error('❌ Error fetching system-wide API keys:', systemError)
           }
-        } catch (dbError) {
-          console.error('❌ Error in API key lookup:', dbError)
-          // Fall through to environment variables
         }
+      } catch (systemKeyError) {
+        console.error('❌ Error checking system-wide API keys:', systemKeyError)
       }
 
-      // Fallback to environment variables if no user key found
+      // Fallback to environment variables if no system-wide key found
       if (!actualApiKey || actualApiKey === 'configured' || actualApiKey === 'use_env_vars') {
         if (service === 'openai') {
-          actualApiKey = process.env.OPENAI_API_KEY
+          actualApiKey = process.env.OPENAI_API_KEY || ''
           if (actualApiKey) {
             console.log('✅ Using OpenAI API key from environment variables')
           }
         } else if (service === 'anthropic') {
-          actualApiKey = process.env.ANTHROPIC_API_KEY
+          actualApiKey = process.env.ANTHROPIC_API_KEY || ''
           if (actualApiKey) {
             console.log('✅ Using Anthropic API key from environment variables')
           }
@@ -169,8 +86,8 @@ export async function POST(request: NextRequest) {
     if (!actualApiKey) {
       return NextResponse.json(
         { 
-          error: `API key not configured for ${service}. Please set up your API key in Settings → AI Settings, or configure environment variables.`,
-          details: userId ? `User ID: ${userId}` : 'No userId provided'
+          error: `API key not configured for ${service}. CEO must set system-wide API keys in Settings → AI Settings Admin, or configure environment variables.`,
+          details: 'System-wide API keys are required. Contact your administrator.'
         },
         { status: 400 }
       )
@@ -293,6 +210,9 @@ Generate only the replacement text:`
         // Use generic template for backward compatibility
         if (field === 'synopsis') {
           systemTemplate = `You are a professional screenwriter. Generate a concise 2-3 paragraph synopsis (150-300 words). Focus on the main story, protagonist, and central conflict. Do not generate a full treatment, scene breakdown, or detailed character descriptions.`
+          userPromptText = prompt
+        } else if (field === 'script') {
+          systemTemplate = `You are a professional screenwriter. Generate a creative movie script outline or scene based on the user's idea. Focus on storytelling, character development, and cinematic elements. Do not use markdown formatting like **, *, ---, or ###. Use plain text with clear headings and paragraphs.`
           userPromptText = prompt
         } else {
           systemTemplate = `You are a professional filmmaker. Generate creative and detailed ${field} for a storyboard scene. Be specific about visual details, mood, and cinematic elements.`

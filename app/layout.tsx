@@ -18,6 +18,7 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'https://cinema.covion.ai'),
   title: {
     default: "Ai Cinema Studio – AI-Powered Film Production Platform",
     template: "%s | Ai Cinema Studio",
