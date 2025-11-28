@@ -2,28 +2,15 @@
 -- Description: Update handle_new_user function to assign role from invite codes
 -- Date: 2024-12-XX
 
--- First, ensure the role column exists (in case migration 055 hasn't run)
-DO $$ 
-BEGIN
-  -- Check if role column exists, if not, this migration will fail and that's okay
-  -- The migration order should ensure 055 runs before 061
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns 
-    WHERE table_schema = 'public' 
-    AND table_name = 'users' 
-    AND column_name = 'role'
-  ) THEN
-    RAISE EXCEPTION 'Role column does not exist in users table. Please run migration 055 first.';
-  END IF;
-END $$;
-
 -- Update function to handle new user signup with invite code role assignment
+-- This function is designed to never fail, even if the role column doesn't exist
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 DECLARE
   invite_role user_role;
   user_name TEXT;
   user_email TEXT;
+  role_column_exists BOOLEAN;
 BEGIN
   -- Initialize variables with safe defaults
   invite_role := 'user'::user_role; -- Default to user
@@ -40,58 +27,79 @@ BEGIN
     user_email := COALESCE(NEW.raw_user_meta_data->>'email', 'user@example.com');
   END IF;
   
-  -- Check if user has invite code role in metadata
-  IF NEW.raw_user_meta_data IS NOT NULL 
+  -- Check if role column exists
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' 
+    AND table_name = 'users' 
+    AND column_name = 'role'
+  ) INTO role_column_exists;
+  
+  -- Check if user has invite code role in metadata (only if role column exists)
+  IF role_column_exists 
+     AND NEW.raw_user_meta_data IS NOT NULL 
      AND NEW.raw_user_meta_data->>'inviteCodeRole' IS NOT NULL 
      AND (NEW.raw_user_meta_data->>'inviteCodeRole')::text != '' THEN
     -- Validate the role from metadata
     BEGIN
       invite_role := (NEW.raw_user_meta_data->>'inviteCodeRole')::user_role;
     EXCEPTION
-      WHEN invalid_text_representation THEN
+      WHEN invalid_text_representation OR OTHERS THEN
         -- If role string doesn't match enum, default to 'user'
-        invite_role := 'user'::user_role;
-      WHEN OTHERS THEN
-        -- For any other error, default to 'user'
         invite_role := 'user'::user_role;
     END;
   END IF;
 
-  -- Insert user with role
-  INSERT INTO public.users (id, email, name, role, created_at)
-  VALUES (
-    NEW.id, 
-    user_email, 
-    user_name,
-    invite_role,
-    NOW()
-  );
-  
-  RETURN NEW;
-EXCEPTION
-  WHEN OTHERS THEN
-    -- If insert fails, try with minimal safe values
-    BEGIN
+  -- Insert user - with or without role column
+  BEGIN
+    IF role_column_exists THEN
+      -- Insert with role
       INSERT INTO public.users (id, email, name, role, created_at)
       VALUES (
         NEW.id, 
-        COALESCE(NEW.email, 'user@example.com'), 
-        COALESCE(NEW.raw_user_meta_data->>'name', NEW.email, 'User'),
-        'user'::user_role,
+        user_email, 
+        user_name,
+        invite_role,
         NOW()
       );
+    ELSE
+      -- Insert without role (for backwards compatibility)
+      INSERT INTO public.users (id, email, name, created_at)
+      VALUES (
+        NEW.id, 
+        user_email, 
+        user_name,
+        NOW()
+      );
+    END IF;
+    
+    RETURN NEW;
+  EXCEPTION
+    WHEN unique_violation THEN
+      -- User already exists, that's okay - just return
       RETURN NEW;
-    EXCEPTION
-      WHEN unique_violation THEN
-        -- User already exists, that's okay - just return
+    WHEN OTHERS THEN
+      -- Try fallback insert without role
+      BEGIN
+        INSERT INTO public.users (id, email, name, created_at)
+        VALUES (
+          NEW.id, 
+          COALESCE(NEW.email, 'user@example.com'), 
+          COALESCE(NEW.raw_user_meta_data->>'name', NEW.email, 'User'),
+          NOW()
+        );
         RETURN NEW;
-      WHEN OTHERS THEN
-        -- Log the error but don't fail the signup
-        -- The user record can be created later via a separate process
-        -- We return NEW to allow auth.users insert to succeed
-        RAISE WARNING 'Failed to create user record in public.users: %', SQLERRM;
-        RETURN NEW;
-    END;
+      EXCEPTION
+        WHEN unique_violation THEN
+          -- User already exists
+          RETURN NEW;
+        WHEN OTHERS THEN
+          -- Last resort: log warning but don't fail signup
+          -- The auth.users record will be created, public.users can be fixed later
+          RAISE WARNING 'Failed to create user record in public.users for user %: %', NEW.id, SQLERRM;
+          RETURN NEW;
+      END;
+  END;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
