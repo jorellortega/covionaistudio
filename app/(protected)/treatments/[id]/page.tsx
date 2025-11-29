@@ -43,7 +43,9 @@ export default function TreatmentDetailPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isEditingTreatment, setIsEditingTreatment] = useState(false)
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingTreatmentData, setEditingTreatmentData] = useState({
+    title: '',
     target_audience: '',
     estimated_budget: '',
     estimated_duration: '',
@@ -1002,6 +1004,7 @@ Treatment:`
   const handleStartEditTreatment = () => {
     if (!treatment) return
     setEditingTreatmentData({
+      title: treatment.title || '',
       target_audience: treatment.target_audience || '',
       estimated_budget: treatment.estimated_budget || '',
       estimated_duration: treatment.estimated_duration || '',
@@ -1009,11 +1012,14 @@ Treatment:`
       genre: treatment.genre || '',
     })
     setIsEditingTreatment(true)
+    setIsEditDialogOpen(true)
   }
 
   const handleCancelEditTreatment = () => {
     setIsEditingTreatment(false)
+    setIsEditDialogOpen(false)
     setEditingTreatmentData({
+      title: '',
       target_audience: '',
       estimated_budget: '',
       estimated_duration: '',
@@ -1028,6 +1034,7 @@ Treatment:`
     try {
       setIsSavingTreatment(true)
       const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+        title: editingTreatmentData.title || undefined,
         target_audience: editingTreatmentData.target_audience || undefined,
         estimated_budget: editingTreatmentData.estimated_budget || undefined,
         estimated_duration: editingTreatmentData.estimated_duration || undefined,
@@ -1037,6 +1044,7 @@ Treatment:`
       
       setTreatment(updatedTreatment)
       setIsEditingTreatment(false)
+      setIsEditDialogOpen(false)
       
       toast({
         title: "Success",
@@ -5190,7 +5198,38 @@ Return ONLY the JSON object, no other text:`
                 </>
               )}
               
-              {/* Thumbnail Strip - Show in bottom-right near Edit/Delete buttons */}
+              {/* Edit and Delete Buttons - Above thumbnails */}
+              <div className={`absolute ${coverImageAssets.length > 1 ? 'bottom-20' : 'bottom-4'} right-4 flex gap-2 z-30 pointer-events-auto`}>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleStartEditTreatment()
+                  }}
+                  className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
+                >
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleDelete()
+                  }}
+                  disabled={isDeleting}
+                  className="backdrop-blur-sm bg-red-500/20 text-white border-red-500/30 hover:bg-red-500/30 pointer-events-auto"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {isDeleting ? 'Deleting...' : 'Delete'}
+                </Button>
+              </div>
+
+              {/* Thumbnail Strip - Show in bottom-right */}
               {coverImageAssets.length > 1 && (
                 <div className="absolute bottom-4 right-4 flex flex-col items-end gap-2 z-20">
                   {/* Counter */}
@@ -5303,22 +5342,6 @@ Return ONLY the JSON object, no other text:`
                   )}
                 </div>
               </div>
-              <div className="flex gap-2 flex-shrink-0">
-                <Button variant="outline" size="sm" className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={handleDelete}
-                  disabled={isDeleting}
-                  className="backdrop-blur-sm bg-red-500/20 text-white border-red-500/30 hover:bg-red-500/30"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  {isDeleting ? 'Deleting...' : 'Delete'}
-                </Button>
-              </div>
             </div>
           </div>
         </div>
@@ -5378,6 +5401,121 @@ Return ONLY the JSON object, no other text:`
                   Save
                 </Button>
               </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Treatment Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+        if (!open && !isSavingTreatment) {
+          handleCancelEditTreatment()
+        }
+      }}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Treatment</DialogTitle>
+            <DialogDescription>
+              Update treatment details and metadata
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-6 py-4">
+            {/* Title */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-title" className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                Title
+              </Label>
+              <Input
+                id="edit-title"
+                value={editingTreatmentData.title}
+                onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, title: e.target.value }))}
+                placeholder="Enter treatment title"
+              />
+            </div>
+
+            {/* Target Audience */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-target-audience" className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-muted-foreground" />
+                Target Audience
+              </Label>
+              <Input
+                id="edit-target-audience"
+                value={editingTreatmentData.target_audience}
+                onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, target_audience: e.target.value }))}
+                placeholder="e.g., 18-35"
+              />
+            </div>
+
+            {/* Estimated Budget */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-estimated-budget" className="flex items-center gap-2">
+                <DollarSign className="h-4 w-4 text-muted-foreground" />
+                Estimated Budget
+              </Label>
+              <Input
+                id="edit-estimated-budget"
+                value={editingTreatmentData.estimated_budget}
+                onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_budget: e.target.value }))}
+                placeholder="e.g., $10M"
+              />
+            </div>
+
+            {/* Estimated Duration */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-estimated-duration" className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                Estimated Duration
+              </Label>
+              <Input
+                id="edit-estimated-duration"
+                value={editingTreatmentData.estimated_duration}
+                onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, estimated_duration: e.target.value }))}
+                placeholder="e.g., 120 min"
+              />
+            </div>
+
+            {/* Status */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-status">Status</Label>
+              <Select
+                value={editingTreatmentData.status}
+                onValueChange={(val) => setEditingTreatmentData(prev => ({ ...prev, status: val as any }))}
+              >
+                <SelectTrigger id="edit-status">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="in-progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Genre */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-genre">Genre</Label>
+              <Input
+                id="edit-genre"
+                value={editingTreatmentData.genre}
+                onChange={(e) => setEditingTreatmentData(prev => ({ ...prev, genre: e.target.value }))}
+                placeholder="e.g., Sci-Fi"
+              />
+            </div>
+
+            {/* Dialog Actions */}
+            <div className="flex justify-end gap-2 pt-4 border-t">
+              <Button variant="outline" onClick={handleCancelEditTreatment}>
+                <X className="h-4 w-4 mr-2" />
+                Cancel
+              </Button>
+              <Button onClick={handleSaveTreatment} disabled={isSavingTreatment}>
+                <Save className="h-4 w-4 mr-2" />
+                {isSavingTreatment ? 'Saving...' : 'Save Changes'}
+              </Button>
             </div>
           </div>
         </DialogContent>

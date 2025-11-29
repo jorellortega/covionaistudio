@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ProjectSelector } from "@/components/project-selector"
@@ -8,6 +8,7 @@ import { Navigation } from "@/components/navigation"
 import { MobileNav } from "@/components/mobile-nav"
 import { ThemeToggle } from "@/components/theme-provider"
 import { useAuth } from "@/components/AuthProvider"
+import { useAuthReady } from "@/components/auth-hooks"
 import { LogOut, User, Settings, Menu } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase"
 import {
@@ -21,7 +22,46 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 export default function Header() {
   const { session } = useAuth()
+  const { userId, ready } = useAuthReady()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [userName, setUserName] = useState<string>('User')
+
+  // Fetch user name from public.users table
+  useEffect(() => {
+    const fetchUserName = async () => {
+      if (!ready || !userId) {
+        setUserName('User')
+        return
+      }
+      
+      try {
+        const supabase = getSupabaseClient()
+        const { data, error } = await supabase
+          .from('users')
+          .select('name')
+          .eq('id', userId)
+          .single()
+
+        if (error) {
+          console.error('Error fetching user name:', error)
+          // Fallback to email or default
+          setUserName(session?.user?.email?.split('@')[0] || 'User')
+        } else if (data?.name) {
+          setUserName(data.name)
+        } else {
+          // Fallback to email or default
+          setUserName(session?.user?.email?.split('@')[0] || 'User')
+        }
+      } catch (error) {
+        console.error('Error fetching user name:', error)
+        setUserName(session?.user?.email?.split('@')[0] || 'User')
+      }
+    }
+
+    if (ready && userId) {
+      fetchUserName()
+    }
+  }, [ready, userId, session?.user?.email])
 
   const handleLogout = async () => {
     try {
@@ -72,15 +112,15 @@ export default function Header() {
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="relative h-8 w-8 rounded-full">
                   <Avatar className="h-8 w-8">
-                                <AvatarImage src="/placeholder-user.jpg" alt={session?.user?.user_metadata?.name || session?.user?.email || 'User'} />
-            <AvatarFallback>{(session?.user?.user_metadata?.name || session?.user?.email || 'U').charAt(0).toUpperCase()}</AvatarFallback>
+                    <AvatarImage src="/placeholder-user.jpg" alt={userName || session?.user?.email || 'User'} />
+                    <AvatarFallback>{(userName || session?.user?.email || 'U').charAt(0).toUpperCase()}</AvatarFallback>
                   </Avatar>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
                 <div className="flex items-center justify-start gap-2 p-2">
                   <div className="flex flex-col space-y-1 leading-none">
-                    <p className="font-medium">{session?.user?.user_metadata?.name || 'User'}</p>
+                    <p className="font-medium">{userName}</p>
                     <p className="w-[200px] truncate text-sm text-muted-foreground">
                       {session?.user?.email || 'No email'}
                     </p>

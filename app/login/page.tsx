@@ -57,7 +57,7 @@ function LoginPageContent() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [selectedPlan, setSelectedPlan] = useState<string>('');
+  const [selectedPlan, setSelectedPlan] = useState<string>('studio');
   const [inviteCode, setInviteCode] = useState<string>('');
   const [inviteCodeRole, setInviteCodeRole] = useState<string | null>(null);
   const [validatingInviteCode, setValidatingInviteCode] = useState(false);
@@ -360,11 +360,11 @@ function LoginPageContent() {
                 {submitting ? 'Please wait…' : 'Sign in'}
               </button>
 
-              <div className="text-center pt-2">
+              <div className="text-right pt-2">
                 <button 
                   type="button" 
                   onClick={() => setMode('reset')} 
-                  className="text-sm text-primary hover:text-primary/80 underline underline-offset-4 font-medium transition-colors"
+                  className="text-xs text-gray-600 hover:text-foreground font-medium transition-colors"
                 >
                   Forgot password?
                 </button>

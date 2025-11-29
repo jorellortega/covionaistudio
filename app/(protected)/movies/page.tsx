@@ -1702,36 +1702,7 @@ export default function MoviesPage() {
                   </Button>
                 )}
 
-                <div className="space-y-1 text-xs text-muted-foreground mt-3">
-                  <div className="flex items-center gap-2">
-                    <Film className="h-3 w-3" />
-                    <span>{movie.scenes || 0} scenes</span>
-                    {movie.duration && (
-                      <>
-                        <span>•</span>
-                        <span>{movie.duration}</span>
-                      </>
-                    )}
-                  </div>
-                  {movie.writer && (
-                    <div className="flex items-center gap-2">
-                      <User className="h-3 w-3" />
-                      <span>Writer: {movie.writer}</span>
-                    </div>
-                  )}
-                  {movie.cowriters && movie.cowriters.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <User className="h-3 w-3" />
-                      <span>Co-writers: {movie.cowriters.join(", ")}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <Calendar className="h-3 w-3" />
-                    <span>Created {new Date(movie.created_at).toLocaleDateString()}</span>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:flex sm:flex-col gap-1 mt-2">
+                <div className="grid grid-cols-2 gap-1 mt-2">
                   <Link href={`/timeline?movie=${movie.id}`}>
                     <Button
                       variant="outline"
