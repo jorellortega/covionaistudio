@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Separator } from "@/components/ui/separator"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +40,8 @@ import {
   Eye,
   Users,
   MapPin,
+  Share2,
+  Shield,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -61,7 +64,9 @@ const statusColors = {
 
 export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([])
+  const [sharedMovies, setSharedMovies] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingShared, setLoadingShared] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [selectedProjectStatus, setSelectedProjectStatus] = useState("active")
@@ -130,6 +135,7 @@ export default function MoviesPage() {
     
     console.log('🎬 Movies Page - Calling loadMovies()...')
     loadMovies()
+    loadSharedMovies()
 
     return () => {
       console.log('🎬 Movies Page - useEffect cleanup')
@@ -354,6 +360,30 @@ export default function MoviesPage() {
       console.log('🎬 Movies Page - Setting loading to false...')
       setLoading(false)
       console.log('🎬 Movies Page - loadMovies() completed')
+    }
+  }
+
+  const loadSharedMovies = async () => {
+    if (!userId) return
+    
+    try {
+      setLoadingShared(true)
+      const response = await fetch('/api/project-shares/shared-with-me')
+      const data = await response.json()
+      
+      if (data.success) {
+        // Filter to only movie projects
+        const movieProjects = (data.projects || []).filter((p: any) => 
+          p.project_type === 'movie'
+        )
+        setSharedMovies(movieProjects)
+      } else {
+        console.error('Error loading shared movies:', data.error)
+      }
+    } catch (error: any) {
+      console.error('Error loading shared movies:', error)
+    } finally {
+      setLoadingShared(false)
     }
   }
 
@@ -1571,6 +1601,81 @@ export default function MoviesPage() {
           </div>
         </div>
 
+        {/* Shared with Me Section */}
+        {sharedMovies.length > 0 && (
+          <div className="mb-8">
+            <div className="flex items-center gap-2 mb-4">
+              <Share2 className="h-5 w-5 text-primary" />
+              <h2 className="text-xl font-semibold">Shared with Me</h2>
+              <Badge variant="outline">{sharedMovies.length}</Badge>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6 mb-8">
+              {sharedMovies.map((sharedProject: any) => {
+                const movie = sharedProject as Movie
+                return (
+                  <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group border-primary/20">
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <Badge variant="outline" className="text-xs">
+                          <Share2 className="h-3 w-3 mr-1" />
+                          Shared
+                        </Badge>
+                        {sharedProject.share?.requires_approval && (
+                          <Badge variant="outline" className="text-xs">
+                            <Shield className="h-3 w-3 mr-1" />
+                            Approval Required
+                          </Badge>
+                        )}
+                      </div>
+                      <Link 
+                        href={`/timeline?movie=${movie.id}`}
+                        className="block"
+                      >
+                        <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                          <img
+                            src={movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                            alt={movie.name}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            onError={(e) => {
+                              const target = e.target as HTMLImageElement
+                              if (target.src !== "/placeholder.svg?height=300&width=200") {
+                                target.src = "/placeholder.svg?height=300&width=200"
+                              }
+                            }}
+                          />
+                        </div>
+                      </Link>
+                      <CardTitle className="text-lg">{movie.name}</CardTitle>
+                      {movie.description && (
+                        <CardDescription className="line-clamp-2">{movie.description}</CardDescription>
+                      )}
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex items-center justify-between text-sm">
+                        <Badge className={statusColors[movie.movie_status as keyof typeof statusColors] || "bg-gray-500/20 text-gray-400"}>
+                          {movie.movie_status}
+                        </Badge>
+                        <Link href={`/share-control?project_id=${movie.id}`}>
+                          <Button variant="ghost" size="sm">
+                            <Share2 className="h-4 w-4 mr-1" />
+                            View Share
+                          </Button>
+                        </Link>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+            <Separator className="my-8" />
+          </div>
+        )}
+
+        {/* My Movies Section */}
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold mb-4">My Movies</h2>
+        </div>
+
         {/* Movies Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
           {filteredMovies.map((movie) => (
@@ -1648,6 +1753,12 @@ export default function MoviesPage() {
                       <DropdownMenuItem>
                         <Play className="mr-2 h-4 w-4" />
                         Preview
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href={`/share-control?project_id=${movie.id}`}>
+                          <Share2 className="mr-2 h-4 w-4" />
+                          Share Control
+                        </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem 
                         onClick={() => downloadMovieCover(movie)}

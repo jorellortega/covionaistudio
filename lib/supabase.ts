@@ -116,6 +116,56 @@ export type Database = {
           updated_at?: string
         }
       }
+      project_shares: {
+        Row: {
+          id: string
+          project_id: string
+          owner_id: string
+          shared_with_user_id?: string
+          shared_with_email?: string
+          share_key?: string
+          deadline?: string
+          requires_approval: boolean
+          is_revoked: boolean
+          revoked_at?: string
+          permissions: any
+          metadata: any
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          owner_id: string
+          shared_with_user_id?: string
+          shared_with_email?: string
+          share_key?: string
+          deadline?: string
+          requires_approval?: boolean
+          is_revoked?: boolean
+          revoked_at?: string
+          permissions?: any
+          metadata?: any
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          owner_id?: string
+          shared_with_user_id?: string
+          shared_with_email?: string
+          share_key?: string
+          deadline?: string
+          requires_approval?: boolean
+          is_revoked?: boolean
+          revoked_at?: string
+          permissions?: any
+          metadata?: any
+          created_at?: string
+          updated_at?: string
+        }
+      }
       timelines: {
         Row: {
           id: string
