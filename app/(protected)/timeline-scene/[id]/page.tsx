@@ -55,6 +55,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Type,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { useParams } from "next/navigation"
@@ -531,9 +532,364 @@ function ScenePageClient({ id }: { id: string }) {
     insertTextAtCursor('\nINT. LOCATION - DAY\n')
   }
 
-  // Insert dialogue (with proper 12-space indentation)
+  // Insert dialogue (with proper 10-space indentation)
   const insertDialogue = () => {
-    insertTextAtCursor('\n            ') // Newline + 12 spaces for dialogue indentation
+    insertTextAtCursor('\n          ') // Newline + 10 spaces for dialogue indentation (industry standard)
+  }
+
+  // Handle Enter key to maintain dialogue formatting
+  const handleScreenplayKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter') {
+      const textarea = e.currentTarget
+      const cursorPos = textarea.selectionStart
+      const content = getCurrentPageEditContent()
+      
+      // Find the start of the current line
+      let lineStart = cursorPos
+      while (lineStart > 0 && content[lineStart - 1] !== '\n') {
+        lineStart--
+      }
+      
+      // Get the current line
+      const lineEnd = content.indexOf('\n', cursorPos)
+      const currentLine = content.substring(lineStart, lineEnd === -1 ? content.length : lineEnd)
+      
+      // Check if current line is dialogue (has 8-12 spaces of indentation, which is dialogue range)
+      const leadingSpaces = currentLine.match(/^ */)?.[0].length || 0
+      const trimmedLine = currentLine.trim()
+      
+      // Check if it's dialogue: has 8-12 spaces AND doesn't look like a character name, scene heading, or parenthetical
+      const isDialogue = leadingSpaces >= 8 && leadingSpaces <= 12 &&
+                        !trimmedLine.match(/^[A-Z][A-Z0-9\s#'-]+$/) && // Not a character name
+                        !trimmedLine.match(/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i) && // Not a scene heading
+                        !trimmedLine.startsWith('(') // Not a parenthetical
+      
+      if (isDialogue) {
+        // Prevent default Enter behavior
+        e.preventDefault()
+        
+        // Insert newline with 10 spaces for dialogue continuation
+        const beforeCursor = content.substring(0, cursorPos)
+        const afterCursor = content.substring(cursorPos)
+        const newContent = beforeCursor + '\n          ' + afterCursor
+        
+        // Update content
+        saveCurrentPageEdit(newContent)
+        
+        // Update textarea and set cursor position
+        setTimeout(() => {
+          const newCursorPos = cursorPos + 11 // newline + 10 spaces
+          textarea.value = newContent
+          textarea.setSelectionRange(newCursorPos, newCursorPos)
+        }, 0)
+      }
+    }
+  }
+
+  // Convert selected text to screenplay format
+  const convertToScreenplayFormat = (formatType: 'character' | 'dialogue' | 'action' | 'parenthetical' | 'scene-heading') => {
+    console.log('🎬 CONVERT FORMAT - Starting conversion:', formatType)
+    
+    if (!isEditingScreenplay || !selectedText || !screenplayTextareaRef.current) {
+      toast({
+        title: "No Selection",
+        description: "Please select text to convert.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const textarea = screenplayTextareaRef.current
+    const currentPageContent = getCurrentPageEditContent()
+    console.log('🎬 CONVERT FORMAT - Current page content length:', currentPageContent.length)
+    console.log('🎬 CONVERT FORMAT - Selected text:', JSON.stringify(selectedText))
+    console.log('🎬 CONVERT FORMAT - Selected text length:', selectedText.length)
+    
+    // Validate selection positions
+    let start = selectionStart
+    let end = selectionEnd
+    console.log('🎬 CONVERT FORMAT - Initial selection:', { start, end, fromState: true })
+    
+    if (start < 0 || end > currentPageContent.length || start > end) {
+      start = textarea.selectionStart
+      end = textarea.selectionEnd
+      console.log('🎬 CONVERT FORMAT - Using textarea selection:', { start, end })
+    }
+
+    let selectedTextContent = currentPageContent.substring(start, end)
+    console.log('🎬 CONVERT FORMAT - Selected text content (raw):', JSON.stringify(selectedTextContent))
+    console.log('🎬 CONVERT FORMAT - Selected text content length:', selectedTextContent.length)
+    
+    // For dialogue, remove ALL quotes from the entire selection BEFORE splitting into lines
+    if (formatType === 'dialogue') {
+      // AGGRESSIVE: Remove ALL quotes (both single and double, escaped or not) from anywhere
+      // First, remove escaped quotes
+      selectedTextContent = selectedTextContent.replace(/\\"/g, '')
+      selectedTextContent = selectedTextContent.replace(/\\'/g, '')
+      // Remove ALL quotes from anywhere in the selection (not just edges)
+      selectedTextContent = selectedTextContent.replace(/["']/g, '')
+      // Trim whitespace
+      selectedTextContent = selectedTextContent.trim()
+      console.log('🎬 CONVERT FORMAT - Removed ALL quotes from selection')
+      console.log('🎬 CONVERT FORMAT - After quote removal:', JSON.stringify(selectedTextContent))
+    }
+    
+    let lines = selectedTextContent.split('\n')
+    console.log('🎬 CONVERT FORMAT - Split into lines:', lines.length)
+    console.log('🎬 CONVERT FORMAT - Lines:', lines.map((l, i) => `[${i}]: "${l}" (${l.length} chars, ${l.match(/^ */)?.[0].length || 0} leading spaces)`))
+    
+    const LINE_WIDTH = 80
+    
+    // For dialogue, automatically include continuation lines that start at hard left
+    if (formatType === 'dialogue') {
+      console.log('🎬 CONVERT FORMAT - Checking for continuation lines...')
+      // Check if there are continuation lines after the selection
+      const contentAfterSelection = currentPageContent.substring(end)
+      console.log('🎬 CONVERT FORMAT - Content after selection:', JSON.stringify(contentAfterSelection.substring(0, 200)))
+      
+      const continuationLines: string[] = []
+      let searchPos = 0
+      
+      // Look for continuation lines (lines that start at hard left or minimal indent)
+      while (true) {
+        const nextLineMatch = contentAfterSelection.substring(searchPos).match(/^\n([^\n]*)/)
+        if (!nextLineMatch) {
+          console.log('🎬 CONVERT FORMAT - No more lines found at position', searchPos)
+          break
+        }
+        
+        const nextLine = nextLineMatch[1]
+        const nextLineTrimmed = nextLine.trim()
+        const nextLineLeadingSpaces = nextLine.match(/^ */)?.[0].length || 0
+        
+        console.log('🎬 CONVERT FORMAT - Checking next line:', {
+          line: JSON.stringify(nextLine),
+          trimmed: JSON.stringify(nextLineTrimmed),
+          leadingSpaces: nextLineLeadingSpaces
+        })
+        
+        // Stop if we hit an empty line, scene heading, character name, or parenthetical
+        if (!nextLineTrimmed) {
+          console.log('🎬 CONVERT FORMAT - Empty line, stopping')
+          break
+        }
+        if (nextLineTrimmed.match(/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i)) {
+          console.log('🎬 CONVERT FORMAT - Scene heading/transition, stopping')
+          break
+        }
+        if (nextLineTrimmed.match(/^[A-Z][A-Z0-9\s#'-]+$/) && nextLineTrimmed.length < 50) {
+          console.log('🎬 CONVERT FORMAT - Character name, stopping')
+          break
+        }
+        if (nextLineTrimmed.startsWith('(')) {
+          console.log('🎬 CONVERT FORMAT - Parenthetical, stopping')
+          break
+        }
+        
+        // If it looks like a continuation line - any line that's not a character name, 
+        // scene heading, or parenthetical could be dialogue continuation
+        // Include it regardless of current indentation - we'll format it to 10 spaces
+        // Only exclude if it has excessive indentation (more than 20 spaces, likely parenthetical or misformatted)
+        if (nextLineLeadingSpaces <= 20) {
+          console.log('🎬 CONVERT FORMAT - Found continuation line, adding it')
+          continuationLines.push(nextLine)
+          searchPos += nextLineMatch[0].length
+        } else {
+          console.log('🎬 CONVERT FORMAT - Line has excessive indent, stopping')
+          break
+        }
+      }
+      
+      console.log('🎬 CONVERT FORMAT - Found continuation lines:', continuationLines.length)
+      if (continuationLines.length > 0) {
+        console.log('🎬 CONVERT FORMAT - Continuation lines:', continuationLines.map((l, i) => `[${i}]: "${l}"`))
+        lines = [...lines, ...continuationLines]
+        console.log('🎬 CONVERT FORMAT - Total lines after adding continuations:', lines.length)
+      }
+    }
+    
+    let formattedText = ''
+    
+    switch (formatType) {
+      case 'character': {
+        // Character names: CENTERED, all caps
+        formattedText = lines.map(line => {
+          const trimmed = line.trim()
+          if (!trimmed) return ''
+          const name = trimmed.toUpperCase()
+          const nameLength = name.length
+          const leftPadding = Math.max(0, Math.floor((LINE_WIDTH - nameLength) / 2))
+          return ' '.repeat(leftPadding) + name
+        }).join('\n')
+        break
+      }
+      
+      case 'dialogue': {
+        console.log('🎬 CONVERT FORMAT - Formatting as dialogue, processing', lines.length, 'lines')
+        // Dialogue: 10 spaces indent for ALL lines (including continuation lines)
+        // Every line in the selection should get exactly 10 spaces, regardless of current formatting
+        const DIALOGUE_INDENT = 10
+        const LINE_WIDTH = 80
+        // Dialogue should be narrower - typically 45-50 characters wide (not full width to column 80)
+        // This creates proper margins on both sides: 10 spaces left, ~20-25 spaces right margin
+        const MAX_DIALOGUE_WIDTH = 50 // Standard screenplay dialogue width (not 70!)
+        
+        // First, combine all lines into one continuous text, removing all formatting
+        // This ensures we handle dialogue that's already split across multiple lines
+        let combinedText = lines.map(line => {
+          // Remove ALL leading and trailing whitespace and quotes from each line
+          let cleaned = line
+          // Remove escaped quotes
+          cleaned = cleaned.replace(/\\"/g, '')
+          cleaned = cleaned.replace(/\\'/g, '')
+          // Remove ALL quotes
+          cleaned = cleaned.replace(/["']/g, '')
+          // Trim whitespace
+          return cleaned.trim()
+        }).filter(line => line.length > 0).join(' ') // Join with spaces to create continuous text
+        
+        console.log('🎬 CONVERT FORMAT - Combined text after cleaning:', JSON.stringify(combinedText))
+        
+        // If no text after cleaning, return empty
+        if (!combinedText) {
+          formattedText = ''
+          break
+        }
+        
+        // Now split the combined text into properly formatted dialogue lines
+        // Each line should be EXACTLY max 70 characters (80 - 10 spaces) to ensure right margin alignment
+        const words = combinedText.split(/\s+/)
+        const formattedLines: string[] = []
+        let currentLine = ''
+        
+        words.forEach((word, wordIndex) => {
+          // Calculate what the line would be with this word
+          const testLine = currentLine ? `${currentLine} ${word}` : word
+          
+          // STRICT: Only add word if the resulting line is <= 70 characters
+          // If a single word is longer than 70 chars, we still add it (can't break words)
+          if (testLine.length <= MAX_DIALOGUE_WIDTH) {
+            // Word fits on current line
+            currentLine = testLine
+          } else {
+            // Word doesn't fit - save current line (if any) and start new line with this word
+            if (currentLine) {
+              // Ensure current line doesn't exceed limit (shouldn't happen, but safety check)
+              const lineToAdd = currentLine.length <= MAX_DIALOGUE_WIDTH 
+                ? currentLine 
+                : currentLine.substring(0, MAX_DIALOGUE_WIDTH)
+              formattedLines.push(' '.repeat(DIALOGUE_INDENT) + lineToAdd)
+            }
+            // Start new line with this word (even if word is longer than 70 chars)
+            currentLine = word
+          }
+          
+          // If this is the last word, add the current line with 10 spaces
+          if (wordIndex === words.length - 1 && currentLine) {
+            // Ensure line doesn't exceed limit
+            const lineToAdd = currentLine.length <= MAX_DIALOGUE_WIDTH 
+              ? currentLine 
+              : currentLine.substring(0, MAX_DIALOGUE_WIDTH)
+            formattedLines.push(' '.repeat(DIALOGUE_INDENT) + lineToAdd)
+          }
+        })
+        
+        // Log each formatted line for debugging
+        formattedLines.forEach((line, idx) => {
+          const textOnly = line.substring(DIALOGUE_INDENT)
+          console.log(`🎬 CONVERT FORMAT - Line ${idx}: length=${textOnly.length}, text="${textOnly.substring(0, 50)}${textOnly.length > 50 ? '...' : ''}"`)
+        })
+        
+        formattedText = formattedLines.join('\n')
+        
+        console.log('🎬 CONVERT FORMAT - Final formatted text:', JSON.stringify(formattedText))
+        console.log('🎬 CONVERT FORMAT - Total formatted lines:', formattedLines.length)
+        console.log('🎬 CONVERT FORMAT - Formatted text length:', formattedText.length)
+        break
+      }
+      
+      case 'action': {
+        // Action lines: Left-aligned, no indent
+        formattedText = lines.map(line => line.trim()).join('\n')
+        break
+      }
+      
+      case 'parenthetical': {
+        // Parentheticals: 15 spaces indent, wrapped in parentheses
+        formattedText = lines.map(line => {
+          const trimmed = line.trim()
+          if (!trimmed) return ''
+          let content = trimmed
+          // Remove existing parentheses if present
+          content = content.replace(/^\(+/, '').replace(/\)+$/, '').trim()
+          // Ensure it has parentheses
+          if (!content.startsWith('(')) content = '(' + content
+          if (!content.endsWith(')')) content = content + ')'
+          return ' '.repeat(15) + content
+        }).join('\n')
+        break
+      }
+      
+      case 'scene-heading': {
+        // Scene headings: Left-aligned, all caps
+        formattedText = lines.map(line => {
+          const trimmed = line.trim()
+          if (!trimmed) return ''
+          return trimmed.toUpperCase()
+        }).join('\n')
+        break
+      }
+    }
+
+    // Replace the selected text with formatted version
+    // If we included continuation lines for dialogue, extend the end position
+    let newEnd = end
+    if (formatType === 'dialogue' && lines.length > selectedTextContent.split('\n').length) {
+      // We added continuation lines, find where they end in the original content
+      const contentAfterSelection = currentPageContent.substring(end)
+      let continuationLength = 0
+      let searchPos = 0
+      const addedLines = lines.length - selectedTextContent.split('\n').length
+      
+      for (let i = 0; i < addedLines; i++) {
+        const nextLineMatch = contentAfterSelection.substring(searchPos).match(/^\n([^\n]*)/)
+        if (nextLineMatch) {
+          continuationLength += nextLineMatch[0].length
+          searchPos += nextLineMatch[0].length
+        } else {
+          break
+        }
+      }
+      
+      newEnd = end + continuationLength
+    }
+    
+    const newValue = currentPageContent.substring(0, start) + formattedText + currentPageContent.substring(newEnd)
+    
+    // Update the textarea immediately to show the change
+    if (textarea) {
+      textarea.value = newValue
+    }
+    
+    saveCurrentPageEdit(newValue, start + formattedText.length) // Pass cursor position
+    
+    // Update textarea and set cursor position
+    setTimeout(() => {
+      const newCursorPos = start + formattedText.length
+      if (textarea) {
+        textarea.focus()
+        textarea.setSelectionRange(newCursorPos, newCursorPos)
+      }
+    }, 50)
+    
+    // Clear selection
+    setSelectedText("")
+    setToolbarPosition(null)
+    
+    toast({
+      title: "Format Applied",
+      description: `Text converted to ${formatType.replace('-', ' ')} format.`,
+    })
   }
 
   // Insert title page format (centered)
@@ -4339,6 +4695,7 @@ ${centerText('AUTHOR NAME')}
                             value={getCurrentPageEditContent()}
                             onChange={(e) => saveCurrentPageEdit(e.target.value)}
                             onSelect={handleScreenplayTextSelection}
+                            onKeyDown={handleScreenplayKeyDown}
                             className="min-h-[600px] font-mono text-sm leading-relaxed pt-8"
                             style={{ 
                               fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
@@ -4370,40 +4727,92 @@ ${centerText('AUTHOR NAME')}
                         {selectedText && toolbarPosition && (
                           <div
                             data-selection-toolbar
-                            className="fixed z-50 flex items-center gap-2 p-2 bg-background border border-border rounded-lg shadow-lg"
+                            className="fixed z-50 bg-background border border-border rounded-lg shadow-lg p-2"
                             style={{
                               top: `${toolbarPosition.top}px`,
                               left: `${toolbarPosition.left}px`,
                             }}
                           >
-                            <Badge variant="outline" className="text-xs">
-                              {selectedText.length} chars
-                            </Badge>
-                            <Button
-                              size="sm"
-                              variant="default"
-                              onClick={handleAITextEditScreenplay}
-                              className="bg-purple-500 hover:bg-purple-600 text-white"
-                            >
-                              <Bot className="h-3 w-3 mr-1" />
-                              AI Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setSelectedText("")
-                                setToolbarPosition(null)
-                                const textarea = screenplayTextareaRef.current
-                                if (textarea) {
-                                  textarea.focus()
-                                }
-                              }}
-                              className="h-7 w-7 p-0"
-                              title="Clear selection"
-                            >
-                              ×
-                            </Button>
+                            <div className="flex items-center gap-2 mb-2">
+                              <Badge variant="outline" className="text-xs">
+                                {selectedText.length} chars
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="default"
+                                onClick={handleAITextEditScreenplay}
+                                className="bg-purple-500 hover:bg-purple-600 text-white"
+                              >
+                                <Bot className="h-3 w-3 mr-1" />
+                                AI Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setSelectedText("")
+                                  setToolbarPosition(null)
+                                  const textarea = screenplayTextareaRef.current
+                                  if (textarea) {
+                                    textarea.focus()
+                                  }
+                                }}
+                                className="h-7 w-7 p-0"
+                                title="Clear selection"
+                              >
+                                ×
+                              </Button>
+                            </div>
+                            <div className="border-t border-border pt-2 mt-2">
+                              <div className="text-xs text-muted-foreground mb-1">Convert to:</div>
+                              <div className="flex flex-wrap gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => convertToScreenplayFormat('character')}
+                                  className="h-7 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                >
+                                  <Users className="h-3 w-3 mr-1" />
+                                  Character
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => convertToScreenplayFormat('dialogue')}
+                                  className="h-7 px-2 text-xs border-green-500/30 text-green-400 hover:bg-green-500/10"
+                                >
+                                  <MessageSquare className="h-3 w-3 mr-1" />
+                                  Dialogue
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => convertToScreenplayFormat('action')}
+                                  className="h-7 px-2 text-xs border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                                >
+                                  <FileText className="h-3 w-3 mr-1" />
+                                  Action
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => convertToScreenplayFormat('parenthetical')}
+                                  className="h-7 px-2 text-xs border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                                >
+                                  <Type className="h-3 w-3 mr-1" />
+                                  (Wryly)
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => convertToScreenplayFormat('scene-heading')}
+                                  className="h-7 px-2 text-xs border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
+                                >
+                                  <MapPin className="h-3 w-3 mr-1" />
+                                  Scene
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -4456,6 +4865,24 @@ ${centerText('AUTHOR NAME')}
                           >
                             <Film className="h-4 w-4 mr-2" />
                             View Storyboards
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
+                            onClick={generateShotListFromPage}
+                            disabled={isGeneratingShotList || !getCurrentPageContent()}
+                          >
+                            {isGeneratingShotList ? (
+                              <>
+                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                Generating Shot List...
+                              </>
+                            ) : (
+                              <>
+                                <Film className="h-4 w-4 mr-2" />
+                                Generate Shot List from This Page
+                              </>
+                            )}
                           </Button>
                         </div>
                       </div>
@@ -4535,45 +4962,24 @@ ${centerText('AUTHOR NAME')}
             {!isEditingScreenplay && screenplayContent && (
               <Collapsible open={isShotListExpanded} onOpenChange={setIsShotListExpanded} className="mt-6">
                 <Card className="bg-card border-primary/20">
-                  <CardHeader>
-                    <div className="flex items-center justify-between mb-3">
-                      <CollapsibleTrigger asChild>
-                        <div className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity">
+                  <CollapsibleTrigger asChild>
+                    <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
                           <Film className="h-5 w-5 text-blue-400" />
                           <CardTitle>Shot List</CardTitle>
-                          {isShotListExpanded ? (
-                            <ChevronUp className="h-4 w-4 text-muted-foreground ml-2" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 text-muted-foreground ml-2" />
-                          )}
                         </div>
-                      </CollapsibleTrigger>
-                      <Button
-                        size="sm"
-                        className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          generateShotListFromPage()
-                        }}
-                        disabled={isGeneratingShotList || !getCurrentPageContent()}
-                      >
-                        {isGeneratingShotList ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Generating Shot List...
-                          </>
+                        {isShotListExpanded ? (
+                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         ) : (
-                          <>
-                            <Film className="h-4 w-4 mr-2" />
-                            Generate Shot List from This Page
-                          </>
+                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
                         )}
-                      </Button>
-                    </div>
-                    <p className="text-sm text-muted-foreground">
-                      Shots generated from this scene's screenplay. Use the button above to create shots for the current page.
-                    </p>
-                  </CardHeader>
+                      </div>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Shots generated from this scene's screenplay. Use "Generate Shot List from This Page" above to create shots for the current page.
+                      </p>
+                    </CardHeader>
+                  </CollapsibleTrigger>
                   <CollapsibleContent>
                     <CardContent>
                       <ShotListComponent

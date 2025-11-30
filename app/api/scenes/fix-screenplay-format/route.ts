@@ -4,8 +4,14 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 
 /**
- * Fixes screenplay formatting issues, particularly excessive spacing in character names
- * and dialogue. Ensures proper indentation following standard screenplay format.
+ * Fixes screenplay formatting to proper industry standard format.
+ * Standard format (for 80-character monospace line):
+ * - Scene headings (INT./EXT.): Left-aligned, all caps, no indentation
+ * - Action lines: Left-aligned, no indentation (0 spaces)
+ * - Character names: CENTERED on the line (around column 40 for 80-char line)
+ * - Parentheticals: Indented 15-17 spaces from left
+ * - Dialogue: Indented 10 spaces from left
+ * - Transitions: Right-aligned (around column 65-70)
  */
 function fixScreenplayFormatting(screenplay: string): string {
   console.log('🎬 FIX FORMAT API - Starting formatting fix')
@@ -16,53 +22,103 @@ function fixScreenplayFormatting(screenplay: string): string {
   const formattedLines: string[] = []
   let changesMade = 0
   
+  // Standard screenplay indentation constants (for 80-character line)
+  const LINE_WIDTH = 80                    // Standard screenplay line width
+  const CHARACTER_NAME_CENTER = 40         // Center point for character names
+  const PARENTHETICAL_INDENT = 15          // Parentheticals indented 15 spaces
+  const DIALOGUE_INDENT = 10               // Dialogue indented 10 spaces
+  const TRANSITION_COLUMN = 70             // Transitions right-aligned at column 70
+  
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const trimmed = line.trim()
     const leadingSpaces = line.match(/^ */)?.[0].length || 0
     
-    // Skip empty lines
+    // Skip empty lines (preserve them)
     if (!trimmed) {
       formattedLines.push('')
       continue
     }
     
-    // Check if this is a scene heading (INT./EXT.)
+    // 1. SCENE HEADINGS (INT./EXT.) - Left-aligned, all caps, no indentation
     if (/^(INT\.|EXT\.)/i.test(trimmed)) {
-      formattedLines.push(trimmed.toUpperCase())
+      const formatted = trimmed.toUpperCase()
+      if (formatted !== line) {
+        changesMade++
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: SCENE HEADING fixed`)
+        console.log(`  Before: [${line}]`)
+        console.log(`  After:  [${formatted}]`)
+      }
+      formattedLines.push(formatted)
       continue
     }
     
-    // Check if this is a transition (FADE IN, CUT TO, etc.)
-    if (/^(FADE IN|FADE OUT|CUT TO|DISSOLVE TO|SMASH CUT|MATCH CUT)/i.test(trimmed)) {
-      formattedLines.push(trimmed.toUpperCase().padStart(65))
+    // 2. TRANSITIONS (FADE IN, CUT TO, etc.) - Right-aligned, all caps
+    // Remove colon if present, add it back, then right-align
+    const transitionMatch = trimmed.match(/^(FADE IN|FADE OUT|CUT TO|DISSOLVE TO|SMASH CUT|MATCH CUT|FADE TO BLACK|FADE IN:|FADE OUT:|CUT TO:|DISSOLVE TO:)/i)
+    if (transitionMatch) {
+      let transition = transitionMatch[1].toUpperCase()
+      // Ensure it ends with colon for standard transitions
+      if (!transition.endsWith(':') && (transition.includes('CUT') || transition.includes('DISSOLVE') || transition.includes('FADE'))) {
+        transition = transition + ':'
+      }
+      // Right-align to TRANSITION_COLUMN
+      const formatted = transition.padStart(TRANSITION_COLUMN)
+      if (formatted !== line) {
+        changesMade++
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: TRANSITION fixed`)
+        console.log(`  Before: [${line}]`)
+        console.log(`  After:  [${formatted}]`)
+      }
+      formattedLines.push(formatted)
       continue
     }
     
-    // Look ahead to determine context
+    // Look ahead to determine context (check up to 3 lines ahead)
     const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : ''
     const nextNextLine = i < lines.length - 2 ? lines[i + 2].trim() : ''
+    const nextNextNextLine = i < lines.length - 3 ? lines[i + 3].trim() : ''
     const isParenthetical = /^\(/.test(nextLine)
     const isNextParenthetical = /^\(/.test(nextNextLine)
-    const hasNextDialogue = nextLine && !isParenthetical && !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(nextLine) && !/^[A-Z][A-Z0-9\s]+$/.test(nextLine)
+    const isNextNextParenthetical = /^\(/.test(nextNextNextLine)
     
-    // Check if this is a character name (ALL CAPS, no lowercase, reasonable length)
-    const looksLikeCharacterName = /^[A-Z][A-Z0-9\s#]+$/.test(trimmed) && 
-                                    trimmed.length > 0 && 
-                                    trimmed.length < 50 &&
-                                    !trimmed.includes('.') &&
-                                    !trimmed.match(/^[A-Z\s#]+[a-z]/) &&
-                                    !/^(SCENE|FADE|CUT|DISSOLVE|INT|EXT)/i.test(trimmed) &&
-                                    (isParenthetical || isNextParenthetical || hasNextDialogue || 
-                                     (i < lines.length - 2 && /^\(/.test(lines[i + 2]?.trim())))
+    // Check if next non-empty line is dialogue (not a character name, not a scene heading, not a transition)
+    const hasNextDialogue = nextLine && !isParenthetical && 
+                           !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(nextLine) && 
+                           !/^[A-Z][A-Z0-9\s#'-]+$/.test(nextLine) &&
+                           nextLine.length > 0 &&
+                           !/^\(/.test(nextLine)
     
-    // Always normalize character names to proper indentation (~40 spaces)
+    // 3. CHARACTER NAMES - All caps, CENTERED on the line
+    // Character names are typically:
+    // - All caps (or mostly caps, but we'll uppercase them)
+    // - No periods (except in names like O'BRIEN, but we check for scene headings separately)
+    // - Reasonable length (usually < 50 chars)
+    // - Followed by parenthetical or dialogue (within 1-2 lines)
+    const isAllCaps = /^[A-Z0-9\s#'-]+$/.test(trimmed) && trimmed.length > 0
+    const isReasonableLength = trimmed.length > 0 && trimmed.length < 50
+    const hasNoPeriods = !trimmed.includes('.') || trimmed.match(/^[A-Z\s#'-]+\.?$/) // Allow period only at end for names like "MR."
+    const isNotSceneHeading = !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE|SCENE)/i.test(trimmed)
+    const hasContext = isParenthetical || isNextParenthetical || isNextNextParenthetical || hasNextDialogue || 
+                       (i < lines.length - 2 && /^\(/.test(lines[i + 2]?.trim())) ||
+                       (i < lines.length - 3 && /^\(/.test(lines[i + 3]?.trim()))
+    
+    const looksLikeCharacterName = isAllCaps && 
+                                    isReasonableLength &&
+                                    hasNoPeriods &&
+                                    isNotSceneHeading &&
+                                    hasContext
+    
     if (looksLikeCharacterName) {
-      const name = trimmed.toUpperCase()
-      const formatted = '                                        '.substring(0, Math.max(0, 40 - name.length)) + name
+      const name = trimmed.toUpperCase().trim()
+      // PROPERLY CENTER the name on the line
+      // Center point is CHARACTER_NAME_CENTER, so we calculate left padding
+      const nameLength = name.length
+      const leftPadding = Math.max(0, Math.floor((LINE_WIDTH - nameLength) / 2))
+      const formatted = ' '.repeat(leftPadding) + name
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME fixed`)
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME fixed (centered)`)
         console.log(`  Before: [${line}]`)
         console.log(`  After:  [${formatted}]`)
       }
@@ -70,13 +126,16 @@ function fixScreenplayFormatting(screenplay: string): string {
       continue
     }
     
-    // Check for character name with (CONT'D) - handle this BEFORE parenthetical check
-    if (/\(CONT['']D\)$/i.test(trimmed)) {
-      const name = trimmed.toUpperCase()
-      const formatted = '                                        '.substring(0, Math.max(0, 40 - name.length)) + name
+    // Check for character name with (CONT'D) or (V.O.) or (O.S.) or (O.C.)
+    if (/\(CONT['']D\)|\(V\.O\.\)|\(O\.S\.\)|\(O\.C\.\)$/i.test(trimmed)) {
+      const name = trimmed.toUpperCase().trim()
+      // PROPERLY CENTER the name on the line
+      const nameLength = name.length
+      const leftPadding = Math.max(0, Math.floor((LINE_WIDTH - nameLength) / 2))
+      const formatted = ' '.repeat(leftPadding) + name
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME (CONT'D) fixed`)
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME (with modifier) fixed (centered)`)
         console.log(`  Before: [${line}]`)
         console.log(`  After:  [${formatted}]`)
       }
@@ -84,12 +143,20 @@ function fixScreenplayFormatting(screenplay: string): string {
       continue
     }
     
-    // Check if this is a parenthetical (starts with parenthesis)
+    // 4. PARENTHETICALS - Indented 15 spaces, wrapped in parentheses
     if (/^\(/.test(trimmed)) {
-      const content = trimmed.replace(/^\(/, '').replace(/\)$/, '').trim()
-      const parenthetical = `(${content})`
-      const spaces = '                 ' // Exactly 17 spaces
-      const formatted = spaces + parenthetical
+      // Clean up parenthetical: ensure it has parentheses
+      let content = trimmed.trim()
+      // Remove extra opening/closing parentheses
+      content = content.replace(/^\(+/, '(').replace(/\)+$/, ')')
+      // Ensure it starts and ends with parentheses
+      if (!content.startsWith('(')) content = '(' + content
+      if (!content.endsWith(')')) content = content + ')'
+      // Normalize spacing inside parentheses
+      const innerContent = content.slice(1, -1).trim()
+      content = `(${innerContent})`
+      
+      const formatted = ' '.repeat(PARENTHETICAL_INDENT) + content
       if (formatted !== line) {
         changesMade++
         console.log(`🎬 FIX FORMAT API - Line ${i + 1}: PARENTHETICAL fixed`)
@@ -103,9 +170,14 @@ function fixScreenplayFormatting(screenplay: string): string {
     // Look behind to determine if this is dialogue
     const prevLine = i > 0 ? lines[i - 1].trim() : ''
     const prevPrevLine = i > 1 ? lines[i - 2].trim() : ''
-    const wasCharacterName = /^[A-Z][A-Z0-9\s#]+$/.test(prevLine) && prevLine.length < 50 && !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevLine)
+    const wasCharacterName = /^[A-Z][A-Z0-9\s#'-]+$/.test(prevLine) && 
+                             prevLine.length < 50 && 
+                             !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevLine) &&
+                             !/^\(/.test(prevLine)
     const wasParenthetical = /^\(/.test(prevLine)
-    const wasPrevCharacterName = /^[A-Z][A-Z0-9\s#]+$/.test(prevPrevLine) && prevPrevLine.length < 50 && !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevPrevLine)
+    const wasPrevCharacterName = /^[A-Z][A-Z0-9\s#'-]+$/.test(prevPrevLine) && 
+                                  prevPrevLine.length < 50 && 
+                                  !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevPrevLine)
     
     // Check if previous lines were dialogue (for continuation lines)
     let wasDialogue = false
@@ -114,39 +186,42 @@ function fixScreenplayFormatting(screenplay: string): string {
       const prevTrimmed = prevFormatted.trim()
       const prevLeadingSpaces = prevFormatted.match(/^ */)?.[0].length || 0
       
-      wasDialogue = prevLeadingSpaces >= 10 && prevLeadingSpaces <= 20 && 
+      // Dialogue has DIALOGUE_INDENT spaces indentation (allow some flexibility)
+      wasDialogue = prevLeadingSpaces >= DIALOGUE_INDENT - 2 && prevLeadingSpaces <= DIALOGUE_INDENT + 2 && 
                     prevTrimmed.length > 0 &&
                     !/^\(/.test(prevTrimmed) &&
-                    !/^[A-Z][A-Z0-9\s#]+$/.test(prevTrimmed) &&
+                    !/^[A-Z][A-Z0-9\s#'-]+$/.test(prevTrimmed) &&
                     !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevTrimmed)
-      
-      if (!wasDialogue && leadingSpaces >= 6 && leadingSpaces <= 15 && formattedLines.length > 1) {
-        const prevPrevFormatted = formattedLines[formattedLines.length - 2]
-        const prevPrevLeadingSpaces = prevPrevFormatted.match(/^ */)?.[0].length || 0
-        const prevPrevTrimmed = prevPrevFormatted.trim()
-        wasDialogue = prevPrevLeadingSpaces >= 10 && prevPrevLeadingSpaces <= 20 &&
-                      prevPrevTrimmed.length > 0 &&
-                      !/^\(/.test(prevPrevTrimmed) &&
-                      !/^[A-Z][A-Z0-9\s#]+$/.test(prevPrevTrimmed) &&
-                      !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(prevPrevTrimmed)
-      }
     }
     
-    // Always normalize dialogue
+    // Check if this is a continuation line of dialogue (even if it starts at hard left)
+    // A continuation line is one that:
+    // 1. Follows a dialogue line (wasDialogue is true), OR
+    // 2. Follows a character name or parenthetical, OR
+    // 3. Has some indentation (6-15 spaces) and looks like dialogue
+    // 4. Starts at hard left (0 spaces) but follows dialogue - this is the key fix
+    const isDialogueContinuation = wasDialogue && 
+                                    leadingSpaces < DIALOGUE_INDENT && 
+                                    !looksLikeCharacterName && 
+                                    !/^\(/.test(trimmed) &&
+                                    !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(trimmed) &&
+                                    !/^[A-Z][A-Z0-9\s#'-]+$/.test(trimmed)
+    
+    // 5. DIALOGUE - Indented 10 spaces, follows character name or parenthetical
     const isPotentialDialogueContinuation = leadingSpaces >= 6 && leadingSpaces <= 15 && 
                                             !looksLikeCharacterName && 
                                             !/^\(/.test(trimmed) &&
                                             !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(trimmed) &&
-                                            !/^[A-Z][A-Z0-9\s]+$/.test(trimmed)
+                                            !/^[A-Z][A-Z0-9\s#'-]+$/.test(trimmed)
     
-    if ((wasCharacterName || wasParenthetical || (wasPrevCharacterName && wasParenthetical) || wasDialogue || isPotentialDialogueContinuation) && 
+    if ((wasCharacterName || wasParenthetical || (wasPrevCharacterName && wasParenthetical) || wasDialogue || isPotentialDialogueContinuation || isDialogueContinuation) && 
         !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(trimmed) &&
-        !/^[A-Z][A-Z0-9\s#]+$/.test(trimmed) &&
+        !/^[A-Z][A-Z0-9\s#'-]+$/.test(trimmed) &&
         !/^\(/.test(trimmed)) {
-      const formatted = '          ' + trimmed // Exactly 10 spaces
+      const formatted = ' '.repeat(DIALOGUE_INDENT) + trimmed
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: DIALOGUE fixed`)
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: DIALOGUE fixed${isDialogueContinuation ? ' (continuation)' : ''}`)
         console.log(`  Before: [${line}] (${leadingSpaces} leading spaces)`)
         console.log(`  After:  [${formatted}]`)
       }
@@ -154,19 +229,23 @@ function fixScreenplayFormatting(screenplay: string): string {
       continue
     }
     
-    // Fix excessive leading spaces on action lines
-    if (leadingSpaces > 10) {
-      if (trimmed !== line.trim()) {
+    // 6. ACTION LINES - Left-aligned, no indentation (remove all leading spaces)
+    // Action lines are everything else that doesn't match the above patterns
+    // They should have no indentation (0 spaces)
+    if (leadingSpaces > 0) {
+      const formatted = trimmed
+      if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: EXCESSIVE SPACING removed`)
-        console.log(`  Before: [${line}] (${leadingSpaces} spaces)`)
-        console.log(`  After:  [${trimmed}]`)
+        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: ACTION LINE fixed (removed ${leadingSpaces} leading spaces)`)
+        console.log(`  Before: [${line}]`)
+        console.log(`  After:  [${formatted}]`)
       }
-      formattedLines.push(trimmed)
+      formattedLines.push(formatted)
       continue
     }
     
-    // Keep line as is
+    // If line has no leading spaces and doesn't match any pattern, it's already an action line
+    // Keep it as is
     formattedLines.push(line)
   }
   
