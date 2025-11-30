@@ -4886,10 +4886,47 @@ ${centerText('AUTHOR NAME')}
                           </Button>
                         </div>
                       </div>
-                      <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
-                        <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                          {getCurrentPageContent()}
-                        </pre>
+                      <div className="space-y-2 relative w-full">
+                        <div className="relative w-full">
+                          {/* Visual ruler for 80-character line width with center marker - same as edit mode */}
+                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
+                            <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                              <span className="absolute left-0 opacity-30">0</span>
+                              <span className="absolute left-[20%] opacity-30">16</span>
+                              <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
+                              <span className="absolute left-[80%] opacity-30">64</span>
+                              <span className="absolute right-0 opacity-30">80</span>
+                              {/* Center line indicator */}
+                              <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
+                            </div>
+                          </div>
+                          <pre 
+                            className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed pt-8"
+                            style={{ 
+                              fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              tabSize: 1,
+                              letterSpacing: '0px',
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'break-word',
+                              wordWrap: 'break-word',
+                              fontVariantNumeric: 'normal',
+                              fontFeatureSettings: 'normal',
+                              width: 'calc(80ch + 24px)',
+                              maxWidth: 'calc(80ch + 24px)',
+                              minWidth: 'calc(80ch + 24px)',
+                              margin: '0 auto',
+                              display: 'block',
+                              overflowX: 'hidden',
+                              minHeight: '600px',
+                              backgroundColor: 'transparent'
+                            }}
+                          >
+                            {getCurrentPageContent()}
+                          </pre>
+                        </div>
                       </div>
                       {/* Audio Generation for Current Page */}
                       {getCurrentPageContent() && getCurrentPageContent().trim() && (
