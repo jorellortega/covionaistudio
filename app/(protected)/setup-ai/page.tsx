@@ -85,6 +85,7 @@ export default function SetupAIPage() {
     if (!userId) return
     
     try {
+      const supabase = getSupabaseClient()
       const serviceMapping: { [key: string]: string } = {
         'openai': 'openai_api_key',
         'anthropic': 'anthropic_api_key',
@@ -101,15 +102,70 @@ export default function SetupAIPage() {
         throw new Error(`Unsupported service: ${service}`)
       }
       
+      // Skip klingSecret - it's not a system-wide key
+      const isSystemWideKey = service !== 'klingSecret'
+      
+      // Check if user is admin/CEO (for system-wide keys)
+      let isAdminOrCEO = false
+      if (isSystemWideKey) {
+        try {
+          const { data: userData } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', userId)
+            .maybeSingle()
+          
+          isAdminOrCEO = userData?.role === 'ceo' || userData?.role === 'admin'
+        } catch (roleError) {
+          console.error('Error checking user role:', roleError)
+        }
+      }
+      
+      // Save to user profile
       const updateData: any = {}
       updateData[dbColumn] = apiKey
 
-      const { error } = await getSupabaseClient()
+      const { error } = await supabase
         .from('users')
         .update(updateData)
         .eq('id', userId)
 
       if (error) throw error
+      
+      // If admin/CEO and this is a system-wide key, ALSO save to system_ai_config
+      if (isAdminOrCEO && isSystemWideKey && apiKey.trim()) {
+        try {
+          const descriptionMap: Record<string, string> = {
+            'openai_api_key': 'OpenAI API key for text generation',
+            'anthropic_api_key': 'Anthropic API key for Claude models',
+            'openart_api_key': 'OpenArt API key for image generation',
+            'kling_api_key': 'Kling AI API key for video generation',
+            'runway_api_key': 'Runway API key for video generation',
+            'elevenlabs_api_key': 'ElevenLabs API key for text-to-speech',
+            'suno_api_key': 'Suno AI API key for music generation',
+          }
+          
+          const { error: systemError } = await supabase
+            .from('system_ai_config')
+            .upsert({
+              setting_key: dbColumn,
+              setting_value: apiKey.trim(),
+              description: descriptionMap[dbColumn] || `${dbColumn.replace(/_/g, ' ')} (system-wide)`
+            }, {
+              onConflict: 'setting_key'
+            })
+          
+          if (systemError) {
+            console.error('Error saving to system_ai_config:', systemError)
+            // Don't throw - user profile save succeeded, just log the system-wide save error
+          } else {
+            console.log(`✅ Saved ${dbColumn} to system_ai_config (system-wide)`)
+          }
+        } catch (systemError) {
+          console.error('Error saving to system_ai_config:', systemError)
+          // Don't throw - user profile save succeeded
+        }
+      }
       
       // Update local state
       setApiKeys(prev => ({ ...prev, [service]: apiKey }))

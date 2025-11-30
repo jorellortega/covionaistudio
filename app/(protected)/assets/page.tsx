@@ -103,13 +103,36 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
         })
         
         if (projectId) {
-          const project = fetchedProjects.find(p => p.id === projectId)
-          console.log('🎯 Found project by ID:', project)
+          // First check if it's in owned projects
+          let project = fetchedProjects.find(p => p.id === projectId)
+          
+          // If not found in owned projects, check if user has shared access
+          if (!project) {
+            console.log('🎯 Project not in owned list, checking for shared access...')
+            const sharedProject = await MovieService.getMovieById(projectId)
+            if (sharedProject) {
+              project = sharedProject
+              // Add shared project to the list so it shows in the selector
+              setProjects(prev => {
+                if (!prev.find(p => p.id === projectId)) {
+                  return [...prev, sharedProject]
+                }
+                return prev
+              })
+              console.log('✅ Found shared project:', sharedProject.id, sharedProject.name)
+            }
+          }
+          
           if (project) {
             setSelectedProject(project.id)
             console.log('✅ Set selected project to:', project.id, project.name)
           } else {
             console.log('❌ No project found with ID:', projectId)
+            toast({
+              title: "Access Denied",
+              description: "You don't have access to this project.",
+              variant: "destructive",
+            })
           }
         } else if (fetchedProjects.length > 0) {
           setSelectedProject(fetchedProjects[0].id)

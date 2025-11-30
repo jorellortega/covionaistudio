@@ -324,9 +324,11 @@ export default function TreatmentDetailPage() {
 
       // Get AI service settings (same as generateTreatmentFromScript)
       let normalizedService = 'openai'
+      let modelToUse = 'gpt-4o'
       try {
         const scriptsSetting = await AISettingsService.getTabSetting('scripts')
         if (scriptsSetting?.selected_model) {
+          modelToUse = scriptsSetting.selected_model
           // Determine service from model
           if (scriptsSetting.selected_model.includes('claude')) {
             normalizedService = 'anthropic'
@@ -390,8 +392,10 @@ Treatment:`
           prompt: aiPrompt,
           field: 'treatment',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 4000, // Increased for longer treatments
         }),
       })
 
@@ -888,6 +892,11 @@ Treatment:`
       return
     }
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsGeneratingTreatmentFromScript(true)
 
@@ -929,8 +938,10 @@ Treatment:`
           prompt: aiPrompt,
           field: 'treatment',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 4000, // Increased for longer treatments
         }),
       })
 
@@ -1249,6 +1260,11 @@ Treatment:`
       return
     }
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsGeneratingSynopsis(true)
 
@@ -1300,8 +1316,10 @@ Synopsis (2-3 paragraphs only):`
           prompt: aiPrompt,
           field: 'synopsis',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured', // Server will fetch from user's database or use environment variables
           userId: userId, // Pass userId so server can fetch user's API keys
+          maxTokens: 2000, // Increased for synopsis generation
         }),
       })
 
@@ -1625,6 +1643,11 @@ Logline (one sentence only):`
       return
     }
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsGeneratingTreatment(true)
 
@@ -1663,8 +1686,10 @@ Write the treatment now:`
           prompt: aiPrompt,
           field: 'treatment',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 4000, // Increased for longer treatments
         }),
       })
 

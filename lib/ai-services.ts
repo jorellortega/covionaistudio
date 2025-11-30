@@ -12,6 +12,7 @@ interface GenerateScriptRequest {
   template: string
   model: string
   apiKey: string
+  maxTokens?: number
 }
 
 interface GenerateImageRequest {
@@ -44,27 +45,132 @@ interface GenerateAudioRequest {
 export class OpenAIService {
   static async generateScript(request: GenerateScriptRequest): Promise<AIResponse> {
     try {
+      // Check if this is a GPT-5 model
+      const isGPT5Model = request.model.startsWith('gpt-5')
+      
+      console.log('🔍 OpenAIService.generateScript:', {
+        model: request.model,
+        isGPT5Model,
+        promptLength: request.prompt.length,
+        maxTokens: request.maxTokens
+      })
+      
+      // Build request body
+      const requestBody: any = {
+        model: request.model,
+        messages: [
+          { role: "system", content: `You are a professional screenwriter. ${request.template}` },
+          { role: "user", content: request.prompt }
+        ],
+      }
+
+      // GPT-5 models use max_completion_tokens instead of max_tokens
+      // Note: max_completion_tokens is for OUTPUT tokens only, reasoning tokens are separate
+      // So we need to set it higher to account for both reasoning and output
+      if (isGPT5Model) {
+        // For GPT-5, increase tokens significantly to allow for reasoning + output
+        // If reasoning_effort is "none", reasoning should be minimal, but we still need buffer
+        const baseTokens = request.maxTokens || 1000
+        // Increase by 2-3x to account for reasoning tokens when reasoning_effort is not "none"
+        requestBody.max_completion_tokens = baseTokens * 3
+      } else {
+        requestBody.max_tokens = request.maxTokens || 1000
+      }
+
+      // For GPT-5 models, add reasoning_effort and verbosity parameters
+      if (isGPT5Model) {
+        // Default to "none" for faster responses (as per GPT-5.1 API)
+        requestBody.reasoning_effort = "none"
+        requestBody.verbosity = "medium"
+        
+        // GPT-5 models only support temperature = 1 (default)
+        // Don't send temperature parameter, let it use default value of 1
+      } else {
+        // For non-GPT-5 models, use standard parameters
+        requestBody.temperature = 0.7
+      }
+
+      console.log('📤 OpenAI API request body:', {
+        model: requestBody.model,
+        hasReasoningEffort: !!requestBody.reasoning_effort,
+        reasoningEffort: requestBody.reasoning_effort,
+        hasVerbosity: !!requestBody.verbosity,
+        verbosity: requestBody.verbosity,
+        maxTokens: requestBody.max_tokens,
+        maxCompletionTokens: requestBody.max_completion_tokens,
+        hasTemperature: !!requestBody.temperature,
+        temperature: requestBody.temperature
+      })
+
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${request.apiKey}`,
         },
-        body: JSON.stringify({
-          model: request.model,
-          messages: [
-            { role: "system", content: `You are a professional screenwriter. ${request.template}` },
-            { role: "user", content: request.prompt }
-          ],
-          max_tokens: 1000,
-          temperature: 0.7,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
-      if (!response.ok) throw new Error(`OpenAI API error: ${response.status}`)
+      if (!response.ok) {
+        const errorText = await response.text()
+        let errorJson: any = {}
+        try {
+          errorJson = JSON.parse(errorText)
+        } catch {
+          // If not JSON, use the text as is
+        }
+        
+        const errorMessage = errorJson.error?.message || errorText || `OpenAI API error: ${response.status}`
+        console.error('OpenAI API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          model: request.model,
+          isGPT5: isGPT5Model
+        })
+        throw new Error(`OpenAI API error (${response.status}): ${errorMessage}`)
+      }
+      
       const result = await response.json()
+      
+      // Log FULL response structure for debugging
+      console.log('📥 OpenAI API response (full):', JSON.stringify(result, null, 2))
+      console.log('📥 OpenAI API response (summary):', {
+        hasChoices: !!result.choices,
+        choicesLength: result.choices?.length || 0,
+        firstChoice: result.choices?.[0] ? {
+          hasMessage: !!result.choices[0].message,
+          messageKeys: result.choices[0].message ? Object.keys(result.choices[0].message) : [],
+          hasContent: !!result.choices[0].message?.content,
+          contentType: typeof result.choices[0].message?.content,
+          contentLength: result.choices[0].message?.content?.length || 0,
+          contentPreview: result.choices[0].message?.content?.substring(0, 100) || 'empty',
+          fullMessage: result.choices[0].message
+        } : null,
+        model: result.model,
+        responseKeys: Object.keys(result),
+        fullResult: result
+      })
+      
+      // Check if content exists in the expected location
+      const content = result?.choices?.[0]?.message?.content
+      if (!content && isGPT5Model) {
+        console.error('⚠️ GPT-5 model returned empty content. Full response:', JSON.stringify(result, null, 2))
+        // Try alternative locations
+        if (result.output_text) {
+          console.log('✅ Found content in output_text field')
+          result.choices = [{
+            message: {
+              content: result.output_text,
+              role: 'assistant'
+            }
+          }]
+        }
+      }
+      
       return { success: true, data: result }
     } catch (error) {
+      console.error('OpenAIService.generateScript error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
     }
   }

@@ -83,7 +83,7 @@ export class TreatmentsService {
         .from('treatments')
         .select('*')
         .eq('id', id)
-        .single()
+        .maybeSingle()
 
       if (error) {
         console.error('Error fetching treatment:', error)

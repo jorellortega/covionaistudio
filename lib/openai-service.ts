@@ -2,6 +2,8 @@ interface GenerateScriptRequest {
   prompt: string
   template: string
   apiKey: string
+  model?: string
+  maxTokens?: number
 }
 
 interface GenerateImageRequest {
@@ -68,12 +70,19 @@ export class OpenAIService {
   }
 
   static async generateScript(request: GenerateScriptRequest): Promise<OpenAIResponse> {
-    const { prompt, template, apiKey } = request
+    const { prompt, template, apiKey, model = 'gpt-4o', maxTokens = 2000 } = request
     
     const systemPrompt = `You are a professional screenwriter. ${template}`
     
-    const data = {
-      model: "gpt-3.5-turbo",
+    // Check if this is a GPT-5 model
+    const isGPT5Model = model.startsWith('gpt-5')
+    
+    // GPT-5 models use max_completion_tokens instead of max_tokens
+    // Note: max_completion_tokens is for OUTPUT tokens only, reasoning tokens are separate
+    const baseTokens = maxTokens || 2000
+    
+    const data: any = {
+      model: model,
       messages: [
         {
           role: "system",
@@ -84,8 +93,17 @@ export class OpenAIService {
           content: prompt
         }
       ],
-      max_tokens: 1000,
-      temperature: 0.7,
+    }
+    
+    if (isGPT5Model) {
+      // GPT-5 models need max_completion_tokens (3x for reasoning + output)
+      data.max_completion_tokens = baseTokens * 3
+      data.reasoning_effort = "none"
+      data.verbosity = "medium"
+      // GPT-5 only supports default temperature (1), so we omit it
+    } else {
+      data.max_tokens = baseTokens
+      data.temperature = 0.7
     }
 
     return this.makeRequest('https://api.openai.com/v1/chat/completions', data, apiKey)

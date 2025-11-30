@@ -797,11 +797,16 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         prompt = `Based on the following treatment, propose a concise set of character profiles.\n\n${treatmentContext}`
       }
 
+      // Check if this is a GPT-5 model and increase maxTokens accordingly
+      const isGPT5Model = model.startsWith('gpt-5')
+      const maxTokens = isGPT5Model ? 4000 : 2000 // GPT-5 needs more tokens (3x for reasoning + output)
+
       const resp = await OpenAIService.generateScript({
         prompt,
         template,
         model, // used by ai-services OpenAIService
         apiKey: userRow.openai_api_key,
+        maxTokens: maxTokens, // Pass maxTokens for GPT-5 support
       } as any)
 
       if (!resp.success) {
@@ -1103,11 +1108,16 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       const fullPrompt = `${config.prompt}\n\nCharacter context:\nName: ${existingData.name}\n${existingData.archetype ? `Archetype: ${existingData.archetype}\n` : ''}${existingData.description ? `Description: ${existingData.description}\n` : ''}${existingData.backstory ? `Backstory: ${existingData.backstory}\n` : ''}\nTreatment context:\n${treatmentContext}`
 
+      // Check if this is a GPT-5 model and increase maxTokens accordingly
+      const isGPT5Model = model.startsWith('gpt-5')
+      const maxTokens = isGPT5Model ? 4000 : 2000 // GPT-5 needs more tokens (3x for reasoning + output)
+
       const resp = await OpenAIService.generateScript({
         prompt: fullPrompt,
         template: `Return STRICT JSON (no prose) as:\n${config.template}\nGenerate comprehensive details for the ${section} section.`,
         model,
         apiKey: userRow.openai_api_key,
+        maxTokens: maxTokens, // Pass maxTokens for GPT-5 support
       } as any)
 
       if (!resp.success) {

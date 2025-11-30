@@ -40,6 +40,10 @@ const aiModels = {
 
 // OpenAI models
 const OPENAI_MODELS = [
+  'gpt-5.1',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  'gpt-5',
   'gpt-4o',
   'gpt-4o-mini',
   'gpt-4-turbo',
@@ -258,17 +262,59 @@ export default function AISettingsPage() {
     }
   }
 
-  // Function to fetch user API keys
+  // Function to fetch user API keys and system-wide keys
   const fetchUserApiKeys = async () => {
     try {
-      const { data, error } = await getSupabaseClient()
+      const supabase = getSupabaseClient()
+      
+      // Fetch user-specific API keys
+      const { data: userData, error: userError } = await supabase
         .from('users')
         .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
         .eq('id', userId)
-        .single()
+        .maybeSingle()
 
-      if (error) throw error
-      setUserApiKeys(data || {})
+      const userKeys = userData || {}
+      
+      // Fetch system-wide API keys from system_ai_config
+      const systemKeys: Record<string, string> = {}
+      try {
+        const { data: systemData, error: systemError } = await supabase
+          .from('system_ai_config')
+          .select('setting_key, setting_value')
+          .in('setting_key', ['openai_api_key', 'anthropic_api_key', 'openart_api_key', 'kling_api_key', 'runway_api_key', 'elevenlabs_api_key', 'suno_api_key'])
+
+        if (!systemError && systemData) {
+          systemData.forEach((item: any) => {
+            if (item.setting_value?.trim()) {
+              // Map setting_key to userApiKeys format
+              const keyMap: Record<string, string> = {
+                'openai_api_key': 'openai_api_key',
+                'anthropic_api_key': 'anthropic_api_key',
+                'openart_api_key': 'openart_api_key',
+                'kling_api_key': 'kling_api_key',
+                'runway_api_key': 'runway_api_key',
+                'elevenlabs_api_key': 'elevenlabs_api_key',
+                'suno_api_key': 'suno_api_key',
+              }
+              const keyName = keyMap[item.setting_key]
+              if (keyName) {
+                systemKeys[keyName] = item.setting_value.trim()
+              }
+            }
+          })
+        }
+      } catch (systemError) {
+        console.error('Error fetching system-wide API keys:', systemError)
+      }
+      
+      // Merge: user keys take precedence, but system keys fill in gaps
+      const mergedKeys = {
+        ...systemKeys,
+        ...userKeys, // User keys override system keys
+      }
+      
+      setUserApiKeys(mergedKeys)
     } catch (error) {
       console.error('Error fetching API keys:', error)
     }
@@ -359,52 +405,52 @@ export default function AISettingsPage() {
     loadSettings()
   }, [ready, toast])
 
-  // Check if user has required API keys for selected models
+  // Check if user has required API keys for selected models (checks both user and system-wide keys)
   const checkModelAvailability = (tabType: string, model: string) => {
     if (!ready) return { isReady: false, statusText: "Not logged in" }
     
-    // Check specific API key requirements
+    // Check specific API key requirements (user keys take precedence, but system keys are checked too)
     if (model === "DALL-E 3" || model === "ChatGPT" || model === "GPT-4") {
       const hasKey = !!userApiKeys.openai_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "OpenAI API Key Required" 
+        statusText: hasKey ? "Ready" : "OpenAI API Key Required (User or System)" 
       }
     } else if (model === "Claude") {
       const hasKey = !!userApiKeys.anthropic_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "Anthropic API Key Required" 
+        statusText: hasKey ? "Ready" : "Anthropic API Key Required (User or System)" 
       }
     } else if (model === "OpenArt") {
       const hasKey = !!userApiKeys.openart_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "OpenArt API Key Required" 
+        statusText: hasKey ? "Ready" : "OpenArt API Key Required (User or System)" 
       }
     } else if (model === "Runway ML") {
       const hasKey = !!userApiKeys.runway_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "Runway ML API Key Required" 
+        statusText: hasKey ? "Ready" : "Runway ML API Key Required (User or System)" 
       }
     } else if (model === "Kling") {
       const hasKey = !!userApiKeys.kling_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "Kling API Key Required" 
+        statusText: hasKey ? "Ready" : "Kling API Key Required (User or System)" 
       }
     } else if (model === "ElevenLabs") {
       const hasKey = !!userApiKeys.elevenlabs_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "ElevenLabs API Key Required" 
+        statusText: hasKey ? "Ready" : "ElevenLabs API Key Required (User or System)" 
       }
     } else if (model === "Suno AI") {
       const hasKey = !!userApiKeys.suno_api_key
       return { 
         isReady: hasKey, 
-        statusText: hasKey ? "Ready" : "Suno AI API Key Required" 
+        statusText: hasKey ? "Ready" : "Suno AI API Key Required (User or System)" 
       }
     }
     

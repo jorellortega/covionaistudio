@@ -34,7 +34,17 @@ export async function POST(request: NextRequest) {
     console.log('File name:', fileName)
     console.log('User ID:', userId)
 
-    // Download the image from OpenAI (server-side, no CORS issues)
+    let imageBlob: Blob
+
+    // Check if this is a data URL (base64)
+    if (imageUrl.startsWith('data:image/')) {
+      // Handle base64 data URL
+      console.log('Processing base64 data URL')
+      const base64Data = imageUrl.split(',')[1]
+      const imageBuffer = Buffer.from(base64Data, 'base64')
+      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    } else {
+      // Download the image from URL (server-side, no CORS issues)
     const response = await fetch(imageUrl)
     if (!response.ok) {
       console.error('Failed to download image:', response.status, response.statusText)
@@ -42,7 +52,8 @@ export async function POST(request: NextRequest) {
     }
 
     const imageBuffer = await response.arrayBuffer()
-    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    }
     
     console.log('Image downloaded, size:', imageBlob.size)
 

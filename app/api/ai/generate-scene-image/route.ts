@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
 import { createServerClient } from '@supabase/ssr'
+import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 
 // Function to download and store image in bucket
@@ -123,6 +124,69 @@ export async function POST(request: NextRequest) {
     // Get actual API key from database if apiKey is 'configured' or not provided
     let actualApiKey = apiKey
     if (apiKey === 'configured' || apiKey === 'use_env_vars' || !apiKey) {
+      // FIRST: Check system-wide API keys from system_ai_config (set by CEO)
+      try {
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!,
+            {
+              auth: {
+                autoRefreshToken: false,
+                persistSession: false
+              }
+            }
+          )
+
+          // Get system-wide API keys using RPC function (bypasses RLS)
+          const { data: systemConfig, error: systemError } = await supabaseAdmin.rpc('get_system_ai_config')
+          
+          if (!systemError && systemConfig && Array.isArray(systemConfig)) {
+            const configMap: Record<string, string> = {}
+            systemConfig.forEach((item: any) => {
+              configMap[item.setting_key] = item.setting_value
+            })
+
+            // Check for system-wide keys based on service
+            if ((service === 'DALL-E 3' || service === 'dalle') && configMap['openai_api_key']?.trim()) {
+              actualApiKey = configMap['openai_api_key'].trim()
+              console.log('✅ Using system-wide OpenAI API key from system_ai_config (CEO-set)')
+            } else if (service === 'OpenArt' || service === 'openart') {
+              if (configMap['openart_api_key']?.trim()) {
+                actualApiKey = configMap['openart_api_key'].trim()
+                console.log('✅ Using system-wide OpenArt API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Kling' || service === 'kling') {
+              if (configMap['kling_api_key']?.trim()) {
+                actualApiKey = configMap['kling_api_key'].trim()
+                console.log('✅ Using system-wide Kling API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Runway ML' || service === 'runway') {
+              if (configMap['runway_api_key']?.trim()) {
+                actualApiKey = configMap['runway_api_key'].trim()
+                console.log('✅ Using system-wide Runway ML API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'ElevenLabs' || service === 'elevenlabs') {
+              if (configMap['elevenlabs_api_key']?.trim()) {
+                actualApiKey = configMap['elevenlabs_api_key'].trim()
+                console.log('✅ Using system-wide ElevenLabs API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Suno AI' || service === 'suno') {
+              if (configMap['suno_api_key']?.trim()) {
+                actualApiKey = configMap['suno_api_key'].trim()
+                console.log('✅ Using system-wide Suno AI API key from system_ai_config (CEO-set)')
+              }
+            }
+          } else if (systemError) {
+            console.error('❌ Error fetching system-wide API keys:', systemError)
+          }
+        }
+      } catch (systemKeyError) {
+        console.error('❌ Error checking system-wide API keys:', systemKeyError)
+      }
+
+      // Fallback to user-specific keys if no system-wide key found
+      if (!actualApiKey || actualApiKey === 'configured' || actualApiKey === 'use_env_vars') {
       if (!userId) {
         console.error('🎬 DEBUG - No userId provided for database API key lookup')
         return NextResponse.json(
@@ -161,7 +225,7 @@ export async function POST(request: NextRequest) {
           .from('users')
           .select('openai_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
           .eq('id', userId)
-          .single()
+            .maybeSingle()
 
         if (error) {
           console.error('🎬 DEBUG - Error fetching API keys from database:', error)
@@ -172,22 +236,22 @@ export async function POST(request: NextRequest) {
         }
 
         if (service === 'DALL-E 3' || service === 'dalle') {
-          actualApiKey = data?.openai_api_key
+            actualApiKey = data?.openai_api_key || actualApiKey
           console.log('🎬 DEBUG - Retrieved OpenAI API key:', {
             hasKey: !!actualApiKey,
             keyLength: actualApiKey?.length || 0,
             keyPrefix: actualApiKey?.substring(0, 10) + '...' || 'None'
           })
         } else if (service === 'OpenArt' || service === 'openart') {
-          actualApiKey = data?.openart_api_key
+            actualApiKey = data?.openart_api_key || actualApiKey
         } else if (service === 'Kling' || service === 'kling') {
-          actualApiKey = data?.kling_api_key
+            actualApiKey = data?.kling_api_key || actualApiKey
         } else if (service === 'Runway ML' || service === 'runway') {
-          actualApiKey = data?.runway_api_key
+            actualApiKey = data?.runway_api_key || actualApiKey
         } else if (service === 'ElevenLabs' || service === 'elevenlabs') {
-          actualApiKey = data?.elevenlabs_api_key
+            actualApiKey = data?.elevenlabs_api_key || actualApiKey
         } else if (service === 'Suno AI' || service === 'suno') {
-          actualApiKey = data?.suno_api_key
+            actualApiKey = data?.suno_api_key || actualApiKey
         }
 
       } catch (error) {
@@ -196,6 +260,7 @@ export async function POST(request: NextRequest) {
           { error: 'Database error while fetching API keys' },
           { status: 500 }
         )
+        }
       }
     }
 

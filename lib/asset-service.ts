@@ -230,20 +230,53 @@ export class AssetService {
   static async getAssetsForProject(projectId: string): Promise<Asset[]> {
     const user = await this.ensureAuthenticated()
     
+    // Check if user has access to this project (owner or shared)
+    const { data: project, error: projectError } = await getSupabaseClient()
+      .from('projects')
+      .select('user_id')
+      .eq('id', projectId)
+      .maybeSingle()
+    
+    if (projectError || !project) {
+      return []
+    }
+
+    if (!project) {
+      return []
+    }
+
+    const isOwner = project.user_id === user.id
+    
+    // If not owner, check for shared access
+    if (!isOwner) {
+      const { data: share, error: shareError } = await getSupabaseClient()
+        .from('project_shares')
+        .select('*')
+        .eq('project_id', projectId)
+        .or(`shared_with_user_id.eq.${user.id},shared_with_email.eq.${user.email}`)
+        .eq('is_revoked', false)
+        .maybeSingle()
+
+      if (shareError || !share || (share.deadline && new Date(share.deadline) < new Date())) {
+        return [] // No access
+      }
+    }
+
+    // Get all assets for this project (regardless of who created them)
+    // Assets can be created by owner or shared users
     const { data, error } = await getSupabaseClient()
       .from('assets')
       .select('*')
       .eq('project_id', projectId)
-      .eq('user_id', user.id)
       .eq('is_latest_version', true)
       .order('created_at', { ascending: false })
 
     if (error) {
-      console.error('Error fetching project assets:', error)
+      console.error('Error fetching assets for project:', error)
       throw error
     }
 
-    return data as Asset[]
+    return (data || []) as Asset[]
   }
 
   static async getAssetsForScene(sceneId: string): Promise<Asset[]> {

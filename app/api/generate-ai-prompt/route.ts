@@ -74,23 +74,50 @@ ${prompt}
 Provide an improved version of this prompt. Return ONLY the improved prompt text, without any additional commentary or explanation.`
 
     try {
+      const model = settings['openai_model']?.trim() || 'gpt-4o-mini'
+      const isGPT5Model = model.startsWith('gpt-5')
+      
+      // Build request body
+      const requestBody: any = {
+        model,
+        messages: [
+          {
+            role: 'user',
+            content: enhancementPrompt,
+          },
+        ],
+      }
+
+      // GPT-5 models use max_completion_tokens instead of max_tokens
+      // Note: max_completion_tokens is for OUTPUT tokens only, reasoning tokens are separate
+      // So we need to set it higher to account for both reasoning and output
+      if (isGPT5Model) {
+        // Increase tokens to allow for reasoning + output (3x base to account for reasoning)
+        requestBody.max_completion_tokens = 6000
+      } else {
+        requestBody.max_tokens = 2000
+      }
+
+      // For GPT-5 models, add reasoning_effort and verbosity parameters
+      if (isGPT5Model) {
+        // Default to "none" for faster responses (as per GPT-5.1 API)
+        requestBody.reasoning_effort = "none"
+        requestBody.verbosity = "medium"
+        
+        // GPT-5 models only support temperature = 1 (default)
+        // Don't send temperature parameter, let it use default value of 1
+      } else {
+        // For non-GPT-5 models, use standard parameters
+        requestBody.temperature = 0.7
+      }
+
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${openaiKey}`,
         },
-        body: JSON.stringify({
-          model: settings['openai_model']?.trim() || 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'user',
-              content: enhancementPrompt,
-            },
-          ],
-          temperature: 0.7,
-          max_tokens: 2000,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {

@@ -24,6 +24,7 @@ import { AssetService, type Asset } from "@/lib/asset-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { useAuthReady } from "@/components/auth-hooks"
 import { OpenAIService } from "@/lib/ai-services"
+import { MovieService } from "@/lib/movie-service"
 
 export default function LocationsPage() {
   const { toast } = useToast()
@@ -89,6 +90,18 @@ export default function LocationsPage() {
       if (!projectId) return
       setLoading(true)
       try {
+        // Check if user has access to this project (owner or shared)
+        const movie = await MovieService.getMovieById(projectId)
+        if (!movie) {
+          toast({
+            title: "Access Denied",
+            description: "You don't have access to this project.",
+            variant: "destructive",
+          })
+          router.push('/movies')
+          return
+        }
+
         // Find treatment for project (if any)
         const treatment = await TreatmentsService.getTreatmentByProjectId(projectId)
         setTreatmentId(treatment?.id || null)

@@ -87,36 +87,79 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }, [voices, selectedVoice])
 
   const loadApiKey = async () => {
+    console.log('🔑 [DEBUG] loadApiKey called, userId:', userId)
     if (!userId) {
-      console.log('No userId available, skipping API key load')
+      console.log('❌ [DEBUG] No userId available, skipping API key load')
       return
     }
 
     try {
-      const { data, error } = await getSupabaseClient()
+      const supabase = getSupabaseClient()
+      
+      // First, try to get user's API key
+      console.log('🔑 [DEBUG] Checking user-specific API key...')
+      const { data: userData, error: userError } = await supabase
         .from('users')
         .select('elevenlabs_api_key')
         .eq('id', userId)
-        .single()
+        .maybeSingle()
 
-      if (error) throw error
-      
-      if (data?.elevenlabs_api_key) {
-        setElevenLabsApiKey(data.elevenlabs_api_key)
-      } else {
-        toast({
-          title: "ElevenLabs Not Configured",
-          description: "To use text-to-speech, please configure your ElevenLabs API key in settings.",
-          variant: "destructive",
-        })
-      }
-    } catch (error) {
-      console.error('Error loading API key:', error)
-      toast({
-        title: "Error",
-        description: "Failed to load AI settings.",
-        variant: "destructive",
+      console.log('🔑 [DEBUG] User key query result:', {
+        hasData: !!userData,
+        hasKey: !!userData?.elevenlabs_api_key,
+        keyLength: userData?.elevenlabs_api_key?.length || 0,
+        error: userError?.message || null
       })
+
+      if (!userError && userData?.elevenlabs_api_key?.trim()) {
+        console.log('✅ [DEBUG] Using user-specific ElevenLabs API key')
+        setElevenLabsApiKey(userData.elevenlabs_api_key.trim())
+        return
+      }
+
+      // If no user key, try system-wide key via API route (bypasses RLS)
+      console.log('🔑 [DEBUG] No user key found, checking system-wide key via API route...')
+      try {
+        const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
+        console.log('🔑 [DEBUG] API route response status:', response.status, response.statusText)
+        
+        if (response.ok) {
+          const data = await response.json()
+          console.log('🔑 [DEBUG] API route response data (full):', JSON.stringify(data, null, 2))
+          console.log('🔑 [DEBUG] API route response data (parsed):', {
+            hasApiKey: !!data.apiKey,
+            apiKeyValue: data.apiKey,
+            apiKeyType: typeof data.apiKey,
+            apiKeyLength: data.apiKey?.length || 0,
+            debug: data.debug,
+            allKeys: Object.keys(data)
+          })
+          
+          if (data.apiKey?.trim()) {
+            setElevenLabsApiKey(data.apiKey.trim())
+            console.log('✅ [DEBUG] Using system-wide ElevenLabs API key')
+            return
+      } else {
+            console.log('❌ [DEBUG] System-wide API key is empty or null', {
+              apiKey: data.apiKey,
+              trimmed: data.apiKey?.trim(),
+              isEmpty: !data.apiKey?.trim()
+            })
+          }
+        } else {
+          const errorData = await response.json().catch(() => ({}))
+          console.error('❌ [DEBUG] API route error:', response.status, errorData)
+        }
+      } catch (apiError) {
+        console.error('❌ [DEBUG] Error fetching system-wide API key:', apiError)
+      }
+
+      // No key found - only show error if user tried to use the feature
+      // Don't show error on mount, only when they try to use it
+      console.log('❌ [DEBUG] ElevenLabs API key not found in user profile or system config')
+    } catch (error) {
+      console.error('❌ [DEBUG] Error loading API key:', error)
+      // Don't show error toast on mount, only log it
     }
   }
 

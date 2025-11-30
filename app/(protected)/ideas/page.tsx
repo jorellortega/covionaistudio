@@ -1798,11 +1798,24 @@ Synopsis (2-3 paragraphs only):`
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate script')
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        const errorMessage = errorData.error || errorData.message || 'Failed to generate script'
+        console.error('❌ API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorMessage,
+          errorData
+        })
+        throw new Error(errorMessage)
       }
 
       const result = await response.json()
+      console.log('📥 API Response:', {
+        success: result.success,
+        hasText: !!result.text,
+        textLength: result.text?.length || 0,
+        error: result.error
+      })
 
       if (result.success && result.text) {
         const content = result.text
@@ -1823,13 +1836,16 @@ Synopsis (2-3 paragraphs only):`
           description: "AI script generated successfully",
         })
       } else {
-        throw new Error(result.error || "Failed to generate script")
+        const errorMsg = result.error || result.message || "Failed to generate script"
+        console.error('❌ Generation failed:', result)
+        throw new Error(errorMsg)
       }
     } catch (error) {
       console.error('Error generating script:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to generate script with AI'
       toast({
         title: "Error",
-        description: "Failed to generate script with AI",
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams, useSearchParams } from "next/navigation"
+import { useParams, useSearchParams, useRouter } from "next/navigation"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -70,6 +70,7 @@ export default function CastingPage() {
   
   const { user, userId, ready } = useAuthReady()
   const { toast } = useToast()
+  const router = useRouter()
 
   // State
   const [movie, setMovie] = useState<Movie | null>(null)
@@ -128,8 +129,19 @@ export default function CastingPage() {
     try {
       setLoading(true)
       
-      // Load movie
+      // Load movie (checks for shared access)
       const movieData = await MovieService.getMovieById(movieId)
+      
+      if (!movieData) {
+        toast({
+          title: "Access Denied",
+          description: "You don't have access to this project.",
+          variant: "destructive",
+        })
+        router.push('/movies')
+        return
+      }
+      
       setMovie(movieData)
       
       // Check if user is owner
@@ -168,7 +180,7 @@ export default function CastingPage() {
               .from('treatments')
               .select('*')
               .eq('project_id', movieId)
-              .single()
+              .maybeSingle()
 
             if (treatmentData) {
               setTreatment(treatmentData)
@@ -181,13 +193,15 @@ export default function CastingPage() {
         if (settings.show_scenes) {
           try {
             // Get timeline first, then scenes
+            // RLS policy will handle access control for shared users
             const { data: timelineData } = await getSupabaseClient()
               .from('timelines')
               .select('id')
               .eq('project_id', movieId)
-              .single()
+              .maybeSingle()
 
             if (timelineData) {
+              // RLS policy will handle access control for shared users
               const { data: scenesData } = await getSupabaseClient()
                 .from('scenes')
                 .select('*')

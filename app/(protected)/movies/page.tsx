@@ -65,6 +65,7 @@ const statusColors = {
 export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [sharedMovies, setSharedMovies] = useState<any[]>([])
+  const [sharedMovieTreatmentMap, setSharedMovieTreatmentMap] = useState<Record<string, string>>({}) // movieId -> treatmentId
   const [loading, setLoading] = useState(true)
   const [loadingShared, setLoadingShared] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -72,6 +73,9 @@ export default function MoviesPage() {
   const [selectedProjectStatus, setSelectedProjectStatus] = useState("active")
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isShareKeyDialogOpen, setIsShareKeyDialogOpen] = useState(false)
+  const [shareKeyInput, setShareKeyInput] = useState("")
+  const [isAcceptingShare, setIsAcceptingShare] = useState(false)
   const [editingMovie, setEditingMovie] = useState<Movie | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -377,6 +381,21 @@ export default function MoviesPage() {
           p.project_type === 'movie'
         )
         setSharedMovies(movieProjects)
+        
+        // Load treatments for shared movies
+        const treatmentMap: Record<string, string> = {}
+        for (const movie of movieProjects) {
+          try {
+            const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
+            if (treatment) {
+              treatmentMap[movie.id] = treatment.id
+              console.log(`✅ Movies Page - Found treatment ${treatment.id} for shared movie ${movie.id} (${movie.name})`)
+            }
+          } catch (error) {
+            console.error(`Error loading treatment for shared movie ${movie.id}:`, error)
+          }
+        }
+        setSharedMovieTreatmentMap(treatmentMap)
       } else {
         console.error('Error loading shared movies:', data.error)
       }
@@ -384,6 +403,67 @@ export default function MoviesPage() {
       console.error('Error loading shared movies:', error)
     } finally {
       setLoadingShared(false)
+    }
+  }
+
+  const handleAcceptShareKey = async () => {
+    if (!shareKeyInput.trim()) {
+      toast({
+        title: "Share Key Required",
+        description: "Please enter a share key",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!userId) {
+      toast({
+        title: "Authentication Required",
+        description: "You must be logged in to accept a share",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsAcceptingShare(true)
+      const response = await fetch('/api/project-shares/accept-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          share_key: shareKeyInput.trim(),
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to accept share')
+      }
+
+      if (data.success) {
+        toast({
+          title: "Share Accepted!",
+          description: `You now have access to "${data.project?.name || 'the project'}"`,
+        })
+        setIsShareKeyDialogOpen(false)
+        setShareKeyInput("")
+        // Reload shared movies
+        await loadSharedMovies()
+      } else {
+        throw new Error(data.error || 'Failed to accept share')
+      }
+    } catch (error: any) {
+      console.error('Error accepting share key:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to accept share. The key may be invalid or expired.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAcceptingShare(false)
     }
   }
 
@@ -1562,6 +1642,16 @@ export default function MoviesPage() {
               <DropdownMenuItem onClick={() => setSelectedStatus("Distribution")}>Distribution</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsShareKeyDialogOpen(true)}
+            className="border-primary/30 hover:bg-primary/10"
+          >
+            <Share2 className="h-4 w-4 mr-2" />
+            Enter Share Key
+          </Button>
         </div>
 
         {/* Status Tabs */}
@@ -1604,11 +1694,23 @@ export default function MoviesPage() {
         {/* Shared with Me Section */}
         {sharedMovies.length > 0 && (
           <div className="mb-8">
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
               <Share2 className="h-5 w-5 text-primary" />
               <h2 className="text-xl font-semibold">Shared with Me</h2>
               <Badge variant="outline">{sharedMovies.length}</Badge>
             </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsShareKeyDialogOpen(true)}
+                className="border-primary/30 hover:bg-primary/10"
+              >
+                <Share2 className="h-4 w-4 mr-2" />
+                Enter Share Key
+              </Button>
+            </div>
+            <>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6 mb-8">
               {sharedMovies.map((sharedProject: any) => {
                 const movie = sharedProject as Movie
@@ -1651,14 +1753,81 @@ export default function MoviesPage() {
                       )}
                     </CardHeader>
                     <CardContent>
-                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex items-center justify-between text-sm mb-3">
                         <Badge className={statusColors[movie.movie_status as keyof typeof statusColors] || "bg-gray-500/20 text-gray-400"}>
                           {movie.movie_status}
                         </Badge>
-                        <Link href={`/share-control?project_id=${movie.id}`}>
-                          <Button variant="ghost" size="sm">
-                            <Share2 className="h-4 w-4 mr-1" />
-                            View Share
+                        </div>
+                        {sharedMovieTreatmentMap[movie.id] ? (
+                          <Link href={`/treatments/${sharedMovieTreatmentMap[movie.id]}`} className="block mb-3">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 h-8 text-xs"
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-2" />
+                              View Movie
+                            </Button>
+                          </Link>
+                        ) : null}
+                        <div className="grid grid-cols-2 gap-1 mt-2">
+                          <Link href={`/timeline?movie=${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
+                            >
+                              <Play className="mr-2 h-3.5 w-3.5" />
+                              Timeline
+                            </Button>
+                          </Link>
+                          <Link href={`/screenplay/${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
+                            >
+                              <FileText className="mr-2 h-3.5 w-3.5" />
+                              Screenplay
+                            </Button>
+                          </Link>
+                          <Link href={`/assets?project=${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-orange-500/30 bg-transparent hover:bg-orange-500/10 text-orange-400 hover:text-orange-300 text-xs h-8"
+                            >
+                              <FolderOpen className="mr-2 h-3.5 w-3.5" />
+                              Assets
+                            </Button>
+                          </Link>
+                          <Link href={`/casting/${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
+                            >
+                              <Users className="mr-2 h-3.5 w-3.5" />
+                              Casting
+                            </Button>
+                          </Link>
+                          <Link href={`/characters?movie=${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
+                            >
+                              Characters
+                            </Button>
+                          </Link>
+                          <Link href={`/locations?movie=${movie.id}`}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full border-purple-500/30 bg-transparent hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 text-xs h-8"
+                            >
+                              <MapPin className="mr-2 h-3.5 w-3.5" />
+                              Locations
                           </Button>
                         </Link>
                       </div>
@@ -1668,8 +1837,69 @@ export default function MoviesPage() {
               })}
             </div>
             <Separator className="my-8" />
+            </>
           </div>
         )}
+
+        {/* Share Key Dialog */}
+        <Dialog open={isShareKeyDialogOpen} onOpenChange={setIsShareKeyDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Enter Share Key</DialogTitle>
+              <DialogDescription>
+                Enter the share key you received to access a shared movie project
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="share-key">Share Key</Label>
+                <Input
+                  id="share-key"
+                  placeholder="Enter share key (e.g., ABC12345)"
+                  value={shareKeyInput}
+                  onChange={(e) => setShareKeyInput(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && shareKeyInput.trim()) {
+                      handleAcceptShareKey()
+                    }
+                  }}
+                  className="font-mono"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The share key should have been provided by the project owner
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsShareKeyDialogOpen(false)
+                  setShareKeyInput("")
+                }}
+                disabled={isAcceptingShare}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleAcceptShareKey}
+                disabled={isAcceptingShare || !shareKeyInput.trim()}
+              >
+                {isAcceptingShare ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Accepting...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Accept Share
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* My Movies Section */}
         <div className="mb-4">

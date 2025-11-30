@@ -384,13 +384,47 @@ function ScreenplayPageClient({ id }: { id: string }) {
     try {
       console.log('📝 fetchScriptsFromScenes: Starting to fetch screenplay from scenes...')
       
-      // Get timeline for this project
+      // Get timeline for this project - need to check shared access
+      // First get the project to find the owner
+      const { data: project, error: projectError } = await getSupabaseClient()
+        .from('projects')
+        .select('user_id')
+        .eq('id', id)
+        .maybeSingle()
+
+      if (projectError || !project) {
+        console.log('❌ fetchScriptsFromScenes: Project not found')
+        return
+      }
+
+      // Check if user has access (owner or shared)
+      const isOwner = project.user_id === userId
+      let hasAccess = isOwner
+      
+      if (!isOwner) {
+        const { data: share, error: shareError } = await getSupabaseClient()
+          .from('project_shares')
+          .select('*')
+          .eq('project_id', id)
+          .or(`shared_with_user_id.eq.${userId},shared_with_email.eq.${user?.email}`)
+          .eq('is_revoked', false)
+          .maybeSingle()
+
+        hasAccess = !shareError && share && (!share.deadline || new Date(share.deadline) > new Date())
+      }
+      
+      if (!hasAccess) {
+        console.log('❌ fetchScriptsFromScenes: User does not have access to this project')
+        return
+      }
+
+      // Get timeline using owner's user_id (timelines are created by owner)
       const { data: timeline, error: timelineError } = await getSupabaseClient()
         .from('timelines')
         .select('id')
         .eq('project_id', id)
-        .eq('user_id', userId)
-        .single()
+        .eq('user_id', project.user_id) // Use owner's user_id
+        .maybeSingle()
 
       if (timelineError || !timeline) {
         console.log('❌ fetchScriptsFromScenes: No timeline found for project')
@@ -400,11 +434,11 @@ function ScreenplayPageClient({ id }: { id: string }) {
       console.log('✅ fetchScriptsFromScenes: Found timeline:', timeline.id)
 
       // Get all scenes for this timeline with screenplay_content
+      // RLS policy will handle access control for shared users
       const { data: scenes, error: scenesError } = await getSupabaseClient()
         .from('scenes')
         .select('id, name, metadata, order_index, screenplay_content, created_at, updated_at')
         .eq('timeline_id', timeline.id)
-        .eq('user_id', userId)
 
       if (scenesError) {
         console.error('❌ fetchScriptsFromScenes: Error fetching scenes:', scenesError)
@@ -452,13 +486,13 @@ function ScreenplayPageClient({ id }: { id: string }) {
       })
 
       // Get scripts for each scene (as fallback)
+      // RLS policy will handle access control for shared users
       const sceneIds = sortedScenes.map(s => s.id)
       const { data: sceneScripts, error: scriptsError } = await getSupabaseClient()
         .from('assets')
         .select('*')
         .in('scene_id', sceneIds)
         .eq('content_type', 'script')
-        .eq('user_id', userId)
         .eq('is_latest_version', true)
         .order('created_at', { ascending: false })
 
@@ -1939,6 +1973,11 @@ ${centerText('AUTHOR NAME')}
                              serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
                              'openai'
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsGeneratingScenes(true)
 
@@ -1977,8 +2016,10 @@ Return ONLY the JSON array, no other text:`
           prompt: aiPrompt,
           field: 'scenes',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 8000, // Increased for scene generation
         }),
       })
 
@@ -2300,6 +2341,11 @@ Return ONLY the JSON array, no other text:`
                              serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
                              'openai'
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsRegeneratingScene(scene.id)
 
@@ -2367,8 +2413,10 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
           prompt: aiPrompt,
           field: 'scene',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 4000, // Increased for detailed scene descriptions
         }),
       })
 
@@ -2558,6 +2606,11 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
                              serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') ? 'anthropic' : 
                              'openai'
 
+    // Get the model from AI settings
+    const scriptsSetting = aiSettings.find((s: any) => s.tab_type === 'scripts')
+    const modelToUse = scriptsSetting?.selected_model || 
+                      (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
     try {
       setIsGeneratingScenes(true)
 
@@ -2607,8 +2660,10 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           prompt: aiPrompt,
           field: 'scenes',
           service: normalizedService,
+          model: modelToUse, // Pass the model from AI settings
           apiKey: 'configured',
           userId: userId,
+          maxTokens: 8000, // Increased for multiple scene details
         }),
       })
 

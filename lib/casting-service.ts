@@ -80,18 +80,14 @@ export class CastingService {
         .from('casting_settings')
         .select('*')
         .eq('movie_id', movieId)
-        .single()
+        .maybeSingle()
 
       if (error) {
-        if (error.code === 'PGRST116') {
-          // No rows returned
-          return null
-        }
         console.error('Error fetching casting settings:', error)
         throw error
       }
 
-      return data as CastingSetting
+      return data as CastingSetting | null
     } catch (error) {
       console.error('Error in getCastingSettings:', error)
       throw error

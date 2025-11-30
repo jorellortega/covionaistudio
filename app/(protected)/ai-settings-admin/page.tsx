@@ -18,6 +18,10 @@ import { Textarea } from "@/components/ui/textarea"
 
 // OpenAI models
 const OPENAI_MODELS = [
+  'gpt-5.1',
+  'gpt-5-mini',
+  'gpt-5-nano',
+  'gpt-5',
   'gpt-4o',
   'gpt-4o-mini',
   'gpt-4-turbo',
@@ -44,6 +48,7 @@ export default function AISettingsAdminPage() {
   const [userRole, setUserRole] = useState<string>('user')
   const [hasAccess, setHasAccess] = useState(false)
   const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({})
+  const [autoFilledKeys, setAutoFilledKeys] = useState<string[]>([])
 
   // Check if user is CEO or Admin
   useEffect(() => {
@@ -132,7 +137,93 @@ export default function AISettingsAdminPage() {
       }
 
       console.log('✅ AI settings loaded, count:', data?.length || 0)
-      setSettings(data || [])
+      
+      // Ensure common API keys are always present (even if empty)
+      const commonApiKeys = [
+        { setting_key: 'openai_api_key', description: 'OpenAI API key for text generation', userKey: 'openai_api_key' },
+        { setting_key: 'anthropic_api_key', description: 'Anthropic API key for Claude models', userKey: 'anthropic_api_key' },
+        { setting_key: 'openart_api_key', description: 'OpenArt API key for image generation', userKey: 'openart_api_key' },
+        { setting_key: 'kling_api_key', description: 'Kling AI API key for video generation', userKey: 'kling_api_key' },
+        { setting_key: 'runway_api_key', description: 'Runway API key for video generation', userKey: 'runway_api_key' },
+        { setting_key: 'elevenlabs_api_key', description: 'ElevenLabs API key for text-to-speech', userKey: 'elevenlabs_api_key' },
+        { setting_key: 'suno_api_key', description: 'Suno AI API key for music generation', userKey: 'suno_api_key' },
+      ]
+      
+      const existingKeys = new Set((data || []).map((s: GlobalAISetting) => s.setting_key))
+      const missingKeys = commonApiKeys
+        .filter(key => !existingKeys.has(key.setting_key))
+        .map(key => ({
+          setting_key: key.setting_key,
+          setting_value: '',
+          description: key.description,
+          updated_at: null
+        }))
+      
+      let allSettings = [...(data || []), ...missingKeys]
+      
+      // Auto-fill empty system-wide keys from admin's user profile
+      if (userId) {
+        try {
+          const { data: userData } = await supabase
+            .from('users')
+            .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+            .eq('id', userId)
+            .maybeSingle()
+          
+          if (userData) {
+            // Map user keys to system settings
+            const keyMapping: Record<string, string> = {
+              'openai_api_key': userData.openai_api_key,
+              'anthropic_api_key': userData.anthropic_api_key,
+              'openart_api_key': userData.openart_api_key,
+              'kling_api_key': userData.kling_api_key,
+              'runway_api_key': userData.runway_api_key,
+              'elevenlabs_api_key': userData.elevenlabs_api_key,
+              'suno_api_key': userData.suno_api_key,
+            }
+            
+            // Fill in empty system keys with admin's user keys
+            allSettings = allSettings.map(setting => {
+              const userKey = keyMapping[setting.setting_key]
+              // Only auto-fill if system key is empty AND user has a key
+              if (!setting.setting_value?.trim() && userKey?.trim()) {
+                console.log(`🔄 [AUTO-FILL] Auto-filling ${setting.setting_key} from admin user profile`, {
+                  hasUserKey: !!userKey?.trim(),
+                  keyLength: userKey?.trim().length || 0,
+                  keyPreview: userKey?.trim().substring(0, 10) + '...'
+                })
+                return {
+                  ...setting,
+                  setting_value: userKey.trim()
+                }
+              }
+              return setting
+            })
+            
+            // Track which keys were auto-filled
+            const autoFilled = allSettings
+              .filter(s => {
+                const userKey = keyMapping[s.setting_key]
+                return !s.setting_value?.trim() && userKey?.trim()
+              })
+              .map(s => s.setting_key)
+            
+            if (autoFilled.length > 0) {
+              setAutoFilledKeys(autoFilled)
+              console.log(`✅ [AUTO-FILL] Auto-filled ${autoFilled.length} keys from your user profile:`, autoFilled)
+              console.log(`⚠️ [AUTO-FILL] IMPORTANT: Click "Save Changes" to copy these keys to system_ai_config so all users can use them!`)
+            } else {
+              setAutoFilledKeys([])
+            }
+          }
+        } catch (userKeyError) {
+          console.error('Error fetching admin user keys for auto-fill:', userKeyError)
+        }
+      }
+      
+      setSettings(allSettings.sort((a, b) => 
+        a.setting_key.localeCompare(b.setting_key)
+      ))
     } catch (error) {
       console.error('Error loading settings:', error)
       // Don't show toast if already shown above
@@ -163,21 +254,42 @@ export default function AISettingsAdminPage() {
       setIsSaving(true)
       const supabase = getSupabaseClient()
 
+      console.log('💾 [SAVE] Starting to save settings...')
+      console.log('💾 [SAVE] Total settings to save:', settings.length)
+      
       // Update or insert each setting
       for (const setting of settings) {
+        // Skip saving empty API keys (don't overwrite existing keys with empty values)
+        if (isSensitiveKey(setting.setting_key) && !setting.setting_value?.trim()) {
+          console.log(`⏭️ [SAVE] Skipping empty ${setting.setting_key}`)
+          continue
+        }
+        
+        console.log(`💾 [SAVE] Saving ${setting.setting_key}:`, {
+          hasValue: !!setting.setting_value?.trim(),
+          valueLength: setting.setting_value?.length || 0,
+          description: setting.description
+        })
+        
         const { error } = await supabase
           .from('system_ai_config')
           .upsert({
             setting_key: setting.setting_key,
-            setting_value: setting.setting_value,
+            setting_value: setting.setting_value || '',
             description: setting.description
           }, {
             onConflict: 'setting_key'
           })
 
-        if (error) throw error
+        if (error) {
+          console.error(`❌ [SAVE] Error saving ${setting.setting_key}:`, error)
+          throw error
+        } else {
+          console.log(`✅ [SAVE] Successfully saved ${setting.setting_key}`)
+        }
       }
 
+      console.log('✅ [SAVE] All settings saved successfully')
       toast({
         title: "Success",
         description: "Settings saved successfully",
@@ -186,7 +298,7 @@ export default function AISettingsAdminPage() {
       // Reload settings to get updated timestamps
       await loadSettings()
     } catch (error) {
-      console.error('Error saving settings:', error)
+      console.error('❌ [SAVE] Error saving settings:', error)
       toast({
         title: "Error",
         description: "Failed to save settings",
@@ -238,9 +350,20 @@ export default function AISettingsAdminPage() {
         <Alert className="mb-6">
           <AlertCircle className="h-4 w-4" />
           <AlertDescription>
-            Only users with CEO role can access and modify these settings. API keys are masked by default for security.
+            Only users with CEO or Admin role can access and modify these settings. API keys are masked by default for security.
           </AlertDescription>
         </Alert>
+
+        {autoFilledKeys.length > 0 && (
+          <Alert className="mb-6 border-orange-500 bg-orange-50 dark:bg-orange-950">
+            <AlertCircle className="h-4 w-4 text-orange-600" />
+            <AlertDescription className="text-orange-800 dark:text-orange-200">
+              <strong>Auto-filled from your profile:</strong> {autoFilledKeys.join(', ').replace(/_/g, ' ')}
+              <br />
+              <strong className="text-orange-900 dark:text-orange-100">⚠️ Click "Save Changes" below to copy these keys to system-wide config so all users can use them!</strong>
+            </AlertDescription>
+          </Alert>
+        )}
 
         <div className="space-y-6">
           {/* Provider Configuration Card */}
@@ -417,7 +540,7 @@ export default function AISettingsAdminPage() {
                 </Select>
                 {settings.find(s => s.setting_key === 'text_enhancer_model')?.updated_at && (
                   <p className="text-xs text-muted-foreground">
-                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_model')!.updated_at).toLocaleString()}
+                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_model')!.updated_at || '').toLocaleString()}
                   </p>
                 )}
               </div>
@@ -455,7 +578,7 @@ export default function AISettingsAdminPage() {
                 />
                 {settings.find(s => s.setting_key === 'text_enhancer_prefix')?.updated_at && (
                   <p className="text-xs text-muted-foreground">
-                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_prefix')!.updated_at).toLocaleString()}
+                    Last updated: {new Date(settings.find(s => s.setting_key === 'text_enhancer_prefix')!.updated_at || '').toLocaleString()}
                   </p>
                 )}
               </div>

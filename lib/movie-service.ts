@@ -120,21 +120,76 @@ export class MovieService {
   }
 
   static async getMovieById(id: string): Promise<Movie | null> {
-    const { data, error } = await getSupabaseClient()
+    const { data: { user } } = await getSupabaseClient().auth.getUser()
+    if (!user) {
+      throw new Error('User not authenticated')
+    }
+
+    console.log('🎬 MovieService.getMovieById - Checking access for project:', id, 'user:', user.id, 'email:', user.email)
+
+    // First check if user owns the project
+    const { data: ownedProject, error: ownedError } = await getSupabaseClient()
       .from('projects')
       .select('*')
       .eq('id', id)
       .eq('project_type', 'movie')
-      .single()
+      .eq('user_id', user.id)
+      .maybeSingle()
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return null // No rows returned
-      }
-      console.error('Error fetching movie:', error)
-      throw error
+    if (!ownedError && ownedProject) {
+      console.log('✅ MovieService.getMovieById - User owns the project')
+      return ownedProject as Movie
     }
 
-    return data as Movie
+    console.log('🔍 MovieService.getMovieById - Not owner, checking for shared access...')
+
+    // If not owned, check if user has shared access
+    // Check both user_id and email matches
+    const { data: shares, error: shareError } = await getSupabaseClient()
+      .from('project_shares')
+      .select('*')
+      .eq('project_id', id)
+      .eq('is_revoked', false)
+
+    console.log('🔍 MovieService.getMovieById - Shares found:', shares?.length || 0, 'error:', shareError)
+
+    if (!shareError && shares && shares.length > 0) {
+      // Find a share that matches the user
+      const matchingShare = shares.find(share => 
+        (share.shared_with_user_id === user.id) || 
+        (share.shared_with_email && share.shared_with_email.toLowerCase() === user.email?.toLowerCase())
+      )
+
+      if (matchingShare) {
+        console.log('✅ MovieService.getMovieById - Found matching share:', matchingShare.id)
+        
+        // Check if expired
+        if (matchingShare.deadline && new Date(matchingShare.deadline) < new Date()) {
+          console.log('❌ MovieService.getMovieById - Share has expired')
+          return null
+        }
+
+        // User has shared access, fetch the project
+        const { data: sharedProject, error: projectError } = await getSupabaseClient()
+          .from('projects')
+          .select('*')
+          .eq('id', id)
+          .eq('project_type', 'movie')
+          .maybeSingle()
+
+        if (!projectError && sharedProject) {
+          console.log('✅ MovieService.getMovieById - Project loaded via shared access')
+          return sharedProject as Movie
+        } else {
+          console.error('❌ MovieService.getMovieById - Error loading shared project:', projectError)
+        }
+      } else {
+        console.log('❌ MovieService.getMovieById - No matching share found for user')
+      }
+    }
+
+    // No access found
+    console.log('❌ MovieService.getMovieById - No access found for project')
+    return null
   }
 }

@@ -408,13 +408,18 @@ Generate a full, professional screenplay scene that brings this scene to life. I
     // Generate screenplay using AI
     let generatedScreenplay = ''
     const modelToUse = model || (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+    
+    // Check if this is a GPT-5 model and increase maxTokens accordingly
+    const isGPT5Model = modelToUse.startsWith('gpt-5')
+    const maxTokens = isGPT5Model ? 12000 : 8000 // GPT-5 needs more tokens (3x for reasoning + output)
 
     if (normalizedService === 'openai') {
       const response = await OpenAIService.generateScript({
         prompt: userPrompt,
         template: systemPrompt,
         model: modelToUse,
-        apiKey: actualApiKey
+        apiKey: actualApiKey,
+        maxTokens: maxTokens // Pass maxTokens for GPT-5 support
       })
 
       if (!response.success) {
@@ -424,7 +429,17 @@ Generate a full, professional screenplay scene that brings this scene to life. I
         )
       }
 
-      generatedScreenplay = response.data.choices[0].message.content
+      // Extract content with better error handling for GPT-5 models
+      const content = response.data?.choices?.[0]?.message?.content
+      if (!content || (typeof content === 'string' && content.trim().length === 0)) {
+        console.error('❌ [Screenplay Generation] No content in OpenAI response:', JSON.stringify(response.data, null, 2))
+        return NextResponse.json(
+          { error: 'No content in OpenAI response. The model may have used all tokens for reasoning. Try increasing maxTokens or using a different model.' },
+          { status: 500 }
+        )
+      }
+
+      generatedScreenplay = typeof content === 'string' ? content.trim() : String(content)
       
       // Clean up markdown code block markers if present
       generatedScreenplay = generatedScreenplay.trim()
@@ -502,14 +517,39 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       }
     )
 
+    // Check if content is too large (PostgreSQL TEXT can handle up to 1GB, but we'll be safe)
+    // If there's an index issue, we might need to truncate or handle differently
+    const maxContentLength = 10000000 // 10MB should be more than enough for a screenplay
+    
+    let contentToSave = generatedScreenplay
+    if (contentToSave.length > maxContentLength) {
+      console.warn(`⚠️ Screenplay content is very large (${contentToSave.length} chars), truncating to ${maxContentLength}`)
+      contentToSave = contentToSave.substring(0, maxContentLength) + '\n\n[... content truncated due to size ...]'
+    }
+
     const { error: updateError } = await supabaseAdmin
       .from('scenes')
-      .update({ screenplay_content: generatedScreenplay })
+      .update({ screenplay_content: contentToSave })
       .eq('id', sceneId)
       .eq('user_id', targetUserId)
 
     if (updateError) {
       console.error('Error saving screenplay:', updateError)
+      
+      // Check if it's an index size error
+      if (updateError.message && updateError.message.includes('index row requires') && updateError.message.includes('maximum size')) {
+        console.error('❌ Index size limit error detected. This suggests an index exists on screenplay_content that needs to be removed.')
+        console.error('Run migration 063_fix_screenplay_content_index_issue.sql to fix this.')
+        return NextResponse.json(
+          { 
+            error: 'Screenplay content is too large for database index. Please contact support to run a database migration.',
+            details: 'The generated screenplay exceeds the database index size limit. A migration is needed to remove the problematic index.',
+            code: 'INDEX_SIZE_ERROR'
+          },
+          { status: 500 }
+        )
+      }
+      
       return NextResponse.json(
         { error: 'Failed to save screenplay', details: updateError.message },
         { status: 500 }

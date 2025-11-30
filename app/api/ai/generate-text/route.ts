@@ -147,7 +147,50 @@ Generate only the replacement text:`
             throw new Error(openaiResponse.error || 'OpenAI API failed')
           }
           
-          generatedText = openaiResponse.data.choices[0].message.content
+          // Log response structure for debugging
+          console.log('📥 [API] OpenAI response structure:', {
+            hasData: !!openaiResponse.data,
+            hasChoices: !!openaiResponse.data?.choices,
+            choicesLength: openaiResponse.data?.choices?.length || 0,
+            firstChoice: openaiResponse.data?.choices?.[0] ? {
+              hasMessage: !!openaiResponse.data.choices[0].message,
+              hasContent: !!openaiResponse.data.choices[0].message?.content,
+              contentType: typeof openaiResponse.data.choices[0].message?.content,
+              contentLength: openaiResponse.data.choices[0].message?.content?.length || 0,
+              contentPreview: openaiResponse.data.choices[0].message?.content?.substring(0, 100) || 'empty'
+            } : null,
+            model: openaiResponse.data?.model,
+            allKeys: openaiResponse.data ? Object.keys(openaiResponse.data) : []
+          })
+          
+          // Try multiple ways to extract content (same as test page)
+          let content = openaiResponse.data?.choices?.[0]?.message?.content
+          
+          // If content is null/undefined, try alternative locations
+          if (!content) {
+            console.log('⚠️ [API] Content not found in standard location, trying alternatives...')
+            console.log('📋 [API] Full response data:', JSON.stringify(openaiResponse.data, null, 2))
+            
+            // Try alternative locations
+            if (openaiResponse.data?.output_text) {
+              content = openaiResponse.data.output_text
+              console.log('✅ [API] Found content in output_text field')
+            } else if (openaiResponse.data?.choices?.[0]?.text) {
+              content = openaiResponse.data.choices[0].text
+              console.log('✅ [API] Found content in choices[0].text field')
+            } else if (openaiResponse.data?.message) {
+              content = openaiResponse.data.message
+              console.log('✅ [API] Found content in message field')
+            }
+          }
+          
+          if (!content || (typeof content === 'string' && content.trim().length === 0)) {
+            console.error('❌ [API] No content in OpenAI response:', JSON.stringify(openaiResponse.data, null, 2))
+            throw new Error('No content in OpenAI response. Response structure may be different for GPT-5 models.')
+          }
+          
+          // Trim the content (same as test page)
+          generatedText = typeof content === 'string' ? content.trim() : String(content)
           break
 
         case 'anthropic':
@@ -242,7 +285,50 @@ Generate only the replacement text:`
             throw new Error(openaiResponse.error || 'OpenAI API failed')
           }
           
-          generatedText = openaiResponse.data.choices[0].message.content
+          // Log response structure for debugging (legacy path)
+          console.log('📥 [API] OpenAI response structure (legacy):', {
+            hasData: !!openaiResponse.data,
+            hasChoices: !!openaiResponse.data?.choices,
+            choicesLength: openaiResponse.data?.choices?.length || 0,
+            firstChoice: openaiResponse.data?.choices?.[0] ? {
+              hasMessage: !!openaiResponse.data.choices[0].message,
+              hasContent: !!openaiResponse.data.choices[0].message?.content,
+              contentType: typeof openaiResponse.data.choices[0].message?.content,
+              contentLength: openaiResponse.data.choices[0].message?.content?.length || 0,
+              contentPreview: openaiResponse.data.choices[0].message?.content?.substring(0, 100) || 'empty'
+            } : null,
+            model: openaiResponse.data?.model,
+            allKeys: openaiResponse.data ? Object.keys(openaiResponse.data) : []
+          })
+          
+          // Try multiple ways to extract content (same as new path)
+          let content = openaiResponse.data?.choices?.[0]?.message?.content
+          
+          // If content is null/undefined, try alternative locations
+          if (!content) {
+            console.log('⚠️ [API] Content not found in standard location (legacy), trying alternatives...')
+            console.log('📋 [API] Full response data (legacy):', JSON.stringify(openaiResponse.data, null, 2))
+            
+            // Try alternative locations
+            if (openaiResponse.data?.output_text) {
+              content = openaiResponse.data.output_text
+              console.log('✅ [API] Found content in output_text field (legacy)')
+            } else if (openaiResponse.data?.choices?.[0]?.text) {
+              content = openaiResponse.data.choices[0].text
+              console.log('✅ [API] Found content in choices[0].text field (legacy)')
+            } else if (openaiResponse.data?.message) {
+              content = openaiResponse.data.message
+              console.log('✅ [API] Found content in message field (legacy)')
+            }
+          }
+          
+          if (!content || (typeof content === 'string' && content.trim().length === 0)) {
+            console.error('❌ [API] No content in OpenAI response (legacy):', JSON.stringify(openaiResponse.data, null, 2))
+            throw new Error('No content in OpenAI response. Response structure may be different for GPT-5 models.')
+          }
+          
+          // Trim the content
+          generatedText = typeof content === 'string' ? content.trim() : String(content)
           break
 
         case 'anthropic':
@@ -327,6 +413,26 @@ Generate only the replacement text:`
       generatedText = cleanedText
     }
 
+    // Validate that we have generated text
+    if (!generatedText || generatedText.trim().length === 0) {
+      console.error('❌ [API] Generated text is empty!', {
+        service,
+        model,
+        field,
+        generatedText,
+        generatedTextType: typeof generatedText
+      })
+      return NextResponse.json({
+        success: false,
+        error: 'Generated text is empty. The AI model may have returned an empty response.',
+        details: {
+          service,
+          model,
+          field
+        }
+      }, { status: 500 })
+    }
+
     console.log('✅ [API] Generation complete:', {
       service: service.toUpperCase(),
       field,
@@ -348,7 +454,7 @@ Generate only the replacement text:`
       console.error('Error details:', {
         message: error.message,
         stack: error.stack,
-        service,
+        service: service || 'unknown',
         hasApiKey: !!actualApiKey,
         apiKeyLength: actualApiKey ? actualApiKey.length : 0
       })
@@ -359,7 +465,7 @@ Generate only the replacement text:`
         error: error instanceof Error ? error.message : 'Unknown error occurred',
         success: false,
         details: {
-          service,
+          service: service || 'unknown',
           hasApiKey: !!actualApiKey,
           contentType: contentType || 'unknown'
         }

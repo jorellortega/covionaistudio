@@ -66,12 +66,23 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       console.log('Fetching timeline for movie:', movieId, 'user:', user.id)
       
-      // First try to find ANY existing timeline for this project
+      // Check if user has access to this project (owner or shared)
+      const movie = await this.getMovieById(movieId)
+      if (!movie) {
+        console.log('User does not have access to this project')
+        return null
+      }
+      
+      // Get the project owner's user_id
+      const projectOwnerId = movie.user_id
+      
+      // Find timeline for this project (timelines are created by the owner)
+      // We need to get the owner's timeline, not filter by current user
       const { data: existingTimelines, error: listError } = await getSupabaseClient()
         .from('timelines')
         .select('*')
         .eq('project_id', movieId)
-        .eq('user_id', user.id)
+        .eq('user_id', projectOwnerId) // Use owner's user_id, not current user's
         .order('created_at', { ascending: true })
 
       if (listError) {
@@ -126,17 +137,48 @@ export class TimelineService {
       const user = await this.ensureAuthenticated()
       console.log('Fetching scenes for timeline:', timelineId, 'user:', user.id)
       
-      // Get all scenes first
+      // Get timeline to find the project and owner
+      const { data: timeline, error: timelineError } = await getSupabaseClient()
+        .from('timelines')
+        .select('project_id, user_id')
+        .eq('id', timelineId)
+        .maybeSingle()
+
+      if (timelineError) {
+        console.error('Error fetching timeline:', timelineError)
+        throw timelineError
+      }
+
+      if (!timeline) {
+        console.error('Timeline not found:', timelineId)
+        return []
+      }
+
+      console.log('Timeline found - project_id:', timeline.project_id, 'owner user_id:', timeline.user_id)
+
+      // Check if user has access to this project
+      const movie = await this.getMovieById(timeline.project_id)
+      if (!movie) {
+        console.log('User does not have access to this project')
+        return []
+      }
+
+      console.log('User has access to project, fetching scenes for timeline:', timelineId, 'owner user_id:', timeline.user_id)
+
+      // Get scenes - RLS policy will handle access control for shared users
+      // We filter by timeline_id only, and RLS ensures user has access to the project
       const { data, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('timeline_id', timelineId)
-        .eq('user_id', user.id)
 
       if (error) {
         console.error('Error fetching scenes:', error)
+        console.error('Scene query error details:', JSON.stringify(error, null, 2))
         throw error
       }
+
+      console.log('Scenes query successful - found', data?.length || 0, 'scenes')
 
       // Sort scenes by scene number instead of order_index
       const sortedScenes = data.sort((a, b) => {
@@ -387,21 +429,51 @@ export class TimelineService {
   static async getSceneById(sceneId: string): Promise<SceneWithMetadata | null> {
     try {
       const user = await this.ensureAuthenticated()
+      console.log('getSceneById - Fetching scene:', sceneId, 'user:', user.id)
       
+      // Get scene - RLS policy will handle access control for shared users
       const { data, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('id', sceneId)
-        .eq('user_id', user.id)
-        .single()
+        .maybeSingle()
 
       if (error) {
-        if (error.code === 'PGRST116') {
-          return null // No scene found
-        }
         console.error('Error fetching scene:', error)
         throw error
       }
+
+      if (!data) {
+        console.log('Scene not found:', sceneId)
+        return null
+      }
+
+      // Check if user has access to the project this scene belongs to
+      // Get timeline to find project
+      const { data: timeline, error: timelineError } = await getSupabaseClient()
+        .from('timelines')
+        .select('project_id')
+        .eq('id', data.timeline_id)
+        .maybeSingle()
+
+      if (timelineError) {
+        console.error('Error fetching timeline:', timelineError)
+        throw timelineError
+      }
+
+      if (!timeline) {
+        console.log('Timeline not found for scene:', data.timeline_id)
+        return null
+      }
+
+      // Check if user has access to this project
+      const movie = await this.getMovieById(timeline.project_id)
+      if (!movie) {
+        console.log('User does not have access to project for scene:', sceneId)
+        return null
+      }
+
+      console.log('User has access to scene:', sceneId)
 
       // Parse metadata if it exists
       let metadata = {}
@@ -429,23 +501,72 @@ export class TimelineService {
   static async getMovieById(movieId: string) {
     const user = await this.ensureAuthenticated()
     
-    const { data, error } = await getSupabaseClient()
+    console.log('🎬 TimelineService.getMovieById - Checking access for project:', movieId, 'user:', user.id, 'email:', user.email)
+    
+    // First check if user owns the project
+    const { data: ownedProject, error: ownedError } = await getSupabaseClient()
       .from('projects')
       .select('*')
       .eq('id', movieId)
       .eq('user_id', user.id)
       .eq('project_type', 'movie')
-      .single()
+      .maybeSingle()
 
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return null // No movie found
-      }
-      console.error('Error fetching movie:', error)
-      throw error
+    if (!ownedError && ownedProject) {
+      console.log('✅ TimelineService.getMovieById - User owns the project')
+      return ownedProject
     }
 
-    return data
+    console.log('🔍 TimelineService.getMovieById - Not owner, checking for shared access...')
+
+    // If not owned, check if user has shared access
+    // Get all shares for this project and find matching one
+    const { data: shares, error: shareError } = await getSupabaseClient()
+      .from('project_shares')
+      .select('*')
+      .eq('project_id', movieId)
+      .eq('is_revoked', false)
+
+    console.log('🔍 TimelineService.getMovieById - Shares found:', shares?.length || 0, 'error:', shareError)
+
+    if (!shareError && shares && shares.length > 0) {
+      // Find a share that matches the user
+      const matchingShare = shares.find(share => 
+        (share.shared_with_user_id === user.id) || 
+        (share.shared_with_email && share.shared_with_email.toLowerCase() === user.email?.toLowerCase())
+      )
+
+      if (matchingShare) {
+        console.log('✅ TimelineService.getMovieById - Found matching share:', matchingShare.id)
+        
+        // Check if expired
+        if (matchingShare.deadline && new Date(matchingShare.deadline) < new Date()) {
+          console.log('❌ TimelineService.getMovieById - Share has expired')
+          return null
+        }
+
+        // User has shared access, fetch the project
+        const { data: sharedProject, error: projectError } = await getSupabaseClient()
+          .from('projects')
+          .select('*')
+          .eq('id', movieId)
+          .eq('project_type', 'movie')
+          .maybeSingle()
+
+        if (!projectError && sharedProject) {
+          console.log('✅ TimelineService.getMovieById - Project loaded via shared access')
+          return sharedProject
+        } else {
+          console.error('❌ TimelineService.getMovieById - Error loading shared project:', projectError)
+        }
+      } else {
+        console.log('❌ TimelineService.getMovieById - No matching share found for user')
+      }
+    }
+
+    // No access found
+    console.log('❌ TimelineService.getMovieById - No access found for project')
+    return null
   }
 
   static async getMovieScenes(movieId: string): Promise<SceneWithMetadata[]> {
@@ -1205,20 +1326,53 @@ export class TimelineService {
   static async getTimelineDisplayOrder(timelineId: string): Promise<SceneWithMetadata[]> {
     try {
       const user = await this.ensureAuthenticated()
+      console.log('getTimelineDisplayOrder - Fetching scenes for timeline:', timelineId, 'user:', user.id)
       
-      // Get all scenes without ordering
+      // Get timeline to check access
+      const { data: timeline, error: timelineError } = await getSupabaseClient()
+        .from('timelines')
+        .select('project_id, user_id')
+        .eq('id', timelineId)
+        .maybeSingle()
+
+      if (timelineError) {
+        console.error('Error fetching timeline:', timelineError)
+        throw timelineError
+      }
+
+      if (!timeline) {
+        console.error('Timeline not found:', timelineId)
+        return []
+      }
+
+      // Check if user has access to this project
+      const movie = await this.getMovieById(timeline.project_id)
+      if (!movie) {
+        console.log('User does not have access to this project')
+        return []
+      }
+
+      console.log('User has access to project, fetching scenes for timeline:', timelineId)
+
+      // Get all scenes - RLS policy will handle access control for shared users
+      // We filter by timeline_id only, and RLS ensures user has access to the project
       const { data: scenes, error } = await getSupabaseClient()
         .from('scenes')
         .select('*')
         .eq('timeline_id', timelineId)
-        .eq('user_id', user.id)
 
       if (error) {
         console.error('Error fetching scenes for display:', error)
+        console.error('Scene query error details:', JSON.stringify(error, null, 2))
         throw error
       }
 
-      if (!scenes || scenes.length === 0) return []
+      console.log('Scenes query successful - found', scenes?.length || 0, 'scenes')
+
+      if (!scenes || scenes.length === 0) {
+        console.log('No scenes found for timeline:', timelineId)
+        return []
+      }
 
       // Sort by scene number for display only
       const displayOrder = scenes.sort((a, b) => {
