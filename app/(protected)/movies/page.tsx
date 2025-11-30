@@ -789,8 +789,21 @@ export default function MoviesPage() {
       return
     }
 
+    // Normalize model name from display name to API model identifier
+    const normalizeImageModel = (displayName: string | null | undefined): string => {
+      if (!displayName) return "dall-e-3"
+      const model = displayName.toLowerCase()
+      if (model === "gpt image" || model.includes("gpt-image")) {
+        return "gpt-image-1"
+      } else if (model.includes("dall") || model.includes("dalle")) {
+        return "dall-e-3"
+      }
+      return "dall-e-3"
+    }
+    
     // Normalize service name for locked models
-    const normalizedService = serviceToUse.toLowerCase().includes('dall') ? 'dalle' : 
+    const normalizedModel = normalizeImageModel(lockedModel || serviceToUse)
+    const normalizedService = serviceToUse.toLowerCase().includes('dall') || normalizedModel === 'gpt-image-1' ? 'dalle' : 
                              serviceToUse.toLowerCase().includes('openart') ? 'openart' : 
                              serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
                              serviceToUse
@@ -817,7 +830,8 @@ export default function MoviesPage() {
       switch (normalizedService) {
         case "dalle":
           actualPromptUsed = `Movie Art Cover: ${sanitizedPrompt}. Cinematic style, dramatic lighting.`
-          console.log('Making DALL-E request with prompt:', actualPromptUsed)
+          console.log('Making DALL-E/GPT Image request with prompt:', actualPromptUsed)
+          console.log('Using model:', normalizedModel)
           
           const dalleResponse = await fetch('/api/ai/generate-image', {
             method: 'POST',
@@ -825,6 +839,7 @@ export default function MoviesPage() {
             body: JSON.stringify({
               prompt: actualPromptUsed,
               service: 'dalle',
+              model: normalizedModel, // Pass the normalized model (gpt-image-1 or dall-e-3)
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
               autoSaveToBucket: true, // Enable automatic bucket storage
@@ -888,6 +903,7 @@ export default function MoviesPage() {
             body: JSON.stringify({
               prompt: actualPromptUsed,
               service: 'dalle',
+              model: normalizedModel, // Pass the normalized model (gpt-image-1 or dall-e-3)
               apiKey: 'configured',
               userId: user?.id, // Add userId for bucket storage
               autoSaveToBucket: true, // Enable automatic bucket storage

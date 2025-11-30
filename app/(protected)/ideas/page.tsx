@@ -1853,6 +1853,19 @@ Synopsis (2-3 paragraphs only):`
     }
   }
 
+  // Helper function to normalize model name from display name to API model identifier
+  const normalizeImageModel = (displayName: string | null | undefined): string => {
+    if (!displayName) return "dall-e-3"
+    const model = displayName.toLowerCase()
+    if (model === "gpt image" || model.includes("gpt-image")) {
+      return "gpt-image-1"
+    } else if (model.includes("dall") || model.includes("dalle")) {
+      return "dall-e-3"
+    }
+    // Default to DALL-E 3 for unknown models
+    return "dall-e-3"
+  }
+
   const generateImage = async () => {
     if (!prompt.trim()) {
       toast({
@@ -1886,15 +1899,23 @@ Synopsis (2-3 paragraphs only):`
     setGeneratedImage("")
     
     try {
+      const originalModel = imagesSetting.locked_model
+      const normalizedModel = normalizeImageModel(originalModel)
+      console.log('🖼️ IDEAS - generateImage - Original locked_model:', originalModel)
+      console.log('🖼️ IDEAS - generateImage - Normalized model name:', normalizedModel)
+      console.log('🖼️ IDEAS - generateImage - Will use GPT Image API:', normalizedModel === 'gpt-image-1' || normalizedModel.startsWith('gpt-'))
+      
       const response = await OpenAIService.generateImage({
         prompt: prompt,
         style: "cinematic, movie poster",
-        model: imagesSetting.locked_model,
+        model: normalizedModel,
         apiKey: userApiKeys.openai_api_key || ""
       })
 
       if (response.success && response.data) {
-        const imageUrl = response.data.data?.[0]?.url || ""
+        // Handle both URL (DALL-E) and base64 (GPT Image) responses
+        const imageData = response.data.data?.[0]
+        const imageUrl = imageData?.url || (imageData?.b64_json ? `data:image/png;base64,${imageData.b64_json}` : "")
         
         // Save the image to the bucket instead of storing temporary URL
         setIsSavingImage(true)
@@ -1991,15 +2012,23 @@ Synopsis (2-3 paragraphs only):`
       console.log('Enhanced prompt length:', enhancedPrompt.length)
       console.log('Enhanced prompt:', enhancedPrompt)
       
+      const originalModel = imagesSetting.locked_model
+      const normalizedModel = normalizeImageModel(originalModel)
+      console.log('🖼️ IDEAS - generateImageForIdea - Original locked_model:', originalModel)
+      console.log('🖼️ IDEAS - generateImageForIdea - Normalized model name:', normalizedModel)
+      console.log('🖼️ IDEAS - generateImageForIdea - Will use GPT Image API:', normalizedModel === 'gpt-image-1' || normalizedModel.startsWith('gpt-'))
+      
       const response = await OpenAIService.generateImage({
         prompt: enhancedPrompt,
         style: "cinematic, movie poster, high quality",
-        model: imagesSetting.locked_model,
+        model: normalizedModel,
         apiKey: userApiKeys.openai_api_key
       })
 
       if (response.success && response.data) {
-        const imageUrl = response.data.data?.[0]?.url || ""
+        // Handle both URL (DALL-E) and base64 (GPT Image) responses
+        const imageData = response.data.data?.[0]
+        const imageUrl = imageData?.url || (imageData?.b64_json ? `data:image/png;base64,${imageData.b64_json}` : "")
         
         // Save the image to the bucket instead of storing temporary URL
         const saveResponse = await fetch('/api/ai/download-and-store-image', {
@@ -2127,11 +2156,16 @@ Synopsis (2-3 paragraphs only):`
       // Build prompt from idea context - avoid including full script content
       const genres = (idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : [])).join(", ")
       
-      // Use description, but clean it and limit it to avoid including full script
+      // Prefer synopsis if available, otherwise use description
+      // Clean and limit to avoid including full script content
       let description = ""
-      if (idea.description && idea.description.trim()) {
-        // Clean the description - remove markdown and script structure
-        description = idea.description
+      const contentToUse = idea.synopsis && idea.synopsis.trim() 
+        ? idea.synopsis 
+        : (idea.description && idea.description.trim() ? idea.description : "")
+      
+      if (contentToUse) {
+        // Clean the content - remove markdown and script structure
+        description = contentToUse
           .replace(/\*\*/g, '') // Remove markdown
           .replace(/\*/g, '')
           .replace(/__/g, '')
@@ -2150,15 +2184,15 @@ Synopsis (2-3 paragraphs only):`
         description = description.trim()
       }
       
-      // Create a cinematic movie poster prompt
-      let coverPrompt = `Movie poster for "${idea.title}"`
+      // Create a cinematic movie cover prompt
+      let coverPrompt = `Movie cover for "${idea.title}"`
       if (genres) {
         coverPrompt += `, ${genres} genre`
       }
       if (description) {
         coverPrompt += `. ${description}`
       }
-      coverPrompt += `. Cinematic style, professional movie poster, high quality, dramatic lighting`
+      coverPrompt += `. Cinematic style, professional movie cover, high quality, dramatic lighting`
 
       // Limit prompt length to avoid API errors (DALL-E 3 has 1000 character limit)
       if (coverPrompt.length > 900) {
@@ -2166,15 +2200,12 @@ Synopsis (2-3 paragraphs only):`
       }
 
       console.log('Generating quick cover with prompt:', coverPrompt)
+      console.log('🖼️ IDEAS - Original locked_model:', imagesSetting.locked_model)
       
-      // Normalize model name (handle "DALL-E 3" -> "dall-e-3")
-      let modelName = "dall-e-3"
-      if (imagesSetting.locked_model) {
-        const lockedModel = imagesSetting.locked_model.toLowerCase()
-        if (lockedModel.includes('dall') || lockedModel.includes('dalle')) {
-          modelName = "dall-e-3"
-        }
-      }
+      // Normalize model name (handle "GPT Image" -> "gpt-image-1", "DALL-E 3" -> "dall-e-3")
+      const modelName = normalizeImageModel(imagesSetting.locked_model)
+      console.log('🖼️ IDEAS - Normalized model name:', modelName)
+      console.log('🖼️ IDEAS - Will use GPT Image API:', modelName === 'gpt-image-1' || modelName.startsWith('gpt-'))
       
       const response = await OpenAIService.generateImage({
         prompt: coverPrompt,
@@ -2184,7 +2215,9 @@ Synopsis (2-3 paragraphs only):`
       })
 
       if (response.success && response.data) {
-        const imageUrl = response.data.data?.[0]?.url || ""
+        // Handle both URL (DALL-E) and base64 (GPT Image) responses
+        const imageData = response.data.data?.[0]
+        const imageUrl = imageData?.url || (imageData?.b64_json ? `data:image/png;base64,${imageData.b64_json}` : "")
         
         // Save the image to the bucket
         const saveResponse = await fetch('/api/ai/download-and-store-image', {
@@ -2214,8 +2247,8 @@ Synopsis (2-3 paragraphs only):`
             bucket_path: saveResult.filePath || ''
           })
           
-          // Refresh idea images
-          await loadSavedImages()
+          // Refresh idea images for this specific idea
+          await refreshIdeaImages(idea.id)
           
           toast({
             title: "Success!",

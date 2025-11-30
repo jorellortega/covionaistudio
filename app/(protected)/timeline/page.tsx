@@ -96,6 +96,7 @@ export default function TimelinePage() {
   const [selectedAIService, setSelectedAIService] = useState("dalle")
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [generatedImageUrl, setGeneratedImageUrl] = useState("")
+  const [lastUsedService, setLastUsedService] = useState<string>("") // Store the service/model used for the last generation
   
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
@@ -902,10 +903,26 @@ export default function TimelinePage() {
 
       console.log('🎬 DEBUG - Timeline setting is properly configured, proceeding with API call')
 
+      // Normalize the model name for API
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
+        }
+        // Default to DALL-E 3 for unknown models
+        return "dall-e-3"
+      }
+
+      const normalizedModel = normalizeImageModel(timelineSetting.locked_model)
+
       // Generate image using the locked service
       console.log('🎬 DEBUG - Sending request to API with data:', {
         prompt: scenePrompt,
         service: timelineSetting.locked_model,
+        model: normalizedModel,
         apiKeyExists: !!apiKey
       })
       
@@ -917,6 +934,7 @@ export default function TimelinePage() {
         body: JSON.stringify({
           prompt: scenePrompt,
           service: timelineSetting.locked_model,
+          model: normalizedModel, // Pass normalized model
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
@@ -936,6 +954,7 @@ export default function TimelinePage() {
           body: JSON.stringify({
             prompt: simplePrompt,
             service: timelineSetting.locked_model,
+            model: normalizedModel, // Pass normalized model
             apiKey: apiKey,
             userId: user?.id,
             autoSaveToBucket: true,
@@ -1327,13 +1346,49 @@ export default function TimelinePage() {
       return
     }
 
+    // Normalize model name from display name to API model identifier
+    const normalizeImageModel = (displayName: string | null | undefined): string => {
+      if (!displayName) return "dall-e-3"
+      const model = displayName.toLowerCase()
+      if (model === "gpt image" || model.includes("gpt-image")) {
+        return "gpt-image-1"
+      } else if (model.includes("dall") || model.includes("dalle")) {
+        return "dall-e-3"
+      }
+      return "dall-e-3"
+    }
+
+    // Map service name to API service identifier
+    const mapServiceToAPI = (service: string): string => {
+      const serviceLower = service.toLowerCase()
+      if (serviceLower.includes('dall') || serviceLower === 'gpt image' || serviceLower.includes('gpt-image')) {
+        return 'dalle' // GPT Image uses the same service identifier as DALL-E
+      } else if (serviceLower.includes('openart')) {
+        return 'openart'
+      } else if (serviceLower.includes('runway')) {
+        return 'runway'
+      } else if (serviceLower.includes('leonardo')) {
+        return 'leonardo'
+      }
+      return 'dalle' // Default
+    }
+
+    // Normalize the model and service
+    const normalizedModel = normalizeImageModel(serviceToUse)
+    const normalizedService = mapServiceToAPI(serviceToUse)
+
+    // Store the service/model used for saving to asset later
+    setLastUsedService(serviceToUse)
+
     // Debug: Log service selection
-    console.log('Service to use:', serviceToUse, isImagesTabLocked() ? '(locked model)' : '(user selected)')
+    console.log('🎬 TIMELINE - Service to use:', serviceToUse, isImagesTabLocked() ? '(locked model)' : '(user selected)')
+    console.log('🎬 TIMELINE - Normalized model:', normalizedModel)
+    console.log('🎬 TIMELINE - Normalized service:', normalizedService)
 
     try {
       setIsGeneratingImage(true)
 
-      console.log(`Generating scene image using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
+      console.log(`🎬 TIMELINE - Generating scene image using ${serviceToUse} (${isImagesTabLocked() ? 'locked model' : 'user selected'})`)
 
       // For now, use a placeholder API key since these aren't stored in user object
       const apiKey = 'configured'
@@ -1345,7 +1400,8 @@ export default function TimelinePage() {
         },
         body: JSON.stringify({
           prompt: aiPrompt,
-          service: serviceToUse,
+          service: normalizedService,
+          model: normalizedModel, // Pass the normalized model (gpt-image-1 or dall-e-3)
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
@@ -1421,7 +1477,7 @@ export default function TimelinePage() {
           content: '', // No text content for images
           content_url: finalImageUrl,
           prompt: aiPrompt,
-          model: selectedAIService,
+          model: lastUsedService || selectedAIService, // Use the original display name (e.g., "GPT Image") not the normalized one
           generation_settings: {},
           metadata: {
             scene_name: selectedSceneForUpload.name,

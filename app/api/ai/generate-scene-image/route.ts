@@ -30,21 +30,52 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
     console.log('🎬 DEBUG - File name:', fileName)
     console.log('🎬 DEBUG - User ID:', userId)
 
-    // Download the image from the AI service (server-side, no CORS issues)
-    const response = await fetch(imageUrl)
-    if (!response.ok) {
-      console.error('🎬 DEBUG - Failed to download image:', response.status, response.statusText)
-      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
-    }
+    let imageBlob: Blob
+    let fileExtension = 'png' // Default to png
 
-    const imageBuffer = await response.arrayBuffer()
-    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
-    
-    console.log('🎬 DEBUG - Image downloaded, size:', imageBlob.size)
+    // Check if this is a base64 data URL
+    if (imageUrl.startsWith('data:image/')) {
+      console.log('🎬 DEBUG - Handling base64 data URL')
+      // Extract base64 data from data URL
+      const parts = imageUrl.split(',')
+      const mimeTypeMatch = parts[0].match(/data:image\/(.*?);/)
+      if (mimeTypeMatch && mimeTypeMatch[1]) {
+        fileExtension = mimeTypeMatch[1] // e.g., 'png', 'jpeg'
+      }
+      const base64Data = parts[1]
+      
+      if (!base64Data) {
+        throw new Error('Invalid base64 data URL: missing base64 part')
+      }
+
+      // Convert base64 to buffer
+      const imageBuffer = Buffer.from(base64Data, 'base64')
+      imageBlob = new Blob([imageBuffer], { type: `image/${fileExtension}` })
+      console.log('🎬 DEBUG - Base64 image processed, size:', imageBlob.size, 'type:', imageBlob.type)
+    } else {
+      // Download the image from the AI service (server-side, no CORS issues)
+      const response = await fetch(imageUrl)
+      if (!response.ok) {
+        console.error('🎬 DEBUG - Failed to download image:', response.status, response.statusText)
+        throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
+      }
+
+      // Try to get file extension from Content-Type header
+      const contentType = response.headers.get('Content-Type')
+      if (contentType && contentType.startsWith('image/')) {
+        fileExtension = contentType.split('/')[1]
+      } else {
+        // Fallback to extension from URL if Content-Type is not specific
+        fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
+      }
+
+      const imageBuffer = await response.arrayBuffer()
+      imageBlob = new Blob([imageBuffer], { type: `image/${fileExtension}` })
+      console.log('🎬 DEBUG - Image downloaded, size:', imageBlob.size, 'extension:', fileExtension)
+    }
 
     // Create a unique filename
     const timestamp = Date.now()
-    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
     const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
 
     // Upload to Supabase storage
@@ -54,7 +85,7 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
     const { data, error } = await supabase.storage
       .from('cinema_files')
       .upload(filePath, imageBlob, {
-        contentType: 'image/png',
+        contentType: `image/${fileExtension}`,
         cacheControl: '3600',
         upsert: false
       })
@@ -86,7 +117,7 @@ export async function POST(request: NextRequest) {
     console.log('🎬 DEBUG - Timeline scene image generation request received')
     
     const body = await request.json()
-    const { prompt, service, apiKey, userId, autoSaveToBucket = true } = body
+    const { prompt, service, model, apiKey, userId, autoSaveToBucket = true } = body
 
     console.log('🎬 DEBUG - Request body received:', {
       hasPrompt: !!prompt,
@@ -147,11 +178,11 @@ export async function POST(request: NextRequest) {
               configMap[item.setting_key] = item.setting_value
             })
 
-            // Check for system-wide keys based on service
-            if ((service === 'DALL-E 3' || service === 'dalle') && configMap['openai_api_key']?.trim()) {
-              actualApiKey = configMap['openai_api_key'].trim()
-              console.log('✅ Using system-wide OpenAI API key from system_ai_config (CEO-set)')
-            } else if (service === 'OpenArt' || service === 'openart') {
+          // Check for system-wide keys based on service
+          if ((service === 'DALL-E 3' || service === 'dalle' || service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) && configMap['openai_api_key']?.trim()) {
+            actualApiKey = configMap['openai_api_key'].trim()
+            console.log('✅ Using system-wide OpenAI API key from system_ai_config (CEO-set)')
+          } else if (service === 'OpenArt' || service === 'openart') {
               if (configMap['openart_api_key']?.trim()) {
                 actualApiKey = configMap['openart_api_key'].trim()
                 console.log('✅ Using system-wide OpenArt API key from system_ai_config (CEO-set)')
@@ -235,7 +266,7 @@ export async function POST(request: NextRequest) {
           )
         }
 
-        if (service === 'DALL-E 3' || service === 'dalle') {
+        if (service === 'DALL-E 3' || service === 'dalle' || service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) {
             actualApiKey = data?.openai_api_key || actualApiKey
           console.log('🎬 DEBUG - Retrieved OpenAI API key:', {
             hasKey: !!actualApiKey,
@@ -276,35 +307,59 @@ export async function POST(request: NextRequest) {
 
     let imageUrl = ""
 
-    switch (service) {
+    // Normalize service and model for GPT Image support
+    const normalizedService = (service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) ? 'dalle' : service
+    const imageModel = model || (normalizedService === 'dalle' ? 'dall-e-3' : undefined)
+    const isGPTImageModel = imageModel === 'gpt-image-1' || imageModel?.startsWith('gpt-') || service === 'GPT Image' || service?.toLowerCase().includes('gpt image')
+
+    switch (normalizedService) {
       case 'DALL-E 3':
       case 'dalle':
-        console.log('🎬 DEBUG - Generating DALL-E image with prompt:', {
+      case 'GPT Image':
+        console.log('🎬 DEBUG - Generating image with prompt:', {
           promptLength: prompt.length,
           promptPreview: prompt.substring(0, 200) + '...',
-          fullPrompt: prompt
+          fullPrompt: prompt,
+          model: imageModel || 'dall-e-3',
+          isGPTImage: isGPTImageModel
         })
         
         const dalleResponse = await OpenAIService.generateImage({
           prompt: prompt,
           style: 'cinematic',
-          model: 'dall-e-3',
+          model: isGPTImageModel ? (imageModel || 'gpt-image-1') : (imageModel || 'dall-e-3'),
           apiKey: actualApiKey
         })
         
-        console.log('🎬 DEBUG - DALL-E response:', dalleResponse)
+        console.log('🎬 DEBUG - OpenAI image generation response:', dalleResponse)
         
         if (!dalleResponse.success) {
-          console.error('🎬 DEBUG - DALL-E API failed with error:', dalleResponse.error)
-          throw new Error(dalleResponse.error || 'DALL-E API failed')
+          console.error('🎬 DEBUG - OpenAI API failed with error:', dalleResponse.error)
+          throw new Error(dalleResponse.error || 'Image generation API failed')
         }
         
-        if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
-          throw new Error('Invalid response structure from DALL-E API')
+        // Handle both DALL-E (URL) and GPT Image (base64) responses
+        if (isGPTImageModel) {
+          console.log('🖼️ API ROUTE - Using GPT Image (Responses API)')
+          if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0]) {
+            console.error('Invalid GPT Image response structure:', dalleResponse.data)
+            throw new Error('Invalid response structure from GPT Image API')
+          }
+          
+          // GPT Image returns base64, convert to data URL
+          const imageData = dalleResponse.data.data[0]
+          imageUrl = imageData.url || (imageData.b64_json ? `data:image/png;base64,${imageData.b64_json}` : '')
+          console.log('Generated image (base64):', imageUrl.substring(0, 50) + '...')
+        } else {
+          console.log('🖼️ API ROUTE - Using DALL-E (Images API)')
+          if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
+            console.error('Invalid DALL-E response structure:', dalleResponse.data)
+            throw new Error('Invalid response structure from DALL-E API')
+          }
+          
+          imageUrl = dalleResponse.data.data[0].url
+          console.log('🎬 DEBUG - DALL-E image URL generated:', imageUrl)
         }
-        
-        imageUrl = dalleResponse.data.data[0].url
-        console.log('🎬 DEBUG - DALL-E image URL generated:', imageUrl)
         break
 
       case 'OpenArt':
@@ -399,7 +454,9 @@ export async function POST(request: NextRequest) {
     if (autoSaveToBucket && userId) {
       try {
         const sanitizedPrompt = sanitizeFilename(prompt.substring(0, 30))
-        const fileName = `${Date.now()}-${service}-${sanitizedPrompt}.png`
+        // Use the actual model name in filename, or service name as fallback
+        const modelName = isGPTImageModel ? 'GPT Image' : (service || 'DALL-E 3')
+        const fileName = `${Date.now()}-${modelName}-${sanitizedPrompt}`
         bucketUrl = await downloadAndStoreImage(imageUrl, fileName, userId)
         finalImageUrl = bucketUrl
         console.log('🎬 DEBUG - ✅ Image automatically saved to bucket:', bucketUrl)

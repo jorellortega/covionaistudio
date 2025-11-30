@@ -1666,23 +1666,47 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         ? `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality.`
         : `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
 
-      // Determine service and API key
-      let serviceToUse = selectedImageService
+      // Check for locked image model
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const isImagesTabLocked = imagesSetting?.is_locked || false
+      const lockedModel = imagesSetting?.locked_model || null
+      
+      // Use locked model if available, otherwise use selected service
+      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : selectedImageService
       let apiKey = 'configured'
 
-      // Map service names
-      if (serviceToUse === 'dalle' || serviceToUse === 'DALL-E 3') {
-        serviceToUse = 'dalle'
-      } else if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
-        serviceToUse = 'openart'
+      // Helper function to normalize model name from display name to API model identifier
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
+        }
+        // Default to DALL-E 3 for unknown models
+        return "dall-e-3"
       }
+
+      // Normalize service name for API
+      let normalizedService = 'dalle' // Default
+      if (serviceToUse === 'dalle' || serviceToUse === 'DALL-E 3' || serviceToUse === 'GPT Image' || serviceToUse?.toLowerCase().includes('gpt image')) {
+        normalizedService = 'dalle'
+      } else if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
+        normalizedService = 'openart'
+      } else {
+        normalizedService = serviceToUse.toLowerCase()
+      }
+
+      // Normalize model name
+      const normalizedModel = normalizeImageModel(serviceToUse)
 
       const requestBody = {
         prompt: enhancedPrompt,
-        service: serviceToUse,
+        service: normalizedService, // Use normalized service (dalle, openart, etc.)
         apiKey: apiKey,
         userId: userId,
-        model: serviceToUse === 'dalle' ? 'dall-e-3' : undefined,
+        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
         width: 1024,
         height: 1024,
         autoSaveToBucket: true,
@@ -1888,22 +1912,42 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
 
       // Use the locked model from settings
-      let serviceToUse = imagesSetting.locked_model.toLowerCase()
+      const lockedModel = imagesSetting.locked_model
       let apiKey = 'configured'
 
-      // Map service names
-      if (serviceToUse === 'dalle' || serviceToUse === 'dall-e 3' || serviceToUse === 'dall-e-3') {
-        serviceToUse = 'dalle'
-      } else if (serviceToUse === 'openart') {
-        serviceToUse = 'openart'
+      // Helper function to normalize model name from display name to API model identifier
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
+        }
+        // Default to DALL-E 3 for unknown models
+        return "dall-e-3"
       }
+
+      // Normalize service name for API
+      let normalizedService = 'dalle' // Default
+      const serviceLower = lockedModel?.toLowerCase() || ''
+      if (serviceLower === 'dalle' || serviceLower === 'dall-e 3' || serviceLower === 'dall-e-3' || serviceLower === 'gpt image' || serviceLower.includes('gpt image')) {
+        normalizedService = 'dalle'
+      } else if (serviceLower === 'openart') {
+        normalizedService = 'openart'
+      } else {
+        normalizedService = serviceLower
+      }
+
+      // Normalize model name
+      const normalizedModel = normalizeImageModel(lockedModel)
 
       const requestBody = {
         prompt: autoPrompt,
-        service: serviceToUse,
+        service: normalizedService, // Use normalized service (dalle, openart, etc.)
         apiKey: apiKey,
         userId: userId,
-        model: serviceToUse === 'dalle' ? 'dall-e-3' : undefined,
+        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
         width: 1024,
         height: 1024,
         autoSaveToBucket: true,
@@ -1945,9 +1989,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           content: '',
           content_url: imageUrlToUse,
           prompt: autoPrompt,
-          model: serviceToUse,
+          model: lockedModel || normalizedService, // Use original display name or normalized service
           generation_settings: {
-            service: serviceToUse,
+            service: normalizedService,
+            model: normalizedModel,
             character_id: selectedCharacterId,
             character_name: selectedChar.name,
             quick_generate: true,
@@ -1956,7 +2001,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             character_name: selectedChar.name,
             generated_at: new Date().toISOString(),
             source: 'ai_generation_quick',
-            service: serviceToUse,
+            service: normalizedService,
+            model: normalizedModel,
           }
         }
 

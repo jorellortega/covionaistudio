@@ -15,7 +15,6 @@ import {
   Palette, 
   PenTool, 
   ChevronDown,
-  LayoutDashboard,
   Play,
   Image as ImageIcon,
   UserCircle,
@@ -55,18 +54,11 @@ const dashboardItem: NavItem = { name: "Dashboard", href: "/dashboard", icon: Ho
 
 const navigationCategories: NavCategory[] = [
   {
-    name: "Projects",
-    icon: LayoutDashboard,
-    items: [
-      { name: "Movies", href: "/movies", icon: Film },
-      { name: "Treatments", href: "/treatments", icon: FileText },
-      { name: "Videos", href: "/videos", icon: Video },
-    ],
-  },
-  {
     name: "Production",
     icon: Play,
     items: [
+      { name: "Movies", href: "/movies", icon: Film },
+      { name: "Videos", href: "/videos", icon: Video },
       { name: "Timeline", href: "/timeline", icon: Play },
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
       { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },
@@ -81,6 +73,7 @@ const navigationCategories: NavCategory[] = [
     name: "Creative",
     icon: Palette,
     items: [
+      { name: "Treatments", href: "/treatments", icon: FileText },
       { name: "Ideas", href: "/ideas", icon: Lightbulb },
       { name: "Visual Dev", href: "/visdev", icon: Palette },
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
@@ -160,17 +153,30 @@ export function Navigation() {
 
   return (
     <nav className="flex items-center gap-1 overflow-x-auto pb-2">
-      {/* Dashboard link */}
-      <Link
-        href={dashboardItem.href}
-        className={cn(
-          "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
-          isDashboardActive ? "gradient-button neon-glow text-white" : "hover:bg-muted hover:text-accent",
-        )}
-      >
-        <DashboardIcon className="h-4 w-4" />
-        <span className="hidden md:inline">{dashboardItem.name}</span>
-      </Link>
+      {/* Show Movies link when on dashboard, Dashboard link otherwise */}
+      {isDashboardActive ? (
+        <Link
+          href="/movies"
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+            "hover:bg-muted hover:text-accent",
+          )}
+        >
+          <Film className="h-4 w-4" />
+          <span className="hidden md:inline">Movies</span>
+        </Link>
+      ) : (
+        <Link
+          href={dashboardItem.href}
+          className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+            "hover:bg-muted hover:text-accent",
+          )}
+        >
+          <DashboardIcon className="h-4 w-4" />
+          <span className="hidden md:inline">{dashboardItem.name}</span>
+        </Link>
+      )}
 
       {/* Category dropdowns */}
       {filteredCategories.map((category) => {

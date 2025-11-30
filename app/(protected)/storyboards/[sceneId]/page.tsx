@@ -167,11 +167,24 @@ export default function SceneStoryboardsPage() {
   const mapModelToService = (model: string) => {
     switch (model) {
       case "DALL-E 3": return "dalle"
+      case "GPT Image": return "dalle" // GPT Image uses the dalle service but different endpoint
       case "OpenArt": return "openart"
       case "Runway ML": return "runway"
       case "Leonardo AI": return "leonardo"
       default: return "dalle"
     }
+  }
+
+  // Helper function to normalize model name from display name to API model identifier
+  const normalizeImageModel = (displayName: string | null | undefined): string => {
+    if (!displayName) return "dall-e-3"
+    const model = displayName.toLowerCase()
+    if (model === "gpt image" || model.includes("gpt-image")) {
+      return "gpt-image-1"
+    } else if (model.includes("dall") || model.includes("dalle")) {
+      return "dall-e-3"
+    }
+    return "dall-e-3"
   }
   // State variables
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
@@ -1691,10 +1704,14 @@ export default function SceneStoryboardsPage() {
       
       // Determine which service to use - locked model takes precedence
       let serviceToUse = selectedAIService
+      let modelToUse: string | undefined = undefined
+      
       if (imagesSetting?.is_locked && imagesSetting.locked_model) {
         serviceToUse = mapModelToService(imagesSetting.locked_model)
+        modelToUse = normalizeImageModel(imagesSetting.locked_model)
         console.log('🎬 Using locked model from AI settings:', imagesSetting.locked_model)
         console.log('🎬 Mapped to service identifier:', serviceToUse)
+        console.log('🎬 Normalized model for API:', modelToUse)
       } else {
         // Safety check: ensure we have a valid service
         if (!serviceToUse || !['dalle', 'openart', 'runway', 'leonardo'].includes(serviceToUse)) {
@@ -1708,6 +1725,7 @@ export default function SceneStoryboardsPage() {
       console.log('🎬 Service type:', typeof serviceToUse)
       console.log('🎬 Using locked model:', imagesSetting?.is_locked)
       console.log('🎬 Locked model value:', imagesSetting?.locked_model)
+      console.log('🎬 Model to use:', modelToUse)
       
       // Get the API key for the selected service
       const apiKey = getApiKeyForService(serviceToUse)
@@ -1729,12 +1747,17 @@ export default function SceneStoryboardsPage() {
       }
 
       // Debug: Log the request body
-      const requestBody = {
+      const requestBody: any = {
         prompt: enhancedPrompt,
         service: serviceToUse,
         apiKey: apiKey,
         userId: userId,
         autoSaveToBucket: true
+      }
+      
+      // Add model parameter if we have one (for GPT Image support)
+      if (modelToUse) {
+        requestBody.model = modelToUse
       }
       console.log('🎬 Request body being sent:', requestBody)
       console.log('🎬 Service value type:', typeof serviceToUse)

@@ -30,36 +30,89 @@ export async function POST(request: NextRequest) {
       }
     )
 
-    console.log('Downloading image from:', imageUrl)
+    console.log('Downloading image from:', imageUrl.substring(0, 100))
     console.log('File name:', fileName)
     console.log('User ID:', userId)
 
     let imageBlob: Blob
+    let mimeType = 'image/png'
+    let fileExtension = 'png'
 
     // Check if this is a data URL (base64)
     if (imageUrl.startsWith('data:image/')) {
       // Handle base64 data URL
       console.log('Processing base64 data URL')
+      
+      // Extract MIME type from data URL (e.g., "data:image/png;base64," -> "image/png")
+      const mimeMatch = imageUrl.match(/data:image\/([^;]+)/)
+      if (mimeMatch && mimeMatch[1]) {
+        mimeType = `image/${mimeMatch[1]}`
+        // Map common MIME types to file extensions
+        const mimeToExt: Record<string, string> = {
+          'png': 'png',
+          'jpeg': 'jpg',
+          'jpg': 'jpg',
+          'webp': 'webp',
+          'gif': 'gif'
+        }
+        fileExtension = mimeToExt[mimeMatch[1]] || 'png'
+      }
+      
+      // Extract base64 data (everything after the comma)
       const base64Data = imageUrl.split(',')[1]
-      const imageBuffer = Buffer.from(base64Data, 'base64')
-      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+      if (!base64Data) {
+        throw new Error('Invalid base64 data URL: missing data')
+      }
+      
+      try {
+        const imageBuffer = Buffer.from(base64Data, 'base64')
+        imageBlob = new Blob([imageBuffer], { type: mimeType })
+        console.log('Base64 image processed, size:', imageBlob.size, 'type:', mimeType)
+      } catch (error) {
+        console.error('Error decoding base64:', error)
+        throw new Error(`Failed to decode base64 image: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      }
     } else {
       // Download the image from URL (server-side, no CORS issues)
-    const response = await fetch(imageUrl)
-    if (!response.ok) {
-      console.error('Failed to download image:', response.status, response.statusText)
-      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
-    }
+      console.log('Downloading image from URL')
+      const response = await fetch(imageUrl)
+      if (!response.ok) {
+        console.error('Failed to download image:', response.status, response.statusText)
+        throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
+      }
 
-    const imageBuffer = await response.arrayBuffer()
-      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+      // Try to get content type from response headers
+      const contentType = response.headers.get('content-type')
+      if (contentType && contentType.startsWith('image/')) {
+        mimeType = contentType
+        const mimePart = contentType.split('/')[1]?.split(';')[0]
+        if (mimePart) {
+          const mimeToExt: Record<string, string> = {
+            'png': 'png',
+            'jpeg': 'jpg',
+            'jpg': 'jpg',
+            'webp': 'webp',
+            'gif': 'gif'
+          }
+          fileExtension = mimeToExt[mimePart] || 'png'
+        }
+      } else {
+        // Fallback: try to extract from URL
+        const urlExt = imageUrl.split('.').pop()?.split('?')[0]?.toLowerCase()
+        if (urlExt && ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(urlExt)) {
+          fileExtension = urlExt
+        }
+      }
+
+      const imageBuffer = await response.arrayBuffer()
+      imageBlob = new Blob([imageBuffer], { type: mimeType })
+      console.log('Image downloaded from URL, size:', imageBlob.size, 'type:', mimeType)
     }
     
-    console.log('Image downloaded, size:', imageBlob.size)
+    console.log('Image processed, size:', imageBlob.size, 'extension:', fileExtension)
 
     // Create a unique filename
     const timestamp = Date.now()
-    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
     const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
 
     // Upload to Supabase storage
@@ -81,7 +134,7 @@ export async function POST(request: NextRequest) {
     const { data, error } = await supabase.storage
       .from('cinema_files')
       .upload(filePath, imageBlob, {
-        contentType: 'image/png',
+        contentType: mimeType,
         cacheControl: '3600',
         upsert: false
       })

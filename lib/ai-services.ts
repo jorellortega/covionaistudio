@@ -184,53 +184,165 @@ export class OpenAIService {
         model: request.model
       })
 
-      const response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${request.apiKey}`,
-        },
-        body: JSON.stringify({
-          prompt: `${request.style} style: ${request.prompt}`,
-          n: 1,
-          size: "1024x1024",
-          model: "dall-e-3",
-        }),
-      })
+      // Check if this is a GPT image model (gpt-image-1 or GPT-5 models)
+      const isGPTImageModel = request.model === 'gpt-image-1' || request.model.startsWith('gpt-')
+      
+      if (isGPTImageModel) {
+        // Use Responses API for GPT Image models
+        console.log('🖼️ IMAGE GENERATION - Using GPT Image (Responses API)')
+        console.log('🖼️ IMAGE GENERATION - Model:', request.model === 'gpt-image-1' ? 'gpt-4.1-mini (with image_generation tool)' : request.model)
+        console.log('🖼️ IMAGE GENERATION - Prompt:', request.prompt)
+        console.log('🖼️ IMAGE GENERATION - API Endpoint: /v1/responses')
+        
+        const requestBody: any = {
+          model: request.model === 'gpt-image-1' ? 'gpt-4.1-mini' : request.model,
+          input: `Create a visual image. ${request.style} style: ${request.prompt}. Generate the image now.`,
+          tools: [{ type: "image_generation" }],
+          tool_choice: { type: "image_generation" }, // Force the tool to be called
+        }
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        let errorJson: any = {}
-        try {
-          errorJson = JSON.parse(errorText)
-        } catch {
-          // If not JSON, use the text as is
+        // Add GPT-5 specific parameters if using GPT-5 model
+        if (request.model.startsWith('gpt-5')) {
+          requestBody.reasoning_effort = 'none'
+          requestBody.verbosity = 'medium'
+          console.log('🖼️ IMAGE GENERATION - GPT-5 parameters:', {
+            reasoning_effort: 'none',
+            verbosity: 'medium'
+          })
         }
-        
-        console.error('🎬 DEBUG - OpenAI API error response:', {
-          status: response.status,
-          statusText: response.statusText,
-          errorText: errorText,
-          errorJson: errorJson
+
+        console.log('🖼️ IMAGE GENERATION - Request body:', JSON.stringify(requestBody, null, 2))
+
+        const response = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${request.apiKey}`,
+          },
+          body: JSON.stringify(requestBody),
         })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          let errorJson: any = {}
+          try {
+            errorJson = JSON.parse(errorText)
+          } catch {
+            // If not JSON, use the text as is
+          }
+          
+          const errorMessage = errorJson.error?.message || errorText || 'Unknown error'
+          throw new Error(`API Error (${response.status}): ${errorMessage}`)
+        }
+
+        console.log('🖼️ IMAGE GENERATION - Response status:', response.status)
         
-        // Check for content policy violations
-        const errorMessage = errorJson.error?.message || errorText || 'Unknown error'
-        if (errorMessage.toLowerCase().includes('content policy') || 
-            errorMessage.toLowerCase().includes('safety') ||
-            errorMessage.toLowerCase().includes('content_filter') ||
-            errorMessage.toLowerCase().includes('violates our usage policy') ||
-            errorMessage.toLowerCase().includes('not allowed') ||
-            errorMessage.toLowerCase().includes('sensitive content') ||
-            errorJson.error?.code === 'content_filter' ||
-            response.status === 400) {
-          throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+        const data = await response.json()
+        
+        console.log('🖼️ IMAGE GENERATION - Full response:', JSON.stringify(data, null, 2))
+        
+        // Extract image from response - check multiple possible locations
+        let imageData = null
+        
+        // First, try to find image_generation_call in output
+        const imageGenerationCall = data.output?.find((output: any) => output.type === "image_generation_call")
+        if (imageGenerationCall) {
+          imageData = imageGenerationCall.result
+          console.log('🖼️ IMAGE GENERATION - Found image in image_generation_call')
+        } else {
+          // Check if there's a message with tool_calls
+          const messageOutput = data.output?.find((output: any) => output.type === "message")
+          if (messageOutput?.content) {
+            // Look for tool calls in content
+            for (const contentItem of messageOutput.content) {
+              if (contentItem.type === "tool_call" && contentItem.tool_call?.type === "image_generation") {
+                imageData = contentItem.tool_call.result
+                console.log('🖼️ IMAGE GENERATION - Found image in tool_call')
+                break
+              }
+            }
+          }
+          
+          // Also check if there are tool_calls at the message level
+          if (!imageData && messageOutput?.tool_calls) {
+            const imageToolCall = messageOutput.tool_calls.find((tc: any) => tc.type === "image_generation")
+            if (imageToolCall) {
+              imageData = imageToolCall.result
+              console.log('🖼️ IMAGE GENERATION - Found image in message tool_calls')
+            }
+          }
         }
         
-        throw new Error(`OpenAI API error: ${response.status} - ${errorMessage}`)
+        console.log('🖼️ IMAGE GENERATION - Image data found:', !!imageData)
+        console.log('🖼️ IMAGE GENERATION - Output items:', data.output?.length || 0)
+        
+        if (imageData) {
+          console.log('🖼️ IMAGE GENERATION - ✅ Successfully generated image using GPT Image (Responses API)')
+          // Return in the same format as DALL-E for compatibility
+          return { 
+            success: true, 
+            data: {
+              data: [{
+                url: `data:image/png;base64,${imageData}`,
+                b64_json: imageData
+              }]
+            }
+          }
+        } else {
+          console.error('🖼️ IMAGE GENERATION - ❌ No image data in response')
+          console.error('🖼️ IMAGE GENERATION - Response structure:', JSON.stringify(data, null, 2))
+          throw new Error('No image in response - model returned text instead of generating image. Try a different prompt or use DALL-E 3.')
+        }
+      } else {
+        // Use Images API for DALL-E models
+        const response = await fetch('https://api.openai.com/v1/images/generations', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${request.apiKey}`,
+          },
+          body: JSON.stringify({
+            prompt: `${request.style} style: ${request.prompt}`,
+            n: 1,
+            size: "1024x1024",
+            model: "dall-e-3",
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          let errorJson: any = {}
+          try {
+            errorJson = JSON.parse(errorText)
+          } catch {
+            // If not JSON, use the text as is
+          }
+          
+          console.error('🎬 DEBUG - OpenAI API error response:', {
+            status: response.status,
+            statusText: response.statusText,
+            errorText: errorText,
+            errorJson: errorJson
+          })
+          
+          // Check for content policy violations
+          const errorMessage = errorJson.error?.message || errorText || 'Unknown error'
+          if (errorMessage.toLowerCase().includes('content policy') || 
+              errorMessage.toLowerCase().includes('safety') ||
+              errorMessage.toLowerCase().includes('content_filter') ||
+              errorMessage.toLowerCase().includes('violates our usage policy') ||
+              errorMessage.toLowerCase().includes('not allowed') ||
+              errorMessage.toLowerCase().includes('sensitive content') ||
+              errorJson.error?.code === 'content_filter' ||
+              response.status === 400) {
+            throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+          }
+          
+          throw new Error(`OpenAI API error: ${response.status} - ${errorMessage}`)
+        }
+        const result = await response.json()
+        return { success: true, data: result }
       }
-      const result = await response.json()
-      return { success: true, data: result }
     } catch (error) {
       console.error('🎬 DEBUG - OpenAI API error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }

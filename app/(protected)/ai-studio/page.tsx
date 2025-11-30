@@ -87,7 +87,7 @@ interface GeneratedContent {
 
 const aiModels = {
   script: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  image: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   video: ["Kling T2V", "Kling I2V", "Kling I2V Extended", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
@@ -453,15 +453,18 @@ export default function AIStudioPage() {
       if (!userId) return
       
       try {
-        const settings = await AISettingsService.getUserSettings(userId)
+        // Load system-wide AI settings (where locked models are set by CEO)
+        const settings = await AISettingsService.getSystemSettings()
+        console.log('[AI Studio] Loaded system-wide settings:', settings)
         
-        // Ensure default settings exist for all tabs
+        // Ensure default settings exist for all tabs (system-wide)
         const defaultSettings = await Promise.all([
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'scripts'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'images'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'videos'),
-          AISettingsService.getOrCreateDefaultTabSetting(userId, 'audio')
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
+          AISettingsService.getOrCreateDefaultTabSetting('videos'),
+          AISettingsService.getOrCreateDefaultTabSetting('audio')
         ])
+        console.log('[AI Studio] Default settings:', defaultSettings)
         
         // Merge existing settings with default ones, preferring existing
         const mergedSettings = defaultSettings.map(defaultSetting => {
@@ -472,25 +475,7 @@ export default function AIStudioPage() {
         setAiSettings(mergedSettings)
         setAiSettingsLoaded(true)
         
-        // Auto-select locked models for each tab
-        mergedSettings.forEach(setting => {
-          if (setting.is_locked) {
-            switch (setting.tab_type) {
-              case 'scripts':
-                setSelectedModel(setting.locked_model)
-                break
-              case 'images':
-                setSelectedModel(setting.locked_model)
-                break
-              case 'videos':
-                setSelectedModel(setting.locked_model)
-                break
-              case 'audio':
-                setSelectedModel(setting.locked_model)
-                break
-            }
-          }
-        })
+        // The useEffect below will handle setting the locked model when settings load or tab changes
       } catch (error) {
         console.error('Error loading AI settings:', error)
       }
@@ -564,11 +549,13 @@ export default function AIStudioPage() {
   }
 
   // Auto-select locked models when AI settings change
+  // Set locked model when tab or settings change
   useEffect(() => {
     if (aiSettings.length > 0 && activeTab) {
       const currentSetting = aiSettings.find(setting => setting.tab_type === activeTab)
+      console.log(`[AI Studio] Tab changed to ${activeTab}, currentSetting:`, currentSetting)
       if (currentSetting?.is_locked) {
-        console.log(`Setting locked model for ${activeTab}:`, currentSetting.locked_model)
+        console.log(`[AI Studio] Setting locked model for ${activeTab}:`, currentSetting.locked_model)
         setSelectedModel(currentSetting.locked_model)
         
         // If video tab is locked to Runway ML, reset the sub-model to act_two
@@ -576,7 +563,11 @@ export default function AIStudioPage() {
           console.log('Resetting selectedRunwayModel to act_two for locked Runway ML')
           setSelectedRunwayModel('act_two')
         }
+      } else {
+        console.log(`[AI Studio] Tab ${activeTab} is not locked, keeping current model selection`)
       }
+    } else {
+      console.log(`[AI Studio] Waiting for settings or tab - aiSettings.length: ${aiSettings.length}, activeTab: ${activeTab}`)
     }
   }, [aiSettings, activeTab])
 
@@ -592,19 +583,33 @@ export default function AIStudioPage() {
 
   // Get current tab's AI setting
   const getCurrentTabSetting = () => {
-    return aiSettings.find(setting => setting.tab_type === activeTab)
+    if (!aiSettingsLoaded || aiSettings.length === 0) {
+      console.log(`[AI Studio] getCurrentTabSetting - Settings not loaded yet. aiSettingsLoaded: ${aiSettingsLoaded}, aiSettings.length: ${aiSettings.length}`)
+      return undefined
+    }
+    console.log(`[AI Studio] getCurrentTabSetting - activeTab: ${activeTab}, aiSettings:`, aiSettings)
+    const setting = aiSettings.find(setting => setting.tab_type === activeTab)
+    console.log(`[AI Studio] Found setting for ${activeTab}:`, setting)
+    if (!setting) {
+      console.warn(`[AI Studio] No setting found for tab_type: ${activeTab}. Available tab_types:`, aiSettings.map(s => s.tab_type))
+    }
+    return setting
   }
 
   // Check if current tab has a locked model
   const isCurrentTabLocked = () => {
     const setting = getCurrentTabSetting()
-    return setting?.is_locked || false
+    const isLocked = setting?.is_locked || false
+    console.log(`[AI Studio] isCurrentTabLocked for ${activeTab}:`, isLocked, 'setting:', setting)
+    return isLocked
   }
 
   // Get the locked model for current tab
   const getCurrentTabLockedModel = () => {
     const setting = getCurrentTabSetting()
-    return setting?.locked_model || ""
+    const lockedModel = setting?.locked_model || ""
+    console.log(`[AI Studio] getCurrentTabLockedModel for ${activeTab}:`, lockedModel)
+    return lockedModel
   }
 
   // Reset model selection when switching tabs
@@ -973,7 +978,7 @@ export default function AIStudioPage() {
             })
           }
         }
-      } else if (type === "image" && (selectedModel === "DALL-E 3" || selectedModel.startsWith("Runway"))) {
+      } else if (type === "image" && (selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || selectedModel.startsWith("Runway"))) {
         console.log('Attempting to generate image with:', {
           prompt: imagePrompt,
           shot: selectedShot || "",
@@ -998,11 +1003,13 @@ export default function AIStudioPage() {
         console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
         
         let response
-        if (selectedModel === "DALL-E 3") {
+        if (selectedModel === "DALL-E 3" || selectedModel === "GPT Image") {
           console.log(`🚀 IMAGE GENERATION - Calling OpenAIService.generateImage...`)
+          const modelToUse = selectedModel === "GPT Image" ? "gpt-image-1" : "dall-e-3"
           response = await OpenAIService.generateImage({
           prompt: enhancedPrompt,
-          shot: selectedShot || "",
+          style: 'cinematic',
+          model: modelToUse,
           apiKey: userApiKeys.openai_api_key!,
         })
           console.log(`🚀 IMAGE GENERATION - Response received:`, response)
@@ -1071,6 +1078,11 @@ export default function AIStudioPage() {
 
         if (response.success) {
           // Create new generated content
+          // Handle both URL (DALL-E) and base64 (GPT Image) responses
+          const imageUrl = response.data.data?.[0]?.url || response.data.data?.[0]?.b64_json ? 
+            (response.data.data[0].url || `data:image/png;base64,${response.data.data[0].b64_json}`) : 
+            response.data.imageUrl
+          
           const newContent: GeneratedContent = {
             id: Date.now().toString(),
             title: `Generated Image - ${new Date().toLocaleDateString()}`,
@@ -1080,7 +1092,7 @@ export default function AIStudioPage() {
             created_at: new Date().toISOString(),
             project_id: selectedProject,
             scene_id: selectedScene !== "none" ? selectedScene : undefined,
-            url: response.data.data?.[0]?.url || response.data.imageUrl,
+            url: imageUrl,
           }
           
           setGeneratedContent(prev => [newContent, ...prev])

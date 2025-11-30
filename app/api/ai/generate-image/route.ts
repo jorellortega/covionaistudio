@@ -33,25 +33,63 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
       }
     )
 
-    console.log('Downloading image from:', imageUrl)
+    console.log('Downloading image from:', imageUrl.substring(0, 100))
     console.log('File name:', fileName)
     console.log('User ID:', userId)
 
-    // Download the image from the AI service (server-side, no CORS issues)
-    const response = await fetch(imageUrl)
-    if (!response.ok) {
-      console.error('Failed to download image:', response.status, response.statusText)
-      throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
-    }
+    let imageBlob: Blob
+    
+    // Check if this is a base64 data URL
+    if (imageUrl.startsWith('data:image/')) {
+      console.log('Handling base64 data URL')
+      // Extract base64 data from data URL
+      const base64Data = imageUrl.split(',')[1]
+      // Convert base64 to buffer
+      const imageBuffer = Buffer.from(base64Data, 'base64')
+      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    } else {
+      // Download the image from the AI service (server-side, no CORS issues)
+      const response = await fetch(imageUrl)
+      if (!response.ok) {
+        console.error('Failed to download image:', response.status, response.statusText)
+        throw new Error(`Failed to download image: ${response.status} ${response.statusText}`)
+      }
 
-    const imageBuffer = await response.arrayBuffer()
-    const imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+      const imageBuffer = await response.arrayBuffer()
+      imageBlob = new Blob([imageBuffer], { type: 'image/png' })
+    }
     
     console.log('Image downloaded, size:', imageBlob.size)
 
     // Create a unique filename
     const timestamp = Date.now()
-    const fileExtension = imageUrl.split('.').pop()?.split('?')[0] || 'png'
+    let fileExtension = 'png'
+    let mimeType = 'image/png'
+    
+    // Check if this is a data URL (base64)
+    if (imageUrl.startsWith('data:image/')) {
+      // Extract MIME type from data URL (e.g., "data:image/png;base64," -> "image/png")
+      const mimeMatch = imageUrl.match(/data:image\/([^;]+)/)
+      if (mimeMatch && mimeMatch[1]) {
+        mimeType = `image/${mimeMatch[1]}`
+        // Map common MIME types to file extensions
+        const mimeToExt: Record<string, string> = {
+          'png': 'png',
+          'jpeg': 'jpg',
+          'jpg': 'jpg',
+          'webp': 'webp',
+          'gif': 'gif'
+        }
+        fileExtension = mimeToExt[mimeMatch[1]] || 'png'
+      }
+    } else {
+      // Extract from URL
+      const urlExt = imageUrl.split('.').pop()?.split('?')[0]?.toLowerCase()
+      if (urlExt && ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(urlExt)) {
+        fileExtension = urlExt
+      }
+    }
+    
     const uniqueFileName = `${timestamp}-${fileName}.${fileExtension}`
 
     // Upload to Supabase storage
@@ -73,7 +111,7 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
     const { data, error } = await supabase.storage
       .from('cinema_files')
       .upload(filePath, imageBlob, {
-        contentType: 'image/png',
+        contentType: mimeType,
         cacheControl: '3600',
         upsert: false
       })
@@ -159,105 +197,228 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // If apiKey is 'configured', fetch the actual API key from user settings
+    // If apiKey is 'configured', fetch the actual API key from system-wide or user settings
     if (apiKey === 'configured') {
       console.log('Fetching configured API key for service:', service)
-      const { createServerClient } = await import('@supabase/ssr')
-      const { cookies } = await import('next/headers')
       
-      const cookieStore = await cookies()
-      const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            getAll() {
-              return cookieStore.getAll()
-            },
-            setAll(cookiesToSet) {
-              try {
-                cookiesToSet.forEach(({ name, value, options }) =>
-                  cookieStore.set(name, value, options)
-                )
-              } catch {}
-            },
-          },
+      // FIRST: Check system-wide API keys from system_ai_config (set by CEO)
+      let actualApiKey = null
+      try {
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+          const { createClient } = await import('@supabase/supabase-js')
+          const supabaseAdmin = createClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!,
+            {
+              auth: {
+                autoRefreshToken: false,
+                persistSession: false
+              }
+            }
+          )
+
+          // Get system-wide API keys using RPC function (bypasses RLS)
+          const { data: systemConfig, error: systemError } = await supabaseAdmin.rpc('get_system_ai_config')
+          
+          if (!systemError && systemConfig && Array.isArray(systemConfig)) {
+            const configMap: Record<string, string> = {}
+            systemConfig.forEach((item: any) => {
+              configMap[item.setting_key] = item.setting_value
+            })
+
+            // Check for system-wide keys based on service
+            // Normalize service name for comparison
+            const serviceLower = service?.toLowerCase() || ''
+            if ((service === 'DALL-E 3' || service === 'dalle' || service === 'GPT Image' || serviceLower.includes('gpt image') || serviceLower.includes('dall')) && configMap['openai_api_key']?.trim()) {
+              actualApiKey = configMap['openai_api_key'].trim()
+              console.log('✅ Using system-wide OpenAI API key from system_ai_config (CEO-set)')
+            } else if (service === 'OpenArt' || service === 'openart') {
+              if (configMap['openart_api_key']?.trim()) {
+                actualApiKey = configMap['openart_api_key'].trim()
+                console.log('✅ Using system-wide OpenArt API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Kling' || service === 'kling') {
+              if (configMap['kling_api_key']?.trim()) {
+                actualApiKey = configMap['kling_api_key'].trim()
+                console.log('✅ Using system-wide Kling API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Runway ML' || service === 'runway') {
+              if (configMap['runway_api_key']?.trim()) {
+                actualApiKey = configMap['runway_api_key'].trim()
+                console.log('✅ Using system-wide Runway ML API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'ElevenLabs' || service === 'elevenlabs') {
+              if (configMap['elevenlabs_api_key']?.trim()) {
+                actualApiKey = configMap['elevenlabs_api_key'].trim()
+                console.log('✅ Using system-wide ElevenLabs API key from system_ai_config (CEO-set)')
+              }
+            } else if (service === 'Suno AI' || service === 'suno') {
+              if (configMap['suno_api_key']?.trim()) {
+                actualApiKey = configMap['suno_api_key'].trim()
+                console.log('✅ Using system-wide Suno AI API key from system_ai_config (CEO-set)')
+              }
+            }
+          } else if (systemError) {
+            console.error('❌ Error fetching system-wide API keys:', systemError)
+          }
         }
-      )
-
-      // Fetch API key from users table based on service
-      let keyColumn = ''
-      switch (service.toLowerCase()) {
-        case 'dalle':
-          keyColumn = 'openai_api_key'
-          break
-        case 'openart':
-          keyColumn = 'openart_api_key'
-          break
-        case 'leonardo':
-          keyColumn = 'leonardo_api_key'
-          break
-        case 'runway':
-          keyColumn = 'runway_api_key'
-          break
-        case 'stable-diffusion':
-          keyColumn = 'openart_api_key' // Using OpenArt as SD alternative
-          break
-        default:
-          keyColumn = `${service.toLowerCase()}_api_key`
+      } catch (systemKeyError) {
+        console.error('❌ Error checking system-wide API keys:', systemKeyError)
       }
 
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select(keyColumn)
-        .eq('id', userId)
-        .single()
+      // Fallback to user-specific keys if no system-wide key found
+      if (!actualApiKey || actualApiKey === 'configured' || actualApiKey === 'use_env_vars') {
+        if (!userId) {
+          console.error('No userId provided for database API key lookup')
+          return NextResponse.json(
+            { error: 'Missing userId for API key lookup' },
+            { status: 400 }
+          )
+        }
 
-      if (userError || !userData || !userData[keyColumn]) {
-        console.error('Failed to fetch API key:', userError)
-        const serviceName = service.toLowerCase() === 'dalle' ? 'OpenAI' : 
-                          service.toLowerCase() === 'openart' ? 'OpenArt' :
-                          service.toLowerCase() === 'leonardo' ? 'Leonardo' :
-                          service.toLowerCase() === 'runway' ? 'Runway ML' : service
-        return NextResponse.json(
-          { error: `No API key configured for ${serviceName}. Please add your API key in Settings → AI Settings.` },
-          { status: 400 }
+        const { createServerClient } = await import('@supabase/ssr')
+        const { cookies } = await import('next/headers')
+        
+        const cookieStore = await cookies()
+        const supabase = createServerClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+          {
+            cookies: {
+              getAll() {
+                return cookieStore.getAll()
+              },
+              setAll(cookiesToSet) {
+                try {
+                  cookiesToSet.forEach(({ name, value, options }) =>
+                    cookieStore.set(name, value, options)
+                  )
+                } catch {}
+              },
+            },
+          }
         )
+
+        // Fetch API key from users table based on service
+        let keyColumn = ''
+        switch (service.toLowerCase()) {
+          case 'dalle':
+          case 'gpt image':
+            keyColumn = 'openai_api_key'
+            break
+          case 'openart':
+            keyColumn = 'openart_api_key'
+            break
+          case 'leonardo':
+            keyColumn = 'leonardo_api_key'
+            break
+          case 'runway':
+            keyColumn = 'runway_api_key'
+            break
+          case 'stable-diffusion':
+            keyColumn = 'openart_api_key' // Using OpenArt as SD alternative
+            break
+          default:
+            keyColumn = `${service.toLowerCase().replace(/\s+/g, '_')}_api_key`
+        }
+
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select(keyColumn)
+          .eq('id', userId)
+          .single()
+
+        if (userError || !userData || !userData[keyColumn]) {
+          console.error('Failed to fetch API key:', userError)
+          // Determine service name for error message
+          let serviceName = 'OpenAI' // Default
+          const serviceLower = service.toLowerCase()
+          if (serviceLower === 'dalle' || serviceLower.includes('gpt image') || serviceLower === 'gpt image') {
+            serviceName = 'OpenAI'
+          } else if (serviceLower === 'openart') {
+            serviceName = 'OpenArt'
+          } else if (serviceLower === 'leonardo') {
+            serviceName = 'Leonardo'
+          } else if (serviceLower === 'runway') {
+            serviceName = 'Runway ML'
+          } else {
+            serviceName = service
+          }
+          return NextResponse.json(
+            { error: `No API key configured for ${serviceName}. Please add your API key in Settings → AI Settings.` },
+            { status: 400 }
+          )
+        }
+
+        actualApiKey = userData[keyColumn]
+        console.log('Successfully fetched configured API key for', keyColumn)
       }
 
-      apiKey = userData[keyColumn]
-      console.log('Successfully fetched configured API key for', keyColumn)
+      apiKey = actualApiKey
     }
+
+    // Normalize service name - map "GPT Image" to "dalle" since both use OpenAI API
+    const normalizedService = (service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) ? 'dalle' : service.toLowerCase()
 
     let imageUrl = ""
 
-    switch (service) {
+    switch (normalizedService) {
       case 'dalle':
-        console.log('Generating DALL-E image with prompt:', prompt)
+        console.log('Generating image with prompt:', prompt)
+        console.log('Using model:', model || 'dall-e-3')
         console.log('Using API key:', apiKey ? `${apiKey.substring(0, 10)}...` : 'undefined')
+        
+        // Determine the model to use - support GPT image models
+        const imageModel = model || 'dall-e-3'
+        const isGPTImageModel = imageModel === 'gpt-image-1' || imageModel.startsWith('gpt-')
+        
+        if (isGPTImageModel) {
+          console.log('🖼️ API ROUTE - Using GPT Image (Responses API) for model:', imageModel)
+        } else {
+          console.log('🖼️ API ROUTE - Using DALL-E (Images API) for model:', imageModel)
+        }
         
         // Use the OpenAIService from ai-services.ts
         const dalleResponse = await OpenAIService.generateImage({
           prompt: prompt, // Send only the user's exact prompt
           style: 'cinematic',
-          model: 'dall-e-3',
+          model: imageModel,
           apiKey
         })
         
-        console.log('DALL-E response:', dalleResponse)
+        console.log('Image generation response:', dalleResponse)
+        if (isGPTImageModel && dalleResponse.success) {
+          console.log('🖼️ API ROUTE - GPT Image generation successful (base64 response)')
+        } else if (!isGPTImageModel && dalleResponse.success) {
+          console.log('🖼️ API ROUTE - DALL-E generation successful (URL response)')
+        }
         
         if (!dalleResponse.success) {
           // The error message from OpenAIService is already user-friendly for content policy violations
           throw new Error(dalleResponse.error || 'Image generation failed')
         }
         
-        if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
-          console.error('Invalid DALL-E response structure:', dalleResponse.data)
-          throw new Error('Invalid response structure from DALL-E API')
+        // Handle both DALL-E (URL) and GPT Image (base64) responses
+        if (isGPTImageModel) {
+          // GPT Image returns base64 data
+          if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].b64_json) {
+            console.error('Invalid GPT Image response structure:', dalleResponse.data)
+            throw new Error('Invalid response structure from GPT Image API')
+          }
+          
+          // Convert base64 to data URL
+          imageUrl = dalleResponse.data.data[0].url || `data:image/png;base64,${dalleResponse.data.data[0].b64_json}`
+          console.log('Generated image (base64):', imageUrl.substring(0, 50) + '...')
+        } else {
+          // DALL-E returns URL
+          if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
+            console.error('Invalid DALL-E response structure:', dalleResponse.data)
+            throw new Error('Invalid response structure from DALL-E API')
+          }
+          
+          imageUrl = dalleResponse.data.data[0].url
+          console.log('Generated image URL:', imageUrl)
         }
-        
-        imageUrl = dalleResponse.data.data[0].url
-        console.log('Generated image URL:', imageUrl)
         break
 
       case 'openart':

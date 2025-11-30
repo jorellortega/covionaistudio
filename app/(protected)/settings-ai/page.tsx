@@ -32,10 +32,10 @@ import {
 
 const aiModels = {
   scripts: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  images: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  images: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   videos: ["Kling", "Runway ML", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
-  timeline: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  timeline: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
 // OpenAI models
@@ -410,7 +410,7 @@ export default function AISettingsPage() {
     if (!ready) return { isReady: false, statusText: "Not logged in" }
     
     // Check specific API key requirements (user keys take precedence, but system keys are checked too)
-    if (model === "DALL-E 3" || model === "ChatGPT" || model === "GPT-4") {
+    if (model === "DALL-E 3" || model === "ChatGPT" || model === "GPT-4" || model === "GPT Image") {
       const hasKey = !!userApiKeys.openai_api_key
       return { 
         isReady: hasKey, 

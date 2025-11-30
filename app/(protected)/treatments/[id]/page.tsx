@@ -220,6 +220,7 @@ export default function TreatmentDetailPage() {
 
       // Determine which API to use based on model
       const isAnthropic = model.startsWith('claude-')
+      const isGPT5Model = model.startsWith('gpt-5')
       const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
 
       if (!apiKey) {
@@ -254,20 +255,31 @@ export default function TreatmentDetailPage() {
         response = result.content?.[0]?.text || ''
       } else {
         // Use OpenAI API
+        // Build request body
+        const requestBody: any = {
+          model: model,
+          messages: [
+            { role: 'user', content: fullPrompt }
+          ],
+          temperature: 0.7,
+        }
+
+        // GPT-5 models use max_completion_tokens instead of max_tokens
+        if (isGPT5Model) {
+          requestBody.max_completion_tokens = 4000
+          requestBody.reasoning_effort = 'none'
+          requestBody.verbosity = 'medium'
+        } else {
+          requestBody.max_tokens = 4000
+        }
+
         const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              { role: 'user', content: fullPrompt }
-            ],
-            max_tokens: 4000,
-            temperature: 0.7,
-          }),
+          body: JSON.stringify(requestBody),
         })
 
         if (!openaiResponse.ok) {
@@ -1780,8 +1792,20 @@ Write the treatment now:`
       return
     }
 
-    // Normalize service name
-    const normalizedService = serviceToUse.toLowerCase().includes('dall') ? 'dalle' : 
+    // Normalize service name and model
+    const normalizeImageModel = (displayName: string | null | undefined): string => {
+      if (!displayName) return "dall-e-3"
+      const model = displayName.toLowerCase()
+      if (model === "gpt image" || model.includes("gpt-image")) {
+        return "gpt-image-1"
+      } else if (model.includes("dall") || model.includes("dalle")) {
+        return "dall-e-3"
+      }
+      return "dall-e-3"
+    }
+    
+    const normalizedModel = normalizeImageModel(lockedModel || serviceToUse)
+    const normalizedService = serviceToUse.toLowerCase().includes('dall') || normalizedModel === 'gpt-image-1' ? 'dalle' : 
                              serviceToUse.toLowerCase().includes('openart') ? 'openart' : 
                              serviceToUse.toLowerCase().includes('leonardo') ? 'leonardo' : 
                              'dalle'
@@ -1824,6 +1848,7 @@ Write the treatment now:`
           body: JSON.stringify({
             prompt: prompt,
             service: normalizedService,
+            model: normalizedModel, // Pass the normalized model (gpt-image-1 or dall-e-3)
             apiKey: 'configured',
             userId: user.id,
             autoSaveToBucket: true,
@@ -3672,6 +3697,9 @@ Return the character names as a JSON array:`
       const modelToUse = aiSettings.find((s: any) => s.tab_type === 'scripts')?.selected_model || 
                         (normalizedService === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022')
 
+      // Check if this is a GPT-5 model
+      const isGPT5Model = modelToUse.startsWith('gpt-5')
+
       let response
       if (normalizedService === 'anthropic') {
         const apiKey = userApiKeys.anthropic_api_key
@@ -3708,20 +3736,31 @@ Return the character names as a JSON array:`
           throw new Error('OpenAI API key not found')
         }
 
+        // Build request body for OpenAI
+        const requestBody: any = {
+          model: modelToUse,
+          messages: [
+            { role: 'user', content: aiPrompt }
+          ],
+          temperature: 0.3,
+        }
+
+        // GPT-5 models use max_completion_tokens instead of max_tokens
+        if (isGPT5Model) {
+          requestBody.max_completion_tokens = 1000
+          requestBody.reasoning_effort = 'none'
+          requestBody.verbosity = 'medium'
+        } else {
+          requestBody.max_tokens = 1000
+        }
+
         const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
-            model: modelToUse,
-            messages: [
-              { role: 'user', content: aiPrompt }
-            ],
-            max_tokens: 1000,
-            temperature: 0.3,
-          }),
+          body: JSON.stringify(requestBody),
         })
 
         if (!openaiResponse.ok) {
@@ -4077,6 +4116,9 @@ Return the location names as a JSON array:`
       const modelToUse = aiSettings.find((s: any) => s.tab_type === 'scripts')?.selected_model || 
                         (normalizedService === 'openai' ? 'gpt-4o-mini' : 'claude-3-5-sonnet-20241022')
 
+      // Check if this is a GPT-5 model
+      const isGPT5Model = modelToUse.startsWith('gpt-5')
+
       let response
       if (normalizedService === 'anthropic') {
         const apiKey = userApiKeys.anthropic_api_key
@@ -4113,20 +4155,31 @@ Return the location names as a JSON array:`
           throw new Error('OpenAI API key not found')
         }
 
+        // Build request body for OpenAI
+        const requestBody: any = {
+          model: modelToUse,
+          messages: [
+            { role: 'user', content: aiPrompt }
+          ],
+          temperature: 0.3,
+        }
+
+        // GPT-5 models use max_completion_tokens instead of max_tokens
+        if (isGPT5Model) {
+          requestBody.max_completion_tokens = 1000
+          requestBody.reasoning_effort = 'none'
+          requestBody.verbosity = 'medium'
+        } else {
+          requestBody.max_tokens = 1000
+        }
+
         const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
-            model: modelToUse,
-            messages: [
-              { role: 'user', content: aiPrompt }
-            ],
-            max_tokens: 1000,
-            temperature: 0.3,
-          }),
+          body: JSON.stringify(requestBody),
         })
 
         if (!openaiResponse.ok) {
