@@ -2398,7 +2398,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                   )}
                                                 </div>
                                                 <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm max-w-[80%] truncate">
-                                                  {asset.title.replace(' - AI Generated Image', '')}
+                                                  {asset.title.replace(/ - AI Generated Image.*$/, '')}
                                                 </div>
                                               </div>
                                             </CarouselItem>
@@ -2460,7 +2460,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                 {getAssetIcon(asset)}
                                               </div>
                                               <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-medium truncate">{asset.title}</p>
+                                                <p className="text-sm font-medium truncate">{asset.title.replace(/ - AI Generated Image.*$/, '')}</p>
                                                 <p className="text-xs text-muted-foreground mt-1">
                                                   {asset.content_type}
                                                 </p>
@@ -3843,13 +3843,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
         <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
           <DialogHeader className="px-6 pt-6 pb-4">
-            <DialogTitle>{viewingImage?.title || 'Character Image'}</DialogTitle>
-            {viewingImage && (
-              <DialogDescription>
-                {viewingImage.model && `Generated with ${viewingImage.model}`}
-                {viewingImage.created_at && ` • ${new Date(viewingImage.created_at).toLocaleDateString()}`}
-              </DialogDescription>
-            )}
+            <DialogTitle>{(viewingImage?.title || 'Character Image').replace(/ - AI Generated Image.*$/, '')}</DialogTitle>
           </DialogHeader>
           <div className="px-6 pb-6">
             {viewingImage?.content_url && (

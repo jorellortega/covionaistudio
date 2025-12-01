@@ -7,21 +7,21 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Loader2, Users, ExternalLink, Star } from "lucide-react"
+import { ArrowLeft, Loader2, MapPin, ExternalLink, Star } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { CharactersService, type Character } from "@/lib/characters-service"
+import { LocationsService, type Location } from "@/lib/locations-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuthReady } from "@/components/auth-hooks"
 
-export default function CharacterDetailPage() {
+export default function LocationDetailPage() {
   const { id } = useParams()
   const router = useRouter()
   const { toast } = useToast()
   const { ready, userId } = useAuthReady()
   
-  const [character, setCharacter] = useState<Character | null>(null)
+  const [location, setLocation] = useState<Location | null>(null)
   const [assets, setAssets] = useState<Asset[]>([])
   const [loading, setLoading] = useState(true)
   const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
@@ -29,21 +29,21 @@ export default function CharacterDetailPage() {
 
   useEffect(() => {
     if (id && ready && userId) {
-      loadCharacter()
+      loadLocation()
     }
   }, [id, ready, userId])
 
-  const loadCharacter = async () => {
+  const loadLocation = async () => {
     if (!id || !userId) return
     
     setLoading(true)
     try {
-      // Query character directly by ID
+      // Query location directly by ID
       const { getSupabaseClient } = await import("@/lib/supabase")
       const supabase = getSupabaseClient()
       
       const { data, error } = await supabase
-        .from('characters')
+        .from('locations')
         .select('*')
         .eq('id', id)
         .eq('user_id', userId)
@@ -51,32 +51,32 @@ export default function CharacterDetailPage() {
       
       if (error || !data) {
         toast({
-          title: "Character Not Found",
-          description: "The character you're looking for doesn't exist or you don't have access to it.",
+          title: "Location Not Found",
+          description: "The location you're looking for doesn't exist or you don't have access to it.",
           variant: "destructive",
         })
-        router.push("/characters")
+        router.push("/locations")
         return
       }
 
-      setCharacter(data as Character)
+      setLocation(data as Location)
 
-      // Load assets for this character
+      // Load assets for this location
       try {
-        const characterAssets = await AssetService.getAssetsForCharacter(id as string)
-        setAssets(characterAssets)
+        const locationAssets = await AssetService.getAssetsForLocation(id as string)
+        setAssets(locationAssets)
       } catch (assetError) {
         console.error("Error loading assets:", assetError)
         // Non-critical, continue without assets
       }
     } catch (error) {
-      console.error("Error loading character:", error)
+      console.error("Error loading location:", error)
       toast({
         title: "Error",
-        description: "Failed to load character. Please try again.",
+        description: "Failed to load location. Please try again.",
         variant: "destructive",
       })
-      router.push("/characters")
+      router.push("/locations")
     } finally {
       setLoading(false)
     }
@@ -86,16 +86,16 @@ export default function CharacterDetailPage() {
     if (!id || !asset.content_url) return
     
     try {
-      await CharactersService.updateCharacter(id as string, {
+      await LocationsService.updateLocation(id as string, {
         image_url: asset.content_url
       })
       
-      // Update local character state
-      setCharacter(prev => prev ? { ...prev, image_url: asset.content_url || null } : null)
+      // Update local location state
+      setLocation(prev => prev ? { ...prev, image_url: asset.content_url || null } : null)
       
       toast({
         title: "Thumbnail Set",
-        description: "This image is now the character's main thumbnail.",
+        description: "This image is now the location's main thumbnail.",
       })
     } catch (error) {
       console.error('Error setting thumbnail:', error)
@@ -114,21 +114,21 @@ export default function CharacterDetailPage() {
         <div className="container mx-auto px-4 py-8">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading character...
+            Loading location...
           </div>
         </div>
       </>
     )
   }
 
-  if (!character) {
+  if (!location) {
     return (
       <>
         <Header />
         <div className="container mx-auto px-4 py-8">
           <Card className="cinema-card">
             <CardContent className="py-8 text-center text-muted-foreground">
-              Character not found.
+              Location not found.
             </CardContent>
           </Card>
         </div>
@@ -146,22 +146,25 @@ export default function CharacterDetailPage() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push(`/characters?movie=${character.project_id}`)}
+            onClick={() => router.push(`/locations?movie=${location.project_id}`)}
             className="mb-4"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Characters
+            Back to Locations
           </Button>
           
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold">{character.name}</h1>
-              {character.archetype && (
-                <p className="text-muted-foreground mt-1">Archetype: {character.archetype}</p>
+              <h1 className="text-3xl font-bold">{location.name}</h1>
+              {location.type && (
+                <p className="text-muted-foreground mt-1">Type: {location.type}</p>
               )}
-              {character.age && character.gender && (
+              {location.address && (
                 <p className="text-sm text-muted-foreground mt-1">
-                  {character.age} years old, {character.gender}
+                  {location.address}
+                  {location.city && `, ${location.city}`}
+                  {location.state && `, ${location.state}`}
+                  {location.country && `, ${location.country}`}
                 </p>
               )}
             </div>
@@ -169,26 +172,26 @@ export default function CharacterDetailPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Character Image */}
-          {character.image_url && (
+          {/* Location Image */}
+          {location.image_url && (
             <Card className="cinema-card">
               <CardHeader>
-                <CardTitle>Character Image</CardTitle>
+                <CardTitle>Location Image</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
                   <img
-                    src={character.image_url}
-                    alt={character.name}
-                    className="w-full h-full object-cover object-top"
+                    src={location.image_url}
+                    alt={location.name}
+                    className="w-full h-full object-cover object-center"
                   />
                 </div>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    if (character.image_url) {
-                      window.open(character.image_url, '_blank')
+                    if (location.image_url) {
+                      window.open(location.image_url, '_blank')
                     }
                   }}
                   className="w-full mt-4"
@@ -200,76 +203,120 @@ export default function CharacterDetailPage() {
             </Card>
           )}
 
-          {/* Character Details */}
+          {/* Location Details */}
           <Card className="cinema-card">
             <CardHeader>
-              <CardTitle>Character Details</CardTitle>
+              <CardTitle>Location Details</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {character.description ? (
+              {location.description ? (
                 <div>
                   <Label className="text-sm font-medium mb-2 block">Description</Label>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.description}</p>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.description}</p>
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">
-                  No description available for this character.
+                  No description available for this location.
                 </div>
               )}
 
-              {character.backstory && (
+              {location.visual_description && (
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Backstory</Label>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.backstory}</p>
+                  <Label className="text-sm font-medium mb-2 block">Visual Description</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.visual_description}</p>
                 </div>
               )}
 
-              {character.goals && (
+              {location.atmosphere && (
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Goals</Label>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.goals}</p>
+                  <Label className="text-sm font-medium mb-2 block">Atmosphere</Label>
+                  <p className="text-sm text-muted-foreground">{location.atmosphere}</p>
                 </div>
               )}
 
-              {character.conflicts && (
+              {location.mood && (
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Conflicts</Label>
-                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.conflicts}</p>
+                  <Label className="text-sm font-medium mb-2 block">Mood</Label>
+                  <p className="text-sm text-muted-foreground">{location.mood}</p>
                 </div>
               )}
 
-              {(character.height || character.build || character.skin_tone || character.eye_color || character.hair_color_current) && (
+              {location.lighting_notes && (
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Physical Appearance</Label>
-                  <div className="text-sm text-muted-foreground space-y-1">
-                    {character.height && <p>Height: {character.height}</p>}
-                    {character.build && <p>Build: {character.build}</p>}
-                    {character.skin_tone && <p>Skin tone: {character.skin_tone}</p>}
-                    {character.eye_color && <p>Eye color: {character.eye_color}</p>}
-                    {character.hair_color_current && <p>Hair: {character.hair_color_current}</p>}
-                  </div>
+                  <Label className="text-sm font-medium mb-2 block">Lighting Notes</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.lighting_notes}</p>
                 </div>
               )}
 
-              {character.personality?.traits && Array.isArray(character.personality.traits) && character.personality.traits.length > 0 && (
+              {location.sound_notes && (
                 <div>
-                  <Label className="text-sm font-medium mb-2 block">Personality Traits</Label>
+                  <Label className="text-sm font-medium mb-2 block">Sound Notes</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.sound_notes}</p>
+                </div>
+              )}
+
+              {location.time_of_day && Array.isArray(location.time_of_day) && location.time_of_day.length > 0 && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Time of Day</Label>
                   <div className="flex flex-wrap gap-2">
-                    {character.personality.traits.map((trait, idx) => (
-                      <Badge key={idx} variant="outline">{trait}</Badge>
+                    {location.time_of_day.map((time, idx) => (
+                      <Badge key={idx} variant="outline">{time}</Badge>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {location.key_features && Array.isArray(location.key_features) && location.key_features.length > 0 && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Key Features</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {location.key_features.map((feature, idx) => (
+                      <Badge key={idx} variant="outline">{feature}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {location.props && Array.isArray(location.props) && location.props.length > 0 && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Props</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {location.props.map((prop, idx) => (
+                      <Badge key={idx} variant="outline">{prop}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {location.restrictions && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Restrictions</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.restrictions}</p>
+                </div>
+              )}
+
+              {location.access_notes && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Access Notes</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.access_notes}</p>
+                </div>
+              )}
+
+              {location.shooting_notes && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">Shooting Notes</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{location.shooting_notes}</p>
                 </div>
               )}
             </CardContent>
           </Card>
         </div>
 
-        {/* Character Assets */}
+        {/* Location Assets */}
         {imageAssets.length > 0 && (
           <Card className="cinema-card mt-6">
             <CardHeader>
-              <CardTitle>Character Images ({imageAssets.length})</CardTitle>
+              <CardTitle>Location Images ({imageAssets.length})</CardTitle>
             </CardHeader>
             <CardContent>
               <Carousel className="w-full">
@@ -286,7 +333,7 @@ export default function CharacterDetailPage() {
                         <img
                           src={asset.content_url!}
                           alt={asset.title}
-                          className="w-full h-full object-cover object-top"
+                          className="w-full h-full object-cover object-center"
                         />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
                           <Button
@@ -317,7 +364,7 @@ export default function CharacterDetailPage() {
                           </Button>
                         </div>
                         <div className="absolute top-2 left-2 flex items-center gap-2">
-                          {character.image_url === asset.content_url && (
+                          {location.image_url === asset.content_url && (
                             <div className="bg-blue-500 text-white px-2 py-1 rounded text-xs backdrop-blur-sm flex items-center gap-1">
                               <Star className="h-3 w-3 fill-current" />
                               Thumbnail

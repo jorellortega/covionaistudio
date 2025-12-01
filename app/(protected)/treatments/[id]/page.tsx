@@ -138,6 +138,9 @@ export default function TreatmentDetailPage() {
   const [savedCharacters, setSavedCharacters] = useState<Array<{id: string; name: string; image_url?: string | null}>>([])
   const [viewCharacterDialogOpen, setViewCharacterDialogOpen] = useState(false)
   const [viewingCharacter, setViewingCharacter] = useState<{id: string; name: string; image_url?: string | null; fullDetails?: Character | null} | null>(null)
+  const [savedLocations, setSavedLocations] = useState<Array<{id: string; name: string; image_url?: string | null}>>([])
+  const [viewLocationDialogOpen, setViewLocationDialogOpen] = useState(false)
+  const [viewingLocation, setViewingLocation] = useState<{id: string; name: string; image_url?: string | null; fullDetails?: Location | null} | null>(null)
 
   useEffect(() => {
     if (id) {
@@ -588,15 +591,26 @@ Treatment:`
     const loadLocations = async () => {
       if (!treatment?.project_id) {
         setLocations([])
+        setSavedLocations([])
         return
       }
       try {
         setIsLoadingLocations(true)
         const locs = await LocationsService.getLocations(treatment.project_id)
         setLocations(locs)
+        
+        // Also update savedLocations with thumbnails
+        const locationsWithThumbnails = locs.map(l => ({ 
+          id: l.id, 
+          name: l.name, 
+          image_url: l.image_url 
+        }))
+        console.log('📸 Treatment - Reloaded saved locations with thumbnails:', locationsWithThumbnails)
+        setSavedLocations(locationsWithThumbnails)
       } catch (e) {
         console.error('Failed loading locations:', e)
         setLocations([])
+        setSavedLocations([])
       } finally {
         setIsLoadingLocations(false)
       }
@@ -747,6 +761,20 @@ Treatment:`
               setSavedCharacters(charactersWithThumbnails)
             } catch (charError) {
               console.error('Error loading characters:', charError)
+            }
+            
+            // Load saved locations for thumbnails
+            try {
+              const locs = await LocationsService.getLocations(data.project_id)
+              const locationsWithThumbnails = locs.map(l => ({ 
+                id: l.id, 
+                name: l.name, 
+                image_url: l.image_url 
+              }))
+              console.log('📸 Treatment - Loaded saved locations with thumbnails:', locationsWithThumbnails)
+              setSavedLocations(locationsWithThumbnails)
+            } catch (locError) {
+              console.error('Error loading locations:', locError)
             }
           } catch (movieError) {
             console.error('Error loading linked movie:', movieError)
@@ -4371,12 +4399,55 @@ Return the location names as a JSON array:`
         description: `Location from treatment: ${treatment?.title || 'Untitled'}`,
       })
 
+      // Fetch the first image asset for this location to use as thumbnail
+      let thumbnailUrl: string | null = null
+      try {
+        const locationAssets = await AssetService.getAssetsForLocation(location.id)
+        const firstImageAsset = locationAssets.find(asset => asset.content_type === 'image' && asset.content_url)
+        
+        if (firstImageAsset?.content_url) {
+          thumbnailUrl = firstImageAsset.content_url
+          // Update location with thumbnail
+          await LocationsService.updateLocation(location.id, {
+            image_url: thumbnailUrl
+          })
+        }
+      } catch (assetError) {
+        // Non-critical error - location is saved, just no thumbnail
+        console.log('Could not fetch location thumbnail:', assetError)
+      }
+
       // Remove from AI-detected locations since it's now saved
       setAiDetectedLocations(prev => prev.filter(l => l.toLowerCase() !== locationName.toLowerCase()))
 
       // Refresh locations list
       const updatedLocations = await LocationsService.getLocations(treatment.project_id)
       setLocations(updatedLocations)
+
+      // Reload saved locations to get updated thumbnails
+      try {
+        const locationsWithThumbnails = updatedLocations.map(l => ({ 
+          id: l.id, 
+          name: l.name, 
+          image_url: l.image_url 
+        }))
+        console.log('📸 Treatment - Updated saved locations after save:', locationsWithThumbnails)
+        setSavedLocations(locationsWithThumbnails)
+      } catch (locError) {
+        console.error('Error reloading locations:', locError)
+        // Fallback to local update
+        setSavedLocations(prev => {
+          const existing = prev.find(sl => sl.name.toLowerCase() === locationName.toLowerCase())
+          if (existing) {
+            return prev.map(sl => 
+              sl.name.toLowerCase() === locationName.toLowerCase()
+                ? { ...sl, image_url: thumbnailUrl }
+                : sl
+            )
+          }
+          return [...prev, { id: location.id, name: locationName, image_url: thumbnailUrl }]
+        })
+      }
 
       toast({
         title: "Location Saved",
@@ -6158,7 +6229,7 @@ Return ONLY the JSON object, no other text:`
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-4">
                           <h3 className="text-sm font-medium">
-                            Saved Locations ({locations.length})
+                            Saved Locations ({savedLocations.length})
                           </h3>
                           <Link href={`/locations?movie=${treatment.project_id}`}>
                             <Button variant="outline" size="sm" className="gap-2">
@@ -6172,34 +6243,67 @@ Return ONLY the JSON object, no other text:`
                             <Loader2 className="h-4 w-4 animate-spin" />
                             <span className="text-sm text-muted-foreground">Loading locations...</span>
                           </div>
-                        ) : locations.length === 0 ? (
+                        ) : (savedLocations.length === 0 && locations.length === 0) ? (
                           <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
                             No locations saved yet. Use "Detect from Treatment" or "Save" to create location records.
                           </div>
                         ) : (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {locations.map((location) => (
-                              <div
-                                key={location.id}
-                                className="p-3 rounded-lg border border-border bg-muted/30 hover:bg-muted/50 transition-colors"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <h4 className="font-medium text-sm truncate">{location.name}</h4>
-                                    {location.description && (
-                                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                        {location.description}
-                                      </p>
-                                    )}
-                                    {location.type && (
-                                      <Badge variant="outline" className="mt-2 text-xs">
-                                        {location.type}
-                                      </Badge>
-                                    )}
-                                  </div>
+                          <div className="flex flex-wrap gap-3">
+                            {(savedLocations.length > 0 ? savedLocations : locations.map(l => ({ id: l.id, name: l.name, image_url: l.image_url }))).map((loc) => {
+                              const savedLocation = savedLocations.find(sl => sl.id === loc.id) || locations.find(l => l.id === loc.id)
+                              return (
+                                <div
+                                  key={loc.id}
+                                  className="flex items-center gap-2 p-2 rounded-md border border-border hover:bg-muted/50 transition-colors cursor-pointer"
+                                  onClick={async () => {
+                                    setViewLocationDialogOpen(true)
+                                    setViewingLocation({
+                                      ...loc,
+                                      fullDetails: null
+                                    })
+                                    
+                                    // Load full location details
+                                    try {
+                                      const locationDetails = await LocationsService.getLocations(treatment?.project_id || '')
+                                      const locationDetail = locationDetails.find(l => l.id === loc.id)
+                                      if (locationDetail) {
+                                        setViewingLocation({
+                                          ...loc,
+                                          fullDetails: locationDetail
+                                        })
+                                      }
+                                    } catch (error) {
+                                      console.error('Error fetching location details:', error)
+                                      setViewingLocation({
+                                        ...loc,
+                                        fullDetails: null
+                                      })
+                                    }
+                                  }}
+                                  title="Click to view location details"
+                                >
+                                  {loc.image_url ? (
+                                    <div className="w-8 h-8 rounded overflow-hidden border border-border flex-shrink-0">
+                                      <img
+                                        src={loc.image_url}
+                                        alt={loc.name}
+                                        className="w-full h-full object-cover object-center"
+                                        onError={(e) => {
+                                          console.error('📸 Treatment - Image failed to load:', loc.image_url)
+                                          const target = e.target as HTMLImageElement
+                                          target.style.display = 'none'
+                                        }}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="w-8 h-8 rounded border border-border flex-shrink-0 flex items-center justify-center bg-muted">
+                                      <MapPin className="h-4 w-4 text-muted-foreground" />
+                                    </div>
+                                  )}
+                                  <span className="text-sm font-medium">{loc.name}</span>
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         )}
                       </div>
@@ -7323,6 +7427,111 @@ Return ONLY the JSON object, no other text:`
             <Button
               variant="outline"
               onClick={() => setViewCharacterDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Location Dialog */}
+      <Dialog open={viewLocationDialogOpen} onOpenChange={setViewLocationDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-4xl max-h-[90vh] p-0 overflow-hidden flex flex-col">
+          <DialogHeader className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle className="text-2xl">{viewingLocation?.name || 'Location Details'}</DialogTitle>
+            {viewingLocation?.fullDetails && (
+              <DialogDescription>
+                {viewingLocation.fullDetails.type && `Type: ${viewingLocation.fullDetails.type}`}
+                {viewingLocation.fullDetails.address && ` • ${viewingLocation.fullDetails.address}`}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          <div className="px-6 pb-6 overflow-y-auto flex-1 min-h-0">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Location Image */}
+              {viewingLocation?.image_url && (
+                <div className="space-y-4">
+                  <Label className="text-sm font-medium">Location Image</Label>
+                  <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                    <img
+                      src={viewingLocation.image_url}
+                      alt={viewingLocation.name}
+                      className="w-full h-full object-cover object-center"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (viewingLocation?.id) {
+                        router.push(`/locations/${viewingLocation.id}`)
+                      }
+                    }}
+                    className="w-full"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View Location Page
+                  </Button>
+                </div>
+              )}
+              
+              {/* Location Details */}
+              <div className="space-y-4">
+                {viewingLocation?.fullDetails ? (
+                  <>
+                    {viewingLocation.fullDetails.description && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Description</Label>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewingLocation.fullDetails.description}</p>
+                      </div>
+                    )}
+                    {!viewingLocation.fullDetails.description && (
+                      <div className="text-sm text-muted-foreground">
+                        No description available for this location.
+                      </div>
+                    )}
+                    {viewingLocation.fullDetails.visual_description && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Visual Description</Label>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewingLocation.fullDetails.visual_description}</p>
+                      </div>
+                    )}
+                    {viewingLocation.fullDetails.atmosphere && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Atmosphere</Label>
+                        <p className="text-sm text-muted-foreground">{viewingLocation.fullDetails.atmosphere}</p>
+                      </div>
+                    )}
+                    {viewingLocation.fullDetails.mood && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Mood</Label>
+                        <p className="text-sm text-muted-foreground">{viewingLocation.fullDetails.mood}</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Location details not available. This location has been saved but full details haven't been loaded.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="px-6 pb-6 flex-shrink-0">
+            {viewingLocation?.id && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  router.push(`/locations/${viewingLocation.id}`)
+                }}
+              >
+                <MapPin className="h-4 w-4 mr-2" />
+                View Full Location Page
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => setViewLocationDialogOpen(false)}
             >
               Close
             </Button>

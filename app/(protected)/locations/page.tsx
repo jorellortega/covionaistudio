@@ -1084,6 +1084,35 @@ export default function LocationsPage() {
     }
   }
 
+  const handleSetThumbnail = async (asset: Asset) => {
+    if (!selectedLocationId || !asset.content_url) return
+    
+    try {
+      await LocationsService.updateLocation(selectedLocationId, {
+        image_url: asset.content_url
+      })
+      
+      // Update local location state
+      setLocations(prev => prev.map(l => 
+        l.id === selectedLocationId 
+          ? { ...l, image_url: asset.content_url || null }
+          : l
+      ))
+      
+      toast({
+        title: "Thumbnail Set",
+        description: "This image is now the location's main thumbnail.",
+      })
+    } catch (error) {
+      console.error('Error setting thumbnail:', error)
+      toast({
+        title: "Error",
+        description: "Failed to set thumbnail.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const getAssetIcon = (asset: Asset) => {
     switch (asset.content_type) {
       case 'image':
@@ -1253,6 +1282,16 @@ export default function LocationsPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
+                                onClick={() => router.push(`/locations/${selectedLoc.id}`)}
+                                className="gap-2 flex-shrink-0"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                                <span className="hidden sm:inline">View Full Page</span>
+                                <span className="sm:hidden">View</span>
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
                                 onClick={handleQuickGenerateLocationImage}
                                 disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded}
                                 className="gap-2 flex-shrink-0"
@@ -1379,6 +1418,19 @@ export default function LocationsPage() {
                                                     variant="secondary"
                                                     onClick={(e) => {
                                                       e.stopPropagation()
+                                                      handleSetThumbnail(asset)
+                                                    }}
+                                                    className="h-8 bg-blue-500 hover:bg-blue-600 pointer-events-auto"
+                                                    title="Set as main thumbnail"
+                                                  >
+                                                    <Star className="h-3 w-3 mr-1" />
+                                                    Set Thumbnail
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
                                                       handleDeleteAsset(asset.id)
                                                     }}
                                                     className="h-8 pointer-events-auto"
@@ -1390,9 +1442,15 @@ export default function LocationsPage() {
                                                   <div className="bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm">
                                                     {index + 1} / {imageAssets.length}
                                                   </div>
+                                                  {selectedLocationId && locations.find(l => l.id === selectedLocationId)?.image_url === asset.content_url && (
+                                                    <div className="bg-blue-500 text-white px-2 py-1 rounded text-xs backdrop-blur-sm flex items-center gap-1">
+                                                      <Star className="h-3 w-3 fill-current" />
+                                                      Thumbnail
+                                                    </div>
+                                                  )}
                                                 </div>
                                                 <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm max-w-[80%] truncate">
-                                                  {asset.title.replace(' - AI Generated Image', '')}
+                                                  {asset.title.replace(/ - AI Generated Image.*$/, '')}
                                                 </div>
                                               </div>
                                             </CarouselItem>
@@ -1454,7 +1512,7 @@ export default function LocationsPage() {
                                                 {getAssetIcon(asset)}
                                               </div>
                                               <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-medium truncate">{asset.title}</p>
+                                                <p className="text-sm font-medium truncate">{asset.title.replace(/ - AI Generated Image.*$/, '')}</p>
                                                 <p className="text-xs text-muted-foreground mt-1">
                                                   {asset.content_type}
                                                 </p>
@@ -1899,13 +1957,7 @@ export default function LocationsPage() {
       <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
         <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
           <DialogHeader className="px-6 pt-6 pb-4">
-            <DialogTitle>{viewingImage?.title || 'Location Image'}</DialogTitle>
-            {viewingImage && (
-              <DialogDescription>
-                {viewingImage.model && `Generated with ${viewingImage.model}`}
-                {viewingImage.created_at && ` • ${new Date(viewingImage.created_at).toLocaleDateString()}`}
-              </DialogDescription>
-            )}
+            <DialogTitle>{(viewingImage?.title || 'Location Image').replace(/ - AI Generated Image.*$/, '')}</DialogTitle>
           </DialogHeader>
           <div className="px-6 pb-6">
             {viewingImage?.content_url && (
@@ -1919,6 +1971,17 @@ export default function LocationsPage() {
             )}
           </div>
           <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage) {
+                  handleSetThumbnail(viewingImage)
+                }
+              }}
+            >
+              <Star className="h-4 w-4 mr-2" />
+              Set as Thumbnail
+            </Button>
             <Button
               variant="outline"
               onClick={() => {
