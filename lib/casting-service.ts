@@ -10,6 +10,7 @@ export interface CastingSetting {
   show_timeline: boolean
   show_storyboard: boolean
   roles_available: string[]
+  show_character_types: string[]
   submission_deadline: string | null
   casting_notes: string | null
   is_active: boolean
@@ -44,6 +45,7 @@ export interface CreateCastingSettingData {
   show_timeline?: boolean
   show_storyboard?: boolean
   roles_available?: string[]
+  show_character_types?: string[]
   submission_deadline?: string | null
   casting_notes?: string | null
   is_active?: boolean

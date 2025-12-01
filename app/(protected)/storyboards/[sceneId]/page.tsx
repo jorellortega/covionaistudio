@@ -21,6 +21,7 @@ import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { SavedPromptsService } from "@/lib/saved-prompts-service"
 import { PreferencesService } from "@/lib/preferences-service"
+import { CharactersService, type Character } from "@/lib/characters-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
@@ -194,6 +195,8 @@ export default function SceneStoryboardsPage() {
   const [currentSceneIndex, setCurrentSceneIndex] = useState<number>(-1)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [shots, setShots] = useState<any[]>([])
   const [isCreatingAllStoryboards, setIsCreatingAllStoryboards] = useState(false)
@@ -206,7 +209,8 @@ export default function SceneStoryboardsPage() {
     camera_angle: "eye-level",
     movement: "static",
     sequence_order: 0, // Start blank for new shots
-    status: "draft"
+    status: "draft",
+    character_id: null
   })
   
   // Loading states
@@ -251,14 +255,16 @@ export default function SceneStoryboardsPage() {
     shotNumber: 1,
     shotType: "wide",
     cameraAngle: "eye-level",
-    movement: "static"
+    movement: "static",
+    characterId: null as string | null
   })
   const [editingShotDetails, setEditingShotDetails] = useState(false)
   const [tempShotDetails, setTempShotDetails] = useState({
     shotNumber: 1,
     shotType: "wide",
     cameraAngle: "eye-level",
-    movement: "static"
+    movement: "static",
+    characterId: null as string | null
   })
   
   // Ref to track current selection
@@ -706,6 +712,26 @@ export default function SceneStoryboardsPage() {
     }
   }, [sceneInfo?.project_id, userId])
 
+  // Load characters when project_id is available
+  useEffect(() => {
+    const loadCharacters = async () => {
+      if (!sceneInfo?.project_id || !ready || !userId) return
+      
+      setIsLoadingCharacters(true)
+      try {
+        const chars = await CharactersService.getCharacters(sceneInfo.project_id)
+        setCharacters(chars)
+        console.log("🎬 Loaded characters for storyboards:", chars)
+      } catch (error) {
+        console.error("Error loading characters:", error)
+      } finally {
+        setIsLoadingCharacters(false)
+      }
+    }
+    
+    loadCharacters()
+  }, [sceneInfo?.project_id, ready, userId])
+
   // Update current scene index when sceneId or allScenes changes
   useEffect(() => {
     if (sceneId && allScenes.length > 0) {
@@ -984,6 +1010,7 @@ export default function SceneStoryboardsPage() {
         action: textToUse,
         visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
+        character_id: shotDetails.characterId || null,
         project_id: sceneInfo?.project_id || "",
         script_text_start: textRange && textRange.start !== null ? textRange.start : undefined,
         script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
@@ -1476,6 +1503,7 @@ export default function SceneStoryboardsPage() {
       movement: "static",
       sequence_order: 0, // Start blank for new shots
       status: "draft",
+      character_id: null,
       dialogue: "",
       action: "",
       visual_notes: "",
@@ -1738,12 +1766,46 @@ export default function SceneStoryboardsPage() {
         return
       }
 
+      // Get the selected character details if a character is selected for this shot
+      let characterDetailsText = ""
+      const storyboard = storyboards.find(sb => sb.id === storyboardId)
+      if (storyboard?.character_id) {
+        const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
+        if (selectedCharacter) {
+          const characterDetails = [
+            selectedCharacter.name && `Character name: ${selectedCharacter.name}`,
+            selectedCharacter.age && `Age: ${selectedCharacter.age}`,
+            selectedCharacter.gender && `Gender: ${selectedCharacter.gender}`,
+            selectedCharacter.archetype && `Archetype: ${selectedCharacter.archetype}`,
+            selectedCharacter.description && `Description: ${selectedCharacter.description}`,
+            selectedCharacter.height && `Height: ${selectedCharacter.height}`,
+            selectedCharacter.build && `Build: ${selectedCharacter.build}`,
+            selectedCharacter.skin_tone && `Skin tone: ${selectedCharacter.skin_tone}`,
+            selectedCharacter.eye_color && `Eye color: ${selectedCharacter.eye_color}`,
+            selectedCharacter.hair_color_current && `Hair: ${selectedCharacter.hair_color_current} (${selectedCharacter.hair_length})`,
+            selectedCharacter.face_shape && `Face shape: ${selectedCharacter.face_shape}`,
+            selectedCharacter.usual_clothing_style && `Clothing style: ${selectedCharacter.usual_clothing_style}`,
+            selectedCharacter.typical_color_palette?.length > 0 && `Color palette: ${selectedCharacter.typical_color_palette.join(', ')}`,
+            selectedCharacter.personality?.traits?.length > 0 && `Personality traits: ${selectedCharacter.personality.traits.join(', ')}`,
+          ].filter(Boolean).join(', ')
+          
+          if (characterDetails) {
+            characterDetailsText = ` Character details: ${characterDetails}.`
+          }
+        }
+      }
+      
       // Prepare the enhanced prompt for storyboard shots - keep it minimal
       let enhancedPrompt = prompt.trim()
       
+      // Add character details if available
+      if (characterDetailsText) {
+        enhancedPrompt = `${enhancedPrompt}${characterDetailsText}`
+      }
+      
       // Only add minimal enhancement if user hasn't chosen exact prompt
       if (!useExactPrompt) {
-        enhancedPrompt = `${prompt.trim()}, storyboard style`
+        enhancedPrompt = `${enhancedPrompt}, storyboard style`
       }
 
       // Debug: Log the request body
@@ -2275,6 +2337,42 @@ export default function SceneStoryboardsPage() {
                         </Button>
                       </div>
                     </div>
+                    {/* Character Selector */}
+                    {characters.length > 0 && (
+                      <div>
+                        <Label htmlFor="character-selector" className="text-xs text-blue-300">Character (Optional)</Label>
+                        <Select 
+                          value={shotDetails.characterId || "none"} 
+                          onValueChange={(value) => {
+                            setShotDetails(prev => ({ ...prev, characterId: value === "none" ? null : value }))
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            id="character-selector"
+                          >
+                            <SelectValue placeholder="Select a character..." />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="none">
+                              <span className="text-muted-foreground">No character selected</span>
+                            </SelectItem>
+                            {characters.map((char) => (
+                              <SelectItem key={char.id} value={char.id}>
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{char.name}</span>
+                                  {char.archetype && (
+                                    <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-blue-300">
                         💡 Select text in the script below and click "Create Shot" to automatically create storyboards with these settings
@@ -2644,6 +2742,39 @@ export default function SceneStoryboardsPage() {
                 </div>
               </div>
 
+              {/* Character Selector */}
+              {characters.length > 0 && (
+                <div>
+                  <Label htmlFor="character_id">Character (Optional)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Select a character to automatically include their details when generating images
+                  </p>
+                  <Select 
+                    value={formData.character_id || "none"} 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
+                  >
+                    <SelectTrigger id="character_id">
+                      <SelectValue placeholder="Select a character..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">
+                        <span className="text-muted-foreground">No character selected</span>
+                      </SelectItem>
+                      {characters.map((char) => (
+                        <SelectItem key={char.id} value={char.id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{char.name}</span>
+                            {char.archetype && (
+                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               {/* Status Field */}
               <div>
                 <Label htmlFor="status">Status</Label>
@@ -2859,6 +2990,39 @@ export default function SceneStoryboardsPage() {
                   </Select>
                 </div>
               </div>
+
+              {/* Character Selector */}
+              {characters.length > 0 && (
+                <div>
+                  <Label htmlFor="edit-character_id">Character (Optional)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Select a character to automatically include their details when generating images
+                  </p>
+                  <Select 
+                    value={formData.character_id || "none"} 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
+                  >
+                    <SelectTrigger id="edit-character_id">
+                      <SelectValue placeholder="Select a character..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">
+                        <span className="text-muted-foreground">No character selected</span>
+                      </SelectItem>
+                      {characters.map((char) => (
+                        <SelectItem key={char.id} value={char.id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{char.name}</span>
+                            {char.archetype && (
+                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {/* Status Field */}
               <div>
@@ -3170,9 +3334,9 @@ export default function SceneStoryboardsPage() {
                   </div>
                   <Badge
                     variant="secondary"
-                    className={storyboard.ai_generated ? "bg-purple-500/20 text-purple-500 border-purple-500/30" : "bg-blue-500/20 text-blue-500 border-blue-500/30"}
+                    className="bg-blue-500/20 text-blue-500 border-blue-500/30"
                   >
-                    {storyboard.ai_generated ? "AI Generated" : "Manual"}
+                    Shot
                   </Badge>
                 </div>
                 <CardDescription className="flex items-center gap-2 flex-wrap">
@@ -3282,12 +3446,6 @@ export default function SceneStoryboardsPage() {
                         Has Image
                       </Badge>
                     )}
-                    {storyboard.ai_generated && (
-                      <Badge className="text-xs bg-purple-500/20 text-purple-500 border-purple-500/30">
-                        <Sparkles className="h-3 w-3 mr-1" />
-                        AI Generated
-                      </Badge>
-                    )}
                   </div>
                 </div>
 
@@ -3319,6 +3477,7 @@ export default function SceneStoryboardsPage() {
                           movement: storyboard.movement,
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           status: storyboard.status || "draft",
+                          character_id: storyboard.character_id || null,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",
@@ -3358,6 +3517,7 @@ export default function SceneStoryboardsPage() {
                           movement: storyboard.movement,
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           status: storyboard.status || "draft",
+                          character_id: storyboard.character_id || null,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",

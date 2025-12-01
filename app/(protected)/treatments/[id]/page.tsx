@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
-import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2, ArrowUp, ArrowDown } from 'lucide-react'
+import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react'
 import { TreatmentsService, Treatment } from '@/lib/treatments-service'
 import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
@@ -24,12 +24,12 @@ import { sanitizeFilename } from '@/lib/utils'
 import { AssetService, type Asset } from '@/lib/asset-service'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { TreatmentScenesService, type TreatmentScene, type CreateTreatmentSceneData } from '@/lib/treatment-scenes-service'
 import { CastingService, type CastingSetting } from '@/lib/casting-service'
 import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
-import { CharactersService } from '@/lib/characters-service'
+import { CharactersService, type Character } from '@/lib/characters-service'
 import { LocationsService, type Location } from '@/lib/locations-service'
 
 export default function TreatmentDetailPage() {
@@ -135,6 +135,9 @@ export default function TreatmentDetailPage() {
   const [editingCharacterName, setEditingCharacterName] = useState<string | null>(null)
   const [editedCharacterNames, setEditedCharacterNames] = useState<Record<string, string>>({})
   const [savingCharacters, setSavingCharacters] = useState<string[]>([])
+  const [savedCharacters, setSavedCharacters] = useState<Array<{id: string; name: string; image_url?: string | null}>>([])
+  const [viewCharacterDialogOpen, setViewCharacterDialogOpen] = useState(false)
+  const [viewingCharacter, setViewingCharacter] = useState<{id: string; name: string; image_url?: string | null; fullDetails?: Character | null} | null>(null)
 
   useEffect(() => {
     if (id) {
@@ -143,6 +146,28 @@ export default function TreatmentDetailPage() {
       fetchTextEnhancerSettings()
     }
   }, [id])
+
+  // Reload saved characters when project_id is available
+  useEffect(() => {
+    const loadSavedCharacters = async () => {
+      if (!treatment?.project_id || !ready) return
+      
+      try {
+        const characters = await CharactersService.getCharacters(treatment.project_id)
+        const charactersWithThumbnails = characters.map(c => ({ 
+          id: c.id, 
+          name: c.name, 
+          image_url: c.image_url 
+        }))
+        console.log('📸 Treatment - Reloaded saved characters:', charactersWithThumbnails)
+        setSavedCharacters(charactersWithThumbnails)
+      } catch (charError) {
+        console.error('Error loading characters:', charError)
+      }
+    }
+    
+    loadSavedCharacters()
+  }, [treatment?.project_id, ready])
 
   const fetchUserApiKeys = async () => {
     if (!ready || !userId) return
@@ -709,6 +734,20 @@ Treatment:`
             
             // Fetch script assets from the movie project
             await fetchScriptAssets(data.project_id)
+            
+            // Load saved characters for thumbnails
+            try {
+              const characters = await CharactersService.getCharacters(data.project_id)
+              const charactersWithThumbnails = characters.map(c => ({ 
+                id: c.id, 
+                name: c.name, 
+                image_url: c.image_url 
+              }))
+              console.log('📸 Treatment - Loaded saved characters with thumbnails:', charactersWithThumbnails)
+              setSavedCharacters(charactersWithThumbnails)
+            } catch (charError) {
+              console.error('Error loading characters:', charError)
+            }
           } catch (movieError) {
             console.error('Error loading linked movie:', movieError)
             // Don't show error for movie, just continue without it
@@ -3599,6 +3638,50 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         description: `Character from treatment: ${treatment?.title || 'Untitled'}`,
       })
 
+      // Fetch the first image asset for this character to use as thumbnail
+      let thumbnailUrl: string | null = null
+      try {
+        const characterAssets = await AssetService.getAssetsForCharacter(character.id)
+        const firstImageAsset = characterAssets.find(asset => asset.content_type === 'image' && asset.content_url)
+        
+        if (firstImageAsset?.content_url) {
+          thumbnailUrl = firstImageAsset.content_url
+          // Update character with thumbnail
+          await CharactersService.updateCharacter(character.id, {
+            image_url: thumbnailUrl
+          })
+        }
+      } catch (assetError) {
+        // Non-critical error - character is saved, just no thumbnail
+        console.log('Could not fetch character thumbnail:', assetError)
+      }
+
+      // Reload saved characters to get updated thumbnails
+      try {
+        const updatedCharacters = await CharactersService.getCharacters(projectId)
+        const charactersWithThumbnails = updatedCharacters.map(c => ({ 
+          id: c.id, 
+          name: c.name, 
+          image_url: c.image_url 
+        }))
+        console.log('📸 Treatment - Updated saved characters after save:', charactersWithThumbnails)
+        setSavedCharacters(charactersWithThumbnails)
+      } catch (charError) {
+        console.error('Error reloading characters:', charError)
+        // Fallback to local update
+        setSavedCharacters(prev => {
+          const existing = prev.find(sc => sc.name.toLowerCase() === characterName.toLowerCase())
+          if (existing) {
+            return prev.map(sc => 
+              sc.name.toLowerCase() === characterName.toLowerCase()
+                ? { ...sc, image_url: thumbnailUrl }
+                : sc
+            )
+          }
+          return [...prev, { id: character.id, name: characterName, image_url: thumbnailUrl }]
+        })
+      }
+
       toast({
         title: "Character Saved",
         description: `"${characterName}" has been saved to characters. You can view it on the Characters page.`,
@@ -5161,7 +5244,7 @@ Return ONLY the JSON object, no other text:`
                 <img
                   src={coverImageAssets[currentCoverIndex].content_url || treatment.cover_image_url}
                   alt={`${treatment.title} cover ${currentCoverIndex + 1}`}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover object-top"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
                     target.style.display = 'none';
@@ -5171,7 +5254,7 @@ Return ONLY the JSON object, no other text:`
                 <img
                   src={treatment.cover_image_url}
                   alt={`${treatment.title} cover`}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-cover object-top"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
                     target.style.display = 'none';
@@ -5892,6 +5975,36 @@ Return ONLY the JSON object, no other text:`
                   <div className="space-y-4">
                     <p className="whitespace-pre-line">{treatment.characters}</p>
                     
+                    {/* Saved Characters with Thumbnails */}
+                    {treatment.project_id && savedCharacters.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-border">
+                        <Label className="text-sm font-medium mb-3 block">Saved Characters ({savedCharacters.length})</Label>
+                        <div className="flex flex-wrap gap-3">
+                          {savedCharacters.map((char) => (
+                            <div
+                              key={char.id}
+                              className="flex items-center gap-2 p-2 rounded-md border border-border hover:bg-muted/50 transition-colors"
+                            >
+                              {char.image_url ? (
+                                <div className="w-8 h-8 rounded overflow-hidden border border-border flex-shrink-0">
+                                  <img
+                                    src={char.image_url}
+                                    alt={char.name}
+                                    className="w-full h-full object-cover object-top"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="w-8 h-8 rounded border border-border flex-shrink-0 flex items-center justify-center bg-muted">
+                                  <Users className="h-4 w-4 text-muted-foreground" />
+                                </div>
+                              )}
+                              <span className="text-sm font-medium">{char.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    
                     {/* Text to Speech Component */}
                     <div data-tts-characters>
                       <TextToSpeech 
@@ -6185,11 +6298,73 @@ Return ONLY the JSON object, no other text:`
                           const isEditing = editingCharacterName === c.name
                           const displayName = editedCharacterNames[c.name] || c.name
                           const isSaving = savingCharacters.includes(c.name)
+                          // Find saved character to get thumbnail (try exact match first, then partial match)
+                          const savedCharacter = savedCharacters.find(
+                            sc => {
+                              const savedNameLower = sc.name.toLowerCase().trim()
+                              const detectedNameLower = c.name.toLowerCase().trim()
+                              // Exact match
+                              if (savedNameLower === detectedNameLower) {
+                                console.log('📸 Treatment - Exact match:', c.name, '->', sc.name, 'thumbnail:', sc.image_url ? 'Yes' : 'No')
+                                return true
+                              }
+                              // Partial match - saved name contains detected name or vice versa
+                              if (savedNameLower.includes(detectedNameLower) || detectedNameLower.includes(savedNameLower)) {
+                                console.log('📸 Treatment - Partial match:', c.name, '->', sc.name, 'thumbnail:', sc.image_url ? 'Yes' : 'No')
+                                return true
+                              }
+                              return false
+                            }
+                          )
+                          if (!savedCharacter) {
+                            console.log('📸 Treatment - No match found for:', c.name, 'Available saved:', savedCharacters.map(sc => sc.name))
+                          }
                           
                           return (
                             <div key={c.name} className="flex items-center justify-between gap-2 p-2 rounded-md hover:bg-muted/50">
                               <div className="flex items-center gap-2 flex-1 min-w-0">
-                                <Badge variant="outline">{c.count}</Badge>
+                                {savedCharacter?.image_url ? (
+                                  <div 
+                                    className="w-8 h-8 rounded overflow-hidden border border-border flex-shrink-0 bg-muted cursor-pointer hover:ring-2 hover:ring-primary transition-all"
+                                    onClick={async () => {
+                                      // Fetch full character details
+                                      try {
+                                        const fullCharacter = await CharactersService.getCharacters(treatment?.project_id || '')
+                                        const characterDetails = fullCharacter.find(ch => ch.id === savedCharacter.id)
+                                        setViewingCharacter({
+                                          ...savedCharacter,
+                                          fullDetails: characterDetails || null
+                                        })
+                                        setViewCharacterDialogOpen(true)
+                                      } catch (error) {
+                                        console.error('Error fetching character details:', error)
+                                        setViewingCharacter({
+                                          ...savedCharacter,
+                                          fullDetails: null
+                                        })
+                                        setViewCharacterDialogOpen(true)
+                                      }
+                                    }}
+                                    title="Click to view character details"
+                                  >
+                                    <img
+                                      src={savedCharacter.image_url}
+                                      alt={c.name}
+                                      className="w-full h-full object-cover object-top"
+                                      onError={(e) => {
+                                        console.error('📸 Treatment - Image failed to load:', savedCharacter.image_url)
+                                        const target = e.target as HTMLImageElement
+                                        target.style.display = 'none'
+                                      }}
+                                    />
+                                  </div>
+                                ) : savedCharacter ? (
+                                  <div className="w-8 h-8 rounded border border-border flex-shrink-0 flex items-center justify-center bg-muted">
+                                    <Users className="h-4 w-4 text-muted-foreground" />
+                                  </div>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs">{c.count}</Badge>
+                                )}
                                 {isEditing ? (
                                   <div className="flex items-center gap-2 flex-1">
                                     <Input
@@ -7065,6 +7240,95 @@ Return ONLY the JSON object, no other text:`
           </div>
         </div>
       </div>
+
+      {/* View Character Details Dialog */}
+      <Dialog open={viewCharacterDialogOpen} onOpenChange={setViewCharacterDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-4xl max-h-[90vh] p-0 overflow-hidden flex flex-col">
+          <DialogHeader className="px-6 pt-6 pb-4 flex-shrink-0">
+            <DialogTitle className="text-2xl">{viewingCharacter?.name || 'Character Details'}</DialogTitle>
+            {viewingCharacter?.fullDetails && (
+              <DialogDescription>
+                {viewingCharacter.fullDetails.archetype && `Archetype: ${viewingCharacter.fullDetails.archetype}`}
+                {viewingCharacter.fullDetails.age && viewingCharacter.fullDetails.gender && ` • ${viewingCharacter.fullDetails.age} years old, ${viewingCharacter.fullDetails.gender}`}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          <div className="px-6 pb-6 overflow-y-auto flex-1 min-h-0">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Character Image */}
+              {viewingCharacter?.image_url && (
+                <div className="space-y-4">
+                  <Label className="text-sm font-medium">Character Image</Label>
+                  <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                    <img
+                      src={viewingCharacter.image_url}
+                      alt={viewingCharacter.name}
+                      className="w-full h-full object-cover object-top"
+                    />
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (viewingCharacter?.id) {
+                        router.push(`/characters/${viewingCharacter.id}`)
+                        setViewCharacterDialogOpen(false)
+                      }
+                    }}
+                    className="w-full"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    View Character Page
+                  </Button>
+                </div>
+              )}
+              
+              {/* Character Details */}
+              <div className="space-y-4">
+                {viewingCharacter?.fullDetails ? (
+                  <>
+                    {viewingCharacter.fullDetails.description && (
+                      <div>
+                        <Label className="text-sm font-medium mb-2 block">Description</Label>
+                        <p className="text-sm text-muted-foreground whitespace-pre-wrap">{viewingCharacter.fullDetails.description}</p>
+                      </div>
+                    )}
+                    {!viewingCharacter.fullDetails.description && (
+                      <div className="text-sm text-muted-foreground">
+                        No description available for this character.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Character details not available. This character has been saved but full details haven't been loaded.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="px-6 pb-6 flex-shrink-0">
+            {viewingCharacter?.id && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  router.push(`/characters/${viewingCharacter.id}`)
+                  setViewCharacterDialogOpen(false)
+                }}
+              >
+                <Users className="h-4 w-4 mr-2" />
+                View Full Character Page
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => setViewCharacterDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

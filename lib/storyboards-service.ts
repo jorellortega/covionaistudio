@@ -17,6 +17,7 @@ export interface Storyboard {
   ai_generated: boolean
   project_id?: string
   scene_id?: string
+  character_id?: string | null
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string
@@ -40,6 +41,7 @@ export interface CreateStoryboardData {
   image_url?: string
   project_id?: string
   scene_id?: string
+  character_id?: string | null
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string

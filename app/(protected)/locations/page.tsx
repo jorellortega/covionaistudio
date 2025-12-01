@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, Wand2, Sparkles } from "lucide-react"
+import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, Wand2, Sparkles, Star } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -21,10 +21,13 @@ import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
-import { AISettingsService } from "@/lib/ai-settings-service"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { useAuthReady } from "@/components/auth-hooks"
 import { OpenAIService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Checkbox } from "@/components/ui/checkbox"
 
 export default function LocationsPage() {
   const { toast } = useToast()
@@ -48,9 +51,19 @@ export default function LocationsPage() {
   }>({})
   
   // AI Image Generation state
-  const [aiSettings, setAiSettings] = useState<any>({})
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [generatingImageForLocation, setGeneratingImageForLocation] = useState<string | null>(null)
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const [isGeneratingQuickImage, setIsGeneratingQuickImage] = useState(false)
+  const [isGenerateImageDialogOpen, setIsGenerateImageDialogOpen] = useState(false)
+  const [imagePrompt, setImagePrompt] = useState("")
+  const [selectedImageService, setSelectedImageService] = useState("dalle")
+  const [includeLocationDetails, setIncludeLocationDetails] = useState(true)
+  const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
+  const [viewingImage, setViewingImage] = useState<Asset | null>(null)
+  const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null)
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const [treatmentId, setTreatmentId] = useState<string | null>(null)
   const [treatmentScenes, setTreatmentScenes] = useState<TreatmentScene[]>([])
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
@@ -229,11 +242,7 @@ export default function LocationsPage() {
     const fetchAISettings = async () => {
       try {
         const settings = await AISettingsService.getUserSettings(userId)
-        const settingsMap = settings.reduce((acc, setting) => {
-          acc[setting.tab_type] = setting
-          return acc
-        }, {} as any)
-        setAiSettings(settingsMap)
+        setAiSettings(settings)
         setAiSettingsLoaded(true)
       } catch (error) {
         console.error('Error fetching AI settings:', error)
@@ -245,6 +254,22 @@ export default function LocationsPage() {
     fetchUserApiKeys()
     fetchAISettings()
   }, [ready, userId])
+
+  // Sync carousel with current index
+  useEffect(() => {
+    if (!carouselApi) return
+
+    const updateIndex = () => {
+      setCurrentImageIndex(carouselApi.selectedScrollSnap())
+    }
+
+    carouselApi.on('select', updateIndex)
+    updateIndex()
+
+    return () => {
+      carouselApi.off('select', updateIndex)
+    }
+  }, [carouselApi])
 
   // Aggregate distinct locations from all scenes
   const detectedLocations = useMemo(() => {
@@ -394,17 +419,37 @@ export default function LocationsPage() {
 
   const enhanceDescription = () => enhanceField(newLocDescription, setNewLocDescription)
 
-  const generateQuickImage = async (location: Location) => {
-    if (!user || !userId) {
+  const handleQuickGenerateLocationImage = async () => {
+    if (!selectedLocationId || !userId || !ready) {
       toast({
         title: "Error",
-        description: "You must be logged in to generate images",
+        description: "Please select a location and ensure you're logged in.",
         variant: "destructive",
       })
       return
     }
 
-    const imagesSetting = aiSettings.images
+    const selectedLoc = locations.find(l => l.id === selectedLocationId)
+    if (!selectedLoc) {
+      toast({
+        title: "Error",
+        description: "Location not found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Get the locked model from AI settings
+    if (!aiSettingsLoaded || aiSettings.length === 0) {
+      toast({
+        title: "Error",
+        description: "AI settings not loaded yet. Please wait a moment and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
     if (!imagesSetting || !imagesSetting.is_locked) {
       toast({
         title: "AI Not Available",
@@ -414,35 +459,20 @@ export default function LocationsPage() {
       return
     }
 
-    if (!userApiKeys.openai_api_key) {
-      toast({
-        title: "API Key Missing",
-        description: "Please add your OpenAI API key in Settings → Profile",
-        variant: "destructive",
-      })
-      return
-    }
-
-    if (!selectedLocationId || selectedLocationId !== location.id) {
-      setSelectedLocationId(location.id)
-      // Wait a bit for location to be selected
-      await new Promise(resolve => setTimeout(resolve, 300))
-    }
-
-    setGeneratingImageForLocation(location.id)
-    
     try {
-      // Build prompt from location details
-      let imagePrompt = `Cinematic location: "${location.name}"`
+      setIsGeneratingQuickImage(true)
+
+      // Build comprehensive location description for prompt
+      let imagePrompt = `Cinematic location: "${selectedLoc.name}"`
       
       // Add type if available
-      if (location.type) {
-        imagePrompt += `, ${location.type}`
+      if (selectedLoc.type) {
+        imagePrompt += `, ${selectedLoc.type}`
       }
       
       // Add visual description if available (limit to first 200 chars)
-      if (location.visual_description && location.visual_description.trim()) {
-        let visualDesc = location.visual_description
+      if (selectedLoc.visual_description && selectedLoc.visual_description.trim()) {
+        let visualDesc = selectedLoc.visual_description
           .replace(/\*\*/g, '') // Remove markdown
           .replace(/\*/g, '')
           .replace(/\n/g, ' ') // Remove newlines
@@ -459,9 +489,9 @@ export default function LocationsPage() {
         if (visualDesc) {
           imagePrompt += `. ${visualDesc}`
         }
-      } else if (location.description && location.description.trim()) {
+      } else if (selectedLoc.description && selectedLoc.description.trim()) {
         // Fallback to description if no visual description
-        let desc = location.description
+        let desc = selectedLoc.description
           .replace(/\*\*/g, '')
           .replace(/\*/g, '')
           .replace(/\n/g, ' ')
@@ -481,21 +511,21 @@ export default function LocationsPage() {
       }
       
       // Add atmosphere and mood if available
-      if (location.atmosphere) {
-        imagePrompt += `, ${location.atmosphere} atmosphere`
+      if (selectedLoc.atmosphere) {
+        imagePrompt += `, ${selectedLoc.atmosphere} atmosphere`
       }
-      if (location.mood) {
-        imagePrompt += `, ${location.mood} mood`
+      if (selectedLoc.mood) {
+        imagePrompt += `, ${selectedLoc.mood} mood`
       }
       
       // Add time of day if available
-      if (location.time_of_day && location.time_of_day.length > 0) {
-        imagePrompt += `, ${location.time_of_day[0]} lighting`
+      if (selectedLoc.time_of_day && selectedLoc.time_of_day.length > 0) {
+        imagePrompt += `, ${selectedLoc.time_of_day[0]} lighting`
       }
       
       // Add address context if available
-      if (location.city || location.country) {
-        const locationContext = [location.city, location.country].filter(Boolean).join(', ')
+      if (selectedLoc.city || selectedLoc.country) {
+        const locationContext = [selectedLoc.city, selectedLoc.country].filter(Boolean).join(', ')
         if (locationContext) {
           imagePrompt += `, located in ${locationContext}`
         }
@@ -509,143 +539,292 @@ export default function LocationsPage() {
         imagePrompt = imagePrompt.substring(0, 900) + "..."
       }
 
-      console.log('Generating location image with prompt:', imagePrompt)
-      
-      // Normalize model name (handle "DALL-E 3" -> "dall-e-3")
-      let modelName = "dall-e-3"
-      if (imagesSetting.locked_model) {
-        const lockedModel = imagesSetting.locked_model.toLowerCase()
-        if (lockedModel.includes('dall') || lockedModel.includes('dalle')) {
-          modelName = "dall-e-3"
+      // Use the locked model from settings
+      const lockedModel = imagesSetting.locked_model
+      let apiKey = 'configured'
+
+      // Helper function to normalize model name
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
         }
+        return "dall-e-3"
       }
-      
-      const response = await OpenAIService.generateImage({
+
+      // Normalize service name for API
+      let normalizedService = 'dalle'
+      if (lockedModel?.toLowerCase().includes('openart')) {
+        normalizedService = 'openart'
+      }
+
+      const normalizedModel = normalizeImageModel(lockedModel)
+
+      const requestBody = {
         prompt: imagePrompt,
-        style: "cinematic location photography, professional",
-        model: modelName,
-        apiKey: userApiKeys.openai_api_key
+        service: normalizedService,
+        apiKey: apiKey,
+        userId: userId,
+        model: normalizedModel,
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
       })
 
-      if (response.success && response.data) {
-        const imageUrl = response.data.data?.[0]?.url || ""
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.imageUrl) {
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
         
-        if (!imageUrl) {
-          throw new Error('No image URL received from AI service')
+        // Save as location asset
+        const timestamp = new Date().toISOString()
+        const now = new Date()
+        const dateStr = now.toLocaleDateString()
+        const timeStr = now.toLocaleTimeString()
+        const assetData = {
+          project_id: projectId,
+          location_id: selectedLocationId,
+          title: `${selectedLoc.name} - AI Generated Image (${dateStr} ${timeStr})`,
+          content_type: 'image' as const,
+          content: '',
+          content_url: imageUrlToUse,
+          prompt: imagePrompt,
+          model: lockedModel || 'dall-e-3',
+          generation_settings: {
+            service: normalizedService,
+            location_id: selectedLocationId,
+            location_name: selectedLoc.name,
+          },
+          metadata: {
+            location_name: selectedLoc.name,
+            generated_at: timestamp,
+            source: 'ai_generation',
+            service: normalizedService,
+          }
         }
 
-        // Save the image to the bucket
-        const saveResponse = await fetch('/api/ai/download-and-store-image', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageUrl: imageUrl,
-            fileName: `location_image_${location.id}_${Date.now()}`,
-            userId: userId
-          })
+        const savedAsset = await AssetService.createAsset(assetData)
+        setLocationAssets(prev => [savedAsset, ...prev])
+        
+        // Scroll to the newly generated image
+        setTimeout(() => {
+          if (carouselApi) {
+            carouselApi.scrollTo(0)
+          }
+        }, 100)
+        
+        toast({
+          title: "Image Generated!",
+          description: result.savedToBucket 
+            ? "AI image has been generated and saved to your bucket!" 
+            : "AI image has been generated and added to location assets.",
         })
-
-        if (!saveResponse.ok) {
-          throw new Error('Failed to save image to bucket')
-        }
-
-        const saveResult = await saveResponse.json()
-        
-        if (saveResult.success) {
-          const bucketUrl = saveResult.supabaseUrl
-          
-          // Save the image as an asset linked to the location
-          // Each image gets a unique title with timestamp to allow multiple images
-          const timestamp = new Date().toISOString()
-          const now = new Date()
-          const dateStr = now.toLocaleDateString()
-          const timeStr = now.toLocaleTimeString()
-          const assetData = {
-            project_id: projectId,
-            location_id: location.id,
-            title: `${location.name} - AI Generated Image (${dateStr} ${timeStr})`,
-            content_type: 'image' as const,
-            content: '',
-            content_url: bucketUrl,
-            prompt: imagePrompt,
-            model: modelName,
-            generation_settings: {
-              service: 'openai',
-              prompt: imagePrompt,
-              timestamp: timestamp,
-            },
-            metadata: {
-              generated_at: timestamp,
-              source: 'location_quick_image_generation',
-              location_name: location.name,
-              bucket_path: saveResult.filePath || '',
-            }
-          }
-
-          const savedAsset = await AssetService.createAsset(assetData)
-          
-          // Always reload assets from server to get the complete list (ensures we have all images, including ones generated)
-          // This ensures images are ADDED, not replaced
-          if (selectedLocationId === location.id) {
-            try {
-              const assets = await AssetService.getAssetsForLocation(location.id)
-              setLocationAssets(assets)
-            } catch (err) {
-              console.error('Error reloading location assets:', err)
-              // If reload fails, at least add the new one we know about to the existing list
-              setLocationAssets(prev => {
-                // Check if asset already exists to avoid duplicates
-                if (prev.some(a => a.id === savedAsset.id)) {
-                  return prev
-                }
-                return [savedAsset, ...prev]
-              })
-            }
-          } else {
-            // If location not selected, still add to list if it's the same location
-            setLocationAssets(prev => {
-              if (prev.some(a => a.id === savedAsset.id)) {
-                return prev
-              }
-              return [savedAsset, ...prev]
-            })
-          }
-          
-          toast({
-            title: "Success!",
-            description: `Image generated and added for "${location.name}"`,
-          })
-        } else {
-          throw new Error(saveResult.error || 'Failed to save image')
-        }
       } else {
-        throw new Error(response.error || "Failed to generate image")
+        throw new Error('Failed to generate image')
       }
     } catch (error) {
       console.error('Error generating location image:', error)
-      let errorMessage = 'Failed to generate image'
-      
-      if (error instanceof Error) {
-        // Check for content policy violations
-        if (error.message.includes('copyrighted material') || 
-            error.message.includes('explicit content') ||
-            error.message.includes('content policy') ||
-            error.message.includes('violates our usage policy')) {
-          errorMessage = error.message
-        } else if (error.message.includes('API key')) {
-          errorMessage = 'API key issue. Please check your API key in Settings → Profile'
-        } else {
-          errorMessage = error.message
-        }
-      }
-      
       toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate AI image",
+        variant: "destructive"
       })
     } finally {
-      setGeneratingImageForLocation(null)
+      setIsGeneratingQuickImage(false)
+    }
+  }
+
+  const handleGenerateLocationImage = async () => {
+    if (!selectedLocationId || !userId || !ready) {
+      toast({
+        title: "Error",
+        description: "Please select a location and ensure you're logged in.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedLoc = locations.find(l => l.id === selectedLocationId)
+    if (!selectedLoc) {
+      toast({
+        title: "Error",
+        description: "Location not found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!imagePrompt.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter a prompt for the image.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingImage(true)
+
+      // Build location description for prompt enhancement (only if checkbox is checked)
+      let enhancedPrompt = imagePrompt
+      
+      if (includeLocationDetails) {
+        const details: string[] = []
+        
+        if (selectedLoc.name) details.push(`Name: ${selectedLoc.name}`)
+        if (selectedLoc.type) details.push(`Type: ${selectedLoc.type}`)
+        if (selectedLoc.description) details.push(`Description: ${selectedLoc.description}`)
+        if (selectedLoc.visual_description) details.push(`Visual: ${selectedLoc.visual_description}`)
+        if (selectedLoc.atmosphere) details.push(`Atmosphere: ${selectedLoc.atmosphere}`)
+        if (selectedLoc.mood) details.push(`Mood: ${selectedLoc.mood}`)
+        if (selectedLoc.time_of_day && selectedLoc.time_of_day.length > 0) {
+          details.push(`Time of day: ${selectedLoc.time_of_day.join(', ')}`)
+        }
+        if (selectedLoc.city || selectedLoc.country) {
+          details.push(`Location: ${[selectedLoc.city, selectedLoc.country].filter(Boolean).join(', ')}`)
+        }
+
+        const locationDetails = details.join(', ')
+
+        if (locationDetails) {
+          enhancedPrompt = `${imagePrompt}. Location details: ${locationDetails}. Cinematic location photography, professional, high quality.`
+        } else {
+          enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality.`
+        }
+      } else {
+        enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality.`
+      }
+
+      // Check for locked image model
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const isImagesTabLocked = imagesSetting?.is_locked || false
+      const lockedModel = imagesSetting?.locked_model || null
+      
+      // Use locked model if available, otherwise use selected service
+      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : selectedImageService
+      let apiKey = 'configured'
+
+      // Helper function to normalize model name
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
+        }
+        return "dall-e-3"
+      }
+
+      // Normalize service name for API
+      let normalizedService = 'dalle'
+      if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
+        normalizedService = 'openart'
+      }
+
+      const normalizedModel = normalizeImageModel(serviceToUse)
+
+      const requestBody = {
+        prompt: enhancedPrompt,
+        service: normalizedService,
+        apiKey: apiKey,
+        userId: userId,
+        model: normalizedModel,
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+      
+      if (result.success && result.imageUrl) {
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
+        
+        // Save as location asset
+        const assetData = {
+          project_id: projectId,
+          location_id: selectedLocationId,
+          title: selectedLoc.name,
+          content_type: 'image' as const,
+          content: '',
+          content_url: imageUrlToUse,
+          prompt: imagePrompt,
+          model: serviceToUse,
+          generation_settings: {
+            service: serviceToUse,
+            location_id: selectedLocationId,
+            location_name: selectedLoc.name,
+          },
+          metadata: {
+            location_name: selectedLoc.name,
+            generated_at: new Date().toISOString(),
+            source: 'ai_generation',
+            service: serviceToUse,
+          }
+        }
+
+        const savedAsset = await AssetService.createAsset(assetData)
+        setLocationAssets(prev => [savedAsset, ...prev])
+        
+        // Scroll to the newly generated image
+        setTimeout(() => {
+          if (carouselApi) {
+            carouselApi.scrollTo(0)
+          }
+        }, 100)
+        
+        toast({
+          title: "Image Generated!",
+          description: result.savedToBucket 
+            ? "AI image has been generated and saved to your bucket!" 
+            : "AI image has been generated and added to location assets.",
+        })
+
+        // Close dialog and reset prompt
+        setIsGenerateImageDialogOpen(false)
+        setImagePrompt("")
+      } else {
+        throw new Error('Failed to generate image')
+      }
+    } catch (error) {
+      console.error('Error generating location image:', error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate AI image",
+        variant: "destructive"
+      })
+    } finally {
+      setIsGeneratingImage(false)
     }
   }
 
@@ -1068,9 +1247,50 @@ export default function LocationsPage() {
                         
                         {/* Location Assets Section */}
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <Label className="text-sm font-medium">Assets</Label>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleQuickGenerateLocationImage}
+                                disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded}
+                                className="gap-2 flex-shrink-0"
+                                title="Quick generate using system locked AI model"
+                              >
+                                {isGeneratingQuickImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Quick Generate</span>
+                                    <span className="sm:hidden">Quick</span>
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setIsGenerateImageDialogOpen(true)}
+                                disabled={isGeneratingImage || isGeneratingQuickImage}
+                                className="gap-2 flex-shrink-0"
+                              >
+                                {isGeneratingImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ImageIcon className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Generate Image</span>
+                                    <span className="sm:hidden">Generate</span>
+                                  </>
+                                )}
+                              </Button>
                               <input
                                 id="location-asset-upload"
                                 type="file"
@@ -1109,81 +1329,166 @@ export default function LocationsPage() {
                             </div>
                           ) : locationAssets.length === 0 ? (
                             <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
-                              No assets uploaded yet. Upload images, videos, or files to help build up this location.
+                              No assets uploaded yet. Generate or upload images, videos, or files to help build up this location.
                             </div>
-                          ) : (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {locationAssets.map((asset) => (
-                                <div
-                                  key={asset.id}
-                                  className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
-                                >
-                                  {asset.content_type === 'image' && asset.content_url ? (
-                                    <div className="aspect-video relative">
-                                      <img
-                                        src={asset.content_url}
-                                        alt={asset.title}
-                                        className="w-full h-full object-cover"
-                                      />
-                                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={() => window.open(asset.content_url!, '_blank')}
-                                          className="h-8"
-                                        >
-                                          <ExternalLink className="h-3 w-3 mr-1" />
-                                          View
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          onClick={() => handleDeleteAsset(asset.id)}
-                                          className="h-8 text-white hover:text-white"
-                                        >
-                                          <Trash2 className="h-3 w-3" />
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <div className="p-4">
-                                      <div className="flex items-start gap-3">
-                                        <div className="p-2 rounded-lg bg-primary/10">
-                                          {getAssetIcon(asset)}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                          <p className="text-sm font-medium truncate">{asset.title}</p>
-                                          <p className="text-xs text-muted-foreground mt-1">
-                                            {asset.content_type}
-                                          </p>
-                                        </div>
-                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                          {asset.content_url && (
-                                            <Button
-                                              size="icon"
-                                              variant="ghost"
-                                              onClick={() => window.open(asset.content_url!, '_blank')}
-                                              className="h-7 w-7"
+                          ) : (() => {
+                            const imageAssets = locationAssets.filter(a => a.content_type === 'image' && a.content_url)
+                            const nonImageAssets = locationAssets.filter(a => a.content_type !== 'image' || !a.content_url)
+                            
+                            return (
+                              <div className="space-y-4">
+                                {/* Image Slideshow */}
+                                {imageAssets.length > 0 && (
+                                  <div className="space-y-3">
+                                    <Label className="text-xs text-muted-foreground">Images ({imageAssets.length})</Label>
+                                    <div className="relative">
+                                      <Carousel className="w-full" setApi={setCarouselApi}>
+                                        <CarouselContent>
+                                          {imageAssets.map((asset, index) => (
+                                            <CarouselItem key={asset.id}>
+                                              <div 
+                                                className="relative group aspect-video rounded-lg overflow-hidden border border-border bg-muted/30 cursor-pointer"
+                                                onClick={() => {
+                                                  setViewingImage(asset)
+                                                  setViewImageDialogOpen(true)
+                                                }}
+                                              >
+                                                <img
+                                                  src={asset.content_url}
+                                                  alt={asset.title}
+                                                  className="w-full h-full object-cover object-center pointer-events-none"
+                                                />
+                                                <div 
+                                                  className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 pointer-events-none"
+                                                >
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      setViewingImage(asset)
+                                                      setViewImageDialogOpen(true)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
+                                                  >
+                                                    <ExternalLink className="h-3 w-3 mr-1" />
+                                                    View
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      handleDeleteAsset(asset.id)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
+                                                  >
+                                                    <Trash2 className="h-3 w-3 text-white" />
+                                                  </Button>
+                                                </div>
+                                                <div className="absolute top-2 left-2 flex items-center gap-2">
+                                                  <div className="bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm">
+                                                    {index + 1} / {imageAssets.length}
+                                                  </div>
+                                                </div>
+                                                <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm max-w-[80%] truncate">
+                                                  {asset.title.replace(' - AI Generated Image', '')}
+                                                </div>
+                                              </div>
+                                            </CarouselItem>
+                                          ))}
+                                        </CarouselContent>
+                                        {imageAssets.length > 1 && (
+                                          <>
+                                            <CarouselPrevious className="left-2 z-10" />
+                                            <CarouselNext className="right-2 z-10" />
+                                          </>
+                                        )}
+                                      </Carousel>
+                                      
+                                      {/* Thumbnail Navigation */}
+                                      {imageAssets.length > 1 && (
+                                        <div className="mt-3 flex items-center justify-center gap-2 overflow-x-auto pb-2">
+                                          {imageAssets.map((asset, index) => (
+                                            <button
+                                              key={asset.id}
+                                              onClick={() => {
+                                                carouselApi?.scrollTo(index)
+                                              }}
+                                              className={`relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${
+                                                index === currentImageIndex
+                                                  ? 'border-primary ring-2 ring-primary/50'
+                                                  : 'border-border hover:border-primary/50'
+                                              }`}
+                                              title="Click to navigate to this image"
                                             >
-                                              <ExternalLink className="h-3 w-3" />
-                                            </Button>
-                                          )}
-                                          <Button
-                                            size="icon"
-                                            variant="ghost"
-                                            onClick={() => handleDeleteAsset(asset.id)}
-                                            className="h-7 w-7 text-white hover:text-white"
-                                          >
-                                            <Trash2 className="h-3 w-3" />
-                                          </Button>
+                                              <img
+                                                src={asset.content_url}
+                                                alt={asset.title}
+                                                className="w-full h-full object-cover"
+                                              />
+                                              {index === currentImageIndex && (
+                                                <div className="absolute inset-0 bg-primary/20" />
+                                              )}
+                                            </button>
+                                          ))}
                                         </div>
-                                      </div>
+                                      )}
                                     </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                                  </div>
+                                )}
+                                
+                                {/* Non-Image Assets */}
+                                {nonImageAssets.length > 0 && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">Other Files ({nonImageAssets.length})</Label>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {nonImageAssets.map((asset) => (
+                                        <div
+                                          key={asset.id}
+                                          className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
+                                        >
+                                          <div className="p-4">
+                                            <div className="flex items-start gap-3">
+                                              <div className="p-2 rounded-lg bg-primary/10">
+                                                {getAssetIcon(asset)}
+                                              </div>
+                                              <div className="flex-1 min-w-0">
+                                                <p className="text-sm font-medium truncate">{asset.title}</p>
+                                                <p className="text-xs text-muted-foreground mt-1">
+                                                  {asset.content_type}
+                                                </p>
+                                              </div>
+                                              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {asset.content_url && (
+                                                  <Button
+                                                    size="icon"
+                                                    variant="ghost"
+                                                    onClick={() => window.open(asset.content_url!, '_blank')}
+                                                    className="h-7 w-7"
+                                                  >
+                                                    <ExternalLink className="h-3 w-3" />
+                                                  </Button>
+                                                )}
+                                                <Button
+                                                  size="icon"
+                                                  variant="ghost"
+                                                  onClick={() => handleDeleteAsset(asset.id)}
+                                                  className="h-7 w-7 text-destructive"
+                                                >
+                                                  <Trash2 className="h-3 w-3" />
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </div>
                         
                         <Separator />
@@ -1199,25 +1504,6 @@ export default function LocationsPage() {
                           >
                             <Edit className="h-4 w-4" />
                             Edit Location
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => generateQuickImage(selectedLoc)}
-                            disabled={generatingImageForLocation === selectedLoc.id}
-                            className="gap-2"
-                          >
-                            {generatingImageForLocation === selectedLoc.id ? (
-                              <>
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                                Generating...
-                              </>
-                            ) : (
-                              <>
-                                <Sparkles className="h-4 w-4" />
-                                Generate Image
-                              </>
-                            )}
                           </Button>
                         </div>
                       </div>
@@ -1516,6 +1802,143 @@ export default function LocationsPage() {
           </>
         )}
       </main>
+
+      {/* Generate Image Dialog */}
+      <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Generate Location Image</DialogTitle>
+            <DialogDescription>
+              Create an AI-generated image for {selectedLocationId ? locations.find(l => l.id === selectedLocationId)?.name || 'this location' : 'the selected location'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="image-prompt">Image Prompt</Label>
+              <Textarea
+                id="image-prompt"
+                value={imagePrompt}
+                onChange={(e) => setImagePrompt(e.target.value)}
+                placeholder="e.g., cinematic exterior of a coffee shop, warm lighting, urban setting"
+                className="bg-input border-border min-h-[100px]"
+              />
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="include-details"
+                  checked={includeLocationDetails}
+                  onCheckedChange={(checked) => setIncludeLocationDetails(checked === true)}
+                />
+                <Label
+                  htmlFor="include-details"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Include location details (type, atmosphere, mood, etc.)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {includeLocationDetails 
+                  ? "Location details will be automatically added to your prompt."
+                  : "Only your prompt will be used for image generation."}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="image-service">AI Service</Label>
+              <Select
+                value={selectedImageService}
+                onValueChange={setSelectedImageService}
+                disabled={aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked)}
+              >
+                <SelectTrigger id="image-service" className="bg-input border-border">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dalle">DALL-E 3</SelectItem>
+                  <SelectItem value="openart">OpenArt</SelectItem>
+                </SelectContent>
+              </Select>
+              {aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked) && (
+                <p className="text-xs text-muted-foreground">
+                  Service is locked in AI Settings
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsGenerateImageDialogOpen(false)
+                setImagePrompt("")
+                setIncludeLocationDetails(true) // Reset to default
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateLocationImage}
+              disabled={isGeneratingImage || !imagePrompt.trim() || !selectedLocationId}
+              className="gap-2"
+            >
+              {isGeneratingImage ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Generate Image
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Full Image Dialog */}
+      <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <DialogTitle>{viewingImage?.title || 'Location Image'}</DialogTitle>
+            {viewingImage && (
+              <DialogDescription>
+                {viewingImage.model && `Generated with ${viewingImage.model}`}
+                {viewingImage.created_at && ` • ${new Date(viewingImage.created_at).toLocaleDateString()}`}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          <div className="px-6 pb-6">
+            {viewingImage?.content_url && (
+              <div className="relative w-full rounded-lg overflow-hidden border border-border bg-muted/30">
+                <img
+                  src={viewingImage.content_url}
+                  alt={viewingImage.title}
+                  className="w-full h-auto max-h-[70vh] object-contain mx-auto"
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage?.content_url) {
+                  window.open(viewingImage.content_url, '_blank')
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open in New Tab
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setViewImageDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

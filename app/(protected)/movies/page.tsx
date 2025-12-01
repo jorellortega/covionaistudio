@@ -2109,6 +2109,16 @@ export default function MoviesPage() {
                       Characters
                     </Button>
                   </Link>
+                  <Link href={`/storyboards?movie=${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-pink-500/30 bg-transparent hover:bg-pink-500/10 text-pink-400 hover:text-pink-300 text-xs h-8"
+                    >
+                      <Film className="mr-2 h-3.5 w-3.5" />
+                      Storyboards
+                    </Button>
+                  </Link>
                   <Link href={`/locations?movie=${movie.id}`}>
                     <Button
                       variant="outline"

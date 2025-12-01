@@ -36,6 +36,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Image as ImageIcon,
 } from "lucide-react"
 import jsPDF from "jspdf"
 import { useToast } from "@/hooks/use-toast"
@@ -3294,6 +3295,12 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             </Button>
             
             <div className="flex items-center gap-2 flex-wrap">
+              <Button variant="outline" size="sm" asChild className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10">
+                <Link href={`/storyboards?movie=${id}`}>
+                  <ImageIcon className="h-4 w-4 mr-2" />
+                  Storyboards
+                </Link>
+              </Button>
               <Collapsible open={isFileImportExpanded} onOpenChange={setIsFileImportExpanded} className="relative">
                 <CollapsibleTrigger asChild>
                   <Button variant="outline" size="sm" className="border-green-500/30 text-green-400 hover:bg-green-500/10">

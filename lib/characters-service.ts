@@ -27,6 +27,8 @@ export interface Character {
   age?: number | null
   gender?: string | null
   species?: string | null
+  character_type?: 'main' | 'supporting' | 'extra' | 'cameo' | 'voice' | 'stunt' | null
+  show_on_casting?: boolean | null
   relationships?: any | null
   image_url?: string | null
   created_at: string

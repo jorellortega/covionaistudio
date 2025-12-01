@@ -10,9 +10,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight } from "lucide-react"
+import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight, Star } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -34,6 +36,7 @@ export default function CharactersPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const initialProject = searchParams.get("movie") || ""
+  const initialCharacterId = searchParams.get("character") || ""
   const { user, userId, ready } = useAuthReady()
 
   const [projectId, setProjectId] = useState<string>(initialProject)
@@ -53,6 +56,7 @@ export default function CharactersPage() {
   const [newCharArchetype, setNewCharArchetype] = useState("")
   const [newCharGender, setNewCharGender] = useState("")
   const [newCharSpecies, setNewCharSpecies] = useState("")
+  const [newCharCharacterType, setNewCharCharacterType] = useState<string>("main")
   const [newCharDescription, setNewCharDescription] = useState("")
   const [newCharBackstory, setNewCharBackstory] = useState("")
   const [newCharGoals, setNewCharGoals] = useState("")
@@ -183,6 +187,7 @@ export default function CharactersPage() {
   const [editGoals, setEditGoals] = useState("")
   const [editConflicts, setEditConflicts] = useState("")
   const [editTraits, setEditTraits] = useState("")
+  const [editShowOnCasting, setEditShowOnCasting] = useState(true)
   const [isSavingEdit, setIsSavingEdit] = useState(false)
   const [isDeletingId, setIsDeletingId] = useState<string | null>(null)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
@@ -199,6 +204,9 @@ export default function CharactersPage() {
   const [isGenerateImageDialogOpen, setIsGenerateImageDialogOpen] = useState(false)
   const [imagePrompt, setImagePrompt] = useState("")
   const [selectedImageService, setSelectedImageService] = useState("dalle")
+  const [includeCharacterDetails, setIncludeCharacterDetails] = useState(true)
+  const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
+  const [viewingImage, setViewingImage] = useState<Asset | null>(null)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
 
@@ -243,12 +251,21 @@ export default function CharactersPage() {
     load()
   }, [projectId, toast])
 
-  // Auto-select first character when characters are loaded
+  // Auto-select character from URL or first character when characters are loaded
   useEffect(() => {
     if (characters.length > 0 && !selectedCharacterId) {
+      // First try to select character from URL parameter
+      if (initialCharacterId) {
+        const characterFromUrl = characters.find(c => c.id === initialCharacterId)
+        if (characterFromUrl) {
+          setSelectedCharacterId(initialCharacterId)
+          return
+        }
+      }
+      // Otherwise select first character
       setSelectedCharacterId(characters[0].id)
     }
-  }, [characters, selectedCharacterId])
+  }, [characters, selectedCharacterId, initialCharacterId])
 
   // Load assets when a character is selected
   useEffect(() => {
@@ -380,6 +397,7 @@ export default function CharactersPage() {
     setEditBackstory(ch.backstory || "")
     setEditGoals(ch.goals || "")
     setEditConflicts(ch.conflicts || "")
+    setEditShowOnCasting(ch.show_on_casting !== false) // Default to true if null/undefined
     const traits = (ch.personality as any)?.traits as string[] | undefined
     setEditTraits(traits && Array.isArray(traits) ? traits.join(", ") : "")
   }
@@ -673,6 +691,7 @@ export default function CharactersPage() {
         goals: editGoals || undefined,
         conflicts: editConflicts || undefined,
         personality: traits.length ? { traits } : { traits: [] },
+        show_on_casting: editShowOnCasting,
       })
       setCharacters(prev => prev.map(c => c.id === id ? updated : c))
       setEditingCharacterId(null)
@@ -1339,6 +1358,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           archetype: newCharArchetype || undefined,
           gender: newCharGender || undefined,
           species: newCharSpecies || undefined,
+          character_type: newCharCharacterType || 'main',
+          show_on_casting: true, // Default to showing on casting page
           description: newCharDescription || undefined,
           backstory: newCharBackstory || undefined,
           goals: newCharGoals || undefined,
@@ -1597,6 +1618,35 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     }
   }
 
+  const handleSetThumbnail = async (asset: Asset) => {
+    if (!selectedCharacterId || !asset.content_url) return
+    
+    try {
+      await CharactersService.updateCharacter(selectedCharacterId, {
+        image_url: asset.content_url
+      })
+      
+      // Update local character state
+      setCharacters(prev => prev.map(c => 
+        c.id === selectedCharacterId 
+          ? { ...c, image_url: asset.content_url || null }
+          : c
+      ))
+      
+      toast({
+        title: "Thumbnail Set",
+        description: "This image is now the character's main thumbnail.",
+      })
+    } catch (error) {
+      console.error('Error setting thumbnail:', error)
+      toast({
+        title: "Error",
+        description: "Failed to set thumbnail.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const handleDeleteAsset = async (assetId: string) => {
     if (!confirm("Delete this asset? This cannot be undone.")) return
     
@@ -1649,22 +1699,49 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       setIsGeneratingImage(true)
 
-      // Build character description for prompt enhancement
-      const characterDetails = [
-        selectedChar.name && `Character name: ${selectedChar.name}`,
-        selectedChar.archetype && `Archetype: ${selectedChar.archetype}`,
-        selectedChar.description && `Description: ${selectedChar.description}`,
-        selectedChar.visual_bible?.height && `Height: ${selectedChar.visual_bible.height}`,
-        selectedChar.visual_bible?.build && `Build: ${selectedChar.visual_bible.build}`,
-        selectedChar.visual_bible?.skin_tone && `Skin tone: ${selectedChar.visual_bible.skin_tone}`,
-        selectedChar.visual_bible?.eye_color && `Eye color: ${selectedChar.visual_bible.eye_color}`,
-        selectedChar.visual_bible?.hair_color_current && `Hair: ${selectedChar.visual_bible.hair_color_current}`,
-        selectedChar.visual_bible?.usual_clothing_style && `Clothing style: ${selectedChar.visual_bible.usual_clothing_style}`,
-      ].filter(Boolean).join(', ')
+      // Build character description for prompt enhancement (only if checkbox is checked)
+      let enhancedPrompt = imagePrompt
+      
+      if (includeCharacterDetails) {
+        const details: string[] = []
+        
+        // Basic info
+        if (selectedChar.name) details.push(`Name: ${selectedChar.name}`)
+        if (selectedChar.age) details.push(`Age: ${selectedChar.age}`)
+        if (selectedChar.gender) details.push(`Gender: ${selectedChar.gender}`)
+        if (selectedChar.archetype) details.push(`Archetype: ${selectedChar.archetype}`)
+        
+        // Physical appearance
+        if (selectedChar.height) details.push(`Height: ${selectedChar.height}`)
+        if (selectedChar.build) details.push(`Build: ${selectedChar.build}`)
+        if (selectedChar.skin_tone) details.push(`Skin tone: ${selectedChar.skin_tone}`)
+        if (selectedChar.eye_color) details.push(`Eye color: ${selectedChar.eye_color}`)
+        if (selectedChar.hair_color_current) details.push(`Hair color: ${selectedChar.hair_color_current}`)
+        if (selectedChar.hair_length) details.push(`Hair length: ${selectedChar.hair_length}`)
+        if (selectedChar.face_shape) details.push(`Face shape: ${selectedChar.face_shape}`)
+        if (selectedChar.usual_clothing_style) details.push(`Clothing style: ${selectedChar.usual_clothing_style}`)
+        if (selectedChar.typical_color_palette && selectedChar.typical_color_palette.length > 0) {
+          details.push(`Color palette: ${selectedChar.typical_color_palette.join(', ')}`)
+        }
+        
+        // Personality traits
+        if (selectedChar.personality?.traits && Array.isArray(selectedChar.personality.traits) && selectedChar.personality.traits.length > 0) {
+          details.push(`Personality: ${selectedChar.personality.traits.join(', ')}`)
+        }
+        
+        // Description
+        if (selectedChar.description) details.push(`Description: ${selectedChar.description}`)
 
-      const enhancedPrompt = characterDetails 
-        ? `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality.`
-        : `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+        const characterDetails = details.join(', ')
+
+        if (characterDetails) {
+          enhancedPrompt = `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality.`
+        } else {
+          enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+        }
+      } else {
+        enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+      }
 
       // Check for locked image model
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
@@ -1734,7 +1811,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         const assetData = {
           project_id: projectId,
           character_id: selectedCharacterId,
-          title: `${selectedChar.name} - AI Generated Image`,
+          title: selectedChar.name,
           content_type: 'image' as const,
           content: '',
           content_url: imageUrlToUse,
@@ -1984,7 +2061,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         const assetData = {
           project_id: projectId,
           character_id: selectedCharacterId,
-          title: `${selectedChar.name} - AI Generated Image`,
+          title: selectedChar.name,
           content_type: 'image' as const,
           content: '',
           content_url: imageUrlToUse,
@@ -2106,6 +2183,19 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     <Users className="h-5 w-5" />
                     View Character
                   </CardTitle>
+                  {selectedCharacterId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        router.push(`/characters/${selectedCharacterId}`)
+                      }}
+                      className="gap-2"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      View Full Page
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -2243,18 +2333,30 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                         <CarouselContent>
                                           {imageAssets.map((asset, index) => (
                                             <CarouselItem key={asset.id}>
-                                              <div className="relative group aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                                              <div 
+                                                className="relative group aspect-video rounded-lg overflow-hidden border border-border bg-muted/30 cursor-pointer"
+                                                onClick={() => {
+                                                  setViewingImage(asset)
+                                                  setViewImageDialogOpen(true)
+                                                }}
+                                              >
                                                 <img
                                                   src={asset.content_url}
                                                   alt={asset.title}
-                                                  className="w-full h-full object-cover"
+                                                  className="w-full h-full object-cover object-top pointer-events-none"
                                                 />
-                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100">
+                                                <div 
+                                                  className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 pointer-events-none"
+                                                >
                                                   <Button
                                                     size="sm"
                                                     variant="secondary"
-                                                    onClick={() => window.open(asset.content_url!, '_blank')}
-                                                    className="h-8"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      setViewingImage(asset)
+                                                      setViewImageDialogOpen(true)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
                                                   >
                                                     <ExternalLink className="h-3 w-3 mr-1" />
                                                     View
@@ -2262,17 +2364,41 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                   <Button
                                                     size="sm"
                                                     variant="secondary"
-                                                    onClick={() => handleDeleteAsset(asset.id)}
-                                                    className="h-8"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      handleSetThumbnail(asset)
+                                                    }}
+                                                    className="h-8 bg-blue-500 hover:bg-blue-600 pointer-events-auto"
+                                                    title="Set as main thumbnail"
+                                                  >
+                                                    <Star className="h-3 w-3 mr-1" />
+                                                    Set Thumbnail
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      handleDeleteAsset(asset.id)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
                                                   >
                                                     <Trash2 className="h-3 w-3 text-white" />
                                                   </Button>
                                                 </div>
-                                                <div className="absolute top-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm">
-                                                  {index + 1} / {imageAssets.length}
+                                                <div className="absolute top-2 left-2 flex items-center gap-2">
+                                                  <div className="bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm">
+                                                    {index + 1} / {imageAssets.length}
+                                                  </div>
+                                                  {selectedCharacterId && characters.find(c => c.id === selectedCharacterId)?.image_url === asset.content_url && (
+                                                    <div className="bg-blue-500 text-white px-2 py-1 rounded text-xs backdrop-blur-sm flex items-center gap-1">
+                                                      <Star className="h-3 w-3 fill-current" />
+                                                      Thumbnail
+                                                    </div>
+                                                  )}
                                                 </div>
                                                 <div className="absolute bottom-2 left-2 bg-black/70 text-white px-2 py-1 rounded text-xs backdrop-blur-sm max-w-[80%] truncate">
-                                                  {asset.title}
+                                                  {asset.title.replace(' - AI Generated Image', '')}
                                                 </div>
                                               </div>
                                             </CarouselItem>
@@ -2295,11 +2421,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                               onClick={() => {
                                                 carouselApi?.scrollTo(index)
                                               }}
-                                              className={`relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                                              className={`relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${
                                                 index === currentImageIndex
                                                   ? 'border-primary ring-2 ring-primary/50'
                                                   : 'border-border hover:border-primary/50'
                                               }`}
+                                              title="Click to navigate to this image"
                                             >
                                               <img
                                                 src={asset.content_url}
@@ -2557,6 +2684,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                         <SelectItem value="Hybrid">Hybrid</SelectItem>
                         <SelectItem value="Synthetic">Synthetic</SelectItem>
                         <SelectItem value="Unknown">Unknown</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="char-character-type">Character Type</Label>
+                    <Select 
+                      value={newCharCharacterType} 
+                      onValueChange={setNewCharCharacterType}
+                    >
+                      <SelectTrigger id="char-character-type" className="bg-input border-border">
+                        <SelectValue placeholder="Select type..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="main">Main Actor</SelectItem>
+                        <SelectItem value="supporting">Supporting Actor</SelectItem>
+                        <SelectItem value="extra">Extra</SelectItem>
+                        <SelectItem value="cameo">Cameo</SelectItem>
+                        <SelectItem value="voice">Voice Actor</SelectItem>
+                        <SelectItem value="stunt">Stunt Performer</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -3358,6 +3504,17 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                   <Label>Personality Traits (comma-separated)</Label>
                                   <Input value={editTraits} onChange={(e) => setEditTraits(e.target.value)} className="bg-input border-border" />
                                 </div>
+                                <div className="flex items-center justify-between md:col-span-2">
+                                  <div>
+                                    <Label htmlFor="edit-show-casting">Show on Casting Page</Label>
+                                    <p className="text-xs text-muted-foreground">Display this character on the public casting page</p>
+                                  </div>
+                                  <Switch
+                                    id="edit-show-casting"
+                                    checked={editShowOnCasting}
+                                    onCheckedChange={setEditShowOnCasting}
+                                  />
+                                </div>
                               </div>
                               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                                 <Button size="sm" onClick={() => saveEdit(ch.id)} disabled={isSavingEdit} className="w-full sm:w-auto">
@@ -3398,6 +3555,26 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                   )}
                                 </div>
                                 <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                                  <div className="flex items-center gap-1 mr-1" title={ch.show_on_casting !== false ? "Visible on casting page" : "Hidden from casting page"}>
+                                    <Switch
+                                      checked={ch.show_on_casting !== false}
+                                      onCheckedChange={async (checked) => {
+                                        try {
+                                          const updated = await CharactersService.updateCharacter(ch.id, {
+                                            show_on_casting: checked
+                                          })
+                                          setCharacters(prev => prev.map(c => c.id === ch.id ? updated : c))
+                                          toast({ 
+                                            title: checked ? "Character visible" : "Character hidden", 
+                                            description: `"${ch.name}" ${checked ? "will" : "won't"} appear on the casting page.` 
+                                          })
+                                        } catch (e) {
+                                          console.error('Toggle show on casting failed:', e)
+                                          toast({ title: "Error", description: "Failed to update character.", variant: "destructive" })
+                                        }
+                                      }}
+                                    />
+                                  </div>
                                   <Button variant="ghost" size="icon" onClick={() => addRole(ch.name)} title="Add to Casting">
                                     <Plus className="h-4 w-4" />
                                   </Button>
@@ -3589,8 +3766,23 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                 placeholder="e.g., portrait of a confident detective, cinematic lighting, professional headshot"
                 className="bg-input border-border min-h-[100px]"
               />
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="include-details"
+                  checked={includeCharacterDetails}
+                  onCheckedChange={(checked) => setIncludeCharacterDetails(checked === true)}
+                />
+                <Label
+                  htmlFor="include-details"
+                  className="text-sm font-normal cursor-pointer"
+                >
+                  Include character details (appearance, personality, etc.)
+                </Label>
+              </div>
               <p className="text-xs text-muted-foreground">
-                Character details will be automatically added to your prompt.
+                {includeCharacterDetails 
+                  ? "Character details will be automatically added to your prompt."
+                  : "Only your prompt will be used for image generation."}
               </p>
             </div>
             <div className="space-y-2">
@@ -3621,6 +3813,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               onClick={() => {
                 setIsGenerateImageDialogOpen(false)
                 setImagePrompt("")
+                setIncludeCharacterDetails(true) // Reset to default
               }}
             >
               Cancel
@@ -3641,6 +3834,51 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   Generate Image
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Full Image Dialog */}
+      <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <DialogTitle>{viewingImage?.title || 'Character Image'}</DialogTitle>
+            {viewingImage && (
+              <DialogDescription>
+                {viewingImage.model && `Generated with ${viewingImage.model}`}
+                {viewingImage.created_at && ` • ${new Date(viewingImage.created_at).toLocaleDateString()}`}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+          <div className="px-6 pb-6">
+            {viewingImage?.content_url && (
+              <div className="relative w-full rounded-lg overflow-hidden border border-border bg-muted/30">
+                <img
+                  src={viewingImage.content_url}
+                  alt={viewingImage.title}
+                  className="w-full h-auto max-h-[70vh] object-contain mx-auto"
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage?.content_url) {
+                  window.open(viewingImage.content_url, '_blank')
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open in New Tab
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setViewImageDialogOpen(false)}
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
