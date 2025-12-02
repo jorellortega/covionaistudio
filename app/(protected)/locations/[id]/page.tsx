@@ -425,3 +425,5 @@ export default function LocationDetailPage() {
   )
 }
 
+
+

@@ -3419,12 +3419,44 @@ export default function SceneStoryboardsPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 {storyboard.image_url && (
-                  <div className="relative h-48 bg-muted rounded-lg overflow-hidden">
+                  <div className="relative h-48 bg-muted rounded-lg overflow-hidden group">
                     <img
                       src={storyboard.image_url}
                       alt={storyboard.title}
                       className="w-full h-full object-cover"
                     />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={async () => {
+                        try {
+                          const response = await fetch(storyboard.image_url!)
+                          const blob = await response.blob()
+                          const url = window.URL.createObjectURL(blob)
+                          const a = document.createElement('a')
+                          a.href = url
+                          a.download = `${storyboard.title || 'storyboard'}-${storyboard.id}.${blob.type.split('/')[1] || 'png'}`
+                          document.body.appendChild(a)
+                          a.click()
+                          window.URL.revokeObjectURL(url)
+                          document.body.removeChild(a)
+                          toast({
+                            title: "Download Started",
+                            description: "Image download has started.",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Download Failed",
+                            description: "Failed to download image. Please try again.",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download
+                    </Button>
                   </div>
                 )}
                 

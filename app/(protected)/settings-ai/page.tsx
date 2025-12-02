@@ -270,7 +270,7 @@ export default function AISettingsPage() {
       // Fetch user-specific API keys
       const { data: userData, error: userError } = await supabase
         .from('users')
-        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, runway_api_key, elevenlabs_api_key, suno_api_key, leonardo_api_key')
         .eq('id', userId)
         .maybeSingle()
 
@@ -282,7 +282,7 @@ export default function AISettingsPage() {
         const { data: systemData, error: systemError } = await supabase
           .from('system_ai_config')
           .select('setting_key, setting_value')
-          .in('setting_key', ['openai_api_key', 'anthropic_api_key', 'openart_api_key', 'kling_api_key', 'runway_api_key', 'elevenlabs_api_key', 'suno_api_key'])
+          .in('setting_key', ['openai_api_key', 'anthropic_api_key', 'openart_api_key', 'kling_api_key', 'runway_api_key', 'elevenlabs_api_key', 'suno_api_key', 'leonardo_api_key'])
 
         if (!systemError && systemData) {
           systemData.forEach((item: any) => {
@@ -296,6 +296,7 @@ export default function AISettingsPage() {
                 'runway_api_key': 'runway_api_key',
                 'elevenlabs_api_key': 'elevenlabs_api_key',
                 'suno_api_key': 'suno_api_key',
+                'leonardo_api_key': 'leonardo_api_key',
               }
               const keyName = keyMap[item.setting_key]
               if (keyName) {
