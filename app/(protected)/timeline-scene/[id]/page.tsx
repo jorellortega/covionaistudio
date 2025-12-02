@@ -75,6 +75,13 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { CollaborationService, type CreateCollaborationSessionData } from "@/lib/collaboration-service"
 import { CharactersService } from "@/lib/characters-service"
 import { LocationsService } from "@/lib/locations-service"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import jsPDF from "jspdf"
 
 export default function ScenePage() {
   const params = useParams()
@@ -224,7 +231,7 @@ function ScenePageClient({ id }: { id: string }) {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [pages, setPages] = useState<string[]>([])
-  const [isEditingScreenplay, setIsEditingScreenplay] = useState(false)
+  const [isEditingScreenplay, setIsEditingScreenplay] = useState(true)
   const [editedPages, setEditedPages] = useState<Map<number, string>>(new Map())
   const [savingScreenplay, setSavingScreenplay] = useState(false)
   const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -442,13 +449,21 @@ function ScenePageClient({ id }: { id: string }) {
     setPages(pageArray)
     // Reset to page 1 when content changes
     setCurrentPage(1)
+    // Initialize editedPages when pages are calculated
+    if (pageArray.length > 0) {
+      const initialPages = new Map<number, string>()
+      pageArray.forEach((pageContent, index) => {
+        initialPages.set(index + 1, pageContent)
+      })
+      setEditedPages(initialPages)
+    }
   }, [screenplayContent, scene?.screenplay_content])
 
   // Go to specific page
   const goToPage = (page: number) => {
     if (page >= 1 && page <= totalPages) {
-      // If editing, save current page edits before switching
-      if (isEditingScreenplay && screenplayTextareaRef.current) {
+      // Save current page edits before switching
+      if (screenplayTextareaRef.current) {
         saveCurrentPageEdit(screenplayTextareaRef.current.value)
       }
       setCurrentPage(page)
@@ -457,26 +472,16 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Get current page content
   const getCurrentPageContent = () => {
-    if (isEditingScreenplay) {
-      return getCurrentPageEditContent()
-    }
-    const content = screenplayContent || scene?.screenplay_content
-    if (!content) return ''
-    if (pages.length > 0) {
-      return pages[currentPage - 1] || ''
-    }
-    return content
+    return getCurrentPageEditContent()
   }
 
   // Get current page edit content
   const getCurrentPageEditContent = () => {
-    if (!isEditingScreenplay) return ""
     return editedPages.get(currentPage) || pages[currentPage - 1] || ""
   }
 
   // Save current page edit
   const saveCurrentPageEdit = (content: string) => {
-    if (!isEditingScreenplay) return
     setEditedPages(prev => {
       const newMap = new Map(prev)
       newMap.set(currentPage, content)
@@ -765,10 +770,6 @@ ${centerText('AUTHOR NAME')}
 
   // Combine edited pages into full screenplay
   const combineEditedPages = (): string => {
-    if (!isEditingScreenplay) {
-      return screenplayContent || scene?.screenplay_content || ''
-    }
-    
     // Get the maximum page number
     const maxPage = Math.max(
       totalPages,
@@ -815,7 +816,7 @@ ${centerText('AUTHOR NAME')}
       setSavingScreenplay(true)
 
       // Save current page content to state
-      if (isEditingScreenplay && screenplayTextareaRef.current) {
+      if (screenplayTextareaRef.current) {
         saveCurrentPageEdit(screenplayTextareaRef.current.value)
       }
 
@@ -920,14 +921,6 @@ ${centerText('AUTHOR NAME')}
 
   // Enhance current page
   const enhanceCurrentPage = async () => {
-    if (!isEditingScreenplay) {
-      toast({
-        title: "Error",
-        description: "Please enter edit mode first",
-        variant: "destructive",
-      })
-      return
-    }
 
     const currentPageContent = getCurrentPageEditContent()
     if (!currentPageContent || !currentPageContent.trim()) {
@@ -1093,6 +1086,314 @@ ${centerText('AUTHOR NAME')}
     }
   }
 
+  // Export screenplay to PDF
+  const exportScreenplayToPDF = () => {
+    const content = screenplayContent || scene?.screenplay_content
+    if (!content || content.trim().length === 0) {
+      toast({
+        title: "No Screenplay to Export",
+        description: "There's no screenplay content to export.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Create a new PDF document (US Letter size for screenplays)
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'in',
+        format: 'letter'
+      })
+
+      // Set up margins (standard screenplay format: 1.5" left, 1" right, 1" top/bottom)
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const pageHeight = doc.internal.pageSize.getHeight()
+      const leftMargin = 1.5
+      const rightMargin = 1.0
+      const topMargin = 1.0
+      const bottomMargin = 1.0
+      const maxWidth = pageWidth - leftMargin - rightMargin
+      let yPosition = topMargin
+
+      // Set default font
+      doc.setFont('helvetica', 'normal')
+      doc.setFontSize(12)
+      const lineHeight = 0.2 // Approximate line height in inches
+      const paragraphSpacing = 0.15
+
+      // Helper function to add text with word wrapping
+      const addTextWithWrap = (text: string, x: number, startY: number, maxWidth: number, isCentered: boolean = false) => {
+        let y = startY
+        const words = text.split(' ')
+        let currentLine = ''
+        
+        words.forEach((word: string) => {
+          const testLine = currentLine + (currentLine ? ' ' : '') + word
+          const testWidth = doc.getTextWidth(testLine)
+          
+          if (testWidth > maxWidth && currentLine) {
+            // Output current line
+            const outputX = isCentered ? (pageWidth - doc.getTextWidth(currentLine)) / 2 : x
+            doc.text(currentLine, outputX, y)
+            y += lineHeight
+            
+            // Check if we need a new page
+            if (y + lineHeight > pageHeight - bottomMargin) {
+              doc.addPage()
+              y = topMargin
+            }
+            
+            currentLine = word
+          } else {
+            currentLine = testLine
+          }
+        })
+        
+        // Output remaining line
+        if (currentLine) {
+          const outputX = isCentered ? (pageWidth - doc.getTextWidth(currentLine)) / 2 : x
+          doc.text(currentLine, outputX, y)
+          y += lineHeight
+        }
+        
+        return y
+      }
+
+      // Split script into lines
+      const lines = content.split('\n')
+      
+      lines.forEach((line: string) => {
+        // Check if we need a new page before processing line
+        if (yPosition + lineHeight > pageHeight - bottomMargin) {
+          doc.addPage()
+          yPosition = topMargin
+        }
+
+        const trimmedLine = line.trim()
+        
+        // Handle empty lines
+        if (trimmedLine.length === 0) {
+          yPosition += paragraphSpacing
+          return
+        }
+
+        // Detect screenplay element types
+        const isSceneHeading = /^(INT\.|EXT\.|INTERIOR|EXTERIOR)/i.test(trimmedLine)
+        const isCharacterName = trimmedLine === trimmedLine.toUpperCase() && 
+                               trimmedLine.length < 50 && 
+                               !trimmedLine.includes('.') &&
+                               !trimmedLine.includes('(') &&
+                               trimmedLine.length > 2 &&
+                               /^[A-Z\s]+$/.test(trimmedLine)
+        const isParenthetical = trimmedLine.startsWith('(') && trimmedLine.endsWith(')')
+        const isTransition = /^(FADE IN|FADE OUT|CUT TO|DISSOLVE TO|SMASH CUT|MATCH CUT)/i.test(trimmedLine)
+
+        // Format based on element type
+        if (isSceneHeading) {
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(12)
+          yPosition = addTextWithWrap(trimmedLine, leftMargin, yPosition, maxWidth)
+          yPosition += paragraphSpacing
+          doc.setFont('helvetica', 'normal')
+        } else if (isCharacterName) {
+          doc.setFont('helvetica', 'bold')
+          doc.setFontSize(12)
+          yPosition = addTextWithWrap(trimmedLine, leftMargin, yPosition, maxWidth, true) // Center character names
+          yPosition += 0.1
+          doc.setFont('helvetica', 'normal')
+        } else if (isParenthetical) {
+          // Indent parentheticals
+          doc.setFont('helvetica', 'italic')
+          doc.setFontSize(11)
+          const indentX = leftMargin + 1.0
+          yPosition = addTextWithWrap(trimmedLine, indentX, yPosition, maxWidth - 1.0)
+          yPosition += 0.1
+          doc.setFont('helvetica', 'normal')
+        } else if (isTransition) {
+          // Right-align transitions
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(12)
+          const textWidth = doc.getTextWidth(trimmedLine)
+          const rightX = pageWidth - rightMargin - textWidth
+          doc.text(trimmedLine, rightX, yPosition)
+          yPosition += lineHeight + paragraphSpacing
+        } else {
+          // Regular action/description/dialogue
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(12)
+          yPosition = addTextWithWrap(trimmedLine, leftMargin, yPosition, maxWidth)
+        }
+      })
+
+      // Save the PDF
+      const safeFileName = (scene?.name || 'Scene').replace(/[^a-z0-9]/gi, '_').toLowerCase()
+      const fileName = `${safeFileName}_${new Date().toISOString().split('T')[0]}.pdf`
+      doc.save(fileName)
+
+      toast({
+        title: "PDF Exported",
+        description: `Your screenplay has been exported as ${fileName}`,
+      })
+    } catch (error) {
+      console.error('Error exporting PDF:', error)
+      toast({
+        title: "Export Failed",
+        description: "Failed to export screenplay to PDF.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Export screenplay to Word document
+  const exportScreenplayToWord = async () => {
+    const content = screenplayContent || scene?.screenplay_content
+    if (!content || content.trim().length === 0) {
+      toast({
+        title: "No Screenplay to Export",
+        description: "There's no screenplay content to export.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import('docx')
+      
+      // Split content into paragraphs
+      const lines = content.split('\n')
+      const paragraphs: Paragraph[] = []
+      
+      lines.forEach((line: string) => {
+        const trimmedLine = line.trim()
+        
+        if (trimmedLine.length === 0) {
+          paragraphs.push(new Paragraph({ text: '' }))
+          return
+        }
+
+        // Detect screenplay element types
+        const isSceneHeading = /^(INT\.|EXT\.|INTERIOR|EXTERIOR)/i.test(trimmedLine)
+        const isCharacterName = trimmedLine === trimmedLine.toUpperCase() && 
+                               trimmedLine.length < 50 && 
+                               !trimmedLine.includes('.') &&
+                               !trimmedLine.includes('(') &&
+                               trimmedLine.length > 2 &&
+                               /^[A-Z\s]+$/.test(trimmedLine)
+        const isParenthetical = trimmedLine.startsWith('(') && trimmedLine.endsWith(')')
+        const isTransition = /^(FADE IN|FADE OUT|CUT TO|DISSOLVE TO|SMASH CUT|MATCH CUT)/i.test(trimmedLine)
+
+        if (isSceneHeading) {
+          paragraphs.push(new Paragraph({
+            text: trimmedLine,
+            heading: HeadingLevel.HEADING_2,
+            spacing: { after: 200 },
+          }))
+        } else if (isCharacterName) {
+          paragraphs.push(new Paragraph({
+            text: trimmedLine,
+            alignment: 'center',
+            spacing: { before: 200, after: 100 },
+            children: [new TextRun({ text: trimmedLine, bold: true })],
+          }))
+        } else if (isParenthetical) {
+          paragraphs.push(new Paragraph({
+            text: trimmedLine,
+            indent: { left: 720 }, // 0.5 inch indent
+            spacing: { after: 100 },
+            children: [new TextRun({ text: trimmedLine, italics: true })],
+          }))
+        } else if (isTransition) {
+          paragraphs.push(new Paragraph({
+            text: trimmedLine,
+            alignment: 'right',
+            spacing: { after: 200 },
+          }))
+        } else {
+          paragraphs.push(new Paragraph({
+            text: trimmedLine,
+            spacing: { after: 100 },
+          }))
+        }
+      })
+      
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              text: scene?.name || 'Scene',
+              heading: HeadingLevel.HEADING_1,
+            }),
+            ...paragraphs,
+          ],
+        }],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const safeFileName = (scene?.name || 'Scene').replace(/[^a-z0-9]/gi, '_')
+      link.download = `${safeFileName}_${new Date().toISOString().split('T')[0]}.docx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Word Document Exported",
+        description: "Your screenplay has been exported as a Word document.",
+      })
+    } catch (error: any) {
+      console.error("Error exporting to Word:", error)
+      toast({
+        title: "Export Failed",
+        description: error.message || "Failed to export screenplay to Word document.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Export screenplay to text file
+  const exportScreenplayToText = () => {
+    const content = screenplayContent || scene?.screenplay_content
+    if (!content || content.trim().length === 0) {
+      toast({
+        title: "No Screenplay to Export",
+        description: "There's no screenplay content to export.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const textContent = `${scene?.name || 'Scene'}\n\n${content}`
+      const blob = new Blob([textContent], { type: 'text/plain' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const safeFileName = (scene?.name || 'Scene').replace(/[^a-z0-9]/gi, '_')
+      link.download = `${safeFileName}_${new Date().toISOString().split('T')[0]}.txt`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Text File Exported",
+        description: "Your screenplay has been exported as a text file.",
+      })
+    } catch (error: any) {
+      console.error("Error exporting to text:", error)
+      toast({
+        title: "Export Failed",
+        description: error.message || "Failed to export screenplay to text file.",
+        variant: "destructive",
+      })
+    }
+  }
+
   // Cleanup function for inline editing
   useEffect(() => {
     return () => {
@@ -1250,9 +1551,70 @@ ${centerText('AUTHOR NAME')}
     return () => window.removeEventListener('scroll', handleScroll, true)
   }, [isEditingScreenplay, selectedText, toolbarPosition])
 
+  // Debug function to log container and textarea dimensions
+  const debugContainerDimensions = () => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) {
+      console.log('📐 CONTAINER DEBUG: Textarea not found')
+      return
+    }
+    
+    const textareaRect = textarea.getBoundingClientRect()
+    const textareaStyles = window.getComputedStyle(textarea)
+    
+    // Find parent containers
+    const cardContent = textarea.closest('[class*="CardContent"]') || textarea.closest('.card-content')
+    const card = textarea.closest('[class*="Card"]') || textarea.closest('.card')
+    const container = textarea.closest('[class*="container"]')
+    
+    const cardContentRect = cardContent?.getBoundingClientRect()
+    const cardRect = card?.getBoundingClientRect()
+    const containerRect = container?.getBoundingClientRect()
+    
+    console.log('📐 CONTAINER DEBUG - Dimensions:')
+    console.log('  Textarea:')
+    console.log('    - Computed width:', textareaStyles.width)
+    console.log('    - Computed max-width:', textareaStyles.maxWidth)
+    console.log('    - Computed min-width:', textareaStyles.minWidth)
+    console.log('    - Actual width (getBoundingClientRect):', textareaRect.width, 'px')
+    console.log('    - Style width:', textarea.style.width)
+    console.log('    - Style maxWidth:', textarea.style.maxWidth)
+    console.log('    - Style minWidth:', textarea.style.minWidth)
+    console.log('    - Padding left:', textareaStyles.paddingLeft)
+    console.log('    - Padding right:', textareaStyles.paddingRight)
+    console.log('    - Font size:', textareaStyles.fontSize)
+    console.log('    - Font family:', textareaStyles.fontFamily)
+    
+    if (cardContentRect) {
+      console.log('  CardContent:')
+      console.log('    - Width:', cardContentRect.width, 'px')
+      console.log('    - Padding:', window.getComputedStyle(cardContent as Element).padding)
+    }
+    
+    if (cardRect) {
+      console.log('  Card:')
+      console.log('    - Width:', cardRect.width, 'px')
+      console.log('    - Max-width:', window.getComputedStyle(card as Element).maxWidth)
+    }
+    
+    if (containerRect) {
+      console.log('  Container:')
+      console.log('    - Width:', containerRect.width, 'px')
+      console.log('    - Max-width:', window.getComputedStyle(container as Element).maxWidth)
+    }
+    
+    // Calculate expected width for 80 characters
+    const fontSize = parseFloat(textareaStyles.fontSize)
+    const charWidth = fontSize * 0.6 // Approximate for monospace (Courier New)
+    const expectedWidth = (80 * charWidth) + 24 // 80 chars + 24px padding
+    console.log('  Calculations:')
+    console.log('    - Font size:', fontSize, 'px')
+    console.log('    - Estimated char width:', charWidth, 'px')
+    console.log('    - Expected width for 80ch + 24px:', expectedWidth, 'px')
+  }
+
   // Debug container dimensions when textarea is rendered or window resizes
   useEffect(() => {
-    if (!isEditingScreenplay) return
     
     const debugOnMount = () => {
       // Wait a bit for DOM to settle
@@ -1267,15 +1629,10 @@ ${centerText('AUTHOR NAME')}
     return () => {
       window.removeEventListener('resize', debugOnMount)
     }
-  }, [isEditingScreenplay, currentPage])
+  }, [currentPage])
 
   // Clear selection when clicking outside (for screenplay editing)
   useEffect(() => {
-    if (!isEditingScreenplay) {
-      setSelectedText("")
-      setToolbarPosition(null)
-      return
-    }
     
     let clickTimeout: NodeJS.Timeout | null = null
     
@@ -1913,70 +2270,6 @@ ${centerText('AUTHOR NAME')}
     }
   }
 
-  // Debug function to log container and textarea dimensions
-  const debugContainerDimensions = () => {
-    const textarea = screenplayTextareaRef.current
-    if (!textarea) {
-      console.log('📐 CONTAINER DEBUG: Textarea not found')
-      return
-    }
-    
-    const textareaRect = textarea.getBoundingClientRect()
-    const textareaStyles = window.getComputedStyle(textarea)
-    
-    // Find parent containers
-    const cardContent = textarea.closest('[class*="CardContent"]') || textarea.closest('.card-content')
-    const card = textarea.closest('[class*="Card"]') || textarea.closest('.card')
-    const container = textarea.closest('[class*="container"]')
-    
-    const cardContentRect = cardContent?.getBoundingClientRect()
-    const cardRect = card?.getBoundingClientRect()
-    const containerRect = container?.getBoundingClientRect()
-    
-    console.log('📐 CONTAINER DEBUG - Dimensions:')
-    console.log('  Textarea:')
-    console.log('    - Computed width:', textareaStyles.width)
-    console.log('    - Computed max-width:', textareaStyles.maxWidth)
-    console.log('    - Computed min-width:', textareaStyles.minWidth)
-    console.log('    - Actual width (getBoundingClientRect):', textareaRect.width, 'px')
-    console.log('    - Style width:', textarea.style.width)
-    console.log('    - Style maxWidth:', textarea.style.maxWidth)
-    console.log('    - Style minWidth:', textarea.style.minWidth)
-    console.log('    - Padding left:', textareaStyles.paddingLeft)
-    console.log('    - Padding right:', textareaStyles.paddingRight)
-    console.log('    - Font size:', textareaStyles.fontSize)
-    console.log('    - Font family:', textareaStyles.fontFamily)
-    
-    if (cardContentRect) {
-      console.log('  CardContent:')
-      console.log('    - Width:', cardContentRect.width, 'px')
-      console.log('    - Padding:', window.getComputedStyle(cardContent as Element).padding)
-    }
-    
-    if (cardRect) {
-      console.log('  Card:')
-      console.log('    - Width:', cardRect.width, 'px')
-      console.log('    - Max-width:', window.getComputedStyle(card as Element).maxWidth)
-    }
-    
-    if (containerRect) {
-      console.log('  Container:')
-      console.log('    - Width:', containerRect.width, 'px')
-      console.log('    - Max-width:', window.getComputedStyle(container as Element).maxWidth)
-    }
-    
-    // Calculate expected width for 80 characters
-    const fontSize = parseFloat(textareaStyles.fontSize)
-    const charWidth = fontSize * 0.6 // Approximate for monospace (Courier New)
-    const expectedWidth = (80 * charWidth) + 24 // 80 chars + 24px padding
-    console.log('  Calculations:')
-    console.log('    - Font size:', fontSize, 'px')
-    console.log('    - Estimated char width:', charWidth, 'px')
-    console.log('    - Expected width for 80ch + 24px:', expectedWidth, 'px')
-    console.log('    - Actual textarea width:', textareaRect.width, 'px')
-    console.log('    - Difference:', textareaRect.width - expectedWidth, 'px')
-  }
-
   // Update toolbar position based on textarea position
   const updateToolbarPosition = (textarea: HTMLTextAreaElement) => {
     const rect = textarea.getBoundingClientRect()
@@ -1991,7 +2284,6 @@ ${centerText('AUTHOR NAME')}
 
   // Handle text selection for AI editing
   const handleScreenplayTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    if (!isEditingScreenplay) return
     
     const target = e.target as HTMLTextAreaElement
     const start = target.selectionStart
@@ -3849,7 +4141,7 @@ ${centerText('AUTHOR NAME')}
               </div>
             )}
             {/* Screenplay Section */}
-            {!screenplayContent && !scene?.screenplay_content && !isEditingScreenplay && (
+            {!screenplayContent && !scene?.screenplay_content && (
               <Card className="bg-card border-purple-500/20">
                 <CardContent className="py-12 text-center">
                   <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -3870,7 +4162,6 @@ ${centerText('AUTHOR NAME')}
                         setEditedPages(new Map([[1, ""]]))
                         setTotalPages(1)
                         setCurrentPage(1)
-                        setIsEditingScreenplay(true)
                         toast({
                           title: "Blank Page Created",
                           description: "You can now start writing your screenplay manually.",
@@ -3903,7 +4194,7 @@ ${centerText('AUTHOR NAME')}
                 </CardContent>
               </Card>
             )}
-            {(screenplayContent || scene?.screenplay_content || isEditingScreenplay) && (
+            {(screenplayContent || scene?.screenplay_content) && (
               <>
                 {/* Fix Formatting Button */}
                 <div className="mt-6 mb-3 flex justify-end">
@@ -4001,128 +4292,100 @@ ${centerText('AUTHOR NAME')}
                       <p className="text-sm text-muted-foreground mt-1">
                         Professional screenplay format generated from scene description and treatment
                       </p>
-                    </div>
-                    <div className="flex items-center gap-4">
-                      {totalPages > 1 && !isEditingScreenplay && (
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="px-3 py-1">
-                            Page {currentPage} of {totalPages}
-                          </Badge>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => goToPage(currentPage - 1)}
-                            disabled={currentPage === 1}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </Button>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={totalPages}
-                            value={currentPage}
-                            onChange={(e) => {
-                              const page = parseInt(e.target.value)
-                              if (page && page >= 1 && page <= totalPages) {
-                                goToPage(page)
-                              }
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault()
-                                const page = parseInt((e.target as HTMLInputElement).value)
-                                if (page && page >= 1 && page <= totalPages) {
-                                  goToPage(page)
-                                }
-                              }
-                            }}
-                            className="w-20 text-center"
-                          />
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => goToPage(currentPage + 1)}
-                            disabled={currentPage === totalPages}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </Button>
-                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                      {(screenplayContent || scene?.screenplay_content) && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="lg"
+                              className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                            >
+                              <Download className="h-5 w-5 mr-2" />
+                              Export
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="bg-background border-border">
+                            <DropdownMenuItem
+                              onClick={exportScreenplayToPDF}
+                              className="cursor-pointer"
+                            >
+                              <FileText className="h-4 w-4 mr-2" />
+                              Export as PDF
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={exportScreenplayToWord}
+                              className="cursor-pointer"
+                            >
+                              <FileText className="h-4 w-4 mr-2" />
+                              Export as Word (.docx)
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={exportScreenplayToText}
+                              className="cursor-pointer"
+                            >
+                              <FileText className="h-4 w-4 mr-2" />
+                              Export as Text (.txt)
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
-                      {!isEditingScreenplay ? (
-                        <>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
                           <Button
                             variant="outline"
                             size="lg"
-                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
-                            onClick={handleEditScreenplay}
+                            className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                            disabled={savingScreenplay}
                           >
-                            <Edit3 className="h-5 w-5 mr-2" />
-                            Edit Screenplay
+                            <Trash2 className="h-5 w-5 mr-2" />
+                            Delete Screenplay
                           </Button>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="outline"
-                                size="lg"
-                                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                                disabled={savingScreenplay}
-                              >
-                                <Trash2 className="h-5 w-5 mr-2" />
-                                Delete Screenplay
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
-                              <AlertDialogHeader>
-                                <AlertDialogTitle className="text-red-400">Delete Screenplay</AlertDialogTitle>
-                                <AlertDialogDescription className="text-muted-foreground">
-                                  Are you sure you want to delete the screenplay for this scene?
-                                  <br /><br />
-                                  <strong>This action cannot be undone.</strong> The screenplay content will be permanently removed from this scene.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
-                                <AlertDialogAction 
-                                  className="bg-red-500 hover:bg-red-600"
-                                  onClick={handleDeleteScreenplay}
-                                >
-                                  Delete
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                          <Button
-                            size="lg"
-                            className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
-                            onClick={generateScreenplay}
-                            disabled={isGeneratingScreenplay || !treatmentId}
-                          >
-                            {isGeneratingScreenplay ? (
-                              <>
-                                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                                Regenerating...
-                              </>
-                            ) : (
-                              <>
-                                <RefreshCw className="h-5 w-5 mr-2" />
-                                Regenerate Screenplay
-                              </>
-                            )}
-                          </Button>
-                        </>
-                      ) : (
-                        <Badge variant="outline" className="px-3 py-1 text-blue-400 border-blue-500/30">
-                          Editing Mode
-                        </Badge>
-                      )}
+                        </AlertDialogTrigger>
+                        <AlertDialogContent className="bg-background border-red-500/20 max-w-md">
+                          <AlertDialogHeader>
+                            <AlertDialogTitle className="text-red-400">Delete Screenplay</AlertDialogTitle>
+                            <AlertDialogDescription className="text-muted-foreground">
+                              Are you sure you want to delete the screenplay for this scene?
+                              <br /><br />
+                              <strong>This action cannot be undone.</strong> The screenplay content will be permanently removed from this scene.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                            <AlertDialogAction 
+                              className="bg-red-500 hover:bg-red-600"
+                              onClick={handleDeleteScreenplay}
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      <Button
+                        size="lg"
+                        className="bg-gradient-to-r from-purple-600 via-purple-500 to-pink-500 hover:from-purple-700 hover:via-purple-600 hover:to-pink-600 text-white font-semibold shadow-lg shadow-purple-500/50 hover:shadow-xl hover:shadow-purple-500/60 transition-all duration-300 border-0"
+                        onClick={generateScreenplay}
+                        disabled={isGeneratingScreenplay || !treatmentId}
+                      >
+                        {isGeneratingScreenplay ? (
+                          <>
+                            <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                            Regenerating...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-5 w-5 mr-2" />
+                            Regenerate Screenplay
+                          </>
+                        )}
+                      </Button>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {isEditingScreenplay ? (
-                    <div className="space-y-4">
+                  <div className="space-y-4">
                       {/* Page number and action buttons row */}
                       <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
                         <div className="flex items-center gap-4">
@@ -4188,15 +4451,6 @@ ${centerText('AUTHOR NAME')}
                               <Sparkles className="h-4 w-4 mr-1" />
                             )}
                             Enhance
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleCancelEditScreenplay}
-                            disabled={savingScreenplay}
-                            className="h-8 px-3 text-sm border-red-500/30 text-red-400 hover:bg-red-500/10"
-                          >
-                            Cancel
                           </Button>
                         </div>
                       </div>
@@ -4439,66 +4693,9 @@ ${centerText('AUTHOR NAME')}
                         </div>
                       )}
                     </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="px-3 py-1">
-                            Page {currentPage} of {totalPages}
-                          </Badge>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="border-green-500/30 text-green-400 hover:bg-green-500/10"
-                            onClick={() => router.push(`/storyboards/${id}`)}
-                          >
-                            <Film className="h-4 w-4 mr-2" />
-                            View Storyboards
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:opacity-90"
-                            onClick={generateShotListFromPage}
-                            disabled={isGeneratingShotList || !getCurrentPageContent()}
-                          >
-                            {isGeneratingShotList ? (
-                              <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Generating Shot List...
-                              </>
-                            ) : (
-                              <>
-                                <Film className="h-4 w-4 mr-2" />
-                                Generate Shot List from This Page
-                              </>
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                      <div className="bg-muted/20 p-6 rounded-lg border border-purple-500/20">
-                        <pre className="text-sm text-foreground whitespace-pre-wrap font-mono leading-relaxed">
-                          {getCurrentPageContent()}
-                        </pre>
-                      </div>
-                      {/* Audio Generation for Current Page */}
-                      {getCurrentPageContent() && getCurrentPageContent().trim() && (
-                        <div className="mt-4">
-                          <TextToSpeech 
-                            text={getCurrentPageContent()}
-                            title={`Scene Page ${currentPage} Audio`}
-                            className="w-full"
-                            projectId={projectId}
-                            sceneId={id}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </CardContent>
                 {/* Bottom Pagination */}
-                {totalPages > 1 && !isEditingScreenplay && (
+                {totalPages > 1 && (
                   <div className="flex items-center justify-center gap-4 py-4 border-t border-purple-500/20">
                     <Badge variant="outline" className="px-4 py-2">
                       Page {currentPage} of {totalPages}
@@ -4550,7 +4747,7 @@ ${centerText('AUTHOR NAME')}
             )}
 
             {/* Shot List Card - Separate from Screenplay Card */}
-            {!isEditingScreenplay && screenplayContent && (
+            {screenplayContent && (
               <Collapsible open={isShotListExpanded} onOpenChange={setIsShotListExpanded} className="mt-6">
                 <Card className="bg-card border-primary/20">
                   <CollapsibleTrigger asChild>

@@ -391,18 +391,115 @@ export class StoryboardsService {
   // Get storyboards by scene
   static async getStoryboardsByScene(sceneId: string): Promise<Storyboard[]> {
     try {
-      const { data, error } = await getSupabaseClient()
+      console.log('🎬 StoryboardsService.getStoryboardsByScene - sceneId:', sceneId)
+      
+      // Try querying by scene_id first (proper way)
+      const { data: dataBySceneId, error: errorBySceneId } = await getSupabaseClient()
         .from('storyboards')
         .select('*')
         .eq('scene_id', sceneId)
         .order('shot_number', { ascending: true })
 
-      if (error) {
-        console.error('Error fetching storyboards by scene:', error)
-        throw error
+      console.log('🎬 Storyboards by scene_id:', dataBySceneId?.length || 0, dataBySceneId)
+
+      if (dataBySceneId && dataBySceneId.length > 0) {
+        return dataBySceneId
       }
 
-      return data || []
+      // Only try fallback if no storyboards found by scene_id
+      // Try to get the scene to find its timeline_id, order_index, and metadata
+      let scene = null
+      let projectId: string | null = null
+      try {
+        const { data: sceneData, error: sceneError } = await getSupabaseClient()
+          .from('scenes')
+          .select('id, order_index, metadata, timeline_id')
+          .eq('id', sceneId)
+          .single()
+
+        if (!sceneError && sceneData) {
+          scene = sceneData
+          console.log('🎬 Scene data:', scene)
+          
+          // Get project_id from timeline (scenes don't have project_id directly)
+          if (scene.timeline_id) {
+            const { data: timeline, error: timelineError } = await getSupabaseClient()
+              .from('timelines')
+              .select('project_id')
+              .eq('id', scene.timeline_id)
+              .single()
+            
+            if (timelineError) {
+              console.log('🎬 Could not fetch timeline (non-critical):', timelineError.message)
+            } else if (timeline) {
+              projectId = timeline.project_id
+              console.log('🎬 Project ID from timeline:', projectId)
+            }
+          }
+        } else if (sceneError) {
+          console.log('🎬 Could not fetch scene (non-critical):', sceneError.message)
+        }
+      } catch (err) {
+        console.log('🎬 Error fetching scene (non-critical):', err)
+      }
+
+      // If no storyboards found by scene_id, try fallback methods
+      if (scene && projectId) {
+
+        console.log('🎬 Trying fallback: project_id', { project_id: projectId })
+
+        if (projectId) {
+          // Get all storyboards for the project
+          const { data: dataByProject, error: errorByProject } = await getSupabaseClient()
+            .from('storyboards')
+            .select('*')
+            .eq('project_id', projectId)
+            .order('scene_number', { ascending: true })
+            .order('shot_number', { ascending: true })
+
+          console.log('🎬 Storyboards by project_id:', dataByProject?.length || 0, dataByProject)
+
+          if (dataByProject && dataByProject.length > 0) {
+            // Try to match by scene_number from metadata or order_index
+            const sceneNumber = (scene.metadata as any)?.sceneNumber || 
+                               (scene.metadata as any)?.scene_number ||
+                               scene.order_index?.toString()
+            
+            console.log('🎬 Trying to match by scene_number:', sceneNumber, 'order_index:', scene.order_index)
+
+            if (sceneNumber) {
+              // Try to match storyboards by scene_number
+              const sceneNum = typeof sceneNumber === 'string' ? parseInt(sceneNumber) : sceneNumber
+              const filtered = dataByProject.filter(s => {
+                const storyboardSceneNum = typeof s.scene_number === 'string' 
+                  ? parseInt(s.scene_number) 
+                  : s.scene_number
+                return storyboardSceneNum === sceneNum || 
+                       storyboardSceneNum === scene.order_index ||
+                       s.scene_number === sceneNumber
+              })
+              console.log('🎬 Filtered by scene_number:', filtered.length, filtered)
+              
+              if (filtered.length > 0) {
+                return filtered
+              }
+            }
+            
+            // If no match by scene_number, return all storyboards for the project
+            // (user can filter manually)
+            console.log('🎬 Returning all storyboards for project (no scene_number match)')
+            return dataByProject
+          }
+        }
+      }
+
+      if (errorBySceneId) {
+        console.error('Error fetching storyboards by scene:', errorBySceneId)
+        throw errorBySceneId
+      }
+
+      console.log('🎬 No storyboards found for scene')
+      return []
     } catch (error) {
       console.error('Error in getStoryboardsByScene:', error)
       throw error

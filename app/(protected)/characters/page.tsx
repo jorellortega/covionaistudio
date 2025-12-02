@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight, Star } from "lucide-react"
+import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight, Star, Eye } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -64,6 +64,7 @@ export default function CharactersPage() {
   const [newCharPersonalityTraits, setNewCharPersonalityTraits] = useState("")
   const [isGeneratingFromTreatment, setIsGeneratingFromTreatment] = useState(false)
   const [generatingSection, setGeneratingSection] = useState<string | null>(null)
+  const [generatingField, setGeneratingField] = useState<string | null>(null)
   
   // Character Sheet Fields - Core Identity
   const [newCharFullName, setNewCharFullName] = useState("")
@@ -195,6 +196,11 @@ export default function CharactersPage() {
   const [characterAssets, setCharacterAssets] = useState<Asset[]>([])
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
+  const [analyzingImageAssetId, setAnalyzingImageAssetId] = useState<string | null>(null)
+  const [showAnalysisReview, setShowAnalysisReview] = useState(false)
+  const [analysisExtractedData, setAnalysisExtractedData] = useState<any>(null)
+  const [analysisImageUrl, setAnalysisImageUrl] = useState<string | null>(null)
+  const [generatingDetailImage, setGeneratingDetailImage] = useState<string | null>(null)
   const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null)
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   
@@ -1270,6 +1276,164 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     }
   }
 
+  const generateIndividualField = async (fieldKey: string, fieldLabel: string, fieldType: 'text' | 'array' = 'text') => {
+    if (!projectId || !selectedCharacterId) {
+      toast({ title: "Error", description: "Please select a character first.", variant: "destructive" })
+      return
+    }
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) {
+      toast({ title: "Error", description: "Character not found.", variant: "destructive" })
+      return
+    }
+
+    try {
+      setGeneratingField(fieldKey)
+      
+      // Get user and OpenAI key
+      const { data: { session } } = await getSupabaseClient().auth.getSession()
+      const userId = session?.user?.id
+      if (!userId) {
+        toast({ title: "Auth required", description: "Please sign in again.", variant: "destructive" })
+        return
+      }
+      const { data: userRow, error: userErr } = await getSupabaseClient()
+        .from('users')
+        .select('openai_api_key')
+        .eq('id', userId)
+        .single()
+      if (userErr || !userRow?.openai_api_key) {
+        toast({ title: "Missing API Key", description: "Set your OpenAI API key in settings.", variant: "destructive" })
+        return
+      }
+
+      // Determine model
+      let model = 'gpt-4o-mini'
+      try {
+        const scriptsSetting = await AISettingsService.getTabSetting('scripts')
+        if (scriptsSetting?.selected_model) {
+          model = scriptsSetting.selected_model
+        }
+      } catch {}
+
+      // Build context from existing character data
+      const characterContext = [
+        `Character: ${selectedChar.name}`,
+        selectedChar.archetype && `Archetype: ${selectedChar.archetype}`,
+        selectedChar.description && `Description: ${selectedChar.description}`,
+        selectedChar.backstory && `Backstory: ${selectedChar.backstory}`,
+      ].filter(Boolean).join('\n')
+
+      // Field-specific prompts
+      const fieldPrompts: Record<string, string> = {
+        'height': `Generate a realistic height for "${selectedChar.name}". Return only the height value (e.g., "5'10" or "175cm" or "5 feet 10 inches").`,
+        'build': `Generate a body build/type for "${selectedChar.name}". Return only the build description (e.g., "thin", "athletic", "average", "stocky", "muscular").`,
+        'skin_tone': `Generate a skin tone description for "${selectedChar.name}". Return only the skin tone (e.g., "fair", "olive", "medium", "tan", "dark").`,
+        'eye_color': `Generate an eye color for "${selectedChar.name}". Return only the eye color (e.g., "brown", "blue", "green", "hazel", "gray").`,
+        'eye_shape': `Generate an eye shape description for "${selectedChar.name}". Return only the eye shape (e.g., "almond", "round", "hooded", "monolid").`,
+        'eye_expression': `Generate an eye expression description for "${selectedChar.name}". Return only the expression (e.g., "intense", "warm", "piercing", "gentle").`,
+        'hair_color_natural': `Generate a natural hair color for "${selectedChar.name}". Return only the hair color (e.g., "brown", "black", "blonde", "red").`,
+        'hair_color_current': `Generate the current hair color for "${selectedChar.name}". Return only the hair color (e.g., "brown", "black", "blonde", "red", "dyed blue").`,
+        'hair_length': `Generate a hair length for "${selectedChar.name}". Return only the length (e.g., "short", "medium", "long", "shoulder-length").`,
+        'hair_texture': `Generate a hair texture for "${selectedChar.name}". Return only the texture (e.g., "straight", "wavy", "curly", "coily").`,
+        'usual_hairstyle': `Generate a usual hairstyle for "${selectedChar.name}". Return only the hairstyle description (e.g., "slicked back", "messy bun", "pixie cut", "braided").`,
+        'face_shape': `Generate a face shape for "${selectedChar.name}". Return only the face shape (e.g., "oval", "round", "square", "heart", "diamond").`,
+        'distinguishing_marks': `Generate distinguishing marks for "${selectedChar.name}" (tattoos, scars, birthmarks, etc.). Return a brief description.`,
+        'usual_clothing_style': `Generate a usual clothing style for "${selectedChar.name}". Return a brief description of their typical fashion (e.g., "casual streetwear", "business professional", "bohemian", "punk").`,
+        'typical_color_palette': `Generate a typical color palette for "${selectedChar.name}". Return a comma-separated list of 3-5 colors (e.g., "navy, gray, black" or "earth tones, brown, beige").`,
+        'accessories': `Generate typical accessories for "${selectedChar.name}". Return a brief description (e.g., "silver watch, reading glasses" or "leather bracelet, vintage hat").`,
+        'posture': `Generate a posture description for "${selectedChar.name}". Return only the posture (e.g., "upright and confident", "slouched", "relaxed", "tense").`,
+        'body_language': `Generate a body language description for "${selectedChar.name}". Return a brief description of their typical body language.`,
+        'voice_pitch': `Generate a voice pitch for "${selectedChar.name}". Return only the pitch (e.g., "high", "medium", "low", "deep").`,
+        'voice_speed': `Generate a voice speed for "${selectedChar.name}". Return only the speed (e.g., "fast", "moderate", "slow", "measured").`,
+        'voice_accent': `Generate a voice accent for "${selectedChar.name}". Return only the accent (e.g., "American", "British", "Southern", "none").`,
+        'voice_tone': `Generate a voice tone for "${selectedChar.name}". Return only the tone (e.g., "warm", "harsh", "gentle", "authoritative").`,
+      }
+
+      const prompt = fieldPrompts[fieldKey] || `Generate ${fieldLabel} for "${selectedChar.name}". Return only the value, no explanation.`
+      const fullPrompt = `${prompt}\n\n${characterContext}`
+
+      const isGPT5Model = model.startsWith('gpt-5')
+      const maxTokens = isGPT5Model ? 500 : 200
+
+      const resp = await OpenAIService.generateScript({
+        prompt: fullPrompt,
+        template: `Return ONLY the value for ${fieldLabel}. ${fieldType === 'array' ? 'If multiple values, return as comma-separated list.' : 'No explanation, no additional text, just the value.'}`,
+        model,
+        apiKey: userRow.openai_api_key,
+        maxTokens,
+      } as any)
+
+      if (!resp.success) {
+        throw new Error(resp.error || 'AI generation failed')
+      }
+
+      // Extract the value
+      let text = ''
+      try {
+        const choice = resp.data?.choices?.[0]
+        text = choice?.message?.content || resp.data?.text || ''
+      } catch {}
+
+      // Clean up the response - remove quotes, extra whitespace, etc.
+      let value = text.trim()
+      // Remove surrounding quotes if present
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      }
+      // Remove "Answer:" or similar prefixes
+      value = value.replace(/^(Answer|Value|Result):\s*/i, '').trim()
+
+      // Update the appropriate field
+      const fieldSetters: Record<string, (val: string) => void> = {
+        'height': setNewCharHeight,
+        'build': setNewCharBuild,
+        'skin_tone': setNewCharSkinTone,
+        'eye_color': setNewCharEyeColor,
+        'eye_shape': setNewCharEyeShape,
+        'eye_expression': setNewCharEyeExpression,
+        'hair_color_natural': setNewCharHairColorNatural,
+        'hair_color_current': setNewCharHairColorCurrent,
+        'hair_length': setNewCharHairLength,
+        'hair_texture': setNewCharHairTexture,
+        'usual_hairstyle': setNewCharUsualHairstyle,
+        'face_shape': setNewCharFaceShape,
+        'distinguishing_marks': setNewCharDistinguishingMarks,
+        'usual_clothing_style': setNewCharUsualClothingStyle,
+        'typical_color_palette': setNewCharTypicalColorPalette,
+        'accessories': setNewCharAccessories,
+        'posture': setNewCharPosture,
+        'body_language': setNewCharBodyLanguage,
+        'voice_pitch': setNewCharVoicePitch,
+        'voice_speed': setNewCharVoiceSpeed,
+        'voice_accent': setNewCharVoiceAccent,
+        'voice_tone': setNewCharVoiceTone,
+      }
+
+      const setter = fieldSetters[fieldKey]
+      if (setter) {
+        setter(value)
+        toast({
+          title: "Generated",
+          description: `${fieldLabel} generated successfully.`,
+        })
+      } else {
+        throw new Error(`Unknown field: ${fieldKey}`)
+      }
+
+    } catch (err) {
+      console.error(`Error generating ${fieldLabel}:`, err)
+      toast({
+        title: "Error",
+        description: `Failed to generate ${fieldLabel}: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingField(null)
+    }
+  }
+
   const addRole = async (name: string) => {
     if (!projectId || !name.trim()) return
     setSyncing(true)
@@ -1664,6 +1828,336 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         description: "Failed to delete asset.",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleAnalyzeCharacterImage = async (asset: Asset) => {
+    if (!selectedCharacterId || !asset.content_url) {
+      toast({
+        title: "Error",
+        description: "Please select a character and ensure the image has a URL.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) {
+      toast({
+        title: "Error",
+        description: "Character not found.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setAnalyzingImageAssetId(asset.id)
+
+    try {
+      // Call the analyze API
+      const response = await fetch('/api/ai/analyze-character-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: asset.content_url,
+          characterId: selectedCharacterId,
+          characterName: selectedChar.name,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(errorData.error || `Analysis failed: ${response.status}`)
+      }
+
+      const result = await response.json()
+
+      if (!result.success) {
+        throw new Error(result.error || 'Analysis failed')
+      }
+
+      const { extractedData, rawAnalysis } = result
+
+      // Store extracted data and show review dialog
+      setAnalysisExtractedData(extractedData)
+      setAnalysisImageUrl(asset.content_url)
+      setShowAnalysisReview(true)
+
+      toast({
+        title: "Analysis Complete",
+        description: "Review the extracted character details below and choose what to save.",
+      })
+
+    } catch (err) {
+      console.error('Analyze image error:', err)
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      toast({
+        title: "Error",
+        description: `Failed to analyze image: ${errorMessage}`,
+        variant: "destructive",
+      })
+    } finally {
+      setAnalyzingImageAssetId(null)
+    }
+  }
+
+  const handleSaveAnalysisData = async () => {
+    if (!selectedCharacterId || !analysisExtractedData) return
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) return
+
+    try {
+      // Prepare update data from extracted data
+      const updateData: any = {}
+
+      // Physical appearance
+      if (analysisExtractedData.height) updateData.height = analysisExtractedData.height
+      if (analysisExtractedData.build) updateData.build = analysisExtractedData.build
+      if (analysisExtractedData.skin_tone) updateData.skin_tone = analysisExtractedData.skin_tone
+      if (analysisExtractedData.eye_color) updateData.eye_color = analysisExtractedData.eye_color
+      if (analysisExtractedData.eye_shape) updateData.eye_shape = analysisExtractedData.eye_shape
+      if (analysisExtractedData.eye_expression) updateData.eye_expression = analysisExtractedData.eye_expression
+      if (analysisExtractedData.hair_color_natural) updateData.hair_color_natural = analysisExtractedData.hair_color_natural
+      if (analysisExtractedData.hair_color_current) updateData.hair_color_current = analysisExtractedData.hair_color_current
+      if (analysisExtractedData.hair_length) updateData.hair_length = analysisExtractedData.hair_length
+      if (analysisExtractedData.hair_texture) updateData.hair_texture = analysisExtractedData.hair_texture
+      if (analysisExtractedData.usual_hairstyle) updateData.usual_hairstyle = analysisExtractedData.usual_hairstyle
+      if (analysisExtractedData.face_shape) updateData.face_shape = analysisExtractedData.face_shape
+      if (analysisExtractedData.distinguishing_marks) updateData.distinguishing_marks = analysisExtractedData.distinguishing_marks
+      if (analysisExtractedData.age) updateData.age = analysisExtractedData.age
+      if (analysisExtractedData.gender) updateData.gender = analysisExtractedData.gender
+
+      // Clothing & style
+      if (analysisExtractedData.usual_clothing_style) updateData.usual_clothing_style = analysisExtractedData.usual_clothing_style
+      if (analysisExtractedData.typical_color_palette) updateData.typical_color_palette = analysisExtractedData.typical_color_palette
+      if (analysisExtractedData.accessories) updateData.accessories = analysisExtractedData.accessories
+
+      // Body language
+      if (analysisExtractedData.posture) updateData.posture = analysisExtractedData.posture
+      if (analysisExtractedData.body_language) updateData.body_language = analysisExtractedData.body_language
+
+      // Description (append to existing)
+      if (analysisExtractedData.description) {
+        if (selectedChar.description) {
+          updateData.description = `${selectedChar.description}\n\n[AI Analysis from Image]\n${analysisExtractedData.description}`
+        } else {
+          updateData.description = analysisExtractedData.description
+        }
+      }
+
+      // Add image to reference_images array
+      if (analysisImageUrl) {
+        const currentRefImages = selectedChar.reference_images || []
+        if (!currentRefImages.includes(analysisImageUrl)) {
+          updateData.reference_images = [...currentRefImages, analysisImageUrl]
+        }
+      }
+
+      // Update character
+      if (Object.keys(updateData).length > 0) {
+        const updatedCharacter = await CharactersService.updateCharacter(selectedCharacterId, updateData)
+        
+        // Update local state
+        setCharacters(prev => prev.map(c => 
+          c.id === selectedCharacterId ? updatedCharacter : c
+        ))
+
+        toast({
+          title: "Character Updated",
+          description: `Successfully saved ${Object.keys(updateData).length} field(s) from image analysis.`,
+        })
+
+        // Close dialog and reset
+        setShowAnalysisReview(false)
+        setAnalysisExtractedData(null)
+        setAnalysisImageUrl(null)
+      }
+    } catch (err) {
+      console.error('Error saving analysis data:', err)
+      toast({
+        title: "Error",
+        description: "Failed to save character details.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleGenerateDetailReferenceImage = async (
+    detailKey: string,
+    detailLabel: string,
+    prompt: string,
+    category: string = 'general',
+    subcategory?: string
+  ) => {
+    if (!selectedCharacterId || !analysisExtractedData || !userId || !ready) {
+      toast({
+        title: "Error",
+        description: "Please ensure character is selected and you're logged in.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedChar = characters.find(c => c.id === selectedCharacterId)
+    if (!selectedChar) return
+
+    setGeneratingDetailImage(`${category}_${detailKey}`)
+
+    try {
+      // Get AI settings for image generation
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const service = imagesSetting?.selected_service?.toLowerCase() || 'dalle'
+      const model = imagesSetting?.selected_model || 'dall-e-3'
+
+      // Get API key
+      const supabase = getSupabaseClient()
+      const { data: userData } = await supabase
+        .from('users')
+        .select('openai_api_key')
+        .eq('id', userId)
+        .single()
+
+      const apiKey = userData?.openai_api_key || process.env.NEXT_PUBLIC_OPENAI_API_KEY
+
+      if (!apiKey) {
+        toast({
+          title: "Missing API Key",
+          description: "Please configure your OpenAI API key in settings.",
+          variant: "destructive",
+        })
+        setGeneratingDetailImage(null)
+        return
+      }
+
+      // Build enhanced prompt with character context
+      const characterContext = `Character: ${selectedChar.name || 'Character'}. `
+      const fullPrompt = characterContext + prompt
+
+      // Normalize service and model
+      const normalizeImageModel = (service: string, model: string) => {
+        if (model === 'gpt-image-1' || model?.startsWith('gpt-')) {
+          return model
+        }
+        if (service === 'dalle' || service?.toLowerCase().includes('dalle')) {
+          return 'dall-e-3'
+        }
+        return model || 'dall-e-3'
+      }
+
+      const normalizedService = service === 'dalle' || service?.toLowerCase().includes('dalle') ? 'dalle' : service.toLowerCase()
+      const normalizedModel = normalizeImageModel(normalizedService, model)
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: fullPrompt,
+          service: normalizedService,
+          model: normalizedModel,
+          apiKey: apiKey,
+          userId: userId,
+          autoSaveToBucket: true
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(errorData.error || `Failed to generate ${detailLabel}`)
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.imageUrl) {
+        const imageUrlToUse = result.bucketUrl || result.imageUrl
+
+        // Save as character asset
+        const timestamp = Date.now()
+        const safeLabel = detailLabel.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+        const filePath = `${projectId}/characters/${selectedCharacterId}/${timestamp}_${category}_${safeLabel}.png`
+        
+        // If image is already in bucket, just create asset record
+        let finalImageUrl = imageUrlToUse
+        
+        if (!result.bucketUrl) {
+          // Download and save to Supabase storage
+          const imageResponse = await fetch(imageUrlToUse)
+          const imageBlob = await imageResponse.blob()
+          
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('cinema_files')
+            .upload(filePath, imageBlob, {
+              contentType: 'image/png',
+              cacheControl: '3600',
+              upsert: false
+            })
+
+          if (uploadError) {
+            console.error('Upload error:', uploadError)
+            // Continue with original URL if upload fails
+          } else {
+            const { data: { publicUrl } } = supabase.storage
+              .from('cinema_files')
+              .getPublicUrl(filePath)
+            finalImageUrl = publicUrl
+          }
+        }
+
+        const assetData = {
+          project_id: projectId,
+          character_id: selectedCharacterId,
+          title: `${selectedChar.name} - ${detailLabel}${subcategory ? ` (${subcategory})` : ''}`,
+          content_type: 'image',
+          content: '',
+          content_url: finalImageUrl,
+          prompt: fullPrompt,
+          model: normalizedModel,
+          generation_settings: {},
+          metadata: {
+            character_name: selectedChar.name,
+            category: category,
+            detail_key: detailKey,
+            detail_type: 'reference_image',
+            subcategory: subcategory,
+            generated_at: new Date().toISOString(),
+          }
+        }
+
+        await AssetService.createAsset(assetData)
+
+        // Add to reference_images array
+        const currentRefImages = selectedChar.reference_images || []
+        if (!currentRefImages.includes(finalImageUrl)) {
+          await CharactersService.updateCharacter(selectedCharacterId, {
+            reference_images: [...currentRefImages, finalImageUrl]
+          })
+          
+          // Update local state
+          setCharacters(prev => prev.map(c => 
+            c.id === selectedCharacterId 
+              ? { ...c, reference_images: [...currentRefImages, finalImageUrl] }
+              : c
+          ))
+        }
+
+        // Reload character assets
+        const assets = await AssetService.getAssetsForCharacter(selectedCharacterId)
+        setCharacterAssets(assets)
+
+        toast({
+          title: "Success",
+          description: `${detailLabel}${subcategory ? ` (${subcategory})` : ''} reference image generated and saved!`,
+        })
+      }
+    } catch (err) {
+      console.error(`Error generating ${detailLabel}:`, err)
+      toast({
+        title: `Failed: ${detailLabel}`,
+        description: err instanceof Error ? err.message : 'Unknown error',
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingDetailImage(null)
     }
   }
 
@@ -2379,6 +2873,24 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                     variant="secondary"
                                                     onClick={(e) => {
                                                       e.stopPropagation()
+                                                      handleAnalyzeCharacterImage(asset)
+                                                    }}
+                                                    disabled={analyzingImageAssetId === asset.id}
+                                                    className="h-8 bg-purple-500 hover:bg-purple-600 pointer-events-auto"
+                                                    title="Analyze image with GPT Vision to extract character details"
+                                                  >
+                                                    {analyzingImageAssetId === asset.id ? (
+                                                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                                    ) : (
+                                                      <Eye className="h-3 w-3 mr-1" />
+                                                    )}
+                                                    {analyzingImageAssetId === asset.id ? 'Analyzing...' : 'Analyze'}
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
                                                       handleDeleteAsset(asset.id)
                                                     }}
                                                     className="h-8 pointer-events-auto"
@@ -2861,91 +3373,443 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                       <AccordionContent>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                           <div className="space-y-2">
-                            <Label htmlFor="char-height">Height</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-height">Height</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('height', 'Height')}
+                                disabled={!selectedCharacterId || generatingField === 'height'}
+                                className="h-6 px-2"
+                                title="Generate height"
+                              >
+                                {generatingField === 'height' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-height" value={newCharHeight} onChange={(e) => setNewCharHeight(e.target.value)} className="bg-input border-border" placeholder="5'10&quot; or 175cm" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-build">Build</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-build">Build</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('build', 'Build')}
+                                disabled={!selectedCharacterId || generatingField === 'build'}
+                                className="h-6 px-2"
+                                title="Generate build"
+                              >
+                                {generatingField === 'build' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-build" value={newCharBuild} onChange={(e) => setNewCharBuild(e.target.value)} className="bg-input border-border" placeholder="thin, athletic, average, stocky" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-skin-tone">Skin Tone</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-skin-tone">Skin Tone</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('skin_tone', 'Skin Tone')}
+                                disabled={!selectedCharacterId || generatingField === 'skin_tone'}
+                                className="h-6 px-2"
+                                title="Generate skin tone"
+                              >
+                                {generatingField === 'skin_tone' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-skin-tone" value={newCharSkinTone} onChange={(e) => setNewCharSkinTone(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-eye-color">Eye Color</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-eye-color">Eye Color</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('eye_color', 'Eye Color')}
+                                disabled={!selectedCharacterId || generatingField === 'eye_color'}
+                                className="h-6 px-2"
+                                title="Generate eye color"
+                              >
+                                {generatingField === 'eye_color' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-eye-color" value={newCharEyeColor} onChange={(e) => setNewCharEyeColor(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-eye-shape">Eye Shape</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-eye-shape">Eye Shape</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('eye_shape', 'Eye Shape')}
+                                disabled={!selectedCharacterId || generatingField === 'eye_shape'}
+                                className="h-6 px-2"
+                                title="Generate eye shape"
+                              >
+                                {generatingField === 'eye_shape' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-eye-shape" value={newCharEyeShape} onChange={(e) => setNewCharEyeShape(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-eye-expression">Eye Expression</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-eye-expression">Eye Expression</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('eye_expression', 'Eye Expression')}
+                                disabled={!selectedCharacterId || generatingField === 'eye_expression'}
+                                className="h-6 px-2"
+                                title="Generate eye expression"
+                              >
+                                {generatingField === 'eye_expression' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-eye-expression" value={newCharEyeExpression} onChange={(e) => setNewCharEyeExpression(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-hair-natural">Hair Color (Natural)</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-hair-natural">Hair Color (Natural)</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('hair_color_natural', 'Hair Color (Natural)')}
+                                disabled={!selectedCharacterId || generatingField === 'hair_color_natural'}
+                                className="h-6 px-2"
+                                title="Generate natural hair color"
+                              >
+                                {generatingField === 'hair_color_natural' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-hair-natural" value={newCharHairColorNatural} onChange={(e) => setNewCharHairColorNatural(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-hair-current">Hair Color (Current)</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-hair-current">Hair Color (Current)</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('hair_color_current', 'Hair Color (Current)')}
+                                disabled={!selectedCharacterId || generatingField === 'hair_color_current'}
+                                className="h-6 px-2"
+                                title="Generate current hair color"
+                              >
+                                {generatingField === 'hair_color_current' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-hair-current" value={newCharHairColorCurrent} onChange={(e) => setNewCharHairColorCurrent(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-hair-length">Hair Length</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-hair-length">Hair Length</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('hair_length', 'Hair Length')}
+                                disabled={!selectedCharacterId || generatingField === 'hair_length'}
+                                className="h-6 px-2"
+                                title="Generate hair length"
+                              >
+                                {generatingField === 'hair_length' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-hair-length" value={newCharHairLength} onChange={(e) => setNewCharHairLength(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-hair-texture">Hair Texture</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-hair-texture">Hair Texture</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('hair_texture', 'Hair Texture')}
+                                disabled={!selectedCharacterId || generatingField === 'hair_texture'}
+                                className="h-6 px-2"
+                                title="Generate hair texture"
+                              >
+                                {generatingField === 'hair_texture' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-hair-texture" value={newCharHairTexture} onChange={(e) => setNewCharHairTexture(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-hairstyle">Usual Hairstyle</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-hairstyle">Usual Hairstyle</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('usual_hairstyle', 'Usual Hairstyle')}
+                                disabled={!selectedCharacterId || generatingField === 'usual_hairstyle'}
+                                className="h-6 px-2"
+                                title="Generate hairstyle"
+                              >
+                                {generatingField === 'usual_hairstyle' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-hairstyle" value={newCharUsualHairstyle} onChange={(e) => setNewCharUsualHairstyle(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-face-shape">Face Shape</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-face-shape">Face Shape</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('face_shape', 'Face Shape')}
+                                disabled={!selectedCharacterId || generatingField === 'face_shape'}
+                                className="h-6 px-2"
+                                title="Generate face shape"
+                              >
+                                {generatingField === 'face_shape' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-face-shape" value={newCharFaceShape} onChange={(e) => setNewCharFaceShape(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2 md:col-span-2">
-                            <Label htmlFor="char-distinguishing">Distinguishing Marks</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-distinguishing">Distinguishing Marks</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('distinguishing_marks', 'Distinguishing Marks')}
+                                disabled={!selectedCharacterId || generatingField === 'distinguishing_marks'}
+                                className="h-6 px-2"
+                                title="Generate distinguishing marks"
+                              >
+                                {generatingField === 'distinguishing_marks' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Textarea id="char-distinguishing" value={newCharDistinguishingMarks} onChange={(e) => setNewCharDistinguishingMarks(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="tattoos, scars, birthmarks, etc." />
                           </div>
                           <div className="space-y-2 md:col-span-2">
-                            <Label htmlFor="char-clothing">Usual Clothing Style</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-clothing">Usual Clothing Style</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('usual_clothing_style', 'Usual Clothing Style')}
+                                disabled={!selectedCharacterId || generatingField === 'usual_clothing_style'}
+                                className="h-6 px-2"
+                                title="Generate clothing style"
+                              >
+                                {generatingField === 'usual_clothing_style' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Textarea id="char-clothing" value={newCharUsualClothingStyle} onChange={(e) => setNewCharUsualClothingStyle(e.target.value)} className="bg-input border-border min-h-[60px]" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-color-palette">Typical Color Palette (comma-separated)</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-color-palette">Typical Color Palette (comma-separated)</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('typical_color_palette', 'Typical Color Palette', 'array')}
+                                disabled={!selectedCharacterId || generatingField === 'typical_color_palette'}
+                                className="h-6 px-2"
+                                title="Generate color palette"
+                              >
+                                {generatingField === 'typical_color_palette' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-color-palette" value={newCharTypicalColorPalette} onChange={(e) => setNewCharTypicalColorPalette(e.target.value)} className="bg-input border-border" placeholder="navy, gray, black" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-accessories">Accessories</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-accessories">Accessories</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('accessories', 'Accessories')}
+                                disabled={!selectedCharacterId || generatingField === 'accessories'}
+                                className="h-6 px-2"
+                                title="Generate accessories"
+                              >
+                                {generatingField === 'accessories' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-accessories" value={newCharAccessories} onChange={(e) => setNewCharAccessories(e.target.value)} className="bg-input border-border" placeholder="jewelry, glasses, piercings, hats" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-posture">Posture</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-posture">Posture</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('posture', 'Posture')}
+                                disabled={!selectedCharacterId || generatingField === 'posture'}
+                                className="h-6 px-2"
+                                title="Generate posture"
+                              >
+                                {generatingField === 'posture' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-posture" value={newCharPosture} onChange={(e) => setNewCharPosture(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-body-language">Body Language</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-body-language">Body Language</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('body_language', 'Body Language')}
+                                disabled={!selectedCharacterId || generatingField === 'body_language'}
+                                className="h-6 px-2"
+                                title="Generate body language"
+                              >
+                                {generatingField === 'body_language' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-body-language" value={newCharBodyLanguage} onChange={(e) => setNewCharBodyLanguage(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-voice-pitch">Voice Pitch</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-voice-pitch">Voice Pitch</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('voice_pitch', 'Voice Pitch')}
+                                disabled={!selectedCharacterId || generatingField === 'voice_pitch'}
+                                className="h-6 px-2"
+                                title="Generate voice pitch"
+                              >
+                                {generatingField === 'voice_pitch' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-voice-pitch" value={newCharVoicePitch} onChange={(e) => setNewCharVoicePitch(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-voice-speed">Voice Speed</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-voice-speed">Voice Speed</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('voice_speed', 'Voice Speed')}
+                                disabled={!selectedCharacterId || generatingField === 'voice_speed'}
+                                className="h-6 px-2"
+                                title="Generate voice speed"
+                              >
+                                {generatingField === 'voice_speed' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-voice-speed" value={newCharVoiceSpeed} onChange={(e) => setNewCharVoiceSpeed(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-voice-accent">Voice Accent</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-voice-accent">Voice Accent</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('voice_accent', 'Voice Accent')}
+                                disabled={!selectedCharacterId || generatingField === 'voice_accent'}
+                                className="h-6 px-2"
+                                title="Generate voice accent"
+                              >
+                                {generatingField === 'voice_accent' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-voice-accent" value={newCharVoiceAccent} onChange={(e) => setNewCharVoiceAccent(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor="char-voice-tone">Voice Tone</Label>
+                            <div className="flex items-center justify-between">
+                              <Label htmlFor="char-voice-tone">Voice Tone</Label>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => generateIndividualField('voice_tone', 'Voice Tone')}
+                                disabled={!selectedCharacterId || generatingField === 'voice_tone'}
+                                className="h-6 px-2"
+                                title="Generate voice tone"
+                              >
+                                {generatingField === 'voice_tone' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                             <Input id="char-voice-tone" value={newCharVoiceTone} onChange={(e) => setNewCharVoiceTone(e.target.value)} className="bg-input border-border" />
                           </div>
                           <div className="space-y-2 md:col-span-2">
@@ -3877,6 +4741,508 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Analysis Review Dialog */}
+      <Dialog open={showAnalysisReview} onOpenChange={setShowAnalysisReview}>
+          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Review Extracted Character Details</DialogTitle>
+              <DialogDescription>
+                Review the character details extracted from the image. Click "Save All" to apply these details to your character, or close to discard.
+              </DialogDescription>
+            </DialogHeader>
+            
+            {analysisExtractedData && (
+              <div className="space-y-6 py-4">
+                {analysisImageUrl && (
+                  <div className="flex justify-center">
+                    <img 
+                      src={analysisImageUrl} 
+                      alt="Analyzed character" 
+                      className="max-w-xs rounded-lg border"
+                    />
+                  </div>
+                )}
+
+                {/* Physical Appearance */}
+                {(analysisExtractedData.height || analysisExtractedData.build || analysisExtractedData.skin_tone || 
+                  analysisExtractedData.eye_color || analysisExtractedData.hair_color_current || analysisExtractedData.age || 
+                  analysisExtractedData.gender) && (
+                  <div className="border rounded-lg p-4 space-y-4">
+                    <h3 className="font-semibold text-lg">Physical Appearance</h3>
+                    
+                    {/* Skin Tone */}
+                    {analysisExtractedData.skin_tone && (
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <div className="flex-1">
+                          <span className="text-muted-foreground text-sm">Skin Tone:</span>
+                          <p className="font-medium">{analysisExtractedData.skin_tone}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleGenerateDetailReferenceImage(
+                            'skin_tone',
+                            'Skin Tone Reference',
+                            `Color swatch of ${analysisExtractedData.skin_tone} skin tone, professional color reference, clean white background, color chart style, accurate skin tone representation`,
+                            'physical_appearance',
+                            'skin_tone'
+                          )}
+                          disabled={generatingDetailImage === 'physical_appearance_skin_tone'}
+                        >
+                          {generatingDetailImage === 'physical_appearance_skin_tone' ? (
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          ) : (
+                            <Sparkles className="h-3 w-3 mr-1" />
+                          )}
+                          Generate
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Eye Color */}
+                    {analysisExtractedData.eye_color && (
+                      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                        <div className="flex-1">
+                          <span className="text-muted-foreground text-sm">Eye Color:</span>
+                          <p className="font-medium">{analysisExtractedData.eye_color}</p>
+                          {analysisExtractedData.eye_shape && (
+                            <p className="text-xs text-muted-foreground mt-1">Shape: {analysisExtractedData.eye_shape}</p>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleGenerateDetailReferenceImage(
+                            'eye_color',
+                            'Eye Color Reference',
+                            `Close-up professional photo of ${analysisExtractedData.eye_color} colored eyes${analysisExtractedData.eye_shape ? `, ${analysisExtractedData.eye_shape} shape` : ''}, detailed iris texture, clean background, color reference image, high quality`,
+                            'physical_appearance',
+                            'eye_color'
+                          )}
+                          disabled={generatingDetailImage === 'physical_appearance_eye_color'}
+                        >
+                          {generatingDetailImage === 'physical_appearance_eye_color' ? (
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          ) : (
+                            <Sparkles className="h-3 w-3 mr-1" />
+                          )}
+                          Generate
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Hair Section */}
+                    {(analysisExtractedData.hair_color_current || analysisExtractedData.usual_hairstyle || analysisExtractedData.hair_length || analysisExtractedData.hair_texture) && (
+                      <div className="space-y-2">
+                        <h4 className="font-medium text-sm text-muted-foreground">Hair</h4>
+                        
+                        {/* Hair Color */}
+                        {analysisExtractedData.hair_color_current && (
+                          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                            <div className="flex-1">
+                              <span className="text-muted-foreground text-sm">Hair Color:</span>
+                              <p className="font-medium">{analysisExtractedData.hair_color_current}</p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleGenerateDetailReferenceImage(
+                                'hair_color',
+                                'Hair Color Reference',
+                                `Color swatch of ${analysisExtractedData.hair_color_current} hair color, professional color reference, clean white background, color chart style, accurate hair color representation`,
+                                'physical_appearance',
+                                'hair_color'
+                              )}
+                              disabled={generatingDetailImage === 'physical_appearance_hair_color'}
+                            >
+                              {generatingDetailImage === 'physical_appearance_hair_color' ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Sparkles className="h-3 w-3 mr-1" />
+                              )}
+                              Generate
+                            </Button>
+                          </div>
+                        )}
+
+                        {/* Hairstyle */}
+                        {analysisExtractedData.usual_hairstyle && (
+                          <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                            <div className="flex-1">
+                              <span className="text-muted-foreground text-sm">Hairstyle:</span>
+                              <p className="font-medium">
+                                {analysisExtractedData.usual_hairstyle}
+                                {analysisExtractedData.hair_length && ` (${analysisExtractedData.hair_length})`}
+                                {analysisExtractedData.hair_texture && ` - ${analysisExtractedData.hair_texture}`}
+                              </p>
+                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleGenerateDetailReferenceImage(
+                                'hairstyle',
+                                'Hairstyle Reference',
+                                `Professional photo of ${analysisExtractedData.usual_hairstyle || analysisExtractedData.hair_length || 'styled'} ${analysisExtractedData.hair_color_current || ''} hair, ${analysisExtractedData.hair_texture || ''} texture, clean background, reference image style, high quality, detailed hairstyle`,
+                                'physical_appearance',
+                                'hairstyle'
+                              )}
+                              disabled={generatingDetailImage === 'physical_appearance_hairstyle'}
+                            >
+                              {generatingDetailImage === 'physical_appearance_hairstyle' ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <Sparkles className="h-3 w-3 mr-1" />
+                              )}
+                              Generate
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Other Physical Details */}
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2">
+                      {analysisExtractedData.height && (
+                        <div>
+                          <span className="text-muted-foreground">Height:</span>
+                          <p className="font-medium">{analysisExtractedData.height}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.build && (
+                        <div>
+                          <span className="text-muted-foreground">Build:</span>
+                          <p className="font-medium">{analysisExtractedData.build}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.face_shape && (
+                        <div>
+                          <span className="text-muted-foreground">Face Shape:</span>
+                          <p className="font-medium">{analysisExtractedData.face_shape}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.age && (
+                        <div>
+                          <span className="text-muted-foreground">Age:</span>
+                          <p className="font-medium">{analysisExtractedData.age}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.gender && (
+                        <div>
+                          <span className="text-muted-foreground">Gender:</span>
+                          <p className="font-medium">{analysisExtractedData.gender}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.distinguishing_marks && (
+                        <div className="md:col-span-3">
+                          <span className="text-muted-foreground">Distinguishing Marks:</span>
+                          <p className="font-medium">{analysisExtractedData.distinguishing_marks}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Clothing & Style */}
+                {(analysisExtractedData.usual_clothing_style || analysisExtractedData.typical_color_palette || 
+                  analysisExtractedData.accessories) && (
+                  <div className="border rounded-lg p-4 space-y-4">
+                    <h3 className="font-semibold text-lg">Clothing & Style</h3>
+                    
+                    {/* Overall Clothing Style */}
+                    {analysisExtractedData.usual_clothing_style && (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="text-muted-foreground text-sm">Overall Style:</span>
+                            <p className="font-medium">{analysisExtractedData.usual_clothing_style}</p>
+                            {analysisExtractedData.typical_color_palette && Array.isArray(analysisExtractedData.typical_color_palette) && analysisExtractedData.typical_color_palette.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {analysisExtractedData.typical_color_palette.map((color: string, i: number) => (
+                                  <Badge key={i} variant="outline" className="text-xs">{color}</Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleGenerateDetailReferenceImage(
+                              'clothing_overall',
+                              'Overall Clothing Style',
+                              `Professional photo of ${analysisExtractedData.usual_clothing_style} clothing style, ${analysisExtractedData.typical_color_palette ? analysisExtractedData.typical_color_palette.join(', ') + ' color palette' : ''}, clean background, fashion photography style, high quality, full outfit reference`,
+                              'clothing',
+                              'overall_style'
+                            )}
+                            disabled={generatingDetailImage === 'clothing_clothing_overall'}
+                          >
+                            {generatingDetailImage === 'clothing_clothing_overall' ? (
+                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            ) : (
+                              <Sparkles className="h-3 w-3 mr-1" />
+                            )}
+                            Generate
+                          </Button>
+                        </div>
+
+                        {/* Clothing Subcategories */}
+                        <div className="space-y-2 pl-4 border-l-2 border-primary/20">
+                          <h4 className="font-medium text-sm text-muted-foreground mt-3">Individual Pieces</h4>
+                          
+                          {/* Top/Shirt */}
+                          <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                            <span className="text-sm font-medium">Top / Shirt</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleGenerateDetailReferenceImage(
+                                'clothing_top',
+                                'Top/Shirt Reference',
+                                `Professional photo of a ${analysisExtractedData.usual_clothing_style} style top or shirt, ${analysisExtractedData.typical_color_palette ? (analysisExtractedData.typical_color_palette[0] || analysisExtractedData.typical_color_palette.join(', ')) + ' color' : ''}, clean white background, product photography, isolated, high quality`,
+                                'clothing',
+                                'top_shirt'
+                              )}
+                              disabled={generatingDetailImage === 'clothing_clothing_top'}
+                            >
+                              {generatingDetailImage === 'clothing_clothing_top' ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+
+                          {/* Bottom/Pants */}
+                          <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                            <span className="text-sm font-medium">Bottom / Pants</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleGenerateDetailReferenceImage(
+                                'clothing_bottom',
+                                'Bottom/Pants Reference',
+                                `Professional photo of ${analysisExtractedData.usual_clothing_style} style bottom or pants, ${analysisExtractedData.typical_color_palette ? (analysisExtractedData.typical_color_palette[1] || analysisExtractedData.typical_color_palette[0] || analysisExtractedData.typical_color_palette.join(', ')) + ' color' : ''}, clean white background, product photography, isolated, high quality`,
+                                'clothing',
+                                'bottom_pants'
+                              )}
+                              disabled={generatingDetailImage === 'clothing_clothing_bottom'}
+                            >
+                              {generatingDetailImage === 'clothing_clothing_bottom' ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+
+                          {/* Shoes */}
+                          <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                            <span className="text-sm font-medium">Shoes</span>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleGenerateDetailReferenceImage(
+                                'clothing_shoes',
+                                'Shoes Reference',
+                                `Professional photo of ${analysisExtractedData.usual_clothing_style} style shoes or footwear, ${analysisExtractedData.typical_color_palette ? analysisExtractedData.typical_color_palette.join(', ') + ' color' : ''}, clean white background, product photography, isolated, high quality`,
+                                'clothing',
+                                'shoes'
+                              )}
+                              disabled={generatingDetailImage === 'clothing_clothing_shoes'}
+                            >
+                              {generatingDetailImage === 'clothing_clothing_shoes' ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-3 w-3" />
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Accessories - Parse individual items */}
+                    {analysisExtractedData.accessories && (() => {
+                      const accessoriesText = analysisExtractedData.accessories.toLowerCase()
+                      const hasGlasses = accessoriesText.includes('glass') || accessoriesText.includes('eyewear')
+                      const hasJewelry = accessoriesText.includes('jewelry') || accessoriesText.includes('watch') || accessoriesText.includes('ring') || accessoriesText.includes('necklace') || accessoriesText.includes('bracelet')
+                      const hasHat = accessoriesText.includes('hat') || accessoriesText.includes('cap')
+                      
+                      if (hasGlasses || hasJewelry || hasHat) {
+                        return (
+                          <div className="space-y-2">
+                            <h4 className="font-medium text-sm text-muted-foreground">Accessories</h4>
+                            <div className="space-y-2">
+                              {hasGlasses && (
+                                <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                                  <span className="text-sm font-medium">Glasses / Eyewear</span>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const glassesMatch = analysisExtractedData.accessories.match(/(?:glass|eyewear|sunglass)[\w\s]*/i)
+                                      const glassesType = glassesMatch ? glassesMatch[0] : 'glasses'
+                                      handleGenerateDetailReferenceImage(
+                                        'accessories_glasses',
+                                        'Glasses/Eyewear Reference',
+                                        `Professional photo of ${glassesType}, clean white background, product photography, isolated, reference image, high quality`,
+                                        'accessories',
+                                        'glasses'
+                                      )
+                                    }}
+                                    disabled={generatingDetailImage === 'accessories_accessories_glasses'}
+                                  >
+                                    {generatingDetailImage === 'accessories_accessories_glasses' ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              )}
+                              
+                              {hasJewelry && (
+                                <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                                  <span className="text-sm font-medium">Jewelry</span>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleGenerateDetailReferenceImage(
+                                      'accessories_jewelry',
+                                      'Jewelry Reference',
+                                      `Professional photo of ${analysisExtractedData.accessories}, clean white background, product photography, isolated, reference image, high quality`,
+                                      'accessories',
+                                      'jewelry'
+                                    )}
+                                    disabled={generatingDetailImage === 'accessories_accessories_jewelry'}
+                                  >
+                                    {generatingDetailImage === 'accessories_accessories_jewelry' ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              )}
+
+                              {hasHat && (
+                                <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                                  <span className="text-sm font-medium">Hat</span>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const hatMatch = analysisExtractedData.accessories.match(/(?:hat|cap)[\w\s]*/i)
+                                      const hatType = hatMatch ? hatMatch[0] : 'hat'
+                                      handleGenerateDetailReferenceImage(
+                                        'accessories_hat',
+                                        'Hat Reference',
+                                        `Professional photo of ${hatType}, clean white background, product photography, isolated, reference image, high quality`,
+                                        'accessories',
+                                        'hat'
+                                      )
+                                    }}
+                                    disabled={generatingDetailImage === 'accessories_accessories_hat'}
+                                  >
+                                    {generatingDetailImage === 'accessories_accessories_hat' ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              )}
+
+                              {/* General accessories if not categorized */}
+                              {!hasGlasses && !hasJewelry && !hasHat && (
+                                <div className="flex items-center justify-between p-2 bg-muted/30 rounded-lg">
+                                  <span className="text-sm font-medium">{analysisExtractedData.accessories}</span>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleGenerateDetailReferenceImage(
+                                      'accessories_general',
+                                      'Accessories Reference',
+                                      `Professional photo of ${analysisExtractedData.accessories}, clean white background, product photography, isolated, reference image, high quality`,
+                                      'accessories',
+                                      'general'
+                                    )}
+                                    disabled={generatingDetailImage === 'accessories_accessories_general'}
+                                  >
+                                    {generatingDetailImage === 'accessories_accessories_general' ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-3 w-3" />
+                                    )}
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      }
+                      return null
+                    })()}
+                  </div>
+                )}
+
+                {/* Body Language */}
+                {(analysisExtractedData.posture || analysisExtractedData.body_language) && (
+                  <div>
+                    <h3 className="font-semibold mb-3">Body Language</h3>
+                    <div className="space-y-2 text-sm">
+                      {analysisExtractedData.posture && (
+                        <div>
+                          <span className="text-muted-foreground">Posture:</span>
+                          <p className="font-medium">{analysisExtractedData.posture}</p>
+                        </div>
+                      )}
+                      {analysisExtractedData.body_language && (
+                        <div>
+                          <span className="text-muted-foreground">Body Language:</span>
+                          <p className="font-medium">{analysisExtractedData.body_language}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Description */}
+                {analysisExtractedData.description && (
+                  <div>
+                    <h3 className="font-semibold mb-3">Description</h3>
+                    <p className="text-sm whitespace-pre-wrap bg-muted/50 p-3 rounded-lg">
+                      {analysisExtractedData.description}
+                    </p>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t">
+                  <p className="text-xs text-muted-foreground">
+                    💡 <strong>Tip:</strong> These details will be saved to your character model and can be used to generate consistent character images in the future. The analyzed image will also be added to your reference images.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setShowAnalysisReview(false)
+                  setAnalysisExtractedData(null)
+                  setAnalysisImageUrl(null)
+                }}
+              >
+                Cancel
+              </Button>
+              <Button onClick={handleSaveAnalysisData}>
+                <Save className="h-4 w-4 mr-2" />
+                Save All Details
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
     </div>
   )
 }

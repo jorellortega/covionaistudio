@@ -139,9 +139,10 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [pages, setPages] = useState<string[]>([])
-  const [isEditing, setIsEditing] = useState(false)
+  const [isEditing, setIsEditing] = useState(true)
   const [editedPages, setEditedPages] = useState<Map<number, string>>(new Map())
   const [saving, setSaving] = useState(false)
+  const [currentPageContent, setCurrentPageContent] = useState<string>("")
   
   // AI text editing states
   const [showAITextEditor, setShowAITextEditor] = useState(false)
@@ -157,7 +158,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [selectionStart, setSelectionStart] = useState<number>(0)
   const [selectionEnd, setSelectionEnd] = useState<number>(0)
   const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement | HTMLDivElement>(null)
+  const cursorPositionRef = useRef<number | null>(null)
   
   // Active script asset
   const [activeScriptAsset, setActiveScriptAsset] = useState<Asset | null>(null)
@@ -168,6 +170,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   // Screenplay scenes states
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
   const [sceneBoundaries, setSceneBoundaries] = useState<Array<{sceneNumber: string, sceneName: string, position: number}>>([])
+  const [scenePositions, setScenePositions] = useState<Array<{sceneNumber: string, sceneName: string, startLine: number, endLine: number, sceneId?: string}>>([])
+  const [sceneCharBoundaries, setSceneCharBoundaries] = useState<Array<{sceneId: string, sceneNumber: string, sceneName: string, startChar: number, endChar: number}>>([])
   const [isLoadingScenes, setIsLoadingScenes] = useState(false)
   const [isGeneratingScenes, setIsGeneratingScenes] = useState(false)
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
@@ -529,7 +533,9 @@ function ScreenplayPageClient({ id }: { id: string }) {
       console.log(`✅ fetchScriptsFromScenes: Found ${scenesWithContent.length} scenes with content to combine`)
 
       // Combine scripts in scene order and track scene info for visual separators
-      const sceneInfo: Array<{sceneNumber: string, sceneName: string, content: string}> = []
+      const sceneInfo: Array<{sceneNumber: string, sceneName: string, content: string, sceneId: string, startChar: number, endChar: number}> = []
+      const charBoundaries: Array<{sceneId: string, sceneNumber: string, sceneName: string, startChar: number, endChar: number}> = []
+      let currentCharPosition = 0
       const combinedScript = scenesWithContent
         .map(scene => {
           // Prioritize screenplay_content from scene, fall back to script asset
@@ -547,13 +553,39 @@ function ScreenplayPageClient({ id }: { id: string }) {
             return null
           }
           
+          // Calculate where this scene starts and ends in the combined script
+          const startChar = currentCharPosition
+          const endChar = currentCharPosition + content.length
+          
           // Store scene info for visual separators
           const sceneNumber = scene.metadata?.sceneNumber || scene.scene_number || ''
           sceneInfo.push({
             sceneNumber: sceneNumber,
             sceneName: scene.name || '',
-            content: content
+            content: content,
+            sceneId: scene.id,
+            startChar: startChar,
+            endChar: endChar
           })
+          
+          // Store character boundaries for exact scene extraction
+          charBoundaries.push({
+            sceneId: scene.id,
+            sceneNumber: sceneNumber,
+            sceneName: scene.name || '',
+            startChar: startChar,
+            endChar: endChar
+          })
+          
+          console.log(`🎬 SCENE BOUNDARY DEBUG - Scene "${scene.name}" (ID: ${scene.id}):`)
+          console.log(`   - Scene Number: ${sceneNumber}`)
+          console.log(`   - Content length: ${content.length} chars`)
+          console.log(`   - Start position: ${startChar} chars`)
+          console.log(`   - End position: ${endChar} chars`)
+          console.log(`   - Content preview (first 100 chars): "${content.substring(0, 100).replace(/\n/g, '\\n')}"`)
+          
+          // Move position forward (content + \n\n separator)
+          currentCharPosition = endChar + 2 // +2 for \n\n
           
           // Return content without scene markers - they'll be displayed as visual separators in the UI
           return content
@@ -561,12 +593,54 @@ function ScreenplayPageClient({ id }: { id: string }) {
         .filter(Boolean)
         .join("\n\n")
       
+      // Store character boundaries for scene extraction
+      setSceneCharBoundaries(charBoundaries)
+      
+      console.log(`🎬 TOTAL COMBINED SCRIPT: ${combinedScript.length} chars`)
+      console.log(`🎬 TOTAL SCENES: ${sceneInfo.length}`)
+      console.log(`🎬 SCENE CHAR BOUNDARIES:`, charBoundaries)
+      
       // Store scene info for display - this will be used to add separators
       setSceneBoundaries(sceneInfo.map((info, index) => ({
         sceneNumber: info.sceneNumber,
         sceneName: info.sceneName,
         position: index // Use index to identify scene position
       })))
+      
+      // Calculate line positions for each scene in the combined script
+      let currentLine = 0
+      const positions: Array<{sceneNumber: string, sceneName: string, startLine: number, endLine: number, sceneId?: string}> = []
+      console.log('🎬 SCENE POSITIONS DEBUG - Calculating scene positions:')
+      console.log('  Total scenes:', sceneInfo.length)
+      
+      sceneInfo.forEach((info, index) => {
+        const sceneLines = info.content.split('\n').length
+        const startLine = currentLine
+        const endLine = currentLine + sceneLines - 1
+        
+        // Find matching scene from scenesWithContent
+        const matchingScene = scenesWithContent[index]
+        positions.push({
+          sceneNumber: info.sceneNumber,
+          sceneName: info.sceneName,
+          startLine: startLine,
+          endLine: endLine,
+          sceneId: matchingScene?.id
+        })
+        
+        console.log(`  Scene ${index + 1} (${info.sceneNumber || info.sceneName}):`)
+        console.log(`    - Start line: ${startLine}`)
+        console.log(`    - End line: ${endLine}`)
+        console.log(`    - Scene lines: ${sceneLines}`)
+        console.log(`    - Current line before next: ${currentLine}`)
+        
+        // Move to next scene (add 2 for \n\n separator)
+        currentLine = endLine + 3 // +1 for endLine, +2 for \n\n
+        console.log(`    - Current line after: ${currentLine}`)
+      })
+      
+      console.log('🎬 SCENE POSITIONS DEBUG - Final positions:', positions)
+      setScenePositions(positions)
       
       if (combinedScript.trim().length === 0) {
         console.log('❌ fetchScriptsFromScenes: Combined script is empty')
@@ -673,13 +747,82 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
   // Get current page edit content
   const getCurrentPageEditContent = () => {
-    if (!isEditing) return ""
+    // If we have currentPageContent state, use it (most up-to-date)
+    if (currentPageContent) {
+      return currentPageContent
+    }
     return editedPages.get(currentPage) || pages[currentPage - 1] || ""
   }
+  
+  // Update currentPageContent when page changes or when editedPages updates
+  useEffect(() => {
+    const content = editedPages.get(currentPage) || pages[currentPage - 1] || ""
+    setCurrentPageContent(content)
+  }, [currentPage, editedPages, pages])
+
+  // Restore cursor position after content updates
+  useEffect(() => {
+    if (cursorPositionRef.current !== null && textareaRef.current) {
+      const target = textareaRef.current as HTMLElement
+      const cursorPos = cursorPositionRef.current
+      
+      // Use requestAnimationFrame to ensure DOM is updated
+      requestAnimationFrame(() => {
+        try {
+          const range = document.createRange()
+          const sel = window.getSelection()
+          
+          if (!sel) return
+          
+          // Find the text node and offset, skipping divider elements
+          let charCount = 0
+          const walker = document.createTreeWalker(
+            target,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+              acceptNode: (node) => {
+                // Skip divider elements
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                  const el = node as HTMLElement
+                  if (el.classList.contains('flex')) {
+                    return NodeFilter.FILTER_REJECT
+                  }
+                }
+                return NodeFilter.FILTER_ACCEPT
+              }
+            }
+          )
+          
+          let node: Node | null = null
+          let found = false
+          while ((node = walker.nextNode()) && !found) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const nodeLength = node.textContent?.length || 0
+              if (charCount + nodeLength >= cursorPos) {
+                const offset = Math.min(cursorPos - charCount, nodeLength)
+                range.setStart(node, offset)
+                range.setEnd(node, offset)
+                sel.removeAllRanges()
+                sel.addRange(range)
+                found = true
+              }
+              charCount += nodeLength
+            }
+          }
+          
+          // Reset cursor position ref
+          cursorPositionRef.current = null
+        } catch (error) {
+          console.error('Error restoring cursor position:', error)
+          cursorPositionRef.current = null
+        }
+      })
+    }
+  }, [currentPageContent])
 
   // Save current page edit
   const saveCurrentPageEdit = (content: string) => {
-    if (!isEditing) return
+    setCurrentPageContent(content) // Update state to trigger divider recalculation
     setEditedPages(prev => {
       const newMap = new Map(prev)
       newMap.set(currentPage, content)
@@ -945,7 +1088,6 @@ ${centerText('AUTHOR NAME')}
 
   // Combine edited pages into full script
   const combineEditedPages = (): string => {
-    if (!isEditing) return fullScript
     
     // Get the maximum page number from either editedPages or totalPages
     const maxPage = Math.max(
@@ -1032,7 +1174,7 @@ ${centerText('AUTHOR NAME')}
       })
       
       // Save current page content to state after combining (for consistency)
-      if (isEditing && textareaRef.current) {
+      if (textareaRef.current) {
         saveCurrentPageEdit(textareaRef.current.value)
       }
 
@@ -1214,7 +1356,6 @@ ${centerText('AUTHOR NAME')}
   
   // Handle text selection for AI editing
   const handleTextSelection = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    if (!isEditing) return
     
     const target = e.target as HTMLTextAreaElement
     const start = target.selectionStart
@@ -1251,7 +1392,6 @@ ${centerText('AUTHOR NAME')}
 
   // Debug container dimensions when textarea is rendered or window resizes
   useEffect(() => {
-    if (!isEditing) return
     
     const debugOnMount = () => {
       // Wait a bit for DOM to settle
@@ -1270,11 +1410,6 @@ ${centerText('AUTHOR NAME')}
   
   // Clear selection when clicking outside (with delay to allow toolbar button clicks)
   useEffect(() => {
-    if (!isEditing) {
-      setSelectedText("")
-      setToolbarPosition(null)
-      return
-    }
     
     let clickTimeout: NodeJS.Timeout | null = null
     
@@ -1314,7 +1449,7 @@ ${centerText('AUTHOR NAME')}
 
   // Handle AI edit button click from toolbar
   const handleAITextEdit = () => {
-    if (!isEditing || !selectedText || selectedText.length === 0) {
+    if (!selectedText || selectedText.length === 0) {
       toast({
         title: "No Text Selected",
         description: "Please select some text to edit with AI.",
@@ -1338,7 +1473,7 @@ ${centerText('AUTHOR NAME')}
 
   // Handle AI text replacement
   const handleAITextReplace = (newText: string) => {
-    if (!aiEditData || !isEditing) return
+    if (!aiEditData) return
     
     // Get current textarea and its selection to ensure we use the latest positions
     const textarea = document.querySelector('textarea[data-screenplay-editor]') as HTMLTextAreaElement
@@ -1445,14 +1580,6 @@ ${centerText('AUTHOR NAME')}
 
   // Enhance current page
   const enhanceCurrentPage = async () => {
-    if (!isEditing) {
-      toast({
-        title: "Error",
-        description: "Please enter edit mode first",
-        variant: "destructive",
-      })
-      return
-    }
 
     const currentPageContent = getCurrentPageEditContent()
     if (!currentPageContent || !currentPageContent.trim()) {
@@ -1594,7 +1721,6 @@ ${centerText('AUTHOR NAME')}
 
   // Push last line(s) from current page to next page
   const handlePushToNextPage = () => {
-    if (!isEditing) return
     
     // Save current page content first
     const currentContent = textareaRef.current?.value || getCurrentPageEditContent()
@@ -1942,6 +2068,34 @@ ${centerText('AUTHOR NAME')}
       })
     } finally {
       setIsLoadingScenes(false)
+    }
+  }
+
+  // Helper function to get timeline scene ID for navigation
+  const getTimelineSceneId = async (scene: ScreenplayScene): Promise<string | null> => {
+    // If scene.id exists and looks like a UUID, use it (it should be a timeline scene ID)
+    if (scene.id && scene.id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      return scene.id
+    }
+    
+    // Otherwise, try to find the timeline scene by scene number
+    if (!id || !ready || !userId) return null
+    
+    try {
+      const timeline = await TimelineService.getTimelineForMovie(id)
+      if (!timeline) return null
+      
+      const scenes = await TimelineService.getScenesForTimeline(timeline.id)
+      const sceneNumber = scene.scene_number || scene.metadata?.sceneNumber || ''
+      const matchingScene = scenes.find(s => 
+        s.metadata?.sceneNumber === sceneNumber || 
+        s.metadata?.sceneNumber === scene.scene_number
+      )
+      
+      return matchingScene?.id || null
+    } catch (error) {
+      console.error('Error finding timeline scene:', error)
+      return null
     }
   }
 
@@ -3332,69 +3486,55 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   </div>
                 </CollapsibleContent>
               </Collapsible>
-              {!isEditing ? (
-                <>
-                  <Button 
-                    onClick={() => setShowCollaborationDialog(true)} 
-                    variant="outline" 
-                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                  >
-                    <Users className="h-4 w-4 mr-2" />
-                    Start Collaboration
-                  </Button>
-                  {fullScript && fullScript.trim().length > 0 && (
-                    <Button onClick={exportToPDF} variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
-                      <Download className="h-4 w-4 mr-2" />
-                      Export PDF
-                    </Button>
-                  )}
-                  {fullScript && fullScript.trim().length > 0 && totalPages > 0 && (
-                    <Button 
-                      onClick={() => setShowDeletePageConfirm(true)} 
-                      variant="outline" 
-                      className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                      disabled={isDeleting}
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete Page
-                    </Button>
-                  )}
-                  {fullScript && fullScript.trim().length > 0 && (
-                    <Button 
-                      onClick={() => setShowDeleteEntireConfirm(true)} 
-                      variant="outline" 
-                      className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-                      disabled={isDeleting}
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete All
-                    </Button>
-                  )}
-                  <Button onClick={handleEdit} variant="outline">
-                    <Edit3 className="h-4 w-4 mr-2" />
-                    Edit
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button onClick={handleCancelEdit} variant="outline">
-                    Cancel
-                  </Button>
-                  <Button onClick={handleSave} disabled={saving}>
-                    {saving ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="h-4 w-4 mr-2" />
-                        Save
-                      </>
-                    )}
-                  </Button>
-                </>
+              <Button 
+                onClick={() => setShowCollaborationDialog(true)} 
+                variant="outline" 
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+              >
+                <Users className="h-4 w-4 mr-2" />
+                Start Collaboration
+              </Button>
+              {fullScript && fullScript.trim().length > 0 && (
+                <Button onClick={exportToPDF} variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export PDF
+                </Button>
               )}
+              {fullScript && fullScript.trim().length > 0 && totalPages > 0 && (
+                <Button 
+                  onClick={() => setShowDeletePageConfirm(true)} 
+                  variant="outline" 
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  disabled={isDeleting}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Page
+                </Button>
+              )}
+              {fullScript && fullScript.trim().length > 0 && (
+                <Button 
+                  onClick={() => setShowDeleteEntireConfirm(true)} 
+                  variant="outline" 
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  disabled={isDeleting}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete All
+                </Button>
+              )}
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Save
+                  </>
+                )}
+              </Button>
             </div>
           </div>
         </div>
@@ -3405,7 +3545,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             <div className="flex items-center justify-between">
               <CardTitle className="flex items-center gap-2">
                 <FileText className="h-5 w-5" />
-                {isEditing ? 'Editing Screenplay' : 'Screenplay'}
+                Screenplay
               </CardTitle>
               {fullScript && (
                 <div className="flex items-center gap-4">
@@ -3446,19 +3586,15 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           </CardHeader>
           <CardContent>
             <div className="space-y-4" data-script-content>
-              {!fullScript && !isEditing ? (
+              {!fullScript ? (
                 <div className="text-center py-12">
                   <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
                   <h3 className="text-lg font-medium mb-2">No Screenplay Found</h3>
                   <p className="text-muted-foreground mb-4">
-                    This movie doesn't have a screenplay yet. Import a script file or create one by editing.
+                    This movie doesn't have a screenplay yet. Import a script file or start typing below.
                   </p>
-                  <Button onClick={handleEdit} variant="outline">
-                    <Edit3 className="h-4 w-4 mr-2" />
-                    Create Screenplay
-                  </Button>
                 </div>
-              ) : isEditing ? (
+              ) : (
                 <div className="space-y-4">
                   {/* Page number and action buttons row */}
                   <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
@@ -3725,38 +3861,339 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                           <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
                         </div>
                       </div>
+                      {/* Render content with dividers above each scene - using actual fetched scenes */}
+                      {(() => {
+                        const pageContent = currentPageContent || getCurrentPageEditContent()
+                        
+                        // If no scenes fetched yet, show regular textarea
+                        if (!screenplayScenes || screenplayScenes.length === 0) {
+                          return (
+                            <Textarea
+                              key={`page-${currentPage}`}
+                              ref={textareaRef}
+                              data-screenplay-editor
+                              value={pageContent}
+                              onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                              onSelect={handleTextSelection}
+                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                              style={{ 
+                                fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                                tabSize: 1,
+                                letterSpacing: '0px',
+                                paddingLeft: '12px',
+                                paddingRight: '12px',
+                                textAlign: 'left',
+                                whiteSpace: 'pre-wrap',
+                                overflowWrap: 'break-word',
+                                wordWrap: 'break-word',
+                                fontVariantNumeric: 'normal',
+                                fontFeatureSettings: 'normal',
+                                width: 'calc(80ch + 24px)',
+                                maxWidth: 'calc(80ch + 24px)',
+                                minWidth: 'calc(80ch + 24px)',
+                                margin: '0 auto',
+                                display: 'block',
+                                overflowX: 'hidden',
+                                backgroundColor: 'transparent'
+                              }}
+                              placeholder="Enter your screenplay here..."
+                              onFocus={() => {
+                                setTimeout(() => debugContainerDimensions(), 100)
+                              }}
+                            />
+                          )
+                        }
+                        
+                        // Get FULL combined screenplay to extract scene content
+                        const fullContent = combineEditedPages() || fullScript
+                        if (!fullContent) {
+                          return (
+                            <Textarea
+                              key={`page-${currentPage}`}
+                              ref={textareaRef}
+                              data-screenplay-editor
+                              value={pageContent}
+                              onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                              onSelect={handleTextSelection}
+                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                              style={{ 
+                                fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                                tabSize: 1,
+                                letterSpacing: '0px',
+                                paddingLeft: '12px',
+                                paddingRight: '12px',
+                                textAlign: 'left',
+                                whiteSpace: 'pre-wrap',
+                                overflowWrap: 'break-word',
+                                wordWrap: 'break-word',
+                                fontVariantNumeric: 'normal',
+                                fontFeatureSettings: 'normal',
+                                width: 'calc(80ch + 24px)',
+                                maxWidth: 'calc(80ch + 24px)',
+                                minWidth: 'calc(80ch + 24px)',
+                                margin: '0 auto',
+                                display: 'block',
+                                overflowX: 'hidden',
+                                backgroundColor: 'transparent'
+                              }}
+                              placeholder="Enter your screenplay here..."
+                              onFocus={() => {
+                                setTimeout(() => debugContainerDimensions(), 100)
+                              }}
+                            />
+                          )
+                        }
+                        
+                        // Calculate current page character range
+                        const lines = fullContent.split('\n')
+                        const pageStartLine = (currentPage - 1) * LINES_PER_PAGE
+                        const pageEndLine = Math.min(pageStartLine + LINES_PER_PAGE, lines.length)
+                        
+                        // Calculate character positions for current page
+                        let pageStartChar = 0
+                        let pageEndChar = fullContent.length
+                        
+                        if (pageStartLine > 0) {
+                          // Count characters up to pageStartLine
+                          const linesBeforePage = lines.slice(0, pageStartLine)
+                          pageStartChar = linesBeforePage.join('\n').length + (linesBeforePage.length > 0 ? 1 : 0) // +1 for newline
+                        }
+                        
+                        if (pageEndLine < lines.length) {
+                          // Count characters up to pageEndLine
+                          const linesUpToPageEnd = lines.slice(0, pageEndLine)
+                          pageEndChar = linesUpToPageEnd.join('\n').length + (linesUpToPageEnd.length > 0 ? 1 : 0)
+                        }
+                        
+                        console.log(`🎬 PAGINATION DEBUG - Page ${currentPage}:`)
+                        console.log(`   - Page line range: ${pageStartLine} to ${pageEndLine}`)
+                        console.log(`   - Page char range: ${pageStartChar} to ${pageEndChar}`)
+                        console.log(`   - Full content length: ${fullContent.length} chars`)
+                        console.log(`   - screenplayScenes array has ${screenplayScenes.length} scenes`)
+                        console.log(`   - sceneCharBoundaries has ${sceneCharBoundaries.length} boundaries`)
+                        
+                        const colors = [
+                          'bg-green-500',
+                          'bg-blue-500',
+                          'bg-purple-500',
+                          'bg-orange-500',
+                          'bg-pink-500',
+                          'bg-cyan-500',
+                          'bg-yellow-500',
+                          'bg-red-500',
+                        ]
+                        
+                        // Build content: DIVIDER + SCENE for scenes that appear on current page
+                        const elements: JSX.Element[] = []
+                        
+                        // Use screenplayScenes array (sorted in order) - this is the actual fetched scenes
+                        screenplayScenes.forEach((scene, sceneIndex) => {
+                          // Find this scene's character boundaries
+                          const boundary = sceneCharBoundaries.find(b => b.sceneId === scene.id)
+                          if (!boundary) return
+                          
+                          // Check if this scene overlaps with current page
+                          const sceneStartsOnPage = boundary.startChar >= pageStartChar && boundary.startChar < pageEndChar
+                          const sceneEndsOnPage = boundary.endChar > pageStartChar && boundary.endChar <= pageEndChar
+                          const sceneSpansPage = boundary.startChar < pageStartChar && boundary.endChar > pageEndChar
+                          
+                          if (!sceneStartsOnPage && !sceneEndsOnPage && !sceneSpansPage) {
+                            // Scene doesn't appear on this page, skip it
+                            return
+                          }
+                          
+                          // Calculate what portion of scene content to show on this page
+                          const contentStartChar = Math.max(boundary.startChar, pageStartChar)
+                          const contentEndChar = Math.min(boundary.endChar, pageEndChar)
+                          
+                          // Extract scene content for current page
+                          const sceneContentOnPage = fullContent.substring(contentStartChar, contentEndChar)
+                          
+                          if (!sceneContentOnPage.trim() && !sceneStartsOnPage) {
+                            return
+                          }
+                          
+                          const sceneNumber = scene.scene_number || scene.metadata?.sceneNumber || ''
+                          const sceneName = scene.name || ''
+                          const sceneColor = colors[sceneIndex % colors.length]
+                          
+                          console.log(`🎬 RENDERING SCENE ${sceneIndex + 1} on page ${currentPage}:`)
+                          console.log(`   - Scene ID: ${scene.id}`)
+                          console.log(`   - Scene Name: "${boundary.sceneName}"`)
+                          console.log(`   - Scene Number: "${boundary.sceneNumber}"`)
+                          console.log(`   - Full boundary: ${boundary.startChar} to ${boundary.endChar} chars`)
+                          console.log(`   - Page portion: ${contentStartChar} to ${contentEndChar} chars`)
+                          console.log(`   - Content length: ${sceneContentOnPage.length} chars`)
+                          console.log(`   - Starts on page: ${sceneStartsOnPage}`)
+                          
+                          // DIVIDER ABOVE EACH SCENE (only if scene starts on this page)
+                          if (sceneStartsOnPage) {
+                            elements.push(
+                              <div key={`divider-${scene.id}-${sceneIndex}`} className="w-full flex items-center py-2 my-2" contentEditable={false}>
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    const timelineSceneId = await getTimelineSceneId(scene)
+                                    if (timelineSceneId) {
+                                      router.push(`/timeline-scene/${timelineSceneId}`)
+                                    } else {
+                                      toast({
+                                        title: "Scene Not Available",
+                                        description: "This scene hasn't been added to the timeline yet. Please push it to the timeline first.",
+                                        variant: "destructive"
+                                      })
+                                    }
+                                  }}
+                                  className="px-4 text-xs font-bold text-muted-foreground bg-background hover:text-foreground cursor-pointer transition-colors whitespace-nowrap"
+                                  contentEditable={false}
+                                >
+                                  {sceneNumber ? `SCENE ${sceneNumber}` : sceneName || 'Scene'}
+                                </button>
+                                <div className={`flex-grow h-px ${sceneColor}`}></div>
+                              </div>
+                            )
+                          }
+                          
+                          // SCENE CONTENT (only the portion that appears on current page)
+                          if (sceneContentOnPage.trim()) {
+                            elements.push(
+                              <div key={`scene-${scene.id}-${sceneIndex}`} className="whitespace-pre-wrap font-mono text-sm leading-relaxed" style={{
+                                fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              }}>
+                                {sceneContentOnPage}
+                              </div>
+                            )
+                          }
+                        })
+                        
+                        console.log(`🎬 RENDERING DEBUG - Created ${elements.length} elements for page ${currentPage}`)
+                        
+                        return (
+                          <div
+                            ref={textareaRef}
+                            contentEditable
+                            suppressContentEditableWarning
+                            onInput={(e) => {
+                              const target = e.target as HTMLElement
+                              
+                              // Save cursor position before state update
+                              // Only count characters in scene content divs (not dividers)
+                              const selection = window.getSelection()
+                              if (selection && selection.rangeCount > 0) {
+                                const range = selection.getRangeAt(0)
+                                let charCount = 0
+                                
+                                // Walk through child nodes and count only scene content
+                                const walker = document.createTreeWalker(
+                                  target,
+                                  NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+                                  {
+                                    acceptNode: (node) => {
+                                      // Skip divider elements
+                                      if (node.nodeType === Node.ELEMENT_NODE) {
+                                        const el = node as HTMLElement
+                                        if (el.classList.contains('flex')) {
+                                          return NodeFilter.FILTER_REJECT
+                                        }
+                                      }
+                                      return NodeFilter.FILTER_ACCEPT
+                                    }
+                                  }
+                                )
+                                
+                                let node: Node | null = null
+                                let found = false
+                                while ((node = walker.nextNode()) && !found) {
+                                  if (node === range.endContainer || node.contains(range.endContainer)) {
+                                    if (node.nodeType === Node.TEXT_NODE) {
+                                      charCount += range.endOffset
+                                    } else {
+                                      // Find text node within this element
+                                      const textWalker = document.createTreeWalker(
+                                        node,
+                                        NodeFilter.SHOW_TEXT,
+                                        null
+                                      )
+                                      let textNode: Node | null = null
+                                      while ((textNode = textWalker.nextNode())) {
+                                        if (textNode === range.endContainer) {
+                                          charCount += range.endOffset
+                                          found = true
+                                          break
+                                        }
+                                        charCount += textNode.textContent?.length || 0
+                                      }
+                                    }
+                                    found = true
+                                    break
+                                  }
+                                  
+                                  if (node.nodeType === Node.TEXT_NODE) {
+                                    charCount += node.textContent?.length || 0
+                                  }
+                                }
+                                
+                                cursorPositionRef.current = charCount
+                              }
+                              
+                              // Extract text from scene divs only, ignore dividers
+                              const textParts: string[] = []
+                              Array.from(target.children).forEach(child => {
+                                if (!child.classList.contains('flex')) {
+                                  textParts.push(child.textContent || '')
+                                }
+                              })
+                              const finalContent = textParts.filter(p => p.trim()).join('\n\n')
+                              saveCurrentPageEdit(finalContent)
+                            }}
+                            onBlur={(e) => {
+                              const target = e.target as HTMLElement
+                              const textParts: string[] = []
+                              Array.from(target.children).forEach(child => {
+                                if (!child.classList.contains('flex')) {
+                                  textParts.push(child.textContent || '')
+                                }
+                              })
+                              const finalContent = textParts.filter(p => p.trim()).join('\n\n')
+                              saveCurrentPageEdit(finalContent)
+                            }}
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 outline-none"
+                            style={{ 
+                              fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              tabSize: 1,
+                              letterSpacing: '0px',
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'break-word',
+                              wordWrap: 'break-word',
+                              width: 'calc(80ch + 24px)',
+                              maxWidth: 'calc(80ch + 24px)',
+                              minWidth: 'calc(80ch + 24px)',
+                              margin: '0 auto',
+                              display: 'block',
+                              overflowX: 'hidden',
+                              backgroundColor: 'transparent'
+                            }}
+                          >
+                            {elements}
+                          </div>
+                        )
+                      })()}
+                      {/* Hidden textarea for ref compatibility */}
                       <Textarea
-                        key={`page-${currentPage}`}
+                        key={`page-${currentPage}-hidden`}
                         ref={textareaRef}
                         data-screenplay-editor
                         value={getCurrentPageEditContent()}
                         onChange={(e) => saveCurrentPageEdit(e.target.value)}
                         onSelect={handleTextSelection}
-                        className="min-h-[600px] font-mono text-sm leading-relaxed pt-8"
-                        style={{ 
-                          fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
-                          tabSize: 1,
-                          letterSpacing: '0px',
-                          paddingLeft: '12px',
-                          paddingRight: '12px',
-                          textAlign: 'left',
-                          whiteSpace: 'pre-wrap',
-                          overflowWrap: 'break-word',
-                          wordWrap: 'break-word',
-                          fontVariantNumeric: 'normal',
-                          fontFeatureSettings: 'normal',
-                          width: 'calc(80ch + 24px)',
-                          maxWidth: 'calc(80ch + 24px)',
-                          minWidth: 'calc(80ch + 24px)',
-                          margin: '0 auto',
-                          display: 'block',
-                          overflowX: 'hidden'
-                        }}
-                        placeholder="Enter your screenplay here..."
-                        onFocus={() => {
-                          // Debug when textarea is focused
-                          setTimeout(() => debugContainerDimensions(), 100)
-                        }}
+                        className="hidden"
+                        style={{ display: 'none' }}
                       />
                     </div>
                   {/* Floating Selection Toolbar */}
@@ -3832,61 +4269,6 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   </div>
                   </div>
                 </div>
-              ) : (
-                <div className="bg-muted/20 p-6 rounded-lg border">
-                  <div className="font-mono text-sm leading-relaxed space-y-4">
-                    {(() => {
-                      const content = getCurrentPageContent()
-                      if (!content) return null
-                      
-                      // Split by double newlines (scene separators) and add visual separators
-                      const scenes = content.split('\n\n').filter(s => s.trim().length > 0)
-                      const result: JSX.Element[] = []
-                      
-                      console.log('🎬 Display - Scene boundaries:', sceneBoundaries.length, 'Scenes in content:', scenes.length)
-                      
-                      scenes.forEach((sceneContent, sceneIndex) => {
-                        // Add visual separator before each scene (including first if we have boundary info)
-                        if (sceneBoundaries.length > sceneIndex) {
-                          const boundary = sceneBoundaries[sceneIndex]
-                          if (boundary) {
-                            // Different color for each scene
-                            const colors = [
-                              'bg-green-500',
-                              'bg-blue-500',
-                              'bg-purple-500',
-                              'bg-orange-500',
-                              'bg-pink-500',
-                              'bg-cyan-500',
-                              'bg-yellow-500',
-                              'bg-red-500',
-                            ]
-                            const sceneColor = colors[sceneIndex % colors.length]
-                            
-                            result.push(
-                              <div key={`separator-${sceneIndex}`} className="relative my-6 flex items-center py-2">
-                                <div className={`flex-grow h-px ${sceneColor}`}></div>
-                                <div className="px-4 text-xs font-bold text-muted-foreground bg-muted/20 rounded">
-                                  {boundary.sceneNumber ? `SCENE ${boundary.sceneNumber}` : boundary.sceneName || 'Scene'}
-                                </div>
-                                <div className={`flex-grow h-px ${sceneColor}`}></div>
-                              </div>
-                            )
-                          }
-                        }
-                        
-                        // Add scene content
-                        result.push(
-                          <pre key={`scene-${sceneIndex}`} className="whitespace-pre-wrap">
-                            {sceneContent}
-                          </pre>
-                        )
-                      })
-                      
-                      return result.length > 0 ? result : <pre className="whitespace-pre-wrap">{content}</pre>
-                    })()}
-                  </div>
-                </div>
               )}
             </div>
           </CardContent>
@@ -3946,7 +4328,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         )}
 
         {/* Audio Generation */}
-        {!isEditing && fullScript && (
+        {fullScript && (
           <Card className="mb-6">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -4071,34 +4453,52 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   return (
                     <div key={scene.id}>
                       {/* Scene Separator - horizontal line with scene info */}
-                      {index > 0 && (
-                        <div className="relative my-6 flex flex-col items-center py-2">
-                          {(() => {
-                            // Different color for each scene
-                            const colors = [
-                              'bg-green-500',
-                              'bg-blue-500',
-                              'bg-purple-500',
-                              'bg-orange-500',
-                              'bg-pink-500',
-                              'bg-cyan-500',
-                              'bg-yellow-500',
-                              'bg-red-500',
-                            ]
-                            const sceneColor = colors[(index - 1) % colors.length]
-                            
-                            return (
-                              <div className="w-full flex items-center">
-                                <div className={`flex-grow h-px ${sceneColor}`}></div>
-                                <div className="px-4 text-sm font-bold text-muted-foreground bg-background">
-                                  {sceneNumber ? `SCENE ${sceneNumber}` : sceneName || 'Scene'}
-                                </div>
-                                <div className={`flex-grow h-px ${sceneColor}`}></div>
-                              </div>
-                            )
-                          })()}
-                        </div>
-                      )}
+                      <div className="relative my-6 flex flex-col items-center py-2">
+                        {(() => {
+                          // Different color for each scene
+                          const colors = [
+                            'bg-green-500',
+                            'bg-blue-500',
+                            'bg-purple-500',
+                            'bg-orange-500',
+                            'bg-pink-500',
+                            'bg-cyan-500',
+                            'bg-yellow-500',
+                            'bg-red-500',
+                          ]
+                          const sceneColor = colors[index % colors.length]
+                          
+                          return (
+                            <div className="w-full flex items-center">
+                              <div className={`flex-grow h-px ${sceneColor}`}></div>
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  console.log('Scene clicked:', scene.id, sceneNumber)
+                                  const timelineSceneId = await getTimelineSceneId(scene)
+                                  console.log('Timeline scene ID:', timelineSceneId)
+                                  if (timelineSceneId) {
+                                    router.push(`/timeline-scene/${timelineSceneId}`)
+                                  } else {
+                                    toast({
+                                      title: "Scene Not Available",
+                                      description: "This scene hasn't been added to the timeline yet. Please push it to the timeline first.",
+                                      variant: "destructive"
+                                    })
+                                  }
+                                }}
+                                className="px-4 text-sm font-bold text-muted-foreground bg-background hover:text-foreground cursor-pointer transition-colors relative z-10"
+                                style={{ pointerEvents: 'auto' }}
+                              >
+                                {sceneNumber ? `SCENE ${sceneNumber}` : sceneName || 'Scene'}
+                              </button>
+                              <div className={`flex-grow h-px ${sceneColor}`}></div>
+                            </div>
+                          )
+                        })()}
+                      </div>
                       <Collapsible
                         open={isExpanded}
                         onOpenChange={(open) => {
