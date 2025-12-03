@@ -65,7 +65,6 @@ const statusColors = {
 export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [sharedMovies, setSharedMovies] = useState<any[]>([])
-  const [sharedMovieTreatmentMap, setSharedMovieTreatmentMap] = useState<Record<string, string>>({}) // movieId -> treatmentId
   const [loading, setLoading] = useState(true)
   const [loadingShared, setLoadingShared] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
@@ -79,7 +78,6 @@ export default function MoviesPage() {
   const [editingMovie, setEditingMovie] = useState<Movie | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
-  const [movieTreatmentMap, setMovieTreatmentMap] = useState<Record<string, string>>({}) // movieId -> treatmentId
   const [movieCoverImages, setMovieCoverImages] = useState<Record<string, string>>({}) // movieId -> coverImageUrl
   const [creatingTreatmentForMovieId, setCreatingTreatmentForMovieId] = useState<string | null>(null)
   const router = useRouter()
@@ -239,8 +237,7 @@ export default function MoviesPage() {
       setMovies(moviesData)
       console.log('🎬 Movies Page - Movies state updated successfully')
       
-      // Fetch treatments and cover images for each movie
-      const treatmentMap: Record<string, string> = {}
+      // Fetch cover images for each movie (treatment_id is now directly on the movie object!)
       const coverImageMap: Record<string, string> = {}
       
       for (const movie of moviesData) {
@@ -253,28 +250,20 @@ export default function MoviesPage() {
           if (hasExistingThumbnail) {
             coverImageMap[movie.id] = movie.thumbnail
             console.log(`🖼️ Movies Page - Using existing thumbnail for movie ${movie.id} (${movie.name})`)
-            // Still check for treatment (for the treatment link), but don't override thumbnail
-            const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
-            if (treatment) {
-              treatmentMap[movie.id] = treatment.id
-              console.log(`✅ Movies Page - Found treatment ${treatment.id} for movie ${movie.id} (${movie.name})`)
-            }
             continue // Skip to next movie - no need to check assets or ideas
           }
           
-          // 1. Check treatment for cover image (highest priority when no thumbnail exists)
-          const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
-          if (treatment) {
-            treatmentMap[movie.id] = treatment.id
-            console.log(`✅ Movies Page - Found treatment ${treatment.id} for movie ${movie.id} (${movie.name})`)
-            
-            // Get cover image from treatment if available
-            if (treatment.cover_image_url) {
-              coverImageMap[movie.id] = treatment.cover_image_url
-              console.log(`🖼️ Movies Page - Found cover image from treatment for movie ${movie.id}`)
+          // 1. Check treatment for cover image (if treatment_id exists, get cover from treatment)
+          if (movie.treatment_id) {
+            try {
+              const treatment = await TreatmentsService.getTreatment(movie.treatment_id)
+              if (treatment?.cover_image_url) {
+                coverImageMap[movie.id] = treatment.cover_image_url
+                console.log(`🖼️ Movies Page - Found cover image from treatment for movie ${movie.id}`)
+              }
+            } catch (error) {
+              console.error(`❌ Movies Page - Error fetching treatment for movie ${movie.id}:`, error)
             }
-          } else {
-            console.log(`⚠️ Movies Page - No treatment found for movie ${movie.id} (${movie.name})`)
           }
           
           // 2. If no treatment cover, check assets - prioritize actual covers (is_default_cover = true)
@@ -332,9 +321,7 @@ export default function MoviesPage() {
         }
       }
       
-      console.log(`🎬 Movies Page - Treatment map:`, treatmentMap)
       console.log(`🖼️ Movies Page - Cover images map:`, coverImageMap)
-      setMovieTreatmentMap(treatmentMap)
       setMovieCoverImages(coverImageMap)
       
       // Show success message
@@ -381,21 +368,7 @@ export default function MoviesPage() {
           p.project_type === 'movie'
         )
         setSharedMovies(movieProjects)
-        
-        // Load treatments for shared movies
-        const treatmentMap: Record<string, string> = {}
-        for (const movie of movieProjects) {
-          try {
-            const treatment = await TreatmentsService.getTreatmentByProjectId(movie.id)
-            if (treatment) {
-              treatmentMap[movie.id] = treatment.id
-              console.log(`✅ Movies Page - Found treatment ${treatment.id} for shared movie ${movie.id} (${movie.name})`)
-            }
-          } catch (error) {
-            console.error(`Error loading treatment for shared movie ${movie.id}:`, error)
-          }
-        }
-        setSharedMovieTreatmentMap(treatmentMap)
+        // treatment_id is now directly on the movie object, no need to load separately!
       } else {
         console.error('Error loading shared movies:', data.error)
       }
@@ -1774,8 +1747,8 @@ export default function MoviesPage() {
                           {movie.movie_status}
                         </Badge>
                         </div>
-                        {sharedMovieTreatmentMap[movie.id] ? (
-                          <Link href={`/treatments/${sharedMovieTreatmentMap[movie.id]}`} className="block mb-3">
+                        {movie.treatment_id && (
+                          <Link href={`/treatments/${movie.treatment_id}`} className="block mb-3">
                             <Button 
                               variant="outline" 
                               size="sm" 
@@ -1785,7 +1758,7 @@ export default function MoviesPage() {
                               View Movie
                             </Button>
                           </Link>
-                        ) : null}
+                        )}
                         <div className="grid grid-cols-2 gap-1 mt-2">
                           <Link href={`/timeline?movie=${movie.id}`}>
                             <Button
@@ -1937,9 +1910,9 @@ export default function MoviesPage() {
           {filteredMovies.map((movie) => (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
               <CardHeader className="pb-2">
-                {movieTreatmentMap[movie.id] ? (
+                {movie.treatment_id ? (
                   <Link 
-                    href={`/treatments/${movieTreatmentMap[movie.id]}`}
+                    href={`/treatments/${movie.treatment_id}`}
                     className="block"
                   >
                     <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
@@ -1958,28 +1931,25 @@ export default function MoviesPage() {
                     </div>
                   </Link>
                 ) : (
-                  <div 
-                    className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer"
-                    onClick={() => createTreatmentFromMovie(movie)}
+                  <Link 
+                    href={`/timeline?movie=${movie.id}`}
+                    className="block"
                   >
-                    <img
-                      src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
-                      alt={movie.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                      onError={(e) => {
-                        // Fallback to placeholder if image fails to load
-                        const target = e.target as HTMLImageElement
-                        if (target.src !== "/placeholder.svg?height=300&width=200") {
-                          target.src = "/placeholder.svg?height=300&width=200"
-                        }
-                      }}
-                    />
-                    {creatingTreatmentForMovieId === movie.id && (
-                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                        <Loader2 className="h-8 w-8 animate-spin text-white" />
-                      </div>
-                    )}
-                  </div>
+                    <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                      <img
+                        src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                        alt={movie.name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        onError={(e) => {
+                          // Fallback to placeholder if image fails to load
+                          const target = e.target as HTMLImageElement
+                          if (target.src !== "/placeholder.svg?height=300&width=200") {
+                            target.src = "/placeholder.svg?height=300&width=200"
+                          }
+                        }}
+                      />
+                    </div>
+                  </Link>
                 )}
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -2036,8 +2006,8 @@ export default function MoviesPage() {
               </CardHeader>
               <CardContent>
                 <CardDescription className="mb-3 line-clamp-2 text-sm">{movie.description}</CardDescription>
-                {movieTreatmentMap[movie.id] ? (
-                  <Link href={`/treatments/${movieTreatmentMap[movie.id]}`} className="block mb-3">
+                {movie.treatment_id && (
+                  <Link href={`/treatments/${movie.treatment_id}`} className="block mb-3">
                     <Button 
                       variant="outline" 
                       size="sm" 
@@ -2047,26 +2017,6 @@ export default function MoviesPage() {
                       View Movie
                     </Button>
                   </Link>
-                ) : (
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="w-full mb-3 border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 h-8 text-xs"
-                    onClick={() => createTreatmentFromMovie(movie)}
-                    disabled={creatingTreatmentForMovieId === movie.id}
-                  >
-                    {creatingTreatmentForMovieId === movie.id ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 mr-2 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="h-3.5 w-3.5 mr-2" />
-                        Create Treatment
-                      </>
-                    )}
-                  </Button>
                 )}
 
                 <div className="grid grid-cols-2 gap-1 mt-2">

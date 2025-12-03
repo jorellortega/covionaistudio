@@ -450,8 +450,14 @@ function ScenePageClient({ id }: { id: string }) {
     }
 
     setPages(pageArray)
-    // Reset to page 1 when content changes
-    setCurrentPage(1)
+    // Only reset to page 1 if this is initial load (editedPages is empty)
+    // Otherwise preserve current page if it's still valid
+    if (editedPages.size === 0) {
+      setCurrentPage(1)
+    } else if (currentPage > pageArray.length) {
+      // If current page is beyond new total, go to last page
+      setCurrentPage(pageArray.length)
+    }
     // Initialize editedPages when pages are calculated
     if (pageArray.length > 0) {
       const initialPages = new Map<number, string>()
@@ -480,16 +486,83 @@ function ScenePageClient({ id }: { id: string }) {
 
   // Get current page edit content
   const getCurrentPageEditContent = () => {
-    return editedPages.get(currentPage) || pages[currentPage - 1] || ""
+    // If the page has been edited (exists in map), return it even if empty
+    // Otherwise fall back to original page content
+    if (editedPages.has(currentPage)) {
+      return editedPages.get(currentPage) ?? ""
+    }
+    return pages[currentPage - 1] || ""
   }
 
   // Save current page edit
   const saveCurrentPageEdit = (content: string) => {
     setEditedPages(prev => {
       const newMap = new Map(prev)
+      // Always set the content, even if it's empty - this allows clearing the page
       newMap.set(currentPage, content)
       return newMap
     })
+  }
+
+  // Recalculate pages from all edited pages and update screenplayContent
+  const recalculatePagesFromEditedPages = (preserveCurrentPage: boolean = true) => {
+    // Combine all edited pages into full content
+    const allPages: string[] = []
+    const maxPage = Math.max(...Array.from(editedPages.keys()), totalPages, 1)
+    for (let i = 1; i <= maxPage; i++) {
+      const pageContent = editedPages.get(i) || pages[i - 1] || ""
+      allPages.push(pageContent)
+    }
+    const combinedContent = allPages.join('\n')
+    
+    // Calculate new total pages
+    const lines = combinedContent.split('\n')
+    const newPageCount = Math.ceil(lines.length / LINES_PER_PAGE)
+    
+    // Update screenplayContent to trigger pagination recalculation
+    // But preserve current page if requested
+    if (preserveCurrentPage) {
+      // Temporarily store current page
+      const pageToPreserve = currentPage
+      setScreenplayContent(combinedContent)
+      // After pages are recalculated, restore the page (handled in useEffect)
+      setTimeout(() => {
+        if (pageToPreserve <= newPageCount) {
+          setCurrentPage(pageToPreserve)
+        } else {
+          setCurrentPage(newPageCount)
+        }
+      }, 0)
+    } else {
+      setScreenplayContent(combinedContent)
+    }
+  }
+
+  // Handle paste event - recalculate pages immediately after paste
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const textarea = e.currentTarget
+    const pastedText = e.clipboardData.getData('text')
+    
+    // Get current content and cursor position
+    const currentContent = getCurrentPageEditContent()
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    
+    // Calculate what the new content will be after paste
+    const newContent = currentContent.substring(0, start) + pastedText + currentContent.substring(end)
+    
+    // Update the editedPages map immediately
+    setEditedPages(prev => {
+      const newMap = new Map(prev)
+      newMap.set(currentPage, newContent)
+      return newMap
+    })
+    
+    // Use setTimeout to let the paste complete, then recalculate pages
+    setTimeout(() => {
+      // Recalculate pages from all edited content, preserving current page
+      recalculatePagesFromEditedPages(true)
+    }, 10)
   }
 
   // Insert text at cursor position in textarea
@@ -5020,6 +5093,7 @@ ${centerText('AUTHOR NAME')}
                             data-screenplay-editor
                             value={getCurrentPageEditContent()}
                             onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                            onPaste={handlePaste}
                             onSelect={handleScreenplayTextSelection}
                             className="min-h-[600px] font-mono text-sm leading-relaxed pt-8"
                             style={{ 

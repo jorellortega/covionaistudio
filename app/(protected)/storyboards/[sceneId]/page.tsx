@@ -193,6 +193,13 @@ export default function SceneStoryboardsPage() {
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneScript, setSceneScript] = useState<string>("")
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
+  
+  // Pagination state for scene script
+  const LINES_PER_PAGE = 55
+  const [scriptPages, setScriptPages] = useState<string[]>([])
+  const [currentScriptPage, setCurrentScriptPage] = useState(1)
+  const [totalScriptPages, setTotalScriptPages] = useState(1)
+  const [showSceneScript, setShowSceneScript] = useState(false) // Default to hidden
   const [allScenes, setAllScenes] = useState<SceneWithMetadata[]>([])
   const [currentSceneIndex, setCurrentSceneIndex] = useState<number>(-1)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
@@ -603,6 +610,49 @@ export default function SceneStoryboardsPage() {
       fetchSceneScript()
     }
   }, [sceneInfo, ready, userId])
+
+  // Calculate pages from scene script
+  useEffect(() => {
+    if (!sceneScript) {
+      setScriptPages([])
+      setTotalScriptPages(1)
+      setCurrentScriptPage(1)
+      return
+    }
+
+    const lines = sceneScript.split('\n')
+    const pageCount = Math.ceil(lines.length / LINES_PER_PAGE)
+    setTotalScriptPages(pageCount)
+
+    // Split script into pages
+    const pageArray: string[] = []
+    for (let i = 0; i < pageCount; i++) {
+      const startLine = i * LINES_PER_PAGE
+      const endLine = Math.min(startLine + LINES_PER_PAGE, lines.length)
+      const pageContent = lines.slice(startLine, endLine).join('\n')
+      pageArray.push(pageContent)
+    }
+
+    setScriptPages(pageArray)
+    // Reset to page 1 when script changes
+    setCurrentScriptPage(1)
+  }, [sceneScript])
+
+  // Get current page content
+  const getCurrentPageScript = () => {
+    return scriptPages[currentScriptPage - 1] || ""
+  }
+
+  // Get character offset for current page (for adjusting text ranges)
+  const getCurrentPageOffset = () => {
+    if (currentScriptPage === 1) return 0
+    const lines = sceneScript.split('\n')
+    let offset = 0
+    for (let i = 0; i < (currentScriptPage - 1) * LINES_PER_PAGE; i++) {
+      offset += (lines[i]?.length || 0) + 1 // +1 for newline
+    }
+    return offset
+  }
 
   // Hide selection actions when clicking outside and handle global selection changes
   useEffect(() => {
@@ -2113,45 +2163,19 @@ export default function SceneStoryboardsPage() {
               </div>
             </DialogContent>
           </Dialog>
-          
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-              <Film className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium">{sceneInfo?.project_name || "Loading Project..."}</div>
-                <div className="text-xs text-muted-foreground">Project</div>
-              </div>
-            </div>
-            {sceneInfo?.scene_number && (
-              <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-                <FileText className="h-4 w-4 text-muted-foreground" />
-                <div>
-                  <div className="text-sm font-medium">Scene {sceneInfo.scene_number}</div>
-                  <div className="text-xs text-muted-foreground">Scene Number</div>
-                </div>
-              </div>
-            )}
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium">{sceneInfo?.start_time_seconds || "Loading Time..."}s</div>
-                <div className="text-xs text-muted-foreground">Start Time</div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-              <Clock className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-sm font-medium">{sceneInfo?.duration_seconds || "Loading Duration..."}s</div>
-                <div className="text-xs text-muted-foreground">Duration</div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Scene Script Section */}
         <div className="mb-8">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold">Scene Script</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-2xl font-bold">Scene Script</h2>
+              {sceneScript && (
+                <Badge variant="outline" className="text-xs">
+                  {totalScriptPages} {totalScriptPages === 1 ? 'page' : 'pages'}
+                </Badge>
+              )}
+            </div>
             <div className="flex items-center gap-2">
               {isLoadingScript && (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2159,25 +2183,26 @@ export default function SceneStoryboardsPage() {
                   Loading...
                 </div>
               )}
-              <Button
-                variant={shotMode ? "default" : "outline"}
-                size="sm"
-                onClick={() => {
-                  const newShotMode = !shotMode
-                  console.log("🎬 Shot mode toggle clicked!")
-                  console.log("🎬 Current shotMode:", shotMode)
-                  console.log("🎬 Setting shotMode to:", newShotMode)
-                  setShotMode(newShotMode)
-                  if (newShotMode) {
-                    console.log("🎬 Resetting shot mode...")
-                    resetShotMode()
-                  }
-                }}
-                className={`text-xs ${shotMode ? 'bg-primary text-primary-foreground' : ''}`}
-              >
-                <Film className="h-3 w-3 mr-1" />
-                {shotMode ? 'Shot Mode ON' : 'Shot Mode'}
-              </Button>
+              {sceneScript && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowSceneScript(!showSceneScript)}
+                  className="text-xs"
+                >
+                  {showSceneScript ? (
+                    <>
+                      <Eye className="h-3 w-3 mr-1" />
+                      Hide Script
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3 w-3 mr-1" />
+                      Show Script
+                    </>
+                  )}
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -2191,13 +2216,15 @@ export default function SceneStoryboardsPage() {
             </div>
           </div>
           
-          {/* Shot Mode Status Indicator */}
-          <div className={`mb-4 p-2 rounded-lg text-xs font-medium ${shotMode ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-gray-800 text-gray-300 border border-gray-600'}`}>
-            🎬 Shot Mode: {shotMode ? 'ENABLED' : 'DISABLED'} 
-            {shotMode && ` | Next Shot: ${shotDetails.shotNumber}`}
-          </div>
-          {/* Shot Mode Configuration Panel */}
-          {shotMode && (
+          {showSceneScript && (
+            <>
+              {/* Shot Mode Status Indicator */}
+              <div className={`mb-4 p-2 rounded-lg text-xs font-medium ${shotMode ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-gray-800 text-gray-300 border border-gray-600'}`}>
+                🎬 Shot Mode: {shotMode ? 'ENABLED' : 'DISABLED'} 
+                {shotMode && ` | Next Shot: ${shotDetails.shotNumber}`}
+              </div>
+              {/* Shot Mode Configuration Panel */}
+              {shotMode && (
             <Card className="shot-mode-config mb-4" style={{ backgroundColor: '#141414', borderColor: '#333' }}>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -2519,8 +2546,10 @@ export default function SceneStoryboardsPage() {
                 )}
               </CardContent>
             </Card>
+              )}
+            </>
           )}
-          {sceneScript ? (
+          {showSceneScript && sceneScript ? (
             <Card className="bg-muted/20 border-border/50">
               <CardContent className="p-6">
                 {shotMode && (
@@ -2538,6 +2567,29 @@ export default function SceneStoryboardsPage() {
                   </div>
                 )}
                 <div className="bg-background/50 rounded-lg p-4 border border-border/30 relative">
+                  {/* Shot Mode Button - Centered above legend */}
+                  <div className="flex justify-center mb-4">
+                    <Button
+                      variant={shotMode ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        const newShotMode = !shotMode
+                        console.log("🎬 Shot mode toggle clicked!")
+                        console.log("🎬 Current shotMode:", shotMode)
+                        console.log("🎬 Setting shotMode to:", newShotMode)
+                        setShotMode(newShotMode)
+                        if (newShotMode) {
+                          console.log("🎬 Resetting shot mode...")
+                          resetShotMode()
+                        }
+                      }}
+                      className={`text-xs ${shotMode ? 'bg-primary text-primary-foreground' : ''}`}
+                    >
+                      <Film className="h-3 w-3 mr-1" />
+                      {shotMode ? 'Shot Mode ON' : 'Shot Mode'}
+                    </Button>
+                  </div>
+                  
                   {/* Text Highlighting Legend */}
                   {usedTextRanges.length > 0 && (
                     <div className="mb-4 p-3 bg-gray-800/50 border border-gray-600 rounded-lg">
@@ -2561,6 +2613,55 @@ export default function SceneStoryboardsPage() {
                     </div>
                   )}
                   
+                  {/* Pagination Controls */}
+                  {totalScriptPages > 1 && (
+                    <div className="flex items-center justify-center gap-4 mb-4 pb-4 border-b border-border/30">
+                      <Badge variant="outline" className="px-4 py-2">
+                        Page {currentScriptPage} of {totalScriptPages}
+                      </Badge>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentScriptPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentScriptPage === 1}
+                        className="border-primary/30 text-primary hover:bg-primary/10"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </Button>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={totalScriptPages}
+                        value={currentScriptPage}
+                        onChange={(e) => {
+                          const page = parseInt(e.target.value)
+                          if (page && page >= 1 && page <= totalScriptPages) {
+                            setCurrentScriptPage(page)
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            const page = parseInt((e.target as HTMLInputElement).value)
+                            if (page && page >= 1 && page <= totalScriptPages) {
+                              setCurrentScriptPage(page)
+                            }
+                          }
+                        }}
+                        className="w-20 text-center"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentScriptPage(prev => Math.min(totalScriptPages, prev + 1))}
+                        disabled={currentScriptPage === totalScriptPages}
+                        className="border-primary/30 text-primary hover:bg-primary/10"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
+                  
                   <pre 
                     className="whitespace-pre-wrap text-sm font-mono text-foreground leading-relaxed select-text cursor-text"
                     onMouseUp={handleTextSelection}
@@ -2576,7 +2677,20 @@ export default function SceneStoryboardsPage() {
                       }
                     }}
                   >
-                    {renderHighlightedScript(sceneScript, usedTextRanges)}
+                    {renderHighlightedScript(getCurrentPageScript(), usedTextRanges.map(range => {
+                      // Adjust ranges for current page offset
+                      const pageOffset = getCurrentPageOffset()
+                      const pageEnd = pageOffset + getCurrentPageScript().length
+                      // Only show ranges that overlap with current page
+                      if (range.end <= pageOffset || range.start >= pageEnd) {
+                        return null
+                      }
+                      return {
+                        ...range,
+                        start: Math.max(0, range.start - pageOffset),
+                        end: Math.min(getCurrentPageScript().length, range.end - pageOffset)
+                      }
+                    }).filter((r): r is {start: number, end: number, text: string, shotNumber: number} => r !== null))}
                   </pre>
                   
                   {/* Selection Action Buttons */}
@@ -2620,7 +2734,7 @@ export default function SceneStoryboardsPage() {
                 </div>
               </CardContent>
             </Card>
-          ) : (
+          ) : showSceneScript ? (
             <Card className="bg-muted/20 border-border/50">
               <CardContent className="p-6 text-center">
                 <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -2648,7 +2762,7 @@ export default function SceneStoryboardsPage() {
                 </div>
               </CardContent>
             </Card>
-          )}
+          ) : null}
         </div>
 
 
