@@ -14,7 +14,6 @@ import {
   Film,
   FolderOpen,
   Bot,
-  Video,
   Settings,
   FileText,
   Home,
@@ -59,7 +58,6 @@ const navigationCategories: NavCategory[] = [
     items: [
       { name: "Movies", href: "/movies", icon: Film },
       { name: "Treatments", href: "/treatments", icon: FileText },
-      { name: "Videos", href: "/videos", icon: Video },
     ],
   },
   {

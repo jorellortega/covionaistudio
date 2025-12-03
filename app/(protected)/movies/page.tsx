@@ -1846,6 +1846,16 @@ export default function MoviesPage() {
                               Locations
                           </Button>
                         </Link>
+                        <Link href="/manage-submissions">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
+                          >
+                            <Users className="mr-2 h-3.5 w-3.5" />
+                            Submissions
+                          </Button>
+                        </Link>
                       </div>
                     </CardContent>
                   </Card>
@@ -2127,6 +2137,16 @@ export default function MoviesPage() {
                     >
                       <MapPin className="mr-2 h-3.5 w-3.5" />
                       Locations
+                    </Button>
+                  </Link>
+                  <Link href="/manage-submissions">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
+                    >
+                      <Users className="mr-2 h-3.5 w-3.5" />
+                      Submissions
                     </Button>
                   </Link>
                 </div>

@@ -46,7 +46,8 @@ import {
   Star,
   User,
   Save,
-  Edit
+  Edit,
+  Share2
 } from "lucide-react"
 import { CastingService, type CastingSetting, type ActorSubmission } from "@/lib/casting-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
@@ -332,6 +333,16 @@ export default function CastingPage() {
   }
 
   const handleSaveSettings = async () => {
+    // Only owners can save settings
+    if (!isOwner) {
+      toast({
+        title: "Access Denied",
+        description: "Only the project owner can save casting settings",
+        variant: "destructive",
+      })
+      return
+    }
+    
     try {
       setIsSavingSettings(true)
       
@@ -483,6 +494,16 @@ export default function CastingPage() {
   }
 
   const handleUpdateSubmissionStatus = async (submissionId: string, status: ActorSubmission['status'], notes?: string) => {
+    // Only owners can update submission status
+    if (!isOwner) {
+      toast({
+        title: "Access Denied",
+        description: "Only the project owner can update submission status",
+        variant: "destructive",
+      })
+      return
+    }
+    
     try {
       await CastingService.updateSubmission(submissionId, { status, notes })
       
@@ -504,6 +525,16 @@ export default function CastingPage() {
   }
 
   const handleDeleteSubmission = async (submissionId: string) => {
+    // Only owners can delete submissions
+    if (!isOwner) {
+      toast({
+        title: "Access Denied",
+        description: "Only the project owner can delete submissions",
+        variant: "destructive",
+      })
+      return
+    }
+    
     if (!confirm('Are you sure you want to delete this submission?')) {
       return
     }
@@ -526,6 +557,15 @@ export default function CastingPage() {
         variant: "destructive",
       })
     }
+  }
+
+  const handleShareLink = () => {
+    const url = typeof window !== 'undefined' ? window.location.href : ''
+    navigator.clipboard.writeText(url)
+    toast({
+      title: "Link Copied!",
+      description: "Casting page link copied to clipboard",
+    })
   }
 
   if (loading) {
@@ -590,17 +630,45 @@ export default function CastingPage() {
                     </div>
                   </div>
 
-                  {/* Owner Settings Button */}
-                  {isOwner && (
+                  {/* Action Buttons */}
+                  <div className="flex items-center gap-2">
+                    {/* Share Button */}
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setShowSettings(true)}
+                      onClick={handleShareLink}
+                      title="Copy link to share"
                     >
-                      <Settings className="h-4 w-4 mr-2" />
-                      Casting Settings
+                      <Share2 className="h-4 w-4 mr-2" />
+                      Share
                     </Button>
-                  )}
+
+                    {/* Manage Submissions Button - Owner Only */}
+                    {isOwner && (
+                      <Link href="/manage-submissions">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          title="Manage all actor submissions"
+                        >
+                          <Users className="h-4 w-4 mr-2" />
+                          Manage Submissions
+                        </Button>
+                      </Link>
+                    )}
+
+                    {/* Owner Settings Button */}
+                    {isOwner && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowSettings(true)}
+                      >
+                        <Settings className="h-4 w-4 mr-2" />
+                        Casting Settings
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 {movie.description && (
@@ -697,8 +765,13 @@ export default function CastingPage() {
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                         {filteredCharacters.map((character) => {
                           return (
-                            <Card key={character.id} className="border-border">
-                              <CardContent className="p-3">
+                            <Link 
+                              key={character.id} 
+                              href={`/casting/role/${character.id}?movie=${movieId}`}
+                              className="block"
+                            >
+                              <Card className="border-border hover:border-primary/50 transition-colors cursor-pointer">
+                                <CardContent className="p-3">
                                 <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-muted mb-2">
                                   {character.image_url ? (
                                     <img
@@ -738,6 +811,16 @@ export default function CastingPage() {
                                       <Switch
                                         checked={character.show_on_casting !== false}
                                         onCheckedChange={async (checked) => {
+                                          // Double-check ownership before allowing toggle
+                                          if (!isOwner) {
+                                            toast({
+                                              title: "Access Denied",
+                                              description: "Only the project owner can modify character visibility",
+                                              variant: "destructive",
+                                            })
+                                            return
+                                          }
+                                          
                                           try {
                                             const updated = await CharactersService.updateCharacter(character.id, {
                                               show_on_casting: checked
@@ -760,6 +843,7 @@ export default function CastingPage() {
                                 </div>
                               </CardContent>
                             </Card>
+                            </Link>
                           )
                         })}
                       </div>
@@ -1085,7 +1169,18 @@ export default function CastingPage() {
       </main>
 
       {/* Settings Dialog (Owner Only) */}
-      <Dialog open={showSettings} onOpenChange={setShowSettings}>
+      <Dialog open={showSettings && isOwner} onOpenChange={(open) => {
+        // Only allow opening if user is owner
+        if (open && !isOwner) {
+          toast({
+            title: "Access Denied",
+            description: "Only the project owner can access casting settings",
+            variant: "destructive",
+          })
+          return
+        }
+        setShowSettings(open)
+      }}>
         <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Casting Settings</DialogTitle>

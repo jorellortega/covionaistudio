@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
@@ -22,6 +23,7 @@ import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { SavedPromptsService } from "@/lib/saved-prompts-service"
 import { PreferencesService } from "@/lib/preferences-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { LocationsService, type Location } from "@/lib/locations-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
@@ -197,6 +199,8 @@ export default function SceneStoryboardsPage() {
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [characters, setCharacters] = useState<Character[]>([])
   const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
+  const [locations, setLocations] = useState<Location[]>([])
+  const [isLoadingLocations, setIsLoadingLocations] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [shots, setShots] = useState<any[]>([])
   const [isCreatingAllStoryboards, setIsCreatingAllStoryboards] = useState(false)
@@ -210,7 +214,8 @@ export default function SceneStoryboardsPage() {
     movement: "static",
     sequence_order: 0, // Start blank for new shots
     status: "draft",
-    character_id: null
+    character_id: null,
+    location_id: null
   })
   
   // Loading states
@@ -241,6 +246,7 @@ export default function SceneStoryboardsPage() {
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
   const [hidePromptText, setHidePromptText] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
+  const [showDescriptionDialog, setShowDescriptionDialog] = useState(false)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -256,7 +262,8 @@ export default function SceneStoryboardsPage() {
     shotType: "wide",
     cameraAngle: "eye-level",
     movement: "static",
-    characterId: null as string | null
+    characterId: null as string | null,
+    locationId: null as string | null
   })
   const [editingShotDetails, setEditingShotDetails] = useState(false)
   const [tempShotDetails, setTempShotDetails] = useState({
@@ -264,7 +271,8 @@ export default function SceneStoryboardsPage() {
     shotType: "wide",
     cameraAngle: "eye-level",
     movement: "static",
-    characterId: null as string | null
+    characterId: null as string | null,
+    locationId: null as string | null
   })
   
   // Ref to track current selection
@@ -732,6 +740,26 @@ export default function SceneStoryboardsPage() {
     loadCharacters()
   }, [sceneInfo?.project_id, ready, userId])
 
+  // Load locations when project_id is available
+  useEffect(() => {
+    const loadLocations = async () => {
+      if (!sceneInfo?.project_id || !ready || !userId) return
+      
+      setIsLoadingLocations(true)
+      try {
+        const locs = await LocationsService.getLocations(sceneInfo.project_id)
+        setLocations(locs)
+        console.log("🎬 Loaded locations for storyboards:", locs)
+      } catch (error) {
+        console.error("Error loading locations:", error)
+      } finally {
+        setIsLoadingLocations(false)
+      }
+    }
+    
+    loadLocations()
+  }, [sceneInfo?.project_id, ready, userId])
+
   // Update current scene index when sceneId or allScenes changes
   useEffect(() => {
     if (sceneId && allScenes.length > 0) {
@@ -1011,6 +1039,7 @@ export default function SceneStoryboardsPage() {
         visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
         character_id: shotDetails.characterId || null,
+        location_id: shotDetails.locationId || null,
         project_id: sceneInfo?.project_id || "",
         script_text_start: textRange && textRange.start !== null ? textRange.start : undefined,
         script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
@@ -1504,6 +1533,7 @@ export default function SceneStoryboardsPage() {
       sequence_order: 0, // Start blank for new shots
       status: "draft",
       character_id: null,
+      location_id: null,
       dialogue: "",
       action: "",
       visual_notes: "",
@@ -1795,12 +1825,44 @@ export default function SceneStoryboardsPage() {
         }
       }
       
+      // Get the selected location details if a location is selected for this shot
+      let locationDetailsText = ""
+      if (storyboard?.location_id) {
+        const selectedLocation = locations.find(l => l.id === storyboard.location_id)
+        if (selectedLocation) {
+          const locationDetails = [
+            selectedLocation.name && `Location name: ${selectedLocation.name}`,
+            selectedLocation.type && `Type: ${selectedLocation.type}`,
+            selectedLocation.description && `Description: ${selectedLocation.description}`,
+            selectedLocation.address && `Address: ${selectedLocation.address}`,
+            selectedLocation.city && `City: ${selectedLocation.city}`,
+            selectedLocation.state && `State: ${selectedLocation.state}`,
+            selectedLocation.country && `Country: ${selectedLocation.country}`,
+            selectedLocation.time_of_day?.length > 0 && `Time of day: ${selectedLocation.time_of_day.join(', ')}`,
+            selectedLocation.atmosphere && `Atmosphere: ${selectedLocation.atmosphere}`,
+            selectedLocation.mood && `Mood: ${selectedLocation.mood}`,
+            selectedLocation.visual_description && `Visual description: ${selectedLocation.visual_description}`,
+            selectedLocation.lighting_notes && `Lighting: ${selectedLocation.lighting_notes}`,
+            selectedLocation.key_features?.length > 0 && `Key features: ${selectedLocation.key_features.join(', ')}`,
+          ].filter(Boolean).join(', ')
+          
+          if (locationDetails) {
+            locationDetailsText = ` Location details: ${locationDetails}.`
+          }
+        }
+      }
+      
       // Prepare the enhanced prompt for storyboard shots - keep it minimal
       let enhancedPrompt = prompt.trim()
       
       // Add character details if available
       if (characterDetailsText) {
         enhancedPrompt = `${enhancedPrompt}${characterDetailsText}`
+      }
+      
+      // Add location details if available
+      if (locationDetailsText) {
+        enhancedPrompt = `${enhancedPrompt}${locationDetailsText}`
       }
       
       // Only add minimal enhancement if user hasn't chosen exact prompt
@@ -1941,7 +2003,15 @@ export default function SceneStoryboardsPage() {
                 )}
                 <h1 className="text-4xl font-bold">{sceneInfo?.name || "Loading Scene..."}</h1>
               </div>
-              <p className="text-muted-foreground text-lg">{sceneInfo?.description || "Loading description..."}</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowDescriptionDialog(true)}
+                className="text-muted-foreground hover:text-foreground -ml-2"
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                View Description
+              </Button>
             </div>
             
             {/* Scene Navigation */}
@@ -2026,6 +2096,23 @@ export default function SceneStoryboardsPage() {
               </div>
             )}
           </div>
+          
+          {/* Description Dialog */}
+          <Dialog open={showDescriptionDialog} onOpenChange={setShowDescriptionDialog}>
+            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Scene Description</DialogTitle>
+                <DialogDescription>
+                  {sceneInfo?.name && `Description for "${sceneInfo.name}"`}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="mt-4">
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {sceneInfo?.description || "No description available for this scene."}
+                </p>
+              </div>
+            </DialogContent>
+          </Dialog>
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
@@ -2365,6 +2452,42 @@ export default function SceneStoryboardsPage() {
                                   <span className="font-medium">{char.name}</span>
                                   {char.archetype && (
                                     <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {/* Location Selector */}
+                    {locations.length > 0 && (
+                      <div>
+                        <Label htmlFor="location-selector" className="text-xs text-blue-300">Location (Optional)</Label>
+                        <Select 
+                          value={shotDetails.locationId || "none"} 
+                          onValueChange={(value) => {
+                            setShotDetails(prev => ({ ...prev, locationId: value === "none" ? null : value }))
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        >
+                          <SelectTrigger 
+                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            id="location-selector"
+                          >
+                            <SelectValue placeholder="Select a location..." />
+                          </SelectTrigger>
+                          <SelectContent className="bg-gray-800 border-gray-600">
+                            <SelectItem value="none">
+                              <span className="text-muted-foreground">No location selected</span>
+                            </SelectItem>
+                            {locations.map((loc) => (
+                              <SelectItem key={loc.id} value={loc.id}>
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{loc.name}</span>
+                                  {loc.type && (
+                                    <span className="text-xs text-muted-foreground">{loc.type}</span>
                                   )}
                                 </div>
                               </SelectItem>
@@ -2775,6 +2898,39 @@ export default function SceneStoryboardsPage() {
                 </div>
               )}
 
+              {/* Location Selector */}
+              {locations.length > 0 && (
+                <div>
+                  <Label htmlFor="location_id">Location (Optional)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Select a location to automatically include location details when generating images
+                  </p>
+                  <Select 
+                    value={formData.location_id || "none"} 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
+                  >
+                    <SelectTrigger id="location_id">
+                      <SelectValue placeholder="Select a location..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">
+                        <span className="text-muted-foreground">No location selected</span>
+                      </SelectItem>
+                      {locations.map((loc) => (
+                        <SelectItem key={loc.id} value={loc.id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{loc.name}</span>
+                            {loc.type && (
+                              <span className="text-xs text-muted-foreground">{loc.type}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
               {/* Status Field */}
               <div>
                 <Label htmlFor="status">Status</Label>
@@ -3015,6 +3171,39 @@ export default function SceneStoryboardsPage() {
                             <span className="font-medium">{char.name}</span>
                             {char.archetype && (
                               <span className="text-xs text-muted-foreground">{char.archetype}</span>
+                            )}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Location Selector */}
+              {locations.length > 0 && (
+                <div>
+                  <Label htmlFor="edit-location_id">Location (Optional)</Label>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Select a location to automatically include location details when generating images
+                  </p>
+                  <Select 
+                    value={formData.location_id || "none"} 
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
+                  >
+                    <SelectTrigger id="edit-location_id">
+                      <SelectValue placeholder="Select a location..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">
+                        <span className="text-muted-foreground">No location selected</span>
+                      </SelectItem>
+                      {locations.map((loc) => (
+                        <SelectItem key={loc.id} value={loc.id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{loc.name}</span>
+                            {loc.type && (
+                              <span className="text-xs text-muted-foreground">{loc.type}</span>
                             )}
                           </div>
                         </SelectItem>
@@ -3510,6 +3699,7 @@ export default function SceneStoryboardsPage() {
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           status: storyboard.status || "draft",
                           character_id: storyboard.character_id || null,
+                          location_id: storyboard.location_id || null,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",
@@ -3550,6 +3740,7 @@ export default function SceneStoryboardsPage() {
                           sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
                           status: storyboard.status || "draft",
                           character_id: storyboard.character_id || null,
+                          location_id: storyboard.location_id || null,
                           dialogue: storyboard.dialogue || "",
                           action: storyboard.action || "",
                           visual_notes: storyboard.visual_notes || "",

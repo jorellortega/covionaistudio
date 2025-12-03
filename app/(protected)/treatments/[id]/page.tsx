@@ -5381,6 +5381,52 @@ Return ONLY the JSON object, no other text:`
                       <Edit className="h-4 w-4 mr-2" />
                       {treatment.cover_image_url || coverImageAssets.length > 0 ? 'Edit Cover' : 'Add Cover'}
                     </Button>
+                    {/* Set as Default Button - Only show if current cover is not default */}
+                    {(coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex] && !coverImageAssets[currentCoverIndex].is_default_cover) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          if (coverImageAssets[currentCoverIndex]) {
+                            handleSetDefaultCover(coverImageAssets[currentCoverIndex].id)
+                          }
+                        }}
+                        disabled={isSettingDefaultCover}
+                        className="backdrop-blur-sm bg-yellow-500/20 text-white border-yellow-500/30 hover:bg-yellow-500/30 pointer-events-auto"
+                        title="Set as Default Cover"
+                      >
+                        {isSettingDefaultCover ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Star className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
+                    {/* Delete Cover Button - Only show if there's a cover to delete */}
+                    {(coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex]) && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          if (coverImageAssets[currentCoverIndex]) {
+                            handleDeleteCover(coverImageAssets[currentCoverIndex].id)
+                          }
+                        }}
+                        disabled={isDeletingCover}
+                        className="backdrop-blur-sm bg-red-500/20 text-white border-red-500/30 hover:bg-red-500/30 pointer-events-auto"
+                        title="Delete Cover"
+                      >
+                        {isDeletingCover ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
                   </>
                 ) : (
                   <Button

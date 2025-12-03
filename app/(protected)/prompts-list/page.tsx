@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Sparkles, Plus, Edit, Save, X, Trash2, Tag, Copy, Search } from "lucide-react"
+import { Loader2, Sparkles, Plus, Edit, Save, X, Trash2, Tag, Copy, Search, Upload, Image as ImageIcon } from "lucide-react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
@@ -32,6 +32,8 @@ export default function PromptsListPage() {
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string>("")
   const [searchQuery, setSearchQuery] = useState("")
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
 
   // Form fields
   const [title, setTitle] = useState("")
@@ -129,6 +131,7 @@ export default function PromptsListPage() {
     setModel("")
     setTags("")
     setEditingPromptId(null)
+    setImagePreview(null)
   }
 
   const loadPromptIntoForm = (promptItem: SavedPrompt) => {
@@ -225,6 +228,105 @@ export default function PromptsListPage() {
     })
   }
 
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast({
+        title: "Invalid file",
+        description: "Please upload an image file.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "File too large",
+        description: "Please upload an image smaller than 10MB.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Create preview
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const result = e.target?.result as string
+      setImagePreview(result)
+    }
+    reader.readAsDataURL(file)
+
+    // Analyze image
+    await analyzeImage(file)
+  }
+
+  const analyzeImage = async (file: File) => {
+    setIsAnalyzingImage(true)
+    try {
+      // Convert file to base64
+      const reader = new FileReader()
+      const base64Promise = new Promise<string>((resolve, reject) => {
+        reader.onload = (e) => {
+          const result = e.target?.result as string
+          resolve(result)
+        }
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+
+      const base64Image = await base64Promise
+
+      // Call API to analyze image
+      const response = await fetch('/api/ai/analyze-image-prompt', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageUrl: base64Image,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to analyze image')
+      }
+
+      const analysis = result.analysis
+
+      // Populate form fields with extracted information
+      if (analysis.title) setTitle(analysis.title)
+      if (analysis.prompt) setPrompt(analysis.prompt)
+      if (analysis.type) setType(analysis.type)
+      if (analysis.style) setStyle(analysis.style)
+      if (analysis.tags) setTags(analysis.tags)
+
+      toast({
+        title: "Image analyzed",
+        description: "Prompt information extracted from image. Review and save.",
+      })
+    } catch (error: any) {
+      console.error('Error analyzing image:', error)
+      toast({
+        title: "Analysis failed",
+        description: error?.message || "Failed to analyze image. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAnalyzingImage(false)
+      // Clear file input
+      const fileInput = document.getElementById('image-upload') as HTMLInputElement
+      if (fileInput) {
+        fileInput.value = ''
+      }
+    }
+  }
+
   const getTypeColor = (type?: string) => {
     switch (type) {
       case 'character': return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
@@ -316,6 +418,62 @@ export default function PromptsListPage() {
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* Image Import Section */}
+                <div className="space-y-2">
+                  <Label>Import from Image</Label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="image-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      className="hidden"
+                      disabled={isAnalyzingImage}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => document.getElementById('image-upload')?.click()}
+                      disabled={isAnalyzingImage}
+                      className="gap-2"
+                    >
+                      {isAnalyzingImage ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Analyzing...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="h-4 w-4" />
+                          Import & Analyze Image
+                        </>
+                      )}
+                    </Button>
+                    {imagePreview && (
+                      <div className="relative">
+                        <img
+                          src={imagePreview}
+                          alt="Preview"
+                          className="h-12 w-12 object-cover rounded border border-border"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute -top-2 -right-2 h-5 w-5 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                          onClick={() => setImagePreview(null)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Upload an image to automatically extract prompt information using AI vision analysis.
+                  </p>
+                </div>
+
+                <Separator />
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="title">Title *</Label>

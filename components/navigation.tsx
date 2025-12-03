@@ -7,7 +7,6 @@ import {
   Film, 
   FolderOpen, 
   Bot, 
-  Video, 
   Settings, 
   FileText, 
   Home, 
@@ -58,7 +57,6 @@ const navigationCategories: NavCategory[] = [
     icon: Play,
     items: [
       { name: "Movies", href: "/movies", icon: Film },
-      { name: "Videos", href: "/videos", icon: Video },
       { name: "Timeline", href: "/timeline", icon: Play },
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
       { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },

@@ -27,9 +27,10 @@ interface TextToSpeechProps {
   sceneId?: string
   treatmentId?: string
   onAudioSaved?: (assetId: string) => void
+  metadata?: Record<string, any>
 }
 
-export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId, treatmentId, onAudioSaved }: TextToSpeechProps) {
+export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId, treatmentId, onAudioSaved, metadata }: TextToSpeechProps) {
   const { toast } = useToast()
   const { user, userId, ready } = useAuthReady()
   const [voices, setVoices] = useState<Voice[]>([])
@@ -590,7 +591,8 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
           projectId,
           sceneId: sceneId || null,
           treatmentId: treatmentId || null,
-          userId: user?.id
+          userId: user?.id,
+          metadata: metadata || {}
         })
       })
 

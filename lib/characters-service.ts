@@ -147,6 +147,20 @@ export interface Character {
   visual_motifs?: string[] | null
   theme_they_represent?: string | null
   foreshadowing_notes?: string | null
+  
+  // 10. ROLE DETAILS (for casting)
+  role_compensation_type?: 'paid' | 'unpaid' | 'deferred' | 'stipend' | 'negotiable' | null
+  role_compensation_rate?: string | null
+  role_description?: string | null
+  role_requirements?: string | null
+  role_preferred_qualifications?: string | null
+  role_shooting_dates?: string | null
+  role_location?: string | null
+  role_union_status?: 'union' | 'non-union' | 'both' | 'tbd' | null
+  role_audition_required?: boolean | null
+  role_audition_info?: string | null
+  role_contact_email?: string | null
+  role_contact_phone?: string | null
 }
 
 export interface CreateCharacterData extends Partial<Omit<Character, 'id' | 'user_id' | 'created_at' | 'updated_at'>> {
@@ -163,6 +177,22 @@ export class CharactersService {
       throw new Error('Authentication required')
     }
     return session.user
+  }
+
+  static async getCharacterById(characterId: string): Promise<Character | null> {
+    await this.ensureAuthenticated()
+    const { data, error } = await getSupabaseClient()
+      .from('characters')
+      .select('*')
+      .eq('id', characterId)
+      .maybeSingle()
+    
+    if (error) {
+      console.error('Error fetching character:', error)
+      throw error
+    }
+    
+    return data as Character | null
   }
 
   static async getCharacters(projectId: string): Promise<Character[]> {

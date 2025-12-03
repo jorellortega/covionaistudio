@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
-    const { audioBlob, fileName, audioTitle, projectId, sceneId, treatmentId, userId } = await request.json()
+    const { audioBlob, fileName, audioTitle, projectId, sceneId, treatmentId, userId, metadata } = await request.json()
 
     if (!audioBlob || !fileName || !userId) {
       return NextResponse.json(
@@ -158,7 +158,8 @@ export async function POST(request: NextRequest) {
           source: treatmentId ? 'treatment' : sceneId ? 'scene' : 'project',
           file_size: audioBuffer.byteLength, // Store file size in bytes
           size: audioBuffer.byteLength, // Also store as 'size' for backward compatibility
-          has_project: !!projectId // Track if this asset has a project
+          has_project: !!projectId, // Track if this asset has a project
+          ...(metadata || {}) // Merge any additional metadata (e.g., audioType: 'scene_description')
         }
       })
       .select()

@@ -184,6 +184,7 @@ function ScenePageClient({ id }: { id: string }) {
   const [showCreateCollaborationDialog, setShowCreateCollaborationDialog] = useState(false)
   const [newCollaborationTitle, setNewCollaborationTitle] = useState("")
   const [newCollaborationDescription, setNewCollaborationDescription] = useState("")
+  const [showDescriptionDialog, setShowDescriptionDialog] = useState(false)
   const [newCollaborationExpiresAt, setNewCollaborationExpiresAt] = useState<string>("")
   const [newCollaborationAllowGuests, setNewCollaborationAllowGuests] = useState(true)
   const [newCollaborationAllowEdit, setNewCollaborationAllowEdit] = useState(true)
@@ -246,6 +247,8 @@ function ScenePageClient({ id }: { id: string }) {
   })
   const [userApiKeys, setUserApiKeys] = useState<{openai_api_key?: string; anthropic_api_key?: string}>({})
   const [isEnhancingText, setIsEnhancingText] = useState(false)
+  const [isFixingGrammar, setIsFixingGrammar] = useState(false)
+  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false)
   
   // Characters and locations for screenplay toolbar
   const [characters, setCharacters] = useState<Array<{id: string; name: string}>>([])
@@ -1028,6 +1031,173 @@ ${centerText('AUTHOR NAME')}
       })
     } finally {
       setIsEnhancingText(false)
+    }
+  }
+
+  // Fix grammar for entire page
+  const fixGrammarCurrentPage = async () => {
+    const currentPageContent = getCurrentPageEditContent()
+    if (!currentPageContent || !currentPageContent.trim()) {
+      toast({
+        title: "Error",
+        description: "Please enter some text to fix grammar",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsFixingGrammar(true)
+    
+    try {
+      toast({
+        title: "Fixing grammar...",
+        description: "Please wait while we fix grammar and spelling for the entire page.",
+      })
+
+      // Call AI API to fix grammar and spelling for the entire page
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: `Fix grammar and spelling errors in the following text. Keep the exact same format, structure, spacing, line breaks, indentation, and meaning. Only correct grammar and spelling mistakes. Do not change the style, rewrite anything, add explanations, or wrap the text in quotes. Return only the corrected text without any quotes or additional formatting:`,
+          selectedText: currentPageContent,
+          fullContent: currentPageContent,
+          service: 'openai',
+          model: 'gpt-4o-mini',
+          apiKey: 'configured',
+          userId: userId,
+          contentType: 'script',
+          maxTokens: 4000
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to fix grammar')
+      }
+
+      const result = await response.json()
+      // The API returns { text: string } for text editing
+      let fixedText = result.text?.trim()
+
+      if (!fixedText) {
+        throw new Error('No fixed text received from AI')
+      }
+
+      // Remove quotes if AI wrapped the response in them
+      if ((fixedText.startsWith('"') && fixedText.endsWith('"')) || 
+          (fixedText.startsWith("'") && fixedText.endsWith("'"))) {
+        fixedText = fixedText.slice(1, -1).trim()
+      }
+
+      // Update the current page with fixed version
+      if (screenplayTextareaRef.current) {
+        screenplayTextareaRef.current.value = fixedText
+        saveCurrentPageEdit(fixedText)
+      }
+      
+      toast({
+        title: "Grammar Fixed",
+        description: "Grammar and spelling have been corrected for the entire page.",
+      })
+    } catch (error) {
+      console.error('Error fixing grammar:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to fix grammar. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsFixingGrammar(false)
+    }
+  }
+
+  // Get all screenplay content (all pages combined)
+  const getAllScreenplayContent = () => {
+    const allContent: string[] = []
+    for (let i = 1; i <= totalPages; i++) {
+      const pageContent = editedPages.get(i) || pages[i - 1] || ""
+      allContent.push(pageContent)
+    }
+    return allContent.join('\n\n')
+  }
+
+  // Generate scene description from screenplay
+  const generateDescriptionFromScreenplay = async () => {
+    const allScreenplayContent = getAllScreenplayContent()
+    
+    if (!allScreenplayContent || !allScreenplayContent.trim()) {
+      toast({
+        title: "Error",
+        description: "Please add some screenplay content first",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsGeneratingDescription(true)
+    
+    try {
+      toast({
+        title: "Generating description...",
+        description: "Creating scene description based on screenplay content.",
+      })
+
+      // Call AI API to generate description from screenplay
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: `Based on the following screenplay content, create a concise scene description (2-4 sentences) that summarizes what happens in this scene. Focus on the key actions, characters, and events. Write in third person, present tense. Return only the description without quotes or additional formatting:`,
+          selectedText: allScreenplayContent,
+          fullContent: allScreenplayContent,
+          service: 'openai',
+          model: 'gpt-4o-mini',
+          apiKey: 'configured',
+          userId: userId,
+          contentType: 'script',
+          maxTokens: 200
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate description')
+      }
+
+      const result = await response.json()
+      let description = result.text?.trim()
+
+      if (!description) {
+        throw new Error('No description received from AI')
+      }
+
+      // Remove quotes if AI wrapped the response in them
+      if ((description.startsWith('"') && description.endsWith('"')) || 
+          (description.startsWith("'") && description.endsWith("'"))) {
+        description = description.slice(1, -1).trim()
+      }
+
+      // Update the description in editForm
+      setEditForm((prev) => ({ ...prev, description }))
+      
+      toast({
+        title: "Description Generated",
+        description: "Scene description has been updated based on screenplay content.",
+      })
+    } catch (error) {
+      console.error('Error generating description:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate description. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingDescription(false)
     }
   }
 
@@ -2038,6 +2208,121 @@ ${centerText('AUTHOR NAME')}
     }
   }
 
+  // Generate shot list from entire screenplay (all pages)
+  const generateShotListFromScreenplay = async () => {
+    if (!id || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const allScreenplayContent = getAllScreenplayContent()
+    if (!allScreenplayContent || allScreenplayContent.trim().length === 0) {
+      toast({
+        title: "Error",
+        description: "No screenplay content to generate shot list from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingShotList(true)
+
+      // Get AI settings
+      const aiSettings = await AISettingsService.getUserSettings(userId!)
+      const scriptsSetting = aiSettings.find(s => s.tab_type === 'scripts')
+      const lockedModel = scriptsSetting?.locked_model || 'ChatGPT'
+      
+      // Normalize service name for API
+      const normalizedService = lockedModel.toLowerCase().includes('gpt') || lockedModel.toLowerCase().includes('openai') || lockedModel.toLowerCase().includes('chatgpt')
+        ? 'openai'
+        : lockedModel.toLowerCase().includes('claude') || lockedModel.toLowerCase().includes('anthropic')
+        ? 'anthropic'
+        : 'openai'
+      
+      // Get model - use selected_model if available, otherwise default based on service
+      const modelToUse = scriptsSetting?.selected_model || 
+        (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+
+      toast({
+        title: "Generating shot list...",
+        description: "Creating shots from the entire screenplay. This may take a moment.",
+      })
+
+      const response = await fetch('/api/scenes/generate-shot-list', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sceneId: id,
+          screenplayContent: allScreenplayContent,
+          pageNumber: null, // Indicates all pages
+          service: normalizedService,
+          model: modelToUse,
+          userId: userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate shot list')
+      }
+
+      const result = await response.json()
+
+      console.log('🎬 Shot List Generation (Full Screenplay) - API Response:', {
+        success: result.success,
+        shotsCount: result.shots?.length || 0,
+        count: result.count
+      })
+
+      if (result.success && result.shots && result.shots.length > 0) {
+        console.log('🎬 Shot List Generation - Saving shots to database...')
+        
+        // Save all generated shots
+        const savedShots = await ShotListService.bulkCreateShotLists(
+          result.shots.map((shot: any) => ({
+            ...shot,
+            scene_id: id,
+            project_id: projectId,
+          }))
+        )
+
+        console.log('🎬 Shot List Generation - Saved shots:', savedShots.length)
+
+        // Trigger refresh of shot list component
+        setShotListRefreshKey(prev => prev + 1)
+        console.log('🎬 Shot List Generation - Refreshed shot list component')
+
+        // Expand the shot list card to show the newly generated shots
+        setIsShotListExpanded(true)
+
+        toast({
+          title: "Shot List Generated!",
+          description: `Successfully created ${savedShots.length} shots from the entire screenplay.`,
+          duration: 5000,
+        })
+      } else {
+        console.error('🎬 Shot List Generation - No shots in response:', result)
+        throw new Error(result.error || 'No shots returned from AI')
+      }
+    } catch (error) {
+      console.error('Error generating shot list:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate shot list.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShotList(false)
+    }
+  }
+
   // Simple loading state
   if (loading || !ready) {
     return (
@@ -2322,6 +2607,112 @@ ${centerText('AUTHOR NAME')}
       field: 'content'
     })
     setShowAITextEditor(true)
+  }
+
+  // Handle fix grammar button click
+  const handleFixGrammar = async () => {
+    if (!isEditingScreenplay || !selectedText || selectedText.length === 0) {
+      toast({
+        title: "No Text Selected",
+        description: "Please select some text to fix grammar.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const currentPageContent = getCurrentPageEditContent()
+      
+      toast({
+        title: "Fixing grammar...",
+        description: "Please wait while we fix grammar and spelling.",
+      })
+
+      // Call AI API to fix grammar and spelling using the text editing format
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: `Fix grammar and spelling errors in the selected text. Keep the exact same format, structure, spacing, line breaks, indentation, and meaning. Only correct grammar and spelling mistakes. Do not change the style, rewrite anything, add explanations, or wrap the text in quotes. Return only the corrected text without any quotes or additional formatting:`,
+          selectedText: selectedText,
+          fullContent: currentPageContent,
+          service: 'openai',
+          model: 'gpt-4o-mini',
+          apiKey: 'configured',
+          userId: userId,
+          contentType: 'script',
+          maxTokens: 2000
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to fix grammar')
+      }
+
+      const result = await response.json()
+      // The API returns { text: string } for text editing
+      let fixedText = result.text?.trim()
+
+      if (!fixedText) {
+        throw new Error('No fixed text received from AI')
+      }
+
+      // Remove quotes if AI wrapped the response in them
+      if ((fixedText.startsWith('"') && fixedText.endsWith('"')) || 
+          (fixedText.startsWith("'") && fixedText.endsWith("'"))) {
+        fixedText = fixedText.slice(1, -1).trim()
+      }
+
+      // Replace the selected text directly (without requiring aiEditData)
+      const textarea = screenplayTextareaRef.current as HTMLTextAreaElement
+      
+      if (!textarea) {
+        // Fallback to stored selection positions
+        const newValue = currentPageContent.substring(0, selectionStart) + fixedText + currentPageContent.substring(selectionEnd)
+        saveCurrentPageEdit(newValue)
+      } else {
+        // Use stored selection positions
+        let start = selectionStart
+        let end = selectionEnd
+        
+        // Validate that stored positions are still valid
+        if (start < 0 || end > currentPageContent.length || start > end) {
+          // Fallback to textarea's current selection
+          start = textarea.selectionStart
+          end = textarea.selectionEnd
+        }
+        
+        // Replace the selected text
+        const newValue = currentPageContent.substring(0, start) + fixedText + currentPageContent.substring(end)
+        saveCurrentPageEdit(newValue)
+        
+        // Set cursor position after replacement
+        setTimeout(() => {
+          const newCursorPos = start + fixedText.length
+          textarea.focus()
+          textarea.setSelectionRange(newCursorPos, newCursorPos)
+        }, 50)
+      }
+      
+      // Clear selection and toolbar
+      setSelectedText("")
+      setToolbarPosition(null)
+
+      toast({
+        title: "Grammar Fixed",
+        description: "Grammar and spelling have been corrected.",
+      })
+    } catch (error) {
+      console.error('Error fixing grammar:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to fix grammar. Please try again.",
+        variant: "destructive",
+      })
+    }
   }
 
   // Recursive delete function that handles complex circular references
@@ -2623,9 +3014,15 @@ ${centerText('AUTHOR NAME')}
                   Scene: {scene.name}
                 </h1>
                 {scene.description && (
-                  <p className="text-sm sm:text-base text-muted-foreground line-clamp-2">
-                    {scene.description}
-                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowDescriptionDialog(true)}
+                    className="text-muted-foreground hover:text-foreground -ml-2 mt-1"
+                  >
+                    <FileText className="h-4 w-4 mr-2" />
+                    View Description
+                  </Button>
                 )}
               </div>
             </div>
@@ -2715,6 +3112,23 @@ ${centerText('AUTHOR NAME')}
               </div>
             )}
             
+            {/* Description Dialog */}
+            <Dialog open={showDescriptionDialog} onOpenChange={setShowDescriptionDialog}>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Scene Description</DialogTitle>
+                  <DialogDescription>
+                    {scene?.name && `Description for "${scene.name}"`}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="mt-4">
+                  <p className="text-muted-foreground whitespace-pre-wrap">
+                    {scene?.description || "No description available for this scene."}
+                  </p>
+                </div>
+              </DialogContent>
+            </Dialog>
+            
             {/* Action Buttons - Grouped together */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-2">
               {/* Start Collaboration Button */}
@@ -2731,7 +3145,7 @@ ${centerText('AUTHOR NAME')}
                   className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                 >
                   <Users className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">Start Collaboration</span>
+                  <span className="hidden sm:inline">Collab</span>
                   <span className="sm:hidden">Collaborate</span>
                 </Button>
               )}
@@ -2746,7 +3160,7 @@ ${centerText('AUTHOR NAME')}
                 >
                   <Link href={`/screenplay/${projectId}`}>
                     <FileText className="h-4 w-4 mr-2" />
-                    <span className="hidden sm:inline">View Screenplay</span>
+                    <span className="hidden sm:inline">Screenplay</span>
                     <span className="sm:hidden">Screenplay</span>
                   </Link>
                 </Button>
@@ -2761,7 +3175,7 @@ ${centerText('AUTHOR NAME')}
               >
                 <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
                   <Film className="h-4 w-4 mr-2" />
-                  <span className="hidden sm:inline">View Movie</span>
+                  <span className="hidden sm:inline">Movie</span>
                   <span className="sm:hidden">Movie</span>
                 </Link>
               </Button>
@@ -2773,7 +3187,7 @@ ${centerText('AUTHOR NAME')}
                 className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
               >
                 <Upload className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Import Files</span>
+                <span className="hidden sm:inline">Import</span>
                 <span className="sm:hidden">Import</span>
               </Button>
               
@@ -2784,7 +3198,7 @@ ${centerText('AUTHOR NAME')}
                 className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
               >
                 <Edit3 className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Edit Scene</span>
+                <span className="hidden sm:inline">Edit</span>
                 <span className="sm:hidden">Edit</span>
               </Button>
               
@@ -2845,7 +3259,7 @@ ${centerText('AUTHOR NAME')}
                 }}
               >
                 <ImageIcon className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Scene Mood Board</span>
+                <span className="hidden sm:inline">Mood Board</span>
                 <span className="sm:hidden">Mood Board</span>
               </Button>
             </div>
@@ -4442,7 +4856,7 @@ ${centerText('AUTHOR NAME')}
                             size="sm"
                             variant="outline"
                             onClick={enhanceCurrentPage}
-                            disabled={isEnhancingText}
+                            disabled={isEnhancingText || isFixingGrammar}
                             className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                           >
                             {isEnhancingText ? (
@@ -4451,6 +4865,20 @@ ${centerText('AUTHOR NAME')}
                               <Sparkles className="h-4 w-4 mr-1" />
                             )}
                             Enhance
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={fixGrammarCurrentPage}
+                            disabled={isFixingGrammar || isEnhancingText}
+                            className="h-8 px-3 text-sm border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                          >
+                            {isFixingGrammar ? (
+                              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            ) : (
+                              <FileText className="h-4 w-4 mr-1" />
+                            )}
+                            Fix Grammar
                           </Button>
                         </div>
                       </div>
@@ -4644,6 +5072,15 @@ ${centerText('AUTHOR NAME')}
                             </Button>
                             <Button
                               size="sm"
+                              variant="default"
+                              onClick={handleFixGrammar}
+                              className="bg-blue-500 hover:bg-blue-600 text-white"
+                            >
+                              <FileText className="h-3 w-3 mr-1" />
+                              Fix Grammar
+                            </Button>
+                            <Button
+                              size="sm"
                               variant="ghost"
                               onClick={() => {
                                 setSelectedText("")
@@ -4757,14 +5194,50 @@ ${centerText('AUTHOR NAME')}
                           <Film className="h-5 w-5 text-blue-400" />
                           <CardTitle>Shot List</CardTitle>
                         </div>
-                        {isShotListExpanded ? (
-                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                        )}
+                        <div className="flex items-center gap-2">
+                          {getAllScreenplayContent() && getAllScreenplayContent().trim() && (
+                            <Button
+                              onClick={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                generateShotListFromScreenplay()
+                              }}
+                              disabled={isGeneratingShotList}
+                              size="sm"
+                              className="bg-gradient-to-r from-blue-500 to-purple-500 hover:opacity-90"
+                            >
+                              {isGeneratingShotList ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                  Generating...
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="h-3 w-3 mr-1" />
+                                  Generate from Screenplay
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Link href={`/storyboards/${id}`} onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            >
+                              <Film className="h-3 w-3 mr-1" />
+                              Storyboard
+                            </Button>
+                          </Link>
+                          {isShotListExpanded ? (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </div>
                       </div>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Shots generated from this scene's screenplay. Use "Generate Shot List from This Page" above to create shots for the current page.
+                        Shots generated from this scene's screenplay. Use "Generate Shot List from This Page" above to create shots for the current page, or "Generate from Screenplay" to generate from the entire screenplay.
                       </p>
                     </CardHeader>
                   </CollapsibleTrigger>
@@ -5153,6 +5626,35 @@ ${centerText('AUTHOR NAME')}
               </Button>
             </div>
 
+            {/* Generate Audio from Scene Description */}
+            {scene?.description && scene.description.trim() && (
+              <Card className="bg-card border-primary/20">
+                <CardHeader>
+                  <CardTitle className="text-lg text-primary flex items-center gap-2">
+                    <Volume2 className="h-5 w-5" />
+                    Generate Audio from Scene Description
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Convert the scene description to audio using AI voice generation. This audio will be available on the timeline page.
+                  </p>
+                  <TextToSpeech 
+                    text={scene?.description || ''}
+                    title={`Scene: ${scene?.name || 'Untitled'} - Description Audio`}
+                    className="w-full"
+                    projectId={projectId}
+                    sceneId={id}
+                    onAudioSaved={(assetId) => {
+                      // Refresh assets after audio is saved
+                      refreshAssets()
+                    }}
+                    metadata={{ audioType: 'scene_description' }}
+                  />
+                </CardContent>
+              </Card>
+            )}
+
             {assets.filter(a => a.content_type === 'audio').length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {assets.filter(a => a.content_type === 'audio').map((audio) => (
@@ -5340,6 +5842,35 @@ ${centerText('AUTHOR NAME')}
           {/* Shot List Tab */}
           <TabsContent value="shot-list" className="space-y-6">
             <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Shot List</CardTitle>
+                  {getAllScreenplayContent() && getAllScreenplayContent().trim() && (
+                    <Button
+                      onClick={generateShotListFromScreenplay}
+                      disabled={isGeneratingShotList}
+                      className="bg-gradient-to-r from-blue-500 to-purple-500 hover:opacity-90"
+                    >
+                      {isGeneratingShotList ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="h-4 w-4 mr-2" />
+                          Generate from Screenplay
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+                {getAllScreenplayContent() && getAllScreenplayContent().trim() && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Generate a shot list from the entire scene screenplay using AI.
+                  </p>
+                )}
+              </CardHeader>
               <CardContent className="pt-6">
                 <ShotListComponent
                   key={shotListRefreshKey}
@@ -5931,11 +6462,29 @@ ${centerText('AUTHOR NAME')}
                 />
               </div>
               <div>
-                <Label className="text-muted-foreground">Description</Label>
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-muted-foreground">Description</Label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={generateDescriptionFromScreenplay}
+                    disabled={isGeneratingDescription}
+                    className="h-7 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                  >
+                    {isGeneratingDescription ? (
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <Bot className="h-3 w-3 mr-1" />
+                    )}
+                    Generate from Screenplay
+                  </Button>
+                </div>
                 <Textarea
                   value={editForm.description}
                   onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
                   className="bg-card border-primary/30 text-foreground"
+                  placeholder="Enter scene description or generate from screenplay..."
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">

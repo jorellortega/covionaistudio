@@ -205,13 +205,18 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
     // Generate shot list using AI
     let generatedResponse = ''
     const modelToUse = model || (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
+    
+    // Check if GPT-5 model - these need higher token limits
+    const isGPT5Model = modelToUse.startsWith('gpt-5')
+    const maxTokens = isGPT5Model ? 8000 : 4000 // GPT-5 needs more tokens for reasoning + output
 
     if (normalizedService === 'openai') {
       const response = await OpenAIService.generateScript({
         prompt: userPrompt,
         template: systemPrompt,
         model: modelToUse,
-        apiKey: actualApiKey
+        apiKey: actualApiKey,
+        maxTokens: maxTokens
       })
 
       if (!response.success) {
@@ -221,7 +226,41 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
         )
       }
 
-      generatedResponse = response.data.choices[0].message.content
+      generatedResponse = response.data.choices[0].message.content || ''
+      
+      // Handle GPT-5 empty content issue (all tokens used for reasoning)
+      if (!generatedResponse || generatedResponse.trim().length === 0) {
+        if (isGPT5Model) {
+          // Retry with even higher token limit
+          console.log('⚠️ GPT-5 returned empty content, retrying with higher token limit...')
+          const retryResponse = await OpenAIService.generateScript({
+            prompt: userPrompt,
+            template: systemPrompt + '\n\nCRITICAL: You must return the JSON array immediately. Do not use excessive reasoning tokens. The response must contain the actual JSON array.',
+            model: modelToUse,
+            apiKey: actualApiKey,
+            maxTokens: 12000 // Much higher limit to ensure output
+          })
+          
+          if (retryResponse.success && retryResponse.data?.choices?.[0]?.message?.content) {
+            generatedResponse = retryResponse.data.choices[0].message.content
+            console.log('✅ Retry successful, got content:', generatedResponse.substring(0, 200))
+          } else {
+            return NextResponse.json(
+              { 
+                error: 'GPT-5 model used all tokens for reasoning and returned no content. Please try with a different model (GPT-4o) or increase token limits in AI settings.',
+                hint: 'Consider using GPT-4o instead of GPT-5 for shot list generation, or increase max_completion_tokens significantly.',
+                details: 'The model consumed all available tokens for reasoning without producing output.'
+              },
+              { status: 500 }
+            )
+          }
+        } else {
+          return NextResponse.json(
+            { error: 'AI returned empty response. Please try again.' },
+            { status: 500 }
+          )
+        }
+      }
     } else if (normalizedService === 'anthropic') {
       const response = await AnthropicService.generateScript({
         prompt: userPrompt,
@@ -246,8 +285,12 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
     }
 
     // Log the raw response for debugging
-    console.log('Raw AI response (first 500 chars):', generatedResponse.substring(0, 500))
-    console.log('Full response length:', generatedResponse.length)
+    console.log('🔍 DEBUG - Raw AI response (first 500 chars):', generatedResponse.substring(0, 500))
+    console.log('🔍 DEBUG - Full response length:', generatedResponse.length)
+    
+    // Check for double-escaped quotes in raw response
+    const doubleEscapedCount = (generatedResponse.match(/\\\\"/g) || []).length
+    console.log('🔍 DEBUG - Double-escaped quotes (\\\\") found in raw response:', doubleEscapedCount)
 
     // Clean up markdown code block markers if present
     generatedResponse = generatedResponse.trim()
@@ -257,21 +300,90 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
     generatedResponse = generatedResponse.replace(/\n?```\s*$/i, '')
     generatedResponse = generatedResponse.trim()
     
+    console.log('🔍 DEBUG - After markdown cleanup (first 500 chars):', generatedResponse.substring(0, 500))
+    
     // Try to extract JSON from the response if it's wrapped in text
     const jsonMatch = generatedResponse.match(/\[[\s\S]*\]/)
     if (jsonMatch) {
       generatedResponse = jsonMatch[0]
+      console.log('🔍 DEBUG - Extracted JSON array, length:', generatedResponse.length)
     } else {
       // Try to find JSON object with shots array
       const objectMatch = generatedResponse.match(/\{[\s\S]*\}/)
       if (objectMatch) {
         generatedResponse = objectMatch[0]
+        console.log('🔍 DEBUG - Extracted JSON object, length:', generatedResponse.length)
+      }
+    }
+    
+    // CRITICAL: Fix double-escaped quotes AFTER JSON extraction
+    // GPT-5 sometimes returns JSON with double-escaped quotes
+    // The issue: "dialogue": \\"text\\" should be "dialogue": "text"
+    const beforeFix = generatedResponse
+    const beforeFixSample = generatedResponse.substring(0, 1000)
+    const beforeCount = (generatedResponse.match(/\\\\"/g) || []).length
+    console.log('🔍 DEBUG - Before fix: double-escaped quotes count:', beforeCount)
+    console.log('🔍 DEBUG - Before fix sample (first 500 chars):', beforeFixSample.substring(0, 500))
+    
+    // Find a specific example of the problematic pattern
+    const dialogueMatch = generatedResponse.match(/"dialogue":\s*\\\\"[^"]*\\\\"/)
+    if (dialogueMatch) {
+      console.log('🔍 DEBUG - Found problematic dialogue pattern:', dialogueMatch[0].substring(0, 100))
+    }
+    
+    // Pattern 1: Replace \\" that appears after : (start of string value)
+    generatedResponse = generatedResponse.replace(/:\s*\\\\"/g, ': "')
+    console.log('🔍 DEBUG - After pattern 1 (:\s*\\\\"):', (generatedResponse.match(/\\\\"/g) || []).length, 'remaining')
+    
+    // Pattern 2: Replace \\" that appears before , or } (end of string value)
+    generatedResponse = generatedResponse.replace(/\\\\",/g, '",')
+    console.log('🔍 DEBUG - After pattern 2 (\\\\",):', (generatedResponse.match(/\\\\"/g) || []).length, 'remaining')
+    
+    generatedResponse = generatedResponse.replace(/\\\\"\s*}/g, '"}')
+    console.log('🔍 DEBUG - After pattern 3 (\\\\"\s*}):', (generatedResponse.match(/\\\\"/g) || []).length, 'remaining')
+    
+    generatedResponse = generatedResponse.replace(/\\\\"\s*\n/g, '"\n')
+    console.log('🔍 DEBUG - After pattern 4 (\\\\"\s*\n):', (generatedResponse.match(/\\\\"/g) || []).length, 'remaining')
+    
+    // Pattern 3: Replace any remaining \\" with " (catch-all)
+    generatedResponse = generatedResponse.replace(/\\\\"/g, '"')
+    const afterCount = (generatedResponse.match(/\\\\"/g) || []).length
+    console.log('🔍 DEBUG - After pattern 5 (catch-all):', afterCount, 'remaining')
+    
+    const afterFixSample = generatedResponse.substring(0, 1000)
+    if (beforeFix !== generatedResponse) {
+      console.log('✅ DEBUG - Fixed double-escaped quotes')
+      console.log('🔍 DEBUG - Before fix sample:', beforeFixSample.substring(0, 300))
+      console.log('🔍 DEBUG - After fix sample:', afterFixSample.substring(0, 300))
+      
+      // Show a specific dialogue example if it exists
+      const dialogueAfter = generatedResponse.match(/"dialogue":\s*"[^"]*"/)
+      if (dialogueAfter) {
+        console.log('🔍 DEBUG - Example dialogue after fix:', dialogueAfter[0].substring(0, 100))
+      }
+    } else {
+      console.log('⚠️ DEBUG - No changes made to fix double-escaped quotes')
+    }
+    
+    if (afterCount > 0) {
+      console.log('⚠️ DEBUG - Still have', afterCount, 'double-escaped quotes remaining!')
+      // Find where they are
+      const remainingMatches = generatedResponse.match(/[^"]*\\\\"[^"]*/g)
+      if (remainingMatches && remainingMatches.length > 0) {
+        console.log('🔍 DEBUG - Remaining problematic patterns (first 3):', remainingMatches.slice(0, 3))
       }
     }
 
     // Try to repair malformed JSON by finding the last complete object
     const repairJSON = (jsonStr: string): string => {
       let repaired = jsonStr.trim()
+      
+      // Additional normalization for any remaining escape issues
+      // This should already be done above, but just in case
+      repaired = repaired.replace(/\\\\"/g, '"')
+      repaired = repaired.replace(/\\\\n/g, '\n')
+      repaired = repaired.replace(/\\\\t/g, '\t')
+      repaired = repaired.replace(/\\\\r/g, '\r')
       
       // Find all complete objects (properly closed with })
       const completeObjects: number[] = []

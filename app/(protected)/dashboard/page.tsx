@@ -275,23 +275,6 @@ export default function DashboardPage() {
           </Link>
         </Card>
 
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/videos">
-            <CardHeader className="pb-4">
-              <div className="p-3 rounded-lg bg-cyan-500/10 w-fit group-hover:bg-cyan-500/20 transition-colors">
-                <Film className="h-6 w-6 text-cyan-500" />
-              </div>
-              <CardTitle className="text-lg group-hover:text-cyan-500 transition-colors">Videos</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">Manage videos and reels</CardDescription>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold text-cyan-500">12</span>
-                <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-cyan-500 transition-colors" />
-              </div>
-            </CardContent>
-          </Link>
-        </Card>
       </div>
 
       {/* Recent Projects */}

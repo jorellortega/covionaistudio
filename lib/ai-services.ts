@@ -71,8 +71,9 @@ export class OpenAIService {
         // For GPT-5, increase tokens significantly to allow for reasoning + output
         // If reasoning_effort is "none", reasoning should be minimal, but we still need buffer
         const baseTokens = request.maxTokens || 1000
-        // Increase by 2-3x to account for reasoning tokens when reasoning_effort is not "none"
-        requestBody.max_completion_tokens = baseTokens * 3
+        // Increase significantly (4-5x) to ensure there's room for both reasoning and actual output
+        // GPT-5 can use a lot of reasoning tokens even with reasoning_effort="none"
+        requestBody.max_completion_tokens = Math.max(baseTokens * 5, 8000)
       } else {
         requestBody.max_tokens = request.maxTokens || 1000
       }

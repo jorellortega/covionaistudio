@@ -180,6 +180,53 @@ export class CastingService {
   }
 
   /**
+   * Get all submissions for all movies owned by the current user
+   */
+  static async getAllSubmissionsForUser(): Promise<ActorSubmission[]> {
+    try {
+      const { data: { user } } = await getSupabaseClient().auth.getUser()
+      if (!user) {
+        throw new Error('User not authenticated')
+      }
+
+      // Get all movies owned by the user
+      const { data: movies, error: moviesError } = await getSupabaseClient()
+        .from('projects')
+        .select('id')
+        .eq('project_type', 'movie')
+        .eq('user_id', user.id)
+
+      if (moviesError) {
+        console.error('Error fetching user movies:', moviesError)
+        throw moviesError
+      }
+
+      if (!movies || movies.length === 0) {
+        return []
+      }
+
+      const movieIds = movies.map(m => m.id)
+
+      // Get all submissions for these movies
+      const { data, error } = await getSupabaseClient()
+        .from('actor_submissions')
+        .select('*')
+        .in('movie_id', movieIds)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching all submissions:', error)
+        throw error
+      }
+
+      return (data || []) as ActorSubmission[]
+    } catch (error) {
+      console.error('Error in getAllSubmissionsForUser:', error)
+      throw error
+    }
+  }
+
+  /**
    * Submit an actor application
    */
   static async submitActorApplication(
@@ -273,6 +320,21 @@ export class CastingService {
 
       if (error) {
         console.error('Error uploading file:', error)
+        
+        // Provide helpful error message for missing bucket
+        if (error.message?.includes('Bucket not found') || error.message?.includes('not found')) {
+          throw new Error(
+            'Storage bucket "actor-submissions" not found. Please create it in Supabase Dashboard:\n' +
+            '1. Go to Storage section\n' +
+            '2. Click "New bucket"\n' +
+            '3. Name: actor-submissions\n' +
+            '4. Set to Public\n' +
+            '5. Max file size: 50MB\n' +
+            '6. Allowed types: image/*, video/*, application/pdf\n' +
+            'Then run the policies script: supabase/create-actor-submissions-bucket.sql'
+          )
+        }
+        
         throw error
       }
 

@@ -125,6 +125,8 @@ export async function POST(request: NextRequest) {
       promptPreview: prompt?.substring(0, 200) + '...',
       fullPrompt: prompt,
       service: service,
+      model: model,
+      hasModel: !!model,
       hasApiKey: !!apiKey,
       apiKeyLength: apiKey?.length || 0,
       hasUserId: !!userId,
@@ -311,6 +313,13 @@ export async function POST(request: NextRequest) {
     const normalizedService = (service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) ? 'dalle' : service
     const imageModel = model || (normalizedService === 'dalle' ? 'dall-e-3' : undefined)
     const isGPTImageModel = imageModel === 'gpt-image-1' || imageModel?.startsWith('gpt-') || service === 'GPT Image' || service?.toLowerCase().includes('gpt image')
+    
+    console.log('🎬 DEBUG - Model normalization:', {
+      receivedModel: model,
+      normalizedService: normalizedService,
+      imageModel: imageModel,
+      isGPTImageModel: isGPTImageModel
+    })
 
     switch (normalizedService) {
       case 'DALL-E 3':

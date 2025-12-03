@@ -16,6 +16,7 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { ProjectSelector } from "@/components/project-selector"
 import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
+import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 
 export default function MoodBoardsPage() {
   const searchParams = useSearchParams()
@@ -42,6 +43,8 @@ export default function MoodBoardsPage() {
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [generatingForBoard, setGeneratingForBoard] = useState<string | null>(null)
   const [suggesting, setSuggesting] = useState(false)
+  const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
+  const [loadingScenes, setLoadingScenes] = useState(false)
 
   const canLoad = useMemo(() => targetId && targetId.length > 0, [targetId])
 
@@ -85,6 +88,43 @@ export default function MoodBoardsPage() {
 
     loadAISettings()
   }, [ready, userId])
+
+  // Load scenes when project is selected and scope is "scene"
+  useEffect(() => {
+    const loadScenes = async () => {
+      const currentProjectId = projectId || initialProjectId
+      if (!currentProjectId || !ready || !userId || scope !== 'scene') {
+        setScenes([])
+        return
+      }
+      
+      setLoadingScenes(true)
+      try {
+        console.log('📋 Loading scenes for project:', currentProjectId)
+        const projectScenes = await TimelineService.getMovieScenes(currentProjectId)
+        console.log('📋 Loaded scenes:', projectScenes.length)
+        setScenes(projectScenes)
+        
+        // If targetId is set from URL params and matches a scene, keep it
+        // Otherwise, if scenes are loaded and targetId doesn't match, clear it
+        if (initialTarget && !projectScenes.find(s => s.id === initialTarget)) {
+          // targetId from URL doesn't match any scene, but we'll keep it in case user wants to enter manually
+        }
+      } catch (error) {
+        console.error('Error loading scenes:', error)
+        setScenes([])
+        toast({
+          title: "Error",
+          description: "Failed to load scenes for this project.",
+          variant: "destructive"
+        })
+      } finally {
+        setLoadingScenes(false)
+      }
+    }
+
+    loadScenes()
+  }, [projectId, initialProjectId, scope, ready, userId, initialTarget])
 
   // Get images tab AI setting
   const getImagesTabSetting = () => {
@@ -413,7 +453,7 @@ export default function MoodBoardsPage() {
           <label className="text-sm font-medium">Project</label>
           <div className="mt-1">
             <ProjectSelector
-              selectedProject={scope === 'movie' ? targetId : (projectId || undefined)}
+              selectedProject={scope === 'movie' ? targetId : (projectId || initialProjectId || undefined)}
               onProjectChange={(projectId) => {
                 if (scope === 'movie') {
                   console.log('📋 Project selected, setting targetId and loading boards:', projectId)
@@ -422,7 +462,12 @@ export default function MoodBoardsPage() {
                   setBoardItems({})
                   // loadBoards will be called by the useEffect when targetId changes
                 } else {
+                  console.log('📋 Project selected for scene scope, setting projectId:', projectId)
                   setProjectId(projectId)
+                  // Clear targetId when project changes so user can select a new scene
+                  if (scope === 'scene') {
+                    setTargetId('')
+                  }
                 }
               }}
               placeholder="Select a movie project"
@@ -431,7 +476,15 @@ export default function MoodBoardsPage() {
         </div>
         <div className="w-full md:w-48">
           <label className="text-sm font-medium">Scope</label>
-          <Select value={scope} onValueChange={(v) => setScope(v as MoodBoardScope)}>
+          <Select value={scope} onValueChange={(v) => {
+            setScope(v as MoodBoardScope)
+            // Clear targetId when scope changes
+            if (v === 'scene' && !projectId) {
+              setTargetId('')
+            } else if (v !== 'scene') {
+              setTargetId('')
+            }
+          }}>
             <SelectTrigger className="mt-1">
               <SelectValue placeholder="Select scope" />
             </SelectTrigger>
@@ -444,14 +497,47 @@ export default function MoodBoardsPage() {
         </div>
         <div className="w-full">
           <label className="text-sm font-medium">
-            {scope === 'movie' ? 'Project ID' : scope === 'scene' ? 'Scene ID' : 'Storyboard ID'}
+            {scope === 'movie' ? 'Project ID' : scope === 'scene' ? 'Scene' : 'Storyboard ID'}
           </label>
-          <Input
-            className="mt-1"
-            placeholder={scope === 'movie' ? 'Enter project id' : scope === 'scene' ? 'Enter scene id' : 'Enter storyboard id'}
-            value={targetId}
-            onChange={(e) => setTargetId(e.target.value)}
-          />
+          {scope === 'scene' && (projectId || initialProjectId) ? (
+            <Select
+              value={targetId}
+              onValueChange={(value) => setTargetId(value)}
+              disabled={loadingScenes}
+            >
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder={loadingScenes ? 'Loading scenes...' : 'Select a scene'} />
+              </SelectTrigger>
+              <SelectContent>
+                {scenes.length > 0 ? (
+                  scenes.map((scene) => (
+                    <SelectItem key={scene.id} value={scene.id}>
+                      <div className="flex items-center gap-2">
+                        <span>{scene.name}</span>
+                        {scene.metadata?.sceneNumber && (
+                          <span className="text-xs text-muted-foreground">
+                            (Scene {scene.metadata.sceneNumber})
+                          </span>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))
+                ) : (
+                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                    {loadingScenes ? 'Loading scenes...' : 'No scenes available'}
+                  </div>
+                )}
+              </SelectContent>
+            </Select>
+          ) : (
+            <Input
+              className="mt-1"
+              placeholder={scope === 'movie' ? 'Enter project id' : scope === 'scene' ? 'Select project first, then choose scene' : 'Enter storyboard id'}
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+              disabled={scope === 'scene' && !projectId}
+            />
+          )}
         </div>
         <Button className="md:ml-2" disabled={!canLoad || loading} onClick={() => loadBoards()}>
           {loading ? 'Loading…' : 'Load'}

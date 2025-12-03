@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea"
 import {
   Plus,
   Play,
+  Pause,
   Edit,
   Trash2,
   Clock,
@@ -39,6 +40,7 @@ import {
   CheckCircle,
   FileText,
   Film,
+  Volume2,
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
@@ -90,6 +92,12 @@ export default function TimelinePage() {
   const [isImageUploadOpen, setIsImageUploadOpen] = useState(false)
   const [selectedSceneForUpload, setSelectedSceneForUpload] = useState<SceneWithMetadata | null>(null)
   const [isClearingScenes, setIsClearingScenes] = useState(false)
+  const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set())
+  
+  // Scene description audio states
+  const [sceneDescriptionAudio, setSceneDescriptionAudio] = useState<Map<string, string>>(new Map()) // sceneId -> audioUrl
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null)
+  const [audioRefs, setAudioRefs] = useState<Map<string, HTMLAudioElement>>(new Map())
   
   // AI Image Generation states
   const [aiPrompt, setAiPrompt] = useState("")
@@ -215,7 +223,7 @@ export default function TimelinePage() {
     try {
       console.log('🎬 TIMELINE - Starting to load movie and scenes...')
       
-      // Load movie details first (fast)
+      // PHASE 1: Load movie details first (fast) - show page immediately
       const movieData = await TimelineService.getMovieById(movieId)
       if (!movieData) {
         toast({
@@ -228,38 +236,7 @@ export default function TimelinePage() {
       setMovie(movieData)
       console.log('🎬 TIMELINE - Movie loaded:', movieData)
       
-      // Fetch treatment linked to this movie
-      try {
-        const treatment = await TreatmentsService.getTreatmentByProjectId(movieId)
-        if (treatment) {
-          setTreatmentId(treatment.id)
-          console.log('🎬 TIMELINE - Treatment found:', treatment.id)
-        }
-      } catch (error) {
-        console.warn('🎬 TIMELINE - No treatment found for this movie:', error)
-      }
-      
-      // Now load scenes (slower, show loading state)
-      setScenesLoading(true)
-
-      // Check for duplicate timelines and clean them up automatically - but only if needed
-      try {
-        console.log('🎬 TIMELINE - Checking for duplicate timelines...')
-        const cleanupResult = await TimelineService.cleanupDuplicateTimelines(movieId)
-        if (cleanupResult.success && cleanupResult.message !== 'No cleanup needed') {
-          console.log('🎬 TIMELINE - Auto-cleanup completed:', cleanupResult.message)
-          toast({
-            title: "Timeline Cleanup",
-            description: cleanupResult.message,
-          })
-        } else {
-          console.log('🎬 TIMELINE - No cleanup needed, skipping expensive operation')
-        }
-      } catch (cleanupError) {
-        console.warn('🎬 TIMELINE - Auto-cleanup failed, continuing with normal load:', cleanupError)
-      }
-
-      // Get or create timeline for the movie
+      // PHASE 2: Load timeline (needed for scenes) - non-blocking
       let timeline = await TimelineService.getTimelineForMovie(movieId)
       if (!timeline) {
         console.log('No timeline found, creating new one for movie:', movieId)
@@ -277,12 +254,67 @@ export default function TimelinePage() {
       }
       
       setCurrentTimeline(timeline)
+      setScenesLoading(true)
 
-      // Load scenes for the timeline (includes fetching associated assets for thumbnails)
-      // Use the new display order method that sorts by scene number
+      // PHASE 3: Load scenes progressively - show first batch immediately
       const scenesData = await TimelineService.getTimelineDisplayOrder(timeline.id)
       console.log('Loaded scenes with asset thumbnails:', scenesData)
-      setScenes(scenesData)
+      
+      // Show first 5 scenes immediately for fast initial render
+      const initialBatch = scenesData.slice(0, 5)
+      setScenes(initialBatch)
+      setScenesLoading(false) // Allow page to render with first batch
+      
+      // Load remaining scenes progressively
+      if (scenesData.length > 5) {
+        // Load next batch after a short delay
+        setTimeout(() => {
+          setScenes(scenesData.slice(0, 10))
+        }, 100)
+        
+        // Load all scenes after another delay
+        setTimeout(() => {
+          setScenes(scenesData)
+        }, 300)
+      }
+      
+      // PHASE 4: Load non-critical data in background (non-blocking)
+      // Fetch treatment (non-blocking)
+      TreatmentsService.getTreatmentByProjectId(movieId)
+        .then(treatment => {
+          if (treatment) {
+            setTreatmentId(treatment.id)
+            console.log('🎬 TIMELINE - Treatment found:', treatment.id)
+          }
+        })
+        .catch(error => {
+          console.warn('🎬 TIMELINE - No treatment found for this movie:', error)
+        })
+      
+      // Fetch scene description audio (non-blocking, after scenes are visible)
+      if (userId && scenesData.length > 0) {
+        setTimeout(() => {
+          fetchSceneDescriptionAudio(scenesData)
+        }, 500)
+      }
+      
+      // Cleanup duplicates in background (non-blocking, low priority)
+      setTimeout(() => {
+        TimelineService.cleanupDuplicateTimelines(movieId)
+          .then(cleanupResult => {
+            if (cleanupResult.success && cleanupResult.message !== 'No cleanup needed') {
+              console.log('🎬 TIMELINE - Auto-cleanup completed:', cleanupResult.message)
+              toast({
+                title: "Timeline Cleanup",
+                description: cleanupResult.message,
+              })
+            }
+          })
+          .catch(cleanupError => {
+            console.warn('🎬 TIMELINE - Auto-cleanup failed:', cleanupError)
+          })
+      }, 1000) // Run cleanup after everything else is loaded
+      
     } catch (error) {
       console.error('Error loading movie and scenes:', error)
       toast({
@@ -290,8 +322,110 @@ export default function TimelinePage() {
         description: "Failed to load movie and scenes. Please try again.",
         variant: "destructive",
       })
-    } finally {
-      setScenesLoading(false) // Use scenesLoading instead of loading
+      setScenesLoading(false)
+    }
+  }
+
+  // Fetch scene description audio for all scenes
+  const fetchSceneDescriptionAudio = async (scenesData: SceneWithMetadata[]) => {
+    if (!userId) return
+    
+    try {
+      const { getSupabaseClient } = await import('@/lib/supabase')
+      const supabase = getSupabaseClient()
+      
+      const sceneIds = scenesData.map(s => s.id)
+      
+      // Fetch audio assets with metadata indicating scene_description
+      const { data: audioAssets, error } = await supabase
+        .from('assets')
+        .select('id, scene_id, content_url, metadata')
+        .in('scene_id', sceneIds)
+        .eq('content_type', 'audio')
+        .not('content_url', 'is', null)
+      
+      if (error) {
+        console.error('Error fetching scene description audio:', error)
+        return
+      }
+      
+      // Filter for scene description audio and map to scene IDs
+      const audioMap = new Map<string, string>()
+      if (audioAssets) {
+        console.log('🎵 Found', audioAssets.length, 'audio assets')
+        audioAssets.forEach(asset => {
+          console.log('🎵 Checking asset:', {
+            id: asset.id,
+            scene_id: asset.scene_id,
+            hasMetadata: !!asset.metadata,
+            metadata: asset.metadata,
+            metadataType: typeof asset.metadata,
+            isObject: typeof asset.metadata === 'object',
+            hasAudioType: asset.metadata && typeof asset.metadata === 'object' && 'audioType' in asset.metadata,
+            audioType: asset.metadata && typeof asset.metadata === 'object' ? asset.metadata.audioType : null
+          })
+          
+          // Check if this is scene description audio
+          // Handle both JSON string and object metadata
+          let metadata = asset.metadata
+          if (typeof metadata === 'string') {
+            try {
+              metadata = JSON.parse(metadata)
+            } catch (e) {
+              console.warn('Failed to parse metadata as JSON:', e)
+            }
+          }
+          
+          if (metadata && typeof metadata === 'object' && metadata.audioType === 'scene_description') {
+            if (asset.scene_id && asset.content_url) {
+              audioMap.set(asset.scene_id, asset.content_url)
+              console.log('🎵 ✅ Added scene description audio for scene:', asset.scene_id)
+            }
+          }
+        })
+      }
+      
+      setSceneDescriptionAudio(audioMap)
+      console.log('🎵 Loaded scene description audio for', audioMap.size, 'scenes')
+      console.log('🎵 Audio map:', Array.from(audioMap.entries()))
+    } catch (error) {
+      console.error('Error fetching scene description audio:', error)
+    }
+  }
+
+  // Handle audio play/pause
+  const handleAudioPlayPause = (sceneId: string) => {
+    const audioUrl = sceneDescriptionAudio.get(sceneId)
+    if (!audioUrl) return
+    
+    // Stop any currently playing audio
+    if (playingAudioId && playingAudioId !== sceneId) {
+      const currentAudio = audioRefs.get(playingAudioId)
+      if (currentAudio) {
+        currentAudio.pause()
+        currentAudio.currentTime = 0
+      }
+    }
+    
+    if (playingAudioId === sceneId) {
+      // Pause current audio
+      const audio = audioRefs.get(sceneId)
+      if (audio) {
+        audio.pause()
+      }
+      setPlayingAudioId(null)
+    } else {
+      // Play new audio
+      let audio = audioRefs.get(sceneId)
+      if (!audio) {
+        audio = new Audio(audioUrl)
+        audio.addEventListener('ended', () => {
+          setPlayingAudioId(null)
+        })
+        setAudioRefs(prev => new Map(prev).set(sceneId, audio!))
+      }
+      audio.play()
+      setPlayingAudioId(sceneId)
     }
   }
 
@@ -416,6 +550,10 @@ export default function TimelinePage() {
       const scenesData = await TimelineService.getScenesForTimeline(currentTimeline.id)
       console.log('Refreshed scenes:', scenesData)
       setScenes(scenesData)
+      // Refresh scene description audio
+      if (userId && scenesData.length > 0) {
+        fetchSceneDescriptionAudio(scenesData)
+      }
     } catch (error) {
       console.error('Error refreshing scenes:', error)
     }
@@ -860,16 +998,32 @@ export default function TimelinePage() {
         fullPrompt: scenePrompt
       })
       
-      // Get the locked AI service for timeline
-      const timelineSetting = await AISettingsService.getTimelineSetting()
+      // Get the AI settings for images tab (like storyboards does)
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      
+      if (!imagesSetting) {
+        console.log('🎬 DEBUG - Images AI setting not found, showing error toast')
+        toast({
+          title: "AI not configured",
+          description: "Please configure your Images AI settings in AI Settings first",
+          variant: "destructive"
+        })
+        return
+      }
+      
+      // Use Images setting (exactly like storyboards)
+      const timelineSetting = imagesSetting
       
       console.log('🎬 DEBUG - Timeline AI setting found:', {
         timelineSetting: timelineSetting ? {
           id: timelineSetting.id,
           tab_type: timelineSetting.tab_type,
           locked_model: timelineSetting.locked_model,
+          locked_model_type: typeof timelineSetting.locked_model,
+          locked_model_raw: JSON.stringify(timelineSetting.locked_model),
           is_locked: timelineSetting.is_locked
-        } : null
+        } : null,
+        fullSetting: timelineSetting
       })
       
       console.log('🎬 DEBUG - Checking timeline setting conditions:', {
@@ -878,11 +1032,11 @@ export default function TimelinePage() {
         willProceed: !(!timelineSetting || !timelineSetting.is_locked)
       })
       
-      if (!timelineSetting) {
+      if (!timelineSetting || !timelineSetting.locked_model) {
         console.log('🎬 DEBUG - Timeline AI setting not found, showing error toast')
         toast({
           title: "AI not configured",
-          description: "Please configure your Timeline AI settings in AI Settings first",
+          description: "Please configure your Timeline or Images AI settings in AI Settings first",
           variant: "destructive"
         })
         return
@@ -903,25 +1057,70 @@ export default function TimelinePage() {
 
       console.log('🎬 DEBUG - Timeline setting is properly configured, proceeding with API call')
 
-      // Normalize the model name for API
+      // Map service name to API service identifier (like storyboards does)
+      const mapServiceToAPI = (service: string | null | undefined): string => {
+        if (!service) return "dalle"
+        switch (service) {
+          case "DALL-E 3": return "dalle"
+          case "GPT Image": return "dalle" // GPT Image uses the dalle service but different endpoint
+          case "OpenArt": return "openart"
+          case "Runway ML": return "runway"
+          case "Leonardo AI": return "leonardo"
+          default: return "dalle"
+        }
+      }
+
+      // Normalize the model name for API (exactly like storyboards)
       const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) return "dall-e-3"
-        const model = displayName.toLowerCase()
-        if (model === "gpt image" || model.includes("gpt-image")) {
+        if (!displayName) {
+          console.log('🎬 DEBUG - No displayName provided, returning dall-e-3')
+          return "dall-e-3"
+        }
+        const model = displayName.toLowerCase().trim()
+        console.log('🎬 DEBUG - Normalizing model:', {
+          input: displayName,
+          lowercased: model,
+          check1: model === "gpt image",
+          check2: model.includes("gpt image"),
+          check3: model.includes("gpt-image"),
+          check4: model.startsWith("gpt"),
+          willReturnGPT: model === "gpt image" || model.includes("gpt image") || model.includes("gpt-image") || model.startsWith("gpt")
+        })
+        // Check for GPT Image (handles "GPT Image", "GPT Image 1", "gpt-image", "GPT-4.1-mini", etc.)
+        if (model === "gpt image" || model.includes("gpt image") || model.includes("gpt-image") || model.startsWith("gpt")) {
+          console.log('🎬 DEBUG - ✅ Returning gpt-image-1')
           return "gpt-image-1"
         } else if (model.includes("dall") || model.includes("dalle")) {
+          console.log('🎬 DEBUG - Returning dall-e-3')
           return "dall-e-3"
         }
         // Default to DALL-E 3 for unknown models
+        console.log('🎬 DEBUG - ⚠️ Returning default dall-e-3 (no match found)')
         return "dall-e-3"
       }
 
+      const normalizedService = mapServiceToAPI(timelineSetting.locked_model)
       const normalizedModel = normalizeImageModel(timelineSetting.locked_model)
 
       // Generate image using the locked service
+      console.log('🎬 DEBUG - Timeline AI Setting:', {
+        locked_model: timelineSetting.locked_model,
+        locked_model_type: typeof timelineSetting.locked_model,
+        locked_model_length: timelineSetting.locked_model?.length,
+        normalizedService: normalizedService,
+        normalizedModel: normalizedModel,
+        isGPTImage: normalizedModel === 'gpt-image-1',
+        normalizationCheck: {
+          lowercased: timelineSetting.locked_model?.toLowerCase(),
+          includesGPTImage: timelineSetting.locked_model?.toLowerCase().includes('gpt image'),
+          includesGPTDash: timelineSetting.locked_model?.toLowerCase().includes('gpt-image')
+        }
+      })
+      
       console.log('🎬 DEBUG - Sending request to API with data:', {
-        prompt: scenePrompt,
-        service: timelineSetting.locked_model,
+        prompt: scenePrompt.substring(0, 100) + '...',
+        service: normalizedService,
+        originalService: timelineSetting.locked_model,
         model: normalizedModel,
         apiKeyExists: !!apiKey
       })
@@ -933,8 +1132,8 @@ export default function TimelinePage() {
         },
         body: JSON.stringify({
           prompt: scenePrompt,
-          service: timelineSetting.locked_model,
-          model: normalizedModel, // Pass normalized model
+          service: normalizedService, // Use mapped service (dalle for GPT Image)
+          model: normalizedModel, // Pass normalized model (gpt-image-1 for GPT Image)
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
@@ -953,8 +1152,8 @@ export default function TimelinePage() {
           },
           body: JSON.stringify({
             prompt: simplePrompt,
-            service: timelineSetting.locked_model,
-            model: normalizedModel, // Pass normalized model
+            service: normalizedService, // Use mapped service (dalle for GPT Image)
+            model: normalizedModel, // Pass normalized model (gpt-image-1 for GPT Image)
             apiKey: apiKey,
             userId: user?.id,
             autoSaveToBucket: true,
@@ -2208,8 +2407,30 @@ export default function TimelinePage() {
                                     Order: {scene.order_index}
                                   </div>
                                 </div>
-                                <CardTitle className="text-lg md:text-xl min-w-0">{scene.name}</CardTitle>
-                                <div className="flex flex-wrap gap-1">
+                                <div className="flex items-center justify-between gap-2">
+                                  <CardTitle className="text-lg md:text-xl min-w-0">{scene.name}</CardTitle>
+                                  {/* Scene Description Audio Play/Pause Button */}
+                                  {sceneDescriptionAudio.has(scene.id) && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        handleAudioPlayPause(scene.id)
+                                      }}
+                                      className="h-7 w-7 p-0 border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
+                                      title={playingAudioId === scene.id ? "Pause description audio" : "Play description audio"}
+                                    >
+                                      {playingAudioId === scene.id ? (
+                                        <Pause className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Volume2 className="h-3.5 w-3.5" />
+                                      )}
+                                    </Button>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap gap-1 items-center">
                                   <Badge
                                     className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
                                   >
@@ -2218,17 +2439,49 @@ export default function TimelinePage() {
                                   
                                 </div>
                               </div>
-                              <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
+                              {(scene.description || scene.metadata.notes) && (
+                                <div className="mb-3">
+                                  {scene.description && (
+                                    <CardDescription className={`text-sm ${!expandedDescriptions.has(scene.id) ? 'line-clamp-3' : ''}`}>
+                                      {scene.description}
+                                    </CardDescription>
+                                  )}
+                                  {scene.metadata.notes && expandedDescriptions.has(scene.id) && (
+                                    <div className="mt-2 p-2 bg-muted/30 rounded text-xs">
+                                      <p className="text-muted-foreground">
+                                        <span className="font-semibold">Notes:</span> {scene.metadata.notes}
+                                      </p>
+                                    </div>
+                                  )}
+                                  {((scene.description && scene.description.length > 150) || (scene.metadata.notes && scene.metadata.notes.length > 100)) && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="text-xs h-6 px-2 mt-1 text-primary hover:text-primary/80"
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        setExpandedDescriptions(prev => {
+                                          const newSet = new Set(prev)
+                                          if (newSet.has(scene.id)) {
+                                            newSet.delete(scene.id)
+                                          } else {
+                                            newSet.add(scene.id)
+                                          }
+                                          return newSet
+                                        })
+                                      }}
+                                    >
+                                      {expandedDescriptions.has(scene.id) ? 'Read less' : 'Read more'}
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
 
 
 
 
 
-                                {scene.metadata.notes && (
-                                  <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
-                                    <p className="text-muted-foreground">Notes: {scene.metadata.notes}</p>
-                                  </div>
-                                )}
 
                                 <div className="flex flex-wrap items-center gap-1 pt-2 border-t border-border/50">
                                   <Button
@@ -2401,8 +2654,30 @@ export default function TimelinePage() {
                                   {/* Content Section - Below Image */}
                                   <div className="flex-1 p-4 lg:p-6 min-w-0">
                                     <div className="flex flex-col gap-3 mb-2 min-w-0">
-                                      <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
-                                      <div className="flex flex-wrap gap-1">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
+                                        {/* Scene Description Audio Play/Pause Button */}
+                                        {sceneDescriptionAudio.has(scene.id) && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={(e) => {
+                                              e.preventDefault()
+                                              e.stopPropagation()
+                                              handleAudioPlayPause(scene.id)
+                                            }}
+                                            className="h-7 w-7 p-0 border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
+                                            title={playingAudioId === scene.id ? "Pause description audio" : "Play description audio"}
+                                          >
+                                            {playingAudioId === scene.id ? (
+                                              <Pause className="h-3.5 w-3.5" />
+                                            ) : (
+                                              <Volume2 className="h-3.5 w-3.5" />
+                                            )}
+                                          </Button>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-wrap gap-1 items-center">
                                         <Badge
                                           className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}
                                         >
@@ -2422,11 +2697,42 @@ export default function TimelinePage() {
                                         </button>
                                       </div>
                                     </div>
-                                    <CardDescription className="text-sm mb-3">{scene.description}</CardDescription>
-
-                                    {scene.metadata.notes && (
-                                      <div className="mb-2 p-2 bg-muted/30 rounded text-xs">
-                                        <p className="text-muted-foreground">Notes: {scene.metadata.notes}</p>
+                                    {(scene.description || scene.metadata.notes) && (
+                                      <div className="mb-3">
+                                        {scene.description && (
+                                          <CardDescription className={`text-sm ${!expandedDescriptions.has(scene.id) ? 'line-clamp-3' : ''}`}>
+                                            {scene.description}
+                                          </CardDescription>
+                                        )}
+                                        {scene.metadata.notes && expandedDescriptions.has(scene.id) && (
+                                          <div className="mt-2 p-2 bg-muted/30 rounded text-xs">
+                                            <p className="text-muted-foreground">
+                                              <span className="font-semibold">Notes:</span> {scene.metadata.notes}
+                                            </p>
+                                          </div>
+                                        )}
+                                        {((scene.description && scene.description.length > 150) || (scene.metadata.notes && scene.metadata.notes.length > 100)) && (
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-xs h-6 px-2 mt-1 text-primary hover:text-primary/80"
+                                            onClick={(e) => {
+                                              e.preventDefault()
+                                              e.stopPropagation()
+                                              setExpandedDescriptions(prev => {
+                                                const newSet = new Set(prev)
+                                                if (newSet.has(scene.id)) {
+                                                  newSet.delete(scene.id)
+                                                } else {
+                                                  newSet.add(scene.id)
+                                                }
+                                                return newSet
+                                              })
+                                            }}
+                                          >
+                                            {expandedDescriptions.has(scene.id) ? 'Read less' : 'Read more'}
+                                          </Button>
+                                        )}
                                       </div>
                                     )}
 
@@ -2525,16 +2831,63 @@ export default function TimelinePage() {
                               <div className="p-2 rounded-lg bg-blue-500/10">
                                 <Play className="h-5 w-5 text-blue-500" />
                               </div>
-                              <div>
+                              <div className="flex-1 min-w-0">
                                 <CardTitle className="text-lg">{scene.name}</CardTitle>
-                                <CardDescription className="text-sm">{scene.description}</CardDescription>
+                                {scene.description && (
+                                  <div>
+                                    <CardDescription className={`text-sm ${!expandedDescriptions.has(scene.id) ? 'line-clamp-2' : ''}`}>
+                                      {scene.description}
+                                    </CardDescription>
+                                    {scene.description.length > 100 && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="text-xs h-6 px-2 mt-1 text-primary hover:text-primary/80"
+                                        onClick={(e) => {
+                                          e.preventDefault()
+                                          e.stopPropagation()
+                                          setExpandedDescriptions(prev => {
+                                            const newSet = new Set(prev)
+                                            if (newSet.has(scene.id)) {
+                                              newSet.delete(scene.id)
+                                            } else {
+                                              newSet.add(scene.id)
+                                            }
+                                            return newSet
+                                          })
+                                        }}
+                                      >
+                                        {expandedDescriptions.has(scene.id) ? 'Read less' : 'Read more'}
+                                      </Button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center justify-between gap-2">
                               <Badge className={`text-xs ${statusColors[scene.metadata.status as keyof typeof statusColors] || statusColors.Planning}`}>
                                 {scene.metadata.status || "Planning"}
                               </Badge>
-
+                              {/* Scene Description Audio Play/Pause Button */}
+                              {sceneDescriptionAudio.has(scene.id) && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    handleAudioPlayPause(scene.id)
+                                  }}
+                                  className="h-7 w-7 p-0 border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
+                                  title={playingAudioId === scene.id ? "Pause description audio" : "Play description audio"}
+                                >
+                                  {playingAudioId === scene.id ? (
+                                    <Pause className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Volume2 className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                              )}
                             </div>
                           </div>
                         </CardHeader>
