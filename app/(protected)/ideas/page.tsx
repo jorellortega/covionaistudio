@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List, Copy, Download, ChevronDown, ChevronUp, Wand2, Eye } from "lucide-react"
+import { Lightbulb, Sparkles, Plus, Edit, Trash2, Save, Search, Filter, Image as ImageIcon, Upload, FileText, Film, Loader2, List, Copy, Download, ChevronDown, ChevronUp, Wand2, Eye, Clipboard } from "lucide-react"
 import { jsPDF } from "jspdf"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
@@ -107,6 +107,20 @@ export default function IdeasPage() {
   
   // Import search state
   const [importIdeaSearch, setImportIdeaSearch] = useState("")
+  
+  // Paste Content dialog state
+  const [showPasteDialog, setShowPasteDialog] = useState(false)
+  const [pastedContent, setPastedContent] = useState("")
+  const [pasteContentType, setPasteContentType] = useState<"screenplay" | "treatment" | "script" | "story" | "other">("screenplay")
+  const [formattedContent, setFormattedContent] = useState("")
+  const [isFormattingContent, setIsFormattingContent] = useState(false)
+  const [pasteIdeaTitle, setPasteIdeaTitle] = useState("")
+  const [pasteIdeaDescription, setPasteIdeaDescription] = useState("")
+  const [pasteIdeaGenre, setPasteIdeaGenre] = useState("")
+  const [pasteIdeaMainCreator, setPasteIdeaMainCreator] = useState("")
+  const [pasteIdeaCoCreators, setPasteIdeaCoCreators] = useState<string[]>([])
+  const [pasteIdeaStatus, setPasteIdeaStatus] = useState<IdeaStatus>("concept")
+  const [isSavingPasteIdea, setIsSavingPasteIdea] = useState(false)
   
   // Tab state
   const [activeTab, setActiveTab] = useState("ai-prompt")
@@ -2431,6 +2445,192 @@ Synopsis (2-3 paragraphs only):`
     }
   }
 
+  // Format pasted content using AI
+  const formatPastedContent = async () => {
+    if (!pastedContent.trim()) {
+      toast({
+        title: "No Content",
+        description: "Please paste some content first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsFormattingContent(true)
+    setFormattedContent("")
+
+    try {
+      // Get AI settings for scripts tab
+      const settings = await AISettingsService.getSystemSettings()
+      const scriptsSetting = settings.find(s => s.tab_type === 'scripts')
+      
+      if (!scriptsSetting || !scriptsSetting.selected_model) {
+        throw new Error("AI model not configured. Please set up AI settings first.")
+      }
+
+      const service = scriptsSetting.selected_service || 'openai'
+      const model = scriptsSetting.selected_model
+
+      // Build format prompt based on content type
+      let formatPrompt = ""
+      switch (pasteContentType) {
+        case "screenplay":
+          formatPrompt = `Format the following content as a professional screenplay. Ensure proper formatting with:
+- Scene headings (INT./EXT. LOCATION - TIME)
+- Action lines (descriptive text)
+- Character names (centered, uppercase)
+- Dialogue (indented)
+- Parentheticals (under character names)
+- Transitions (FADE IN, FADE OUT, CUT TO, etc.)
+
+Content to format:
+${pastedContent}`
+          break
+        case "treatment":
+          formatPrompt = `Format the following content as a professional movie treatment. Structure should include:
+- TITLE
+- LOGLINE (one-sentence summary)
+- SYNOPSIS (2-3 paragraphs)
+- CHARACTERS (brief descriptions)
+- ACT I, ACT II, ACT III (detailed scene-by-scene narrative in prose)
+- THEMES
+- VISUAL STYLE
+Write in present tense, third person. Be detailed and cinematic.
+
+Content to format:
+${pastedContent}`
+          break
+        case "script":
+          formatPrompt = `Format the following content as a professional script. Ensure proper structure and formatting.
+
+Content to format:
+${pastedContent}`
+          break
+        case "story":
+          formatPrompt = `Format the following content as a well-structured story with proper narrative flow, character development, and pacing.
+
+Content to format:
+${pastedContent}`
+          break
+        default:
+          formatPrompt = `Format and improve the following content, ensuring proper structure, clarity, and professional presentation.
+
+Content to format:
+${pastedContent}`
+      }
+
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: formatPrompt,
+          field: 'script',
+          service: service,
+          model: model,
+          apiKey: 'configured',
+          userId: userId,
+          maxTokens: 4000,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to format content')
+      }
+
+      const result = await response.json()
+      if (result.success && result.text) {
+        setFormattedContent(result.text)
+        toast({
+          title: "Content Formatted!",
+          description: `Your content has been formatted as ${pasteContentType}.`,
+        })
+      } else {
+        throw new Error('No formatted content was generated')
+      }
+    } catch (error) {
+      console.error('Error formatting content:', error)
+      toast({
+        title: "Formatting Failed",
+        description: error instanceof Error ? error.message : 'Failed to format content',
+        variant: "destructive",
+      })
+    } finally {
+      setIsFormattingContent(false)
+    }
+  }
+
+  // Save formatted content as idea
+  const savePasteIdea = async () => {
+    if (!pasteIdeaTitle.trim() || !pasteIdeaMainCreator.trim()) {
+      toast({
+        title: "Missing Required Fields",
+        description: "Please fill in Idea Name and Main Creator.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSavingPasteIdea(true)
+
+    try {
+      const contentToSave = formattedContent || pastedContent
+      
+      const ideaData = {
+        title: pasteIdeaTitle.trim(),
+        description: pasteIdeaDescription.trim() || contentToSave.substring(0, 500),
+        genre: pasteIdeaGenre || "Unspecified",
+        genres: pasteIdeaGenre ? [pasteIdeaGenre] : [],
+        main_creator: pasteIdeaMainCreator.trim(),
+        co_creators: pasteIdeaCoCreators,
+        status: pasteIdeaStatus,
+        original_prompt: contentToSave,
+        prompt: contentToSave,
+        userId: user!.id
+      }
+
+      const response = await fetch('/api/import/idea', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ideaData)
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to save idea')
+      }
+
+      const data = await response.json()
+      toast({
+        title: "Success",
+        description: `Idea "${data.ideaTitle || pasteIdeaTitle}" saved successfully!`,
+      })
+
+      // Reset form
+      setPastedContent("")
+      setFormattedContent("")
+      setPasteIdeaTitle("")
+      setPasteIdeaDescription("")
+      setPasteIdeaGenre("")
+      setPasteIdeaMainCreator("")
+      setPasteIdeaCoCreators([])
+      setPasteIdeaStatus("concept")
+      setPasteContentType("screenplay")
+      setShowPasteDialog(false)
+      
+      fetchIdeas()
+    } catch (error) {
+      console.error('Error saving paste idea:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : 'Failed to save idea',
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingPasteIdea(false)
+    }
+  }
+
   const filteredIdeas = ideas.filter(idea => {
     const matchesSearch = idea.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          idea.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -2507,7 +2707,7 @@ Synopsis (2-3 paragraphs only):`
                       id="title"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      placeholder="Enter movie title"
+                      placeholder=""
                     />
                   </div>
                   <div>
@@ -2588,7 +2788,7 @@ Synopsis (2-3 paragraphs only):`
                       id="main-creator"
                       value={mainCreator}
                       onChange={(e) => setMainCreator(e.target.value)}
-                      placeholder="Primary creator's name"
+                      placeholder=""
                     />
                   </div>
                   <div>
@@ -2604,11 +2804,8 @@ Synopsis (2-3 paragraphs only):`
                           setCoCreators(value.split(',').map(s => s.trim()).filter(s => s !== ''))
                         }
                       }}
-                      placeholder="Co-creators (comma separated)"
+                      placeholder=""
                     />
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Separate multiple names with commas
-                    </p>
                   </div>
                 </div>
                 
@@ -2618,7 +2815,7 @@ Synopsis (2-3 paragraphs only):`
                     id="description"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Brief description of your movie idea"
+                    placeholder=""
                     rows={3}
                   />
                 </div>
@@ -2629,12 +2826,9 @@ Synopsis (2-3 paragraphs only):`
                     id="synopsis"
                     value={synopsis}
                     onChange={(e) => setSynopsis(e.target.value)}
-                    placeholder="Brief synopsis (2-3 paragraphs) - used when converting to a treatment."
+                    placeholder=""
                     rows={4}
                   />
-                  <p className="text-sm text-muted-foreground mt-1">
-                    A brief synopsis (2-3 paragraphs) that will be used when converting this idea to a treatment.
-                  </p>
                   <div className="mt-2">
                     <Button
                       type="button"
@@ -2684,20 +2878,6 @@ Synopsis (2-3 paragraphs only):`
                 </div>
                 
                 <div>
-                  <Label htmlFor="prompt">AI Generated Content</Label>
-                  <Textarea
-                    id="prompt"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="AI-generated content, development notes, or additional prompts..."
-                    rows={4}
-                  />
-                  <p className="text-sm text-muted-foreground mt-1">
-                    AI-generated content, development notes, or additional prompts to develop this idea
-                  </p>
-                </div>
-                
-                <div>
                   <Label htmlFor="status">Status</Label>
                   <Select value={status} onValueChange={(value: any) => setStatus(value)}>
                     <SelectTrigger>
@@ -2740,6 +2920,15 @@ Synopsis (2-3 paragraphs only):`
           >
             <Upload className="h-4 w-4" />
             Import
+          </Button>
+          
+          <Button 
+            variant="outline" 
+            onClick={() => setShowPasteDialog(true)}
+            className="flex items-center gap-2"
+          >
+            <Clipboard className="h-4 w-4" />
+            Paste Content
           </Button>
         </div>
       </div>
@@ -3054,10 +3243,25 @@ Synopsis (2-3 paragraphs only):`
                         </TabsContent>
                         
                         <TabsContent value="files" className="space-y-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-medium">Files</p>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setImportImageIdeaId(idea.id)
+                                setShowImportDialog(true)
+                              }}
+                              className="h-7 gap-1"
+                            >
+                              <Upload className="h-3 w-3" />
+                              Import
+                            </Button>
+                          </div>
+                          
                           {/* Imported Files */}
                           {ideaImages[idea.id] && ideaImages[idea.id].filter(url => !url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)).length > 0 && (
                             <div>
-                              <p className="text-sm font-medium mb-2">Imported Files:</p>
                               <div className="flex gap-2 overflow-x-auto pb-2">
                                 {ideaImages[idea.id]
                                   .filter(fileUrl => !fileUrl.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i))
@@ -3868,6 +4072,76 @@ Synopsis (2-3 paragraphs only):`
               </TabsList>
               
               <TabsContent value="import" className="space-y-3">
+                {/* New Idea Details - Only show if no existing idea selected */}
+                {!importImageIdeaId && (
+                  <div className="space-y-3">
+                    <div>
+                      <Label htmlFor="import-idea-title" className="text-sm font-medium">
+                        New Idea Name <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        id="import-idea-title"
+                        placeholder="Enter a name for your new idea"
+                        value={importIdeaTitle}
+                        onChange={(e) => setImportIdeaTitle(e.target.value)}
+                        className="mt-1"
+                        required
+                      />
+                    </div>
+                    
+                    <div>
+                      <Label htmlFor="import-idea-description" className="text-sm font-medium">
+                        Description
+                      </Label>
+                      <Textarea
+                        id="import-idea-description"
+                        placeholder="Describe your idea (optional)"
+                        value={importIdeaDescription}
+                        onChange={(e) => setImportIdeaDescription(e.target.value)}
+                        className="mt-1"
+                        rows={2}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <Label htmlFor="import-idea-status" className="text-sm font-medium">
+                          Status
+                        </Label>
+                        <Select value={importIdeaStatus} onValueChange={(value: IdeaStatus) => setImportIdeaStatus(value)}>
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Select status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="concept">Concept</SelectItem>
+                            <SelectItem value="development">Development</SelectItem>
+                            <SelectItem value="pre-production">Pre-Production</SelectItem>
+                            <SelectItem value="production">Production</SelectItem>
+                            <SelectItem value="post-production">Post-Production</SelectItem>
+                            <SelectItem value="completed">Completed</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div>
+                        <Label htmlFor="import-idea-main-creator" className="text-sm font-medium">
+                          Main Creator <span className="text-red-500">*</span>
+                        </Label>
+                        <Input
+                          id="import-idea-main-creator"
+                          placeholder="Primary creator's name"
+                          value={importIdeaMainCreator}
+                          onChange={(e) => setImportIdeaMainCreator(e.target.value)}
+                          className="mt-1"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </TabsContent>
+              
+              <TabsContent value="advanced" className="space-y-3">
                 {/* Idea Association */}
                 <div>
                   <Label className="text-sm font-medium">Associate with Idea</Label>
@@ -3903,140 +4177,57 @@ Synopsis (2-3 paragraphs only):`
                       </div>
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Choose an existing idea to add files to, or leave empty to create a new one
-                  </p>
                 </div>
 
-                {/* New Idea Details - Only show if no existing idea selected */}
+                {/* Additional fields - Only show if no existing idea selected */}
                 {!importImageIdeaId && (
                   <div className="space-y-3">
                     <div>
-                      <Label htmlFor="import-idea-title" className="text-sm font-medium">
-                        New Idea Name <span className="text-red-500">*</span>
+                      <Label htmlFor="import-idea-genre" className="text-sm font-medium">
+                        Genre
                       </Label>
-                      <Input
-                        id="import-idea-title"
-                        placeholder="Enter a name for your new idea"
-                        value={importIdeaTitle}
-                        onChange={(e) => setImportIdeaTitle(e.target.value)}
-                        className="mt-1"
-                        required
-                      />
+                      <Select value={importIdeaGenre} onValueChange={setImportIdeaGenre}>
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Select genre" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Action">Action</SelectItem>
+                          <SelectItem value="Comedy">Comedy</SelectItem>
+                          <SelectItem value="Drama">Drama</SelectItem>
+                          <SelectItem value="Horror">Horror</SelectItem>
+                          <SelectItem value="Sci-Fi">Sci-Fi</SelectItem>
+                          <SelectItem value="Thriller">Thriller</SelectItem>
+                          <SelectItem value="Romance">Romance</SelectItem>
+                          <SelectItem value="Documentary">Documentary</SelectItem>
+                          <SelectItem value="Unspecified">Unspecified</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                     
                     <div>
-                      <Label htmlFor="import-idea-description" className="text-sm font-medium">
-                        Description
+                      <Label htmlFor="import-idea-co-creators" className="text-sm font-medium">
+                        Co-Creators
                       </Label>
-                      <Textarea
-                        id="import-idea-description"
-                        placeholder="Describe your idea (optional)"
-                        value={importIdeaDescription}
-                        onChange={(e) => setImportIdeaDescription(e.target.value)}
+                      <Input
+                        id="import-idea-co-creators"
+                        placeholder="Co-creators (comma separated)"
+                        value={importIdeaCoCreators.join(', ')}
+                        onChange={(e) => {
+                          const value = e.target.value
+                          if (value.trim() === '') {
+                            setImportIdeaCoCreators([])
+                          } else {
+                            setImportIdeaCoCreators(value.split(',').map(s => s.trim()).filter(s => s !== ''))
+                          }
+                        }}
                         className="mt-1"
-                        rows={2}
                       />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label htmlFor="import-idea-genre" className="text-sm font-medium">
-                          Genre
-                        </Label>
-                        <Select value={importIdeaGenre} onValueChange={setImportIdeaGenre}>
-                          <SelectTrigger className="mt-1">
-                            <SelectValue placeholder="Select genre" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Action">Action</SelectItem>
-                            <SelectItem value="Comedy">Comedy</SelectItem>
-                            <SelectItem value="Drama">Drama</SelectItem>
-                            <SelectItem value="Horror">Horror</SelectItem>
-                            <SelectItem value="Sci-Fi">Sci-Fi</SelectItem>
-                            <SelectItem value="Thriller">Thriller</SelectItem>
-                            <SelectItem value="Romance">Romance</SelectItem>
-                            <SelectItem value="Documentary">Documentary</SelectItem>
-                            <SelectItem value="Unspecified">Unspecified</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div>
-                        <Label htmlFor="import-idea-status" className="text-sm font-medium">
-                          Status
-                        </Label>
-                        <Select value={importIdeaStatus} onValueChange={(value: IdeaStatus) => setImportIdeaStatus(value)}>
-                          <SelectTrigger className="mt-1">
-                            <SelectValue placeholder="Select status" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="concept">Concept</SelectItem>
-                            <SelectItem value="development">Development</SelectItem>
-                            <SelectItem value="pre-production">Pre-Production</SelectItem>
-                            <SelectItem value="production">Production</SelectItem>
-                            <SelectItem value="post-production">Post-Production</SelectItem>
-                            <SelectItem value="completed">Completed</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <Label htmlFor="import-idea-main-creator" className="text-sm font-medium">
-                          Main Creator <span className="text-red-500">*</span>
-                        </Label>
-                        <Input
-                          id="import-idea-main-creator"
-                          placeholder="Primary creator's name"
-                          value={importIdeaMainCreator}
-                          onChange={(e) => setImportIdeaMainCreator(e.target.value)}
-                          className="mt-1"
-                          required
-                        />
-                      </div>
-                      
-                      <div>
-                        <Label htmlFor="import-idea-co-creators" className="text-sm font-medium">
-                          Co-Creators
-                        </Label>
-                        <Input
-                          id="import-idea-co-creators"
-                          placeholder="Co-creators (comma separated)"
-                          value={importIdeaCoCreators.join(', ')}
-                          onChange={(e) => {
-                            const value = e.target.value
-                            if (value.trim() === '') {
-                              setImportIdeaCoCreators([])
-                            } else {
-                              setImportIdeaCoCreators(value.split(',').map(s => s.trim()).filter(s => s !== ''))
-                            }
-                          }}
-                          className="mt-1"
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Separate multiple names with commas
-                        </p>
-                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Separate multiple names with commas
+                      </p>
                     </div>
                   </div>
                 )}
-              </TabsContent>
-              
-              <TabsContent value="advanced" className="space-y-3">
-                <div className="text-center py-8 text-muted-foreground">
-                  <p className="text-lg font-medium mb-2">Advanced Import Options</p>
-                  <p className="text-sm mb-4">
-                    Use the "Import Files" tab to drag & drop files and configure your idea.
-                  </p>
-                  <div className="space-y-2 text-xs">
-                    <p>• Drag & drop multiple file types</p>
-                    <p>• Associate with existing ideas</p>
-                    <p>• Create new ideas with custom details</p>
-                    <p>• Bulk import with progress tracking</p>
-                  </div>
-                </div>
               </TabsContent>
             </Tabs>
 
@@ -4072,6 +4263,202 @@ Synopsis (2-3 paragraphs only):`
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Paste Content Dialog */}
+      <Dialog open={showPasteDialog} onOpenChange={setShowPasteDialog}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Clipboard className="h-5 w-5 text-blue-500" />
+              Paste & Format Content
+            </DialogTitle>
+            <DialogDescription>
+              Paste your content and use AI to format it into a screenplay, treatment, script, or story
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Content Type Selection */}
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Content Type</Label>
+              <Select value={pasteContentType} onValueChange={(value: any) => setPasteContentType(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select content type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="screenplay">Screenplay</SelectItem>
+                  <SelectItem value="treatment">Treatment</SelectItem>
+                  <SelectItem value="script">Script</SelectItem>
+                  <SelectItem value="story">Story</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Paste Area */}
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Paste Your Content</Label>
+              <Textarea
+                value={pastedContent}
+                onChange={(e) => setPastedContent(e.target.value)}
+                placeholder="Paste your content here..."
+                className="min-h-[200px] font-mono text-sm"
+                rows={10}
+              />
+            </div>
+
+            {/* AI Format Button */}
+            <Button
+              onClick={formatPastedContent}
+              disabled={!pastedContent.trim() || isFormattingContent}
+              className="w-full gap-2"
+            >
+              {isFormattingContent ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Formatting with AI...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-4 w-4" />
+                  Format with AI
+                </>
+              )}
+            </Button>
+
+            {/* Formatted Content Display */}
+            {formattedContent && (
+              <div>
+                <Label className="text-sm font-medium mb-2 block">Formatted Content</Label>
+                <div className="border rounded-md p-4 bg-muted/50 max-h-[300px] overflow-y-auto">
+                  <pre className="whitespace-pre-wrap text-sm font-mono">{formattedContent}</pre>
+                </div>
+              </div>
+            )}
+
+            {/* Idea Details */}
+            <div className="border-t pt-4 space-y-4">
+              <h3 className="text-sm font-semibold">Save as Idea</h3>
+              
+              <div>
+                <Label className="text-sm font-medium">
+                  Idea Name <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  value={pasteIdeaTitle}
+                  onChange={(e) => setPasteIdeaTitle(e.target.value)}
+                  placeholder="Enter idea name"
+                  className="mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Description</Label>
+                <Textarea
+                  value={pasteIdeaDescription}
+                  onChange={(e) => setPasteIdeaDescription(e.target.value)}
+                  placeholder="Brief description (optional)"
+                  className="mt-1"
+                  rows={2}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm font-medium">Genre</Label>
+                  <Select value={pasteIdeaGenre} onValueChange={setPasteIdeaGenre}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select genre" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Action">Action</SelectItem>
+                      <SelectItem value="Comedy">Comedy</SelectItem>
+                      <SelectItem value="Drama">Drama</SelectItem>
+                      <SelectItem value="Horror">Horror</SelectItem>
+                      <SelectItem value="Sci-Fi">Sci-Fi</SelectItem>
+                      <SelectItem value="Thriller">Thriller</SelectItem>
+                      <SelectItem value="Romance">Romance</SelectItem>
+                      <SelectItem value="Documentary">Documentary</SelectItem>
+                      <SelectItem value="Unspecified">Unspecified</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label className="text-sm font-medium">Status</Label>
+                  <Select value={pasteIdeaStatus} onValueChange={(value: IdeaStatus) => setPasteIdeaStatus(value)}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue placeholder="Select status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="concept">Concept</SelectItem>
+                      <SelectItem value="development">Development</SelectItem>
+                      <SelectItem value="pre-production">Pre-Production</SelectItem>
+                      <SelectItem value="production">Production</SelectItem>
+                      <SelectItem value="post-production">Post-Production</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-sm font-medium">
+                    Main Creator <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    value={pasteIdeaMainCreator}
+                    onChange={(e) => setPasteIdeaMainCreator(e.target.value)}
+                    placeholder="Primary creator's name"
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label className="text-sm font-medium">Co-Creators</Label>
+                  <Input
+                    value={pasteIdeaCoCreators.join(', ')}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      if (value.trim() === '') {
+                        setPasteIdeaCoCreators([])
+                      } else {
+                        setPasteIdeaCoCreators(value.split(',').map(s => s.trim()).filter(s => s !== ''))
+                      }
+                    }}
+                    placeholder="Co-creators (comma separated)"
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPasteDialog(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={savePasteIdea}
+              disabled={isSavingPasteIdea || !pasteIdeaTitle.trim() || !pasteIdeaMainCreator.trim()}
+              className="gap-2"
+            >
+              {isSavingPasteIdea ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4" />
+                  Save Idea
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

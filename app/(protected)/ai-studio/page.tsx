@@ -819,6 +819,8 @@ export default function AIStudioPage() {
       }
       if (char.archetype) parts.push(`Archetype: ${char.archetype}`)
       if (char.description) parts.push(`Description: ${char.description}`)
+      // Include AI image analysis - especially important for image generation
+      if (char.ai_image_analysis) parts.push(`AI Image Analysis: ${char.ai_image_analysis}`)
       if (char.backstory) parts.push(`Backstory: ${char.backstory}`)
       if (!forImage) {
         if (char.goals) parts.push(`Goals/Motivations: ${char.goals}`)
@@ -4077,50 +4079,6 @@ export default function AIStudioPage() {
                     </div>
                   )}
                   
-                  {selectedModel === "ElevenLabs" && userApiKeys.elevenlabs_api_key && (
-                    <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
-                      <p className="text-sm text-blue-600">
-                        <CheckCircle className="h-4 w-4 inline mr-2" />
-                        ElevenLabs API key configured
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={async () => {
-                          try {
-                            console.log('🧪 Testing ElevenLabs API connection...')
-                            const { ElevenLabsService } = await import('@/lib/ai-services')
-                            const result = await ElevenLabsService.testApiConnection(userApiKeys.elevenlabs_api_key!)
-                            
-                            if (result.success) {
-                              toast({
-                                title: "API Connection Test",
-                                description: "✅ ElevenLabs API connection successful!",
-                                variant: "default",
-                              })
-                            } else {
-                              toast({
-                                title: "API Connection Test",
-                                description: `❌ Connection failed: ${result.error}`,
-                                variant: "destructive",
-                              })
-                            }
-                          } catch (error) {
-                            console.error('🧪 ElevenLabs API test error:', error)
-                            toast({
-                              title: "API Connection Test",
-                              description: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-                              variant: "destructive",
-                            })
-                          }
-                        }}
-                        className="mt-2 text-xs"
-                      >
-                        Test API Connection
-                          </Button>
-                        </div>
-                      )}
-
                   {selectedModel === "Suno AI" && !userApiKeys.openai_api_key && (
                     <div className="p-3 bg-orange-500/10 rounded-lg border border-orange-500/20">
                       <p className="text-sm text-orange-600">

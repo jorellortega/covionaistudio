@@ -217,6 +217,13 @@ export default function CharacterDetailPage() {
                 </div>
               )}
 
+              {character.ai_image_analysis && (
+                <div>
+                  <Label className="text-sm font-medium mb-2 block">AI Analysis from Image</Label>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.ai_image_analysis}</p>
+                </div>
+              )}
+
               {character.backstory && (
                 <div>
                   <Label className="text-sm font-medium mb-2 block">Backstory</Label>

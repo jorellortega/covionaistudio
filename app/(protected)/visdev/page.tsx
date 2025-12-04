@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { useToast } from '@/hooks/use-toast'
 import { OpenAIService, AnthropicService, OpenArtService } from '@/lib/ai-services'
-import { AISettingsService } from '@/lib/ai-settings-service'
+import { AISettingsService, type AISetting } from '@/lib/ai-settings-service'
 import { useAuthReady } from '@/components/auth-hooks'
 import { getSupabaseClient } from '@/lib/supabase'
 import { ProjectSelector } from '@/components/project-selector'
@@ -69,7 +69,8 @@ export default function VisualDevelopmentPage() {
   const [savedPrompts, setSavedPrompts] = useState<SavedPrompt[]>([])
   const [activeTab, setActiveTab] = useState('characters')
   const [isGenerating, setIsGenerating] = useState(false)
-  const [aiSettings, setAiSettings] = useState<any>(null)
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
   const [selectedProject, setSelectedProject] = useState<string>("all")
   const [selectedScene, setSelectedScene] = useState<string>("movie")
@@ -182,19 +183,22 @@ export default function VisualDevelopmentPage() {
 
   // Auto-select locked model when AI settings change
   useEffect(() => {
-    if (aiSettings && aiSettings.is_locked && aiSettings.locked_model) {
-      // Map the locked model to our model keys
-      const modelMapping: { [key: string]: string } = {
-        'DALL-E 3': 'openai',
-        'Claude': 'anthropic',
-        'SDXL': 'openart'
-      }
-      const mappedModel = modelMapping[aiSettings.locked_model]
-      if (mappedModel) {
+    if (aiSettingsLoaded && aiSettings.length > 0) {
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+        // Map the locked model to our model keys
+        const modelMapping: { [key: string]: string } = {
+          'DALL-E 3': 'openai',
+          'GPT Image': 'openai',
+          'GPT Image 1': 'openai',
+          'Claude': 'anthropic',
+          'SDXL': 'openart'
+        }
+        const mappedModel = modelMapping[imagesSetting.locked_model] || 'openai'
         setSelectedModel(mappedModel)
       }
     }
-  }, [aiSettings])
+  }, [aiSettings, aiSettingsLoaded])
 
   // Log prompts whenever they change for debugging
   useEffect(() => {
@@ -293,12 +297,45 @@ export default function VisualDevelopmentPage() {
 
   const loadAISettings = async () => {
     try {
-      const settings = await AISettingsService.getUserSettings(user!.id)
-      const imageSettings = settings.find(s => s.tab_type === 'images')
-      setAiSettings(imageSettings)
+      const settings = await AISettingsService.getSystemSettings()
+      
+      // Ensure default settings exist for all tabs
+      const defaultSettings = await Promise.all([
+        AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+        AISettingsService.getOrCreateDefaultTabSetting('images'),
+        AISettingsService.getOrCreateDefaultTabSetting('videos'),
+        AISettingsService.getOrCreateDefaultTabSetting('audio')
+      ])
+      
+      // Merge existing settings with default ones, preferring existing
+      const mergedSettings = defaultSettings.map(defaultSetting => {
+        const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+        return existingSetting || defaultSetting
+      })
+      
+      setAiSettings(mergedSettings)
+      setAiSettingsLoaded(true)
     } catch (error) {
       console.error('Failed to load AI settings:', error)
+      setAiSettingsLoaded(true)
     }
+  }
+
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
   }
 
   const loadUserApiKeys = async () => {
@@ -1087,7 +1124,8 @@ export default function VisualDevelopmentPage() {
   }
 
   const isModelAvailable = (modelKey: string) => {
-    if (!aiSettings || !aiSettings.is_locked) return false
+    const imagesSetting = getImagesTabSetting()
+    if (!imagesSetting || !imagesSetting.is_locked) return false
     
     const modelMapping: { [key: string]: string } = {
       'openai': 'DALL-E 3',
@@ -1095,18 +1133,19 @@ export default function VisualDevelopmentPage() {
       'openart': 'SDXL'
     }
     
-    return aiSettings.locked_model === modelMapping[modelKey]
+    return imagesSetting.locked_model === modelMapping[modelKey]
   }
 
   const getModelStatus = (modelKey: string) => {
-    if (!aiSettings) return 'Not Configured'
-    if (!aiSettings.is_locked) return 'Not Locked'
+    const imagesSetting = getImagesTabSetting()
+    if (!imagesSetting) return 'Not Configured'
+    if (!imagesSetting.is_locked) return 'Not Locked'
     if (isModelAvailable(modelKey)) return 'Available'
     return 'Not Available'
   }
 
   const generateContent = async (type: string, prompt: string) => {
-    if (!prompt.trim() || !aiSettings) {
+    if (!prompt.trim() || !aiSettingsLoaded || !user || !userId) {
       toast({
         title: "Error",
         description: "Please enter a prompt and ensure AI settings are configured",
@@ -1117,66 +1156,124 @@ export default function VisualDevelopmentPage() {
 
     setIsGenerating(true)
     try {
-      let response
-      let apiKey = ''
+      // Check for locked image model
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const isImagesTabLocked = imagesSetting?.is_locked || false
+      const lockedModel = imagesSetting?.locked_model || null
       
-      if (selectedModel === 'openai') {
-        apiKey = userApiKeys.openai_api_key || ''
-      } else if (selectedModel === 'anthropic') {
-        apiKey = userApiKeys.anthropic_api_key || ''
-      } else if (selectedModel === 'openart') {
-        apiKey = userApiKeys.openart_api_key || ''
-      }
+      // Use locked model if available, otherwise use selected service
+      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : selectedModel
+      let apiKey = 'configured'
 
-      if (!apiKey) {
-        toast({
-          title: "API Key Missing",
-          description: `Please add your ${models[selectedModel as keyof typeof models]} API key in Settings → Profile`,
-          variant: "destructive"
-        })
-        return
-      }
-
-      if (selectedModel === 'openai') {
-        const stylePrefix = selectedStyle !== 'none' ? `${styles[selectedStyle as keyof typeof styles]} style: ` : ''
-        response = await OpenAIService.generateImage({
-          prompt: `${stylePrefix}${prompt}`,
-          style: selectedStyle !== 'none' ? styles[selectedStyle as keyof typeof styles] : '',
-          model: 'dall-e-3',
-          apiKey
-        })
-      } else if (selectedModel === 'anthropic') {
-        response = await AnthropicService.generateScript({
-          prompt: `Generate detailed visual development content for: ${prompt}`,
-          template: `You are a professional visual development artist. Create detailed descriptions for ${type} including visual style, mood, and technical specifications.`,
-          model: 'claude-3-sonnet-20240229',
-          apiKey
-        })
-      } else if (selectedModel === 'openart') {
-        const stylePrefix = selectedStyle !== 'none' ? `${styles[selectedStyle as keyof typeof styles]} style: ` : ''
-        response = await OpenArtService.generateImage({
-          prompt: `${stylePrefix}${prompt}`,
-          style: selectedStyle !== 'none' ? styles[selectedStyle as keyof typeof styles] : '',
-          model: 'sdxl',
-          apiKey
-        })
-      }
-
-      if (response?.success) {
-        let imageUrl = response.data?.data?.[0]?.url
-        
-        // If we have an image URL and a project is selected, save it to the bucket
-        if (imageUrl && selectedProject && selectedProject !== 'all' && selectedProject !== 'free') {
-          try {
-            const fileName = `${Date.now()}-${type}-${prompt.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.png`
-            const bucketUrl = await saveImageToBucket(imageUrl, fileName)
-            imageUrl = bucketUrl // Use the bucket URL instead of DALL-E URL
-            console.log('✅ Image saved to bucket:', bucketUrl)
-          } catch (error) {
-            console.error('❌ Failed to save image to bucket:', error)
-            // Continue with DALL-E URL if bucket save fails
-          }
+      // Helper function to normalize model name from display name to API model identifier
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model === "gpt image 1" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
         }
+        // Default to DALL-E 3 for unknown models
+        return "dall-e-3"
+      }
+
+      // Normalize service name for API
+      let normalizedService = 'dalle' // Default
+      const serviceLower = serviceToUse?.toLowerCase() || ''
+      if (serviceLower === 'dalle' || serviceLower === 'dall-e 3' || serviceLower === 'dall-e-3' || 
+          serviceLower === 'gpt image' || serviceLower === 'gpt image 1' || serviceLower.includes('gpt image')) {
+        normalizedService = 'dalle'
+      } else if (serviceLower === 'openart' || serviceLower === 'sdxl') {
+        normalizedService = 'openart'
+      } else {
+        normalizedService = serviceLower
+      }
+
+      // Normalize model name
+      const normalizedModel = normalizeImageModel(serviceToUse)
+
+      // Build enhanced prompt with style if needed
+      const stylePrefix = selectedStyle !== 'none' ? `${allStyles[selectedStyle as keyof typeof allStyles]} style: ` : ''
+      
+      // Use the user's manual prompt as-is - don't auto-combine character/location if user typed something
+      // Only auto-combine if the prompt is empty or just whitespace
+      let enhancedPrompt = prompt.trim()
+      
+      // Only auto-combine character and location if prompt is empty
+      if (!enhancedPrompt && selectedCharacterId && selectedLocationId) {
+        const selectedChar = characters.find(c => c.id === selectedCharacterId)
+        const selectedLoc = locations.find(l => l.id === selectedLocationId)
+        if (selectedChar && selectedLoc) {
+          const charParts: string[] = []
+          if (selectedChar.description) charParts.push(selectedChar.description)
+          if (selectedChar.ai_image_analysis) charParts.push(`[AI Analysis: ${selectedChar.ai_image_analysis}]`)
+          const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+          
+          const locParts: string[] = []
+          if (selectedLoc.description) locParts.push(selectedLoc.description)
+          if (selectedLoc.visual_description) locParts.push(`[Visual: ${selectedLoc.visual_description}]`)
+          if (selectedLoc.atmosphere) locParts.push(`[Atmosphere: ${selectedLoc.atmosphere}]`)
+          if (selectedLoc.mood) locParts.push(`[Mood: ${selectedLoc.mood}]`)
+          const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+          
+          enhancedPrompt = `${selectedChar.name}${charDesc} at ${selectedLoc.name}${locDesc}`
+        }
+      } else if (!enhancedPrompt && selectedCharacterId) {
+        // Only character selected and prompt is empty
+        const selectedChar = characters.find(c => c.id === selectedCharacterId)
+        if (selectedChar) {
+          const charParts: string[] = []
+          if (selectedChar.description) charParts.push(selectedChar.description)
+          if (selectedChar.ai_image_analysis) charParts.push(`[AI Analysis: ${selectedChar.ai_image_analysis}]`)
+          const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+          enhancedPrompt = `${selectedChar.name}${charDesc}`
+        }
+      } else if (!enhancedPrompt && selectedLocationId) {
+        // Only location selected and prompt is empty
+        const selectedLoc = locations.find(l => l.id === selectedLocationId)
+        if (selectedLoc) {
+          const locParts: string[] = []
+          if (selectedLoc.description) locParts.push(selectedLoc.description)
+          if (selectedLoc.visual_description) locParts.push(`[Visual: ${selectedLoc.visual_description}]`)
+          if (selectedLoc.atmosphere) locParts.push(`[Atmosphere: ${selectedLoc.atmosphere}]`)
+          if (selectedLoc.mood) locParts.push(`[Mood: ${selectedLoc.mood}]`)
+          const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+          enhancedPrompt = `${selectedLoc.name}${locDesc}`
+        }
+      }
+      
+      // Apply style prefix to the final prompt
+      enhancedPrompt = enhancedPrompt ? `${stylePrefix}${enhancedPrompt}` : stylePrefix.trim()
+
+      const requestBody = {
+        prompt: enhancedPrompt,
+        service: normalizedService, // Use normalized service (dalle, openart, etc.)
+        apiKey: apiKey,
+        userId: userId,
+        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.imageUrl) {
+        let imageUrl = result.imageUrl
 
         const newItem: VisualDevelopmentItem = {
           id: Date.now().toString(),
@@ -1184,7 +1281,7 @@ export default function VisualDevelopmentPage() {
           title: prompt.substring(0, 50) + '...',
           description: prompt,
           prompt,
-          generatedContent: response.data?.content || response.data?.choices?.[0]?.message?.content,
+          generatedContent: result.text || '',
           generatedImage: imageUrl,
           tags: selectedStyle !== 'none' ? [type, selectedStyle] : [type],
           projectId: selectedProject === 'all' ? null : selectedProject,
@@ -1212,10 +1309,10 @@ export default function VisualDevelopmentPage() {
         
         toast({
           title: "Success",
-          description: `${type} generated successfully!${imageUrl !== response.data?.data?.[0]?.url ? ' (Saved to bucket)' : ''}`,
+          description: `${type} generated successfully!`,
         })
       } else {
-        throw new Error(response?.error || 'Generation failed')
+        throw new Error(result.error || 'Generation failed')
       }
     } catch (error) {
       toast({
@@ -1276,7 +1373,7 @@ export default function VisualDevelopmentPage() {
       <div className="space-y-8">
         <div className="max-w-5xl mx-auto">
           {/* AI Model Status Indicator */}
-          {!aiSettings?.is_locked ? (
+          {!isImagesTabLocked() ? (
             <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-yellow-800 dark:text-yellow-200">
@@ -1419,6 +1516,40 @@ export default function VisualDevelopmentPage() {
             </div>
             
             {/* Prompt Title Input */}
+            {/* Selected Character and Location Display */}
+            {(selectedCharacterId || selectedLocationId) && (
+              <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                <div className="flex flex-wrap gap-3 items-center">
+                  <span className="text-sm font-medium text-blue-900 dark:text-blue-100">Active Selections:</span>
+                  {selectedCharacterId && (
+                    <Badge variant="secondary" className="bg-blue-100 dark:bg-blue-800 text-blue-900 dark:text-blue-100">
+                      <Users className="h-3 w-3 mr-1" />
+                      {characters.find(c => c.id === selectedCharacterId)?.name || 'Character'}
+                    </Badge>
+                  )}
+                  {selectedLocationId && (
+                    <Badge variant="secondary" className="bg-blue-100 dark:bg-blue-800 text-blue-900 dark:text-blue-100">
+                      <MapPin className="h-3 w-3 mr-1" />
+                      {locations.find(l => l.id === selectedLocationId)?.name || 'Location'}
+                    </Badge>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedCharacterId(null)
+                      setSelectedLocationId(null)
+                      setPrompt('')
+                      setPromptTitle('')
+                    }}
+                    className="ml-auto h-6 text-xs"
+                  >
+                    Clear All
+                  </Button>
+                </div>
+              </div>
+            )}
+            
             <div className="mb-4">
               <label className="text-sm font-medium mb-2 block">Prompt Title (Optional, for saving)</label>
               <Input
@@ -1502,7 +1633,7 @@ export default function VisualDevelopmentPage() {
               </div>
               
               {/* Only show model selection when NOT locked */}
-              {!aiSettings?.is_locked ? (
+              {!isImagesTabLocked() ? (
                 <div className="flex-1">
                   <label className="text-sm font-medium mb-2 block">AI Model</label>
                   <Select value={selectedModel} onValueChange={setSelectedModel}>
@@ -1550,11 +1681,11 @@ export default function VisualDevelopmentPage() {
               </Button>
               <Button 
                 onClick={() => generateContent(type, prompt)}
-                disabled={isGenerating || !prompt.trim() || !aiSettings?.is_locked}
+                disabled={isGenerating || !prompt.trim() || !isImagesTabLocked()}
                 className="px-8"
               >
                 {isGenerating ? 'Generating...' : 
-                 !aiSettings?.is_locked ? 'Lock AI Model First' : 'Generate'}
+                 !isImagesTabLocked() ? 'Lock AI Model First' : 'Generate'}
               </Button>
             </div>
           </div>
@@ -1867,12 +1998,32 @@ export default function VisualDevelopmentPage() {
                           className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
                           onClick={() => {
                             setSelectedCharacterId(c.id)
-                            const desc = c.description ? ` — ${c.description}` : ''
-                            setPrompt(`${c.name}${desc}`)
-                            setPromptTitle(`${c.name} concept`)
-                            toast({ title: "Character Selected", description: `Using ${c.name} in prompt` })
+                            // Build character parts
+                            const charParts: string[] = []
+                            if (c.description) charParts.push(c.description)
+                            if (c.ai_image_analysis) charParts.push(`[AI Analysis: ${c.ai_image_analysis}]`)
+                            const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+                            
+                            // Combine with location if selected
+                            let finalPrompt = `${c.name}${charDesc}`
+                            if (selectedLocationId) {
+                              const selectedLoc = locations.find(l => l.id === selectedLocationId)
+                              if (selectedLoc) {
+                                const locParts: string[] = []
+                                if (selectedLoc.description) locParts.push(selectedLoc.description)
+                                if (selectedLoc.visual_description) locParts.push(`[Visual: ${selectedLoc.visual_description}]`)
+                                if (selectedLoc.atmosphere) locParts.push(`[Atmosphere: ${selectedLoc.atmosphere}]`)
+                                if (selectedLoc.mood) locParts.push(`[Mood: ${selectedLoc.mood}]`)
+                                const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+                                finalPrompt = `${c.name}${charDesc} at ${selectedLoc.name}${locDesc}`
+                              }
+                            }
+                            
+                            setPrompt(finalPrompt)
+                            setPromptTitle(`${c.name}${selectedLocationId ? ' at ' + locations.find(l => l.id === selectedLocationId)?.name : ''} concept`)
+                            toast({ title: "Character Selected", description: `Using ${c.name}${selectedLocationId ? ' with location' : ''} in prompt` })
                           }}
-                          title={c.description || c.name}
+                          title={[c.description, c.ai_image_analysis].filter(Boolean).join(' | ') || c.name}
                           aria-pressed={isSelected}
                         >
                           {c.name}
@@ -1885,6 +2036,74 @@ export default function VisualDevelopmentPage() {
                 <p className="text-xs text-muted-foreground">Select a movie project to view its characters.</p>
               )}
             </div>
+            
+            {/* Locations section in Characters tab for blending */}
+            {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' && (
+              <div className="max-w-6xl mx-auto w-full mt-6">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-muted-foreground">
+                    Locations {selectedLocationId ? <span className="ml-2 text-xs text-primary">(Selected)</span> : null}
+                  </h3>
+                  <Link href={selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? `/locations?movie=${selectedProject}` : '/locations'}>
+                    <Button className="gradient-button neon-glow text-white h-8 px-3">
+                      <MapPin className="h-4 w-4 mr-2" />
+                      Manage Locations
+                    </Button>
+                  </Link>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {isLoadingLocations ? (
+                    <Badge variant="secondary">Loading…</Badge>
+                  ) : locations.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No locations yet for this project.</span>
+                  ) : (
+                    locations.map((l) => {
+                      const isSelected = selectedLocationId === l.id
+                      return (
+                        <Button
+                          key={l.id}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
+                          onClick={() => {
+                            setSelectedLocationId(l.id)
+                            // Build location parts
+                            const locParts: string[] = []
+                            if (l.description) locParts.push(l.description)
+                            if (l.visual_description) locParts.push(`[Visual: ${l.visual_description}]`)
+                            if (l.atmosphere) locParts.push(`[Atmosphere: ${l.atmosphere}]`)
+                            if (l.mood) locParts.push(`[Mood: ${l.mood}]`)
+                            const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+                            
+                            // Combine with character if selected
+                            let finalPrompt = `${l.name}${locDesc}`
+                            if (selectedCharacterId) {
+                              const selectedChar = characters.find(c => c.id === selectedCharacterId)
+                              if (selectedChar) {
+                                const charParts: string[] = []
+                                if (selectedChar.description) charParts.push(selectedChar.description)
+                                if (selectedChar.ai_image_analysis) charParts.push(`[AI Analysis: ${selectedChar.ai_image_analysis}]`)
+                                const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+                                finalPrompt = `${selectedChar.name}${charDesc} at ${l.name}${locDesc}`
+                              }
+                            }
+                            
+                            setPrompt(finalPrompt)
+                            setPromptTitle(`${selectedCharacterId ? characters.find(c => c.id === selectedCharacterId)?.name + ' at ' : ''}${l.name} concept`)
+                            toast({ title: "Location Selected", description: `Using ${l.name}${selectedCharacterId ? ' with character' : ''} in prompt` })
+                          }}
+                          title={[l.description, l.visual_description, l.atmosphere, l.mood].filter(Boolean).join(' | ') || l.name}
+                          aria-pressed={isSelected}
+                        >
+                          {l.name}
+                        </Button>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+            
             {getTabContent('character')}
           </TabsContent>
 
@@ -1933,12 +2152,32 @@ export default function VisualDevelopmentPage() {
                           className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
                           onClick={() => {
                             setSelectedLocationId(l.id)
-                            const desc = l.description ? ` — ${l.description}` : ''
-                            setPrompt(`${l.name}${desc}`)
-                            setPromptTitle(`${l.name} concept`)
-                            toast({ title: "Location Selected", description: `Using ${l.name} in prompt` })
+                            // Build location parts
+                            const locParts: string[] = []
+                            if (l.description) locParts.push(l.description)
+                            if (l.visual_description) locParts.push(`[Visual: ${l.visual_description}]`)
+                            if (l.atmosphere) locParts.push(`[Atmosphere: ${l.atmosphere}]`)
+                            if (l.mood) locParts.push(`[Mood: ${l.mood}]`)
+                            const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+                            
+                            // Combine with character if selected
+                            let finalPrompt = `${l.name}${locDesc}`
+                            if (selectedCharacterId) {
+                              const selectedChar = characters.find(c => c.id === selectedCharacterId)
+                              if (selectedChar) {
+                                const charParts: string[] = []
+                                if (selectedChar.description) charParts.push(selectedChar.description)
+                                if (selectedChar.ai_image_analysis) charParts.push(`[AI Analysis: ${selectedChar.ai_image_analysis}]`)
+                                const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+                                finalPrompt = `${selectedChar.name}${charDesc} at ${l.name}${locDesc}`
+                              }
+                            }
+                            
+                            setPrompt(finalPrompt)
+                            setPromptTitle(`${selectedCharacterId ? characters.find(c => c.id === selectedCharacterId)?.name + ' at ' : ''}${l.name} concept`)
+                            toast({ title: "Location Selected", description: `Using ${l.name}${selectedCharacterId ? ' with character' : ''} in prompt` })
                           }}
-                          title={l.description || l.name}
+                          title={[l.description, l.visual_description, l.atmosphere, l.mood].filter(Boolean).join(' | ') || l.name}
                           aria-pressed={isSelected}
                         >
                           {l.name}
@@ -1951,6 +2190,74 @@ export default function VisualDevelopmentPage() {
                 <p className="text-xs text-muted-foreground">Select a movie project to view its locations.</p>
               )}
             </div>
+            
+            {/* Characters section in Environments tab for blending */}
+            {selectedProject && selectedProject !== 'all' && selectedProject !== 'free' && (
+              <div className="max-w-6xl mx-auto w-full mt-6">
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-muted-foreground">
+                    Characters {selectedCharacterId ? <span className="ml-2 text-xs text-primary">(Selected)</span> : null}
+                  </h3>
+                  <Link href={selectedProject && selectedProject !== 'all' && selectedProject !== 'free' ? `/characters?movie=${selectedProject}` : '/characters'}>
+                    <Button className="gradient-button neon-glow text-white h-8 px-3">
+                      <Users className="h-4 w-4 mr-2" />
+                      Manage Characters
+                    </Button>
+                  </Link>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {isLoadingCharacters ? (
+                    <Badge variant="secondary">Loading…</Badge>
+                  ) : characters.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">No characters yet for this project.</span>
+                  ) : (
+                    characters.map((c) => {
+                      const isSelected = selectedCharacterId === c.id
+                      return (
+                        <Button
+                          key={c.id}
+                          variant={isSelected ? "default" : "outline"}
+                          size="sm"
+                          className={`h-7 px-2 text-xs ${isSelected ? 'bg-primary text-primary-foreground ring-2 ring-primary/40' : ''}`}
+                          onClick={() => {
+                            setSelectedCharacterId(c.id)
+                            // Build character parts
+                            const charParts: string[] = []
+                            if (c.description) charParts.push(c.description)
+                            if (c.ai_image_analysis) charParts.push(`[AI Analysis: ${c.ai_image_analysis}]`)
+                            const charDesc = charParts.length > 0 ? ` — ${charParts.join(' ')}` : ''
+                            
+                            // Combine with location if selected
+                            let finalPrompt = `${c.name}${charDesc}`
+                            if (selectedLocationId) {
+                              const selectedLoc = locations.find(l => l.id === selectedLocationId)
+                              if (selectedLoc) {
+                                const locParts: string[] = []
+                                if (selectedLoc.description) locParts.push(selectedLoc.description)
+                                if (selectedLoc.visual_description) locParts.push(`[Visual: ${selectedLoc.visual_description}]`)
+                                if (selectedLoc.atmosphere) locParts.push(`[Atmosphere: ${selectedLoc.atmosphere}]`)
+                                if (selectedLoc.mood) locParts.push(`[Mood: ${selectedLoc.mood}]`)
+                                const locDesc = locParts.length > 0 ? ` — ${locParts.join(' ')}` : ''
+                                finalPrompt = `${c.name}${charDesc} at ${selectedLoc.name}${locDesc}`
+                              }
+                            }
+                            
+                            setPrompt(finalPrompt)
+                            setPromptTitle(`${c.name}${selectedLocationId ? ' at ' + locations.find(l => l.id === selectedLocationId)?.name : ''} concept`)
+                            toast({ title: "Character Selected", description: `Using ${c.name}${selectedLocationId ? ' with location' : ''} in prompt` })
+                          }}
+                          title={[c.description, c.ai_image_analysis].filter(Boolean).join(' | ') || c.name}
+                          aria-pressed={isSelected}
+                        >
+                          {c.name}
+                        </Button>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+            
             {getTabContent('environment')}
           </TabsContent>
 

@@ -215,6 +215,10 @@ export default function CharactersPage() {
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  
+  // Description editing state
+  const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null)
+  const [editingDescriptionValue, setEditingDescriptionValue] = useState("")
 
   // Load data for selected project
   useEffect(() => {
@@ -1937,13 +1941,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       if (analysisExtractedData.posture) updateData.posture = analysisExtractedData.posture
       if (analysisExtractedData.body_language) updateData.body_language = analysisExtractedData.body_language
 
-      // Description (append to existing)
+      // AI Image Analysis (save to separate column)
       if (analysisExtractedData.description) {
-        if (selectedChar.description) {
-          updateData.description = `${selectedChar.description}\n\n[AI Analysis from Image]\n${analysisExtractedData.description}`
-        } else {
-          updateData.description = analysisExtractedData.description
-        }
+        updateData.ai_image_analysis = analysisExtractedData.description
       }
 
       // Add image to reference_images array
@@ -3037,10 +3037,83 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                           )}
                         </div>
                         
-                        {selectedChar.description && (
-                          <div>
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
                             <Label className="text-xs text-muted-foreground">Description</Label>
+                            {editingDescriptionId !== selectedChar.id && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0"
+                                onClick={() => {
+                                  setEditingDescriptionId(selectedChar.id)
+                                  setEditingDescriptionValue(selectedChar.description || "")
+                                }}
+                              >
+                                <Edit className="h-3 w-3" />
+                              </Button>
+                            )}
+                          </div>
+                          {editingDescriptionId === selectedChar.id ? (
+                            <div className="space-y-2">
+                              <Textarea
+                                value={editingDescriptionValue}
+                                onChange={(e) => setEditingDescriptionValue(e.target.value)}
+                                className="bg-input border-border min-h-[100px] text-sm"
+                                placeholder="Enter character description..."
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="default"
+                                  onClick={async () => {
+                                    try {
+                                      const updated = await CharactersService.updateCharacter(selectedChar.id, {
+                                        description: editingDescriptionValue.trim() || undefined,
+                                      })
+                                      setCharacters(prev => prev.map(c => c.id === selectedChar.id ? updated : c))
+                                      setEditingDescriptionId(null)
+                                      setEditingDescriptionValue("")
+                                      toast({
+                                        title: "Description updated",
+                                        description: "Character description has been saved.",
+                                      })
+                                    } catch (err) {
+                                      console.error("Error updating description:", err)
+                                      toast({
+                                        title: "Error",
+                                        description: "Failed to update description.",
+                                        variant: "destructive",
+                                      })
+                                    }
+                                  }}
+                                >
+                                  <Save className="h-3 w-3 mr-1" />
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setEditingDescriptionId(null)
+                                    setEditingDescriptionValue("")
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : selectedChar.description ? (
                             <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.description}</p>
+                          ) : (
+                            <p className="text-sm mt-1 text-muted-foreground italic">No description yet. Click the edit icon to add one.</p>
+                          )}
+                        </div>
+                        
+                        {selectedChar.ai_image_analysis && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">AI Analysis from Image</Label>
+                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.ai_image_analysis}</p>
                           </div>
                         )}
                         

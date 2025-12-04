@@ -65,7 +65,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 
 // Screenplay page number calculation (standard: ~55 lines per page)
@@ -192,7 +199,13 @@ function ScreenplayPageClient({ id }: { id: string }) {
   // Collaboration states
   const [showCollaborationDialog, setShowCollaborationDialog] = useState(false)
   const [collaborationSession, setCollaborationSession] = useState<any>(null)
+  const [existingSessions, setExistingSessions] = useState<any[]>([])
+  const [loadingSessions, setLoadingSessions] = useState(false)
+  const [editingSession, setEditingSession] = useState<any>(null)
+  const [showCreateNew, setShowCreateNew] = useState(false)
   const [creatingSession, setCreatingSession] = useState(false)
+  const [updatingSession, setUpdatingSession] = useState(false)
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null)
   const [collaborationForm, setCollaborationForm] = useState({
     title: "",
     description: "",
@@ -3387,6 +3400,160 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
     }
   }
 
+  // Export screenplay to Word (.docx)
+  const exportToWord = async () => {
+    if (!fullScript || fullScript.trim().length === 0) {
+      toast({
+        title: "No Script to Export",
+        description: "There's no screenplay content to export.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const { Document, Packer, Paragraph, TextRun, HeadingLevel } = await import('docx')
+      
+      // Split content into paragraphs
+      const lines = fullScript.split('\n')
+      const paragraphs: Paragraph[] = []
+      
+      lines.forEach((line: string) => {
+        const trimmedLine = line.trim()
+        
+        if (trimmedLine.length === 0) {
+          paragraphs.push(new Paragraph({ text: "" }))
+          return
+        }
+
+        // Detect screenplay element types
+        const isSceneHeading = /^(INT\.|EXT\.|INTERIOR|EXTERIOR)/i.test(trimmedLine)
+        const isCharacterName = trimmedLine === trimmedLine.toUpperCase() && 
+                               trimmedLine.length < 50 && 
+                               !trimmedLine.includes('.') &&
+                               !trimmedLine.includes('(') &&
+                               trimmedLine.length > 2 &&
+                               /^[A-Z\s]+$/.test(trimmedLine)
+        const isParenthetical = trimmedLine.startsWith('(') && trimmedLine.endsWith(')')
+        const isTransition = /^(FADE IN|FADE OUT|CUT TO|DISSOLVE TO|SMASH CUT|MATCH CUT)/i.test(trimmedLine)
+
+        if (isSceneHeading) {
+          paragraphs.push(
+            new Paragraph({
+              text: trimmedLine,
+              heading: HeadingLevel.HEADING_1,
+              spacing: { after: 200 },
+            })
+          )
+        } else if (isCharacterName) {
+          paragraphs.push(
+            new Paragraph({
+              text: trimmedLine,
+              alignment: 'center',
+              spacing: { before: 200, after: 100 },
+            })
+          )
+        } else if (isParenthetical) {
+          paragraphs.push(
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: trimmedLine,
+                  italics: true,
+                }),
+              ],
+              indent: { left: 1440 }, // 1 inch indent
+              spacing: { after: 100 },
+            })
+          )
+        } else if (isTransition) {
+          paragraphs.push(
+            new Paragraph({
+              text: trimmedLine,
+              alignment: 'right',
+              spacing: { before: 200, after: 200 },
+            })
+          )
+        } else {
+          paragraphs.push(
+            new Paragraph({
+              text: trimmedLine,
+              spacing: { after: 100 },
+            })
+          )
+        }
+      })
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: paragraphs,
+        }],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const safeFileName = (movie?.name || 'Screenplay').replace(/[^a-z0-9]/gi, '_').toLowerCase()
+      link.download = `${safeFileName}_${new Date().toISOString().split('T')[0]}.docx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Word Document Exported",
+        description: `Your screenplay has been exported as ${link.download}`,
+      })
+    } catch (error) {
+      console.error('Error exporting Word document:', error)
+      toast({
+        title: "Export Failed",
+        description: "Failed to export screenplay to Word document.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Export screenplay to Text (.txt)
+  const exportToText = () => {
+    if (!fullScript || fullScript.trim().length === 0) {
+      toast({
+        title: "No Script to Export",
+        description: "There's no screenplay content to export.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const textContent = `${movie?.name || 'Screenplay'}\n\n${fullScript}`
+      const blob = new Blob([textContent], { type: 'text/plain' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const safeFileName = (movie?.name || 'Screenplay').replace(/[^a-z0-9]/gi, '_').toLowerCase()
+      link.download = `${safeFileName}_${new Date().toISOString().split('T')[0]}.txt`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+
+      toast({
+        title: "Text File Exported",
+        description: `Your screenplay has been exported as ${link.download}`,
+      })
+    } catch (error) {
+      console.error('Error exporting text file:', error)
+      toast({
+        title: "Export Failed",
+        description: "Failed to export screenplay to text file.",
+        variant: "destructive",
+      })
+    }
+  }
+
   if (loading || !ready) {
     return (
       <div className="min-h-screen bg-background">
@@ -3466,7 +3633,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                     ) : (
                       <>
                         <Upload className="h-4 w-4 mr-2" />
-                        Import Documents
+                        Import
                       </>
                     )}
                   </Button>
@@ -3487,18 +3654,60 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                 </CollapsibleContent>
               </Collapsible>
               <Button 
-                onClick={() => setShowCollaborationDialog(true)} 
+                onClick={async () => {
+                  setShowCollaborationDialog(true)
+                  // Fetch existing sessions
+                  try {
+                    setLoadingSessions(true)
+                    const response = await fetch(`/api/collaboration/sessions?project_id=${id}`)
+                    const result = await response.json()
+                    if (response.ok && result.sessions) {
+                      setExistingSessions(result.sessions)
+                    }
+                  } catch (error) {
+                    console.error('Error fetching sessions:', error)
+                  } finally {
+                    setLoadingSessions(false)
+                  }
+                }} 
                 variant="outline" 
                 className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
               >
                 <Users className="h-4 w-4 mr-2" />
-                Start Collaboration
+                Start
               </Button>
               {fullScript && fullScript.trim().length > 0 && (
-                <Button onClick={exportToPDF} variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
-                  <Download className="h-4 w-4 mr-2" />
-                  Export PDF
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
+                      <Download className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="bg-background border-border">
+                    <DropdownMenuItem
+                      onClick={exportToPDF}
+                      className="cursor-pointer"
+                    >
+                      <FileText className="h-4 w-4 mr-2" />
+                      Export as PDF
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={exportToWord}
+                      className="cursor-pointer"
+                    >
+                      <FileText className="h-4 w-4 mr-2" />
+                      Export as Word (.docx)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={exportToText}
+                      className="cursor-pointer"
+                    >
+                      <FileText className="h-4 w-4 mr-2" />
+                      Export as Text (.txt)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
               {fullScript && fullScript.trim().length > 0 && totalPages > 0 && (
                 <Button 
@@ -4839,16 +5048,131 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         </AlertDialog>
 
         {/* Collaboration Dialog */}
-        <Dialog open={showCollaborationDialog} onOpenChange={setShowCollaborationDialog}>
-          <DialogContent className="max-w-2xl">
+        <Dialog open={showCollaborationDialog} onOpenChange={(open) => {
+          setShowCollaborationDialog(open)
+          if (!open) {
+            // Reset state when closing
+            setCollaborationSession(null)
+            setEditingSession(null)
+            setShowCreateNew(false)
+            setCopiedSessionId(null)
+            setCollaborationForm({
+              title: "",
+              description: "",
+              expires_at: "",
+              allow_guests: true,
+              allow_edit: true,
+              allow_delete: true,
+              allow_add_scenes: true,
+              allow_edit_scenes: true,
+            })
+          }
+        }}>
+          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Start Collaboration Session</DialogTitle>
+              <DialogTitle>
+                {editingSession ? 'Edit Collaboration Session' : collaborationSession ? 'Collaboration Session' : 'Collaboration Sessions'}
+              </DialogTitle>
               <DialogDescription>
-                Create an access code to share with collaborators. They can edit the screenplay in real-time.
+                {editingSession 
+                  ? 'Edit session details and permissions'
+                  : collaborationSession
+                  ? 'Share this access code with your collaborators'
+                  : 'Select an existing session or create a new one to share with collaborators'}
               </DialogDescription>
             </DialogHeader>
             
-            {!collaborationSession ? (
+            {loadingSessions ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                <span>Loading sessions...</span>
+              </div>
+            ) : collaborationSession ? (
+              // Show session details (code and link)
+              <div className="space-y-4">
+                <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+                  <p className="text-sm text-green-400 mb-2">✅ Collaboration session</p>
+                  <div className="space-y-2">
+                    <div>
+                      <Label className="text-muted-foreground">Access Code</Label>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="text-lg font-mono bg-muted px-3 py-2 rounded flex-1">
+                          {collaborationSession.access_code}
+                        </code>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            navigator.clipboard.writeText(collaborationSession.access_code)
+                            toast({
+                              title: "Copied!",
+                              description: "Access code copied to clipboard",
+                            })
+                          }}
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Share URL</Label>
+                      <div className="flex items-center gap-2 mt-1">
+                        <code className="text-sm bg-muted px-3 py-2 rounded flex-1 break-all">
+                          {typeof window !== 'undefined' ? `${window.location.origin}/collaborate/${collaborationSession.access_code}` : ''}
+                        </code>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const url = typeof window !== 'undefined' ? `${window.location.origin}/collaborate/${collaborationSession.access_code}` : ''
+                            navigator.clipboard.writeText(url)
+                            toast({
+                              title: "Copied!",
+                              description: "URL copied to clipboard",
+                            })
+                          }}
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    window.open(`/collaborate/${collaborationSession.access_code}`, '_blank')
+                  }}
+                >
+                  Open Collaboration Page
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setEditingSession(collaborationSession)
+                    setCollaborationForm({
+                      title: collaborationSession.title || "",
+                      description: collaborationSession.description || "",
+                      expires_at: collaborationSession.expires_at 
+                        ? new Date(collaborationSession.expires_at).toISOString().slice(0, 16)
+                        : "",
+                      allow_guests: collaborationSession.allow_guests ?? true,
+                      allow_edit: collaborationSession.allow_edit ?? true,
+                      allow_delete: collaborationSession.allow_delete ?? true,
+                      allow_add_scenes: collaborationSession.allow_add_scenes ?? true,
+                      allow_edit_scenes: collaborationSession.allow_edit_scenes ?? true,
+                    })
+                    setCollaborationSession(null)
+                  }}
+                >
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit Session
+                </Button>
+              </div>
+            ) : editingSession ? (
+              // Edit form for existing session
               <div className="space-y-4">
                 <div>
                   <Label>Session Title (Optional)</Label>
@@ -4926,65 +5250,202 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : !showCreateNew && existingSessions.length > 0 ? (
+              // Show list of existing sessions as cards
               <div className="space-y-4">
-                <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
-                  <p className="text-sm text-green-400 mb-2">✅ Collaboration session created!</p>
-                  <div className="space-y-2">
-                    <div>
-                      <Label className="text-muted-foreground">Access Code</Label>
-                      <div className="flex items-center gap-2 mt-1">
-                        <code className="text-lg font-mono bg-muted px-3 py-2 rounded flex-1">
-                          {collaborationSession.access_code}
-                        </code>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            navigator.clipboard.writeText(collaborationSession.access_code)
-                            toast({
-                              title: "Copied!",
-                              description: "Access code copied to clipboard",
-                            })
-                          }}
-                        >
-                          <Copy className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-muted-foreground">Share URL</Label>
-                      <div className="flex items-center gap-2 mt-1">
-                        <code className="text-sm bg-muted px-3 py-2 rounded flex-1 break-all">
-                          {typeof window !== 'undefined' ? `${window.location.origin}/collaborate/${collaborationSession.access_code}` : ''}
-                        </code>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            const url = typeof window !== 'undefined' ? `${window.location.origin}/collaborate/${collaborationSession.access_code}` : ''
-                            navigator.clipboard.writeText(url)
-                            toast({
-                              title: "Copied!",
-                              description: "URL copied to clipboard",
-                            })
-                          }}
-                        >
-                          <Copy className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
+                <div className="grid gap-3 max-h-[400px] overflow-y-auto">
+                  {existingSessions.map((session) => (
+                    <Card
+                      key={session.id}
+                      className="cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => {
+                        setCollaborationSession(session)
+                      }}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <div className="font-medium">{session.title || 'Untitled Session'}</div>
+                              {session.expires_at && new Date(session.expires_at) < new Date() && (
+                                <Badge variant="destructive" className="text-xs">Expired</Badge>
+                              )}
+                            </div>
+                            {session.description && (
+                              <div className="text-sm text-muted-foreground mb-2 line-clamp-2">{session.description}</div>
+                            )}
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              <code className="bg-muted px-2 py-1 rounded text-xs">{session.access_code}</code>
+                              {session.expires_at && (
+                                <span>
+                                  {new Date(session.expires_at) < new Date() 
+                                    ? `Expired: ${new Date(session.expires_at).toLocaleDateString()}`
+                                    : `Expires: ${new Date(session.expires_at).toLocaleDateString()}`
+                                  }
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                const url = typeof window !== 'undefined' ? `${window.location.origin}/collaborate/${session.access_code}` : ''
+                                navigator.clipboard.writeText(url)
+                                setCopiedSessionId(session.id)
+                                setTimeout(() => {
+                                  setCopiedSessionId(null)
+                                }, 2000)
+                                toast({
+                                  title: "Copied!",
+                                  description: "Collaboration link copied to clipboard",
+                                })
+                              }}
+                              title="Copy link"
+                            >
+                              <Copy className="h-4 w-4 mr-1" />
+                              {copiedSessionId === session.id ? 'Copied' : 'Link'}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingSession(session)
+                                setCollaborationForm({
+                                  title: session.title || "",
+                                  description: session.description || "",
+                                  expires_at: session.expires_at 
+                                    ? new Date(session.expires_at).toISOString().slice(0, 16)
+                                    : "",
+                                  allow_guests: session.allow_guests ?? true,
+                                  allow_edit: session.allow_edit ?? true,
+                                  allow_delete: session.allow_delete ?? true,
+                                  allow_add_scenes: session.allow_add_scenes ?? true,
+                                  allow_edit_scenes: session.allow_edit_scenes ?? true,
+                                })
+                              }}
+                              title="Edit session"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
                 </div>
                 <Button
                   variant="outline"
                   className="w-full"
-                  onClick={() => {
-                    window.open(`/collaborate/${collaborationSession.access_code}`, '_blank')
-                  }}
+                  onClick={() => setShowCreateNew(true)}
                 >
-                  Open Collaboration Page
+                  <Users className="h-4 w-4 mr-2" />
+                  Create New Session
                 </Button>
+              </div>
+            ) : (
+              // Create new session form
+              <div className="space-y-4">
+                {existingSessions.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setShowCreateNew(false)
+                      setCollaborationForm({
+                        title: "",
+                        description: "",
+                        expires_at: "",
+                        allow_guests: true,
+                        allow_edit: true,
+                        allow_delete: true,
+                        allow_add_scenes: true,
+                        allow_edit_scenes: true,
+                      })
+                    }}
+                    className="mb-2"
+                  >
+                    ← Back to Sessions
+                  </Button>
+                )}
+                <div>
+                  <Label>Session Title (Optional)</Label>
+                  <Input
+                    value={collaborationForm.title}
+                    onChange={(e) => setCollaborationForm({ ...collaborationForm, title: e.target.value })}
+                    placeholder="e.g., Act 1 Collaboration"
+                  />
+                </div>
+                <div>
+                  <Label>Description (Optional)</Label>
+                  <Textarea
+                    value={collaborationForm.description}
+                    onChange={(e) => setCollaborationForm({ ...collaborationForm, description: e.target.value })}
+                    placeholder="Describe what you're working on..."
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <Label>Expiration Date (Optional)</Label>
+                  <Input
+                    type="datetime-local"
+                    value={collaborationForm.expires_at}
+                    onChange={(e) => setCollaborationForm({ ...collaborationForm, expires_at: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Permissions</Label>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={collaborationForm.allow_guests}
+                        onChange={(e) => setCollaborationForm({ ...collaborationForm, allow_guests: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label className="font-normal">Allow guests (no login required)</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={collaborationForm.allow_edit}
+                        onChange={(e) => setCollaborationForm({ ...collaborationForm, allow_edit: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label className="font-normal">Allow editing text</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={collaborationForm.allow_delete}
+                        onChange={(e) => setCollaborationForm({ ...collaborationForm, allow_delete: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label className="font-normal">Allow deleting text</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={collaborationForm.allow_add_scenes}
+                        onChange={(e) => setCollaborationForm({ ...collaborationForm, allow_add_scenes: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label className="font-normal">Allow adding scenes</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={collaborationForm.allow_edit_scenes}
+                        onChange={(e) => setCollaborationForm({ ...collaborationForm, allow_edit_scenes: e.target.checked })}
+                        className="rounded"
+                      />
+                      <Label className="font-normal">Allow editing scene info</Label>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
             
@@ -5006,11 +5467,111 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                 }}>
                   Close
                 </Button>
+              ) : editingSession ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setEditingSession(null)
+                      setCollaborationForm({
+                        title: "",
+                        description: "",
+                        expires_at: "",
+                        allow_guests: true,
+                        allow_edit: true,
+                        allow_delete: true,
+                        allow_add_scenes: true,
+                        allow_edit_scenes: true,
+                      })
+                    }}
+                    disabled={updatingSession}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        setUpdatingSession(true)
+                        const expiresAt = collaborationForm.expires_at
+                          ? new Date(collaborationForm.expires_at).toISOString()
+                          : null
+
+                        const response = await fetch(`/api/collaboration/${editingSession.id}`, {
+                          method: 'PATCH',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            title: collaborationForm.title || null,
+                            description: collaborationForm.description || null,
+                            expires_at: expiresAt,
+                            allow_guests: collaborationForm.allow_guests,
+                            allow_edit: collaborationForm.allow_edit,
+                            allow_delete: collaborationForm.allow_delete,
+                            allow_add_scenes: collaborationForm.allow_add_scenes,
+                            allow_edit_scenes: collaborationForm.allow_edit_scenes,
+                          }),
+                        })
+
+                        const result = await response.json()
+                        if (!response.ok) {
+                          throw new Error(result.error || 'Failed to update session')
+                        }
+
+                        setCollaborationSession(result.session)
+                        setEditingSession(null)
+                        // Refresh sessions list
+                        const sessionsResponse = await fetch(`/api/collaboration/sessions?project_id=${id}`)
+                        const sessionsResult = await sessionsResponse.json()
+                        if (sessionsResponse.ok && sessionsResult.sessions) {
+                          setExistingSessions(sessionsResult.sessions)
+                        }
+                        toast({
+                          title: "Session Updated!",
+                          description: "Session details have been updated",
+                        })
+                      } catch (error: any) {
+                        console.error('Error updating collaboration session:', error)
+                        toast({
+                          title: "Error",
+                          description: error.message || "Failed to update collaboration session",
+                          variant: "destructive",
+                        })
+                      } finally {
+                        setUpdatingSession(false)
+                      }
+                    }}
+                    disabled={updatingSession}
+                  >
+                    {updatingSession ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      "Update Session"
+                    )}
+                  </Button>
+                </>
               ) : (
                 <>
                   <Button
                     variant="outline"
-                    onClick={() => setShowCollaborationDialog(false)}
+                    onClick={() => {
+                      if (existingSessions.length > 0 && showCreateNew) {
+                        setShowCreateNew(false)
+                        setCollaborationForm({
+                          title: "",
+                          description: "",
+                          expires_at: "",
+                          allow_guests: true,
+                          allow_edit: true,
+                          allow_delete: true,
+                          allow_add_scenes: true,
+                          allow_edit_scenes: true,
+                        })
+                      } else {
+                        setShowCollaborationDialog(false)
+                      }
+                    }}
                     disabled={creatingSession}
                   >
                     Cancel
@@ -5045,6 +5606,13 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         }
 
                         setCollaborationSession(result.session)
+                        setShowCreateNew(false)
+                        // Refresh sessions list
+                        const sessionsResponse = await fetch(`/api/collaboration/sessions?project_id=${id}`)
+                        const sessionsResult = await sessionsResponse.json()
+                        if (sessionsResponse.ok && sessionsResult.sessions) {
+                          setExistingSessions(sessionsResult.sessions)
+                        }
                         toast({
                           title: "Session Created!",
                           description: "Share the access code with your collaborators",

@@ -11,12 +11,14 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Lightbulb, Plus, Edit, Save, X, Trash2, Zap } from "lucide-react"
+import { Loader2, Lightbulb, Plus, Edit, Save, X, Trash2, Zap, CheckCircle, AlertCircle } from "lucide-react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
 import { LightingPlotService, type LightingPlot } from "@/lib/lighting-plot-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { useAuthReady } from "@/components/auth-hooks"
+import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
+import { ImageIcon } from "lucide-react"
 
 export default function LightingPlotPage() {
   const { toast } = useToast()
@@ -53,6 +55,44 @@ export default function LightingPlotPage() {
   const [plotFlags, setPlotFlags] = useState(false)
   const [plotScrims, setPlotScrims] = useState("")
   const [plotNotes, setPlotNotes] = useState("")
+
+  // AI Settings for image generation
+  const [aiSettings, setAiSettings] = useState<AISetting[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null)
+
+  // Load AI settings
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!ready) return
+      try {
+        const settings = await AISettingsService.getSystemSettings()
+        
+        // Ensure default settings exist for all tabs
+        const defaultSettings = await Promise.all([
+          AISettingsService.getOrCreateDefaultTabSetting('scripts'),
+          AISettingsService.getOrCreateDefaultTabSetting('images'),
+          AISettingsService.getOrCreateDefaultTabSetting('videos'),
+          AISettingsService.getOrCreateDefaultTabSetting('audio')
+        ])
+        
+        // Merge existing settings with default ones, preferring existing
+        const mergedSettings = defaultSettings.map(defaultSetting => {
+          const existingSetting = settings.find(s => s.tab_type === defaultSetting.tab_type)
+          return existingSetting || defaultSetting
+        })
+        
+        setAiSettings(mergedSettings)
+        setAiSettingsLoaded(true)
+      } catch (error) {
+        console.error('Failed to load AI settings:', error)
+        setAiSettingsLoaded(true)
+      }
+    }
+
+    loadAISettings()
+  }, [ready])
 
   // Load data for selected project
   useEffect(() => {
@@ -239,6 +279,140 @@ export default function LightingPlotPage() {
     }
   }
 
+  // Get current images tab AI setting
+  const getImagesTabSetting = () => {
+    return aiSettings.find(setting => setting.tab_type === 'images')
+  }
+
+  // Check if images tab has a locked model
+  const isImagesTabLocked = () => {
+    const setting = getImagesTabSetting()
+    return setting?.is_locked || false
+  }
+
+  // Get the locked model for images tab
+  const getImagesTabLockedModel = () => {
+    const setting = getImagesTabSetting()
+    return setting?.locked_model || ""
+  }
+
+  const generateLightingImage = async () => {
+    if (!aiSettingsLoaded || !user || !userId) {
+      toast({
+        title: "Error",
+        description: "AI settings not loaded yet. Please wait a moment and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Build prompt from lighting plot details
+    const promptParts: string[] = []
+    if (plotName) promptParts.push(plotName)
+    if (plotDescription) promptParts.push(plotDescription)
+    if (plotLocationId) {
+      const location = locations.find(l => l.id === plotLocationId)
+      if (location) promptParts.push(`at ${location.name}`)
+    }
+    if (plotLightingType) promptParts.push(`${plotLightingType} lighting`)
+    if (plotFixtureType) promptParts.push(`using ${plotFixtureType}`)
+    if (plotColorTemperature) promptParts.push(`${plotColorTemperature}K color temperature`)
+    if (plotColorGel) promptParts.push(`${plotColorGel} gel`)
+    if (plotIntensity) promptParts.push(`${plotIntensity}% intensity`)
+    
+    const lightingPrompt = promptParts.length > 0 
+      ? `Cinematic lighting setup: ${promptParts.join(', ')}`
+      : "Professional cinematic lighting setup"
+
+    try {
+      setIsGeneratingImage(true)
+      setGeneratedImageUrl(null)
+
+      // Check for locked image model
+      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const isImagesTabLocked = imagesSetting?.is_locked || false
+      const lockedModel = imagesSetting?.locked_model || null
+      
+      // Use locked model if available
+      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : 'DALL-E 3'
+      let apiKey = 'configured'
+
+      // Helper function to normalize model name from display name to API model identifier
+      const normalizeImageModel = (displayName: string | null | undefined): string => {
+        if (!displayName) return "dall-e-3"
+        const model = displayName.toLowerCase()
+        if (model === "gpt image" || model === "gpt image 1" || model.includes("gpt-image")) {
+          return "gpt-image-1"
+        } else if (model.includes("dall") || model.includes("dalle")) {
+          return "dall-e-3"
+        }
+        // Default to DALL-E 3 for unknown models
+        return "dall-e-3"
+      }
+
+      // Normalize service name for API
+      let normalizedService = 'dalle' // Default
+      const serviceLower = serviceToUse?.toLowerCase() || ''
+      if (serviceLower === 'dalle' || serviceLower === 'dall-e 3' || serviceLower === 'dall-e-3' || 
+          serviceLower === 'gpt image' || serviceLower === 'gpt image 1' || serviceLower.includes('gpt image')) {
+        normalizedService = 'dalle'
+      } else if (serviceLower === 'openart' || serviceLower === 'sdxl') {
+        normalizedService = 'openart'
+      } else {
+        normalizedService = serviceLower
+      }
+
+      // Normalize model name
+      const normalizedModel = normalizeImageModel(serviceToUse)
+
+      const requestBody = {
+        prompt: lightingPrompt,
+        service: normalizedService, // Use normalized service (dalle, openart, etc.)
+        apiKey: apiKey,
+        userId: userId,
+        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
+        width: 1024,
+        height: 1024,
+        autoSaveToBucket: true,
+      }
+
+      const response = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to generate image')
+      }
+
+      const result = await response.json()
+
+      if (result.success && result.imageUrl) {
+        setGeneratedImageUrl(result.imageUrl)
+        toast({
+          title: "Image Generated",
+          description: "AI has generated a lighting visualization image!",
+        })
+      } else {
+        throw new Error('No image URL received from AI service')
+      }
+    } catch (error) {
+      console.error('Failed to generate lighting image:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      toast({
+        title: "Generation Failed",
+        description: `Failed to generate image: ${errorMessage}`,
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingImage(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -310,6 +484,26 @@ export default function LightingPlotPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                {/* AI Status Indicator */}
+                {aiSettingsLoaded && (
+                  <>
+                    {isImagesTabLocked() ? (
+                      <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
+                        <p className="text-sm text-green-600 flex items-center gap-2">
+                          <CheckCircle className="h-4 w-4" />
+                          AI Online - Using {getImagesTabLockedModel()}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
+                        <p className="text-sm text-yellow-600">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          Lock an AI model in Settings → AI Settings to enable image generation.
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="plot-name">Name *</Label>
@@ -576,6 +770,19 @@ export default function LightingPlotPage() {
                     )}
                     {editingPlotId ? "Update Plot" : "Create Plot"}
                   </Button>
+                  <Button
+                    onClick={generateLightingImage}
+                    disabled={isGeneratingImage || !aiSettingsLoaded || !isImagesTabLocked()}
+                    variant="outline"
+                    className="gap-2"
+                  >
+                    {isGeneratingImage ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <ImageIcon className="h-4 w-4" />
+                    )}
+                    Generate Image
+                  </Button>
                   {editingPlotId && (
                     <Button variant="outline" onClick={clearForm} disabled={isCreatingPlot} className="gap-2">
                       <X className="h-4 w-4" />
@@ -583,6 +790,17 @@ export default function LightingPlotPage() {
                     </Button>
                   )}
                 </div>
+                
+                {generatedImageUrl && (
+                  <div className="mt-4 p-4 bg-muted rounded-lg">
+                    <Label className="text-sm font-medium mb-2 block">Generated Lighting Visualization</Label>
+                    <img 
+                      src={generatedImageUrl} 
+                      alt="Generated lighting visualization" 
+                      className="w-full max-w-md rounded-lg border border-border"
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
 

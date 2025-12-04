@@ -88,6 +88,7 @@ export default function TreatmentDetailPage() {
   const [isSettingDefaultCover, setIsSettingDefaultCover] = useState(false)
   const [isSlideshowPaused, setIsSlideshowPaused] = useState(false)
   const [isDeletingCover, setIsDeletingCover] = useState(false)
+  const [showCoverImageDialog, setShowCoverImageDialog] = useState(false)
   
   // Script assets states
   const [scriptAssets, setScriptAssets] = useState<Asset[]>([])
@@ -1741,20 +1742,52 @@ Logline (one sentence only):`
 
       const seed = cleaned.length > 4000 ? cleaned.substring(0, 4000) + '...' : cleaned
 
-      const aiPrompt = `Write a professional film treatment based on the material below.
+      const aiPrompt = `You are a professional screenwriter. Convert the following material into a comprehensive movie treatment document.
 
-REQUIREMENTS:
-- Length: 700-1200 words, 6-10 concise paragraphs
-- Clear beginning, middle, end; strong arc and escalating stakes
-- Third person, present tense; cinematic yet efficient prose
-- Introduce protagonist(s), core conflict, antagonist or opposing force
-- Focus on the spine of the story; avoid dialog, shot lists, and scene numbers
-- No markdown formatting
+CRITICAL FORMATTING REQUIREMENTS:
+- This is a TREATMENT, not a screenplay or story. Write in narrative prose form, NOT screenplay format.
+- Use the following EXACT structure with these EXACT section headers:
 
-Source material:
+TITLE
+[Title of the film]
+
+LOGLINE
+[One-sentence summary of the story]
+
+SYNOPSIS
+[2-3 paragraph summary of the entire story]
+
+CHARACTERS
+[Brief descriptions of main characters - name, role, key traits]
+
+ACT I
+[Detailed scene-by-scene narrative description of Act I in prose form. Describe what happens visually and emotionally. Write in present tense, third person. This should be a flowing narrative, NOT screenplay format.]
+
+ACT II
+[Detailed scene-by-scene narrative description of Act II in prose form. Describe what happens visually and emotionally. Write in present tense, third person. This should be a flowing narrative, NOT screenplay format.]
+
+ACT III
+[Detailed scene-by-scene narrative description of Act III in prose form. Describe what happens visually and emotionally. Write in present tense, third person. This should be a flowing narrative, NOT screenplay format.]
+
+THEMES
+[Key themes and messages of the story]
+
+VISUAL STYLE
+[Description of visual approach, tone, and aesthetic]
+
+ADDITIONAL REQUIREMENTS:
+- Write in present tense, third person narrative prose
+- DO NOT use screenplay format (no INT./EXT., no character names in caps, no dialogue formatting)
+- DO NOT write as a story - write as a treatment document describing what happens
+- Be detailed and cinematic in description
+- Focus on story structure, character arcs, and narrative flow
+- NO markdown formatting (no #, *, **, etc.)
+- Write as a professional treatment document that could be used for pitching
+
+Source material to convert:
 ${seed}
 
-Write the treatment now:`
+Treatment:`
 
       const response = await fetch('/api/ai/generate-text', {
         method: 'POST',
@@ -5315,7 +5348,11 @@ Return ONLY the JSON object, no other text:`
                 <img
                   src={coverImageAssets[currentCoverIndex].content_url || treatment.cover_image_url}
                   alt={`${treatment.title} cover ${currentCoverIndex + 1}`}
-                  className="w-full h-full object-cover object-top"
+                  className="w-full h-full object-cover object-top cursor-pointer hover:opacity-90 transition-opacity"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setShowCoverImageDialog(true)
+                  }}
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
                     target.style.display = 'none';
@@ -5325,7 +5362,11 @@ Return ONLY the JSON object, no other text:`
                 <img
                   src={treatment.cover_image_url}
                   alt={`${treatment.title} cover`}
-                  className="w-full h-full object-cover object-top"
+                  className="w-full h-full object-cover object-top cursor-pointer hover:opacity-90 transition-opacity"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setShowCoverImageDialog(true)
+                  }}
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
                     target.style.display = 'none';
@@ -7578,6 +7619,75 @@ Return ONLY the JSON object, no other text:`
             <Button
               variant="outline"
               onClick={() => setViewLocationDialogOpen(false)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cover Image View Dialog */}
+      <Dialog open={showCoverImageDialog} onOpenChange={setShowCoverImageDialog}>
+        <DialogContent className="max-w-[95vw] max-h-[95vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <DialogTitle>Cover Image</DialogTitle>
+            <DialogDescription>
+              {treatment?.title} - {coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex] 
+                ? `Cover ${currentCoverIndex + 1} of ${coverImageAssets.length}`
+                : 'Cover Image'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="relative flex items-center justify-center bg-muted/50 p-6 min-h-[400px] max-h-[80vh] overflow-auto">
+            {coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex] ? (
+              <img
+                src={coverImageAssets[currentCoverIndex].content_url || treatment?.cover_image_url}
+                alt={`${treatment?.title} cover ${currentCoverIndex + 1}`}
+                className="max-w-full max-h-[75vh] object-contain"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            ) : treatment?.cover_image_url ? (
+              <img
+                src={treatment.cover_image_url}
+                alt={`${treatment.title} cover`}
+                className="max-w-full max-h-[75vh] object-contain"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            ) : null}
+            {coverImageAssets.length > 1 && (
+              <>
+                <button
+                  onClick={() => {
+                    const prevIndex = currentCoverIndex > 0 ? currentCoverIndex - 1 : coverImageAssets.length - 1
+                    setCurrentCoverIndex(prevIndex)
+                  }}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 backdrop-blur-sm"
+                  aria-label="Previous cover"
+                >
+                  <ChevronLeft className="h-6 w-6" />
+                </button>
+                <button
+                  onClick={() => {
+                    const nextIndex = (currentCoverIndex + 1) % coverImageAssets.length
+                    setCurrentCoverIndex(nextIndex)
+                  }}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 backdrop-blur-sm"
+                  aria-label="Next cover"
+                >
+                  <ChevronRight className="h-6 w-6" />
+                </button>
+              </>
+            )}
+          </div>
+          <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={() => setShowCoverImageDialog(false)}
             >
               Close
             </Button>

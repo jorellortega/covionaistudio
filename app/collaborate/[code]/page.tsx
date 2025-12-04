@@ -35,6 +35,11 @@ import {
   RefreshCw,
   Download,
   FileText as FileTextIcon,
+  MapPin,
+  MessageSquare,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { CollaborationService, type CollaborationSession } from "@/lib/collaboration-service"
@@ -47,6 +52,9 @@ import { createClient } from "@supabase/supabase-js"
 import { Database } from "@/lib/supabase"
 import { useAuthReady } from "@/components/auth-hooks"
 import { Wand2 } from "lucide-react"
+
+// Screenplay page number calculation (standard: ~55 lines per page)
+const LINES_PER_PAGE = 55
 
 export default function CollaboratePage() {
   const params = useParams()
@@ -73,7 +81,19 @@ function CollaboratePageClient({ code }: { code: string }) {
     description: "",
     archetype: "",
   })
+  const [locations, setLocations] = useState<any[]>([])
+  const [loadingLocations, setLoadingLocations] = useState(false)
   const [projectThumbnail, setProjectThumbnail] = useState<string | null>(null)
+  
+  // Screenplay view states
+  const [viewMode, setViewMode] = useState<'scenes' | 'screenplay'>('scenes')
+  const [fullScript, setFullScript] = useState<string>("")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [pages, setPages] = useState<string[]>([])
+  const [editedPages, setEditedPages] = useState<Map<number, string>>(new Map())
+  const [currentPageContent, setCurrentPageContent] = useState<string>("")
+  const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [showSidebar, setShowSidebar] = useState(true) // Show by default, will adjust for mobile
@@ -379,6 +399,7 @@ function CollaboratePageClient({ code }: { code: string }) {
       console.log('📋 [COLLAB] Session available, loading scenes for project:', session.project_id)
       loadScenes()
       loadCharacters()
+      loadLocations()
       loadProjectThumbnail()
     } else {
       console.log('⏳ [COLLAB] Waiting for session...')
@@ -418,6 +439,355 @@ function CollaboratePageClient({ code }: { code: string }) {
     }
   }
 
+  // Load locations
+  const loadLocations = async () => {
+    if (!session) {
+      console.log('⚠️ [COLLAB] Cannot load locations: no session')
+      return
+    }
+    
+    try {
+      setLoadingLocations(true)
+      console.log('📍 [COLLAB] Loading locations for project:', session.project_id)
+      
+      // Use API route for guest access
+      const response = await fetch(
+        `/api/collaboration/locations?access_code=${encodeURIComponent(session.access_code)}`
+      )
+      const result = await response.json()
+      
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to load locations")
+      }
+      
+      const locs = result.locations || []
+      setLocations(locs)
+      console.log('✅ [COLLAB] Loaded locations:', locs.length)
+    } catch (error: any) {
+      console.error("❌ [COLLAB] Error loading locations:", error)
+      // Silently fail - locations are optional
+      setLocations([])
+    } finally {
+      setLoadingLocations(false)
+    }
+  }
+
+  // Load full screenplay from all scenes
+  const loadFullScreenplay = async () => {
+    if (!session) return
+    
+    try {
+      // Combine all scene contents
+      const allScenes = await Promise.all(
+        scenes.map(async (scene) => {
+          try {
+            const response = await fetch(
+              `/api/collaboration/scenes/${scene.id}?access_code=${encodeURIComponent(session.access_code)}`
+            )
+            const result = await response.json()
+            if (response.ok && result.scene?.screenplay_content) {
+              return result.scene.screenplay_content
+            }
+            return ""
+          } catch {
+            return ""
+          }
+        })
+      )
+      
+      const combined = allScenes.filter(Boolean).join('\n\n')
+      setFullScript(combined)
+      
+      // Calculate pages
+      const lines = combined.split('\n')
+      const calculatedPages = Math.max(1, Math.ceil(lines.length / LINES_PER_PAGE))
+      setTotalPages(calculatedPages)
+      
+      // Split into pages
+      const pageArray: string[] = []
+      for (let i = 0; i < calculatedPages; i++) {
+        const startLine = i * LINES_PER_PAGE
+        const endLine = Math.min(startLine + LINES_PER_PAGE, lines.length)
+        pageArray.push(lines.slice(startLine, endLine).join('\n'))
+      }
+      setPages(pageArray)
+      
+      // Set current page content
+      if (pageArray.length > 0) {
+        setCurrentPageContent(pageArray[currentPage - 1] || "")
+      }
+    } catch (error) {
+      console.error('Error loading full screenplay:', error)
+      setFullScript("")
+      setPages([])
+      setTotalPages(1)
+    }
+  }
+
+  // Get current page edit content
+  const getCurrentPageEditContent = () => {
+    if (screenplayTextareaRef.current) {
+      return screenplayTextareaRef.current.value
+    }
+    const edited = editedPages.get(currentPage)
+    if (edited !== undefined) {
+      return edited
+    }
+    return pages[currentPage - 1] || ""
+  }
+
+  // Save current page edit
+  const saveCurrentPageEdit = (content: string) => {
+    setCurrentPageContent(content)
+    setEditedPages(prev => {
+      const newMap = new Map(prev)
+      newMap.set(currentPage, content)
+      return newMap
+    })
+  }
+
+  // Insert text at cursor position
+  const insertTextAtCursor = (text: string) => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) return
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const currentContent = getCurrentPageEditContent()
+    const newContent = currentContent.substring(0, start) + text + currentContent.substring(end)
+    
+    saveCurrentPageEdit(newContent)
+    
+    textarea.value = newContent
+    const newPosition = start + text.length
+    textarea.setSelectionRange(newPosition, newPosition)
+    textarea.focus()
+    
+    const event = new Event('input', { bubbles: true })
+    textarea.dispatchEvent(event)
+  }
+
+  // Insert functions
+  const insertActionLine = () => {
+    insertTextAtCursor('\n\n')
+  }
+
+  const insertCharacter = (characterName: string) => {
+    const name = characterName.toUpperCase()
+    const spaces = ' '.repeat(22)
+    insertTextAtCursor(`\n${spaces}${name}\n`)
+  }
+
+  const insertLocation = (locationName: string, locationType?: string | null) => {
+    const intExt = locationType === 'interior' ? 'INT.' : locationType === 'exterior' ? 'EXT.' : 'INT.'
+    insertTextAtCursor(`\n${intExt} ${locationName.toUpperCase()} - DAY\n`)
+  }
+
+  const insertSceneHeading = () => {
+    insertTextAtCursor('\nINT. LOCATION - DAY\n')
+  }
+
+  const insertDialogue = () => {
+    insertTextAtCursor('\n            ')
+  }
+
+  const insertTitlePage = () => {
+    const centerText = (text: string) => {
+      const lineWidth = 80
+      const textLength = text.length
+      const leftPadding = Math.floor((lineWidth - textLength) / 2)
+      return '                                        '.substring(0, Math.max(0, leftPadding)) + text
+    }
+    
+    const titlePage = `
+
+
+
+
+
+
+
+
+
+
+
+${centerText('TITLE HERE')}
+
+
+${centerText('Written by')}
+
+
+${centerText('AUTHOR NAME')}
+
+
+
+
+
+
+
+
+
+
+
+
+
+`
+    insertTextAtCursor(titlePage)
+  }
+
+  // Center text helper
+  const centerText = (text: string) => {
+    const lineWidth = 80
+    const centerPosition = 40
+    const trimmed = text.trim()
+    const textLength = trimmed.length
+    
+    if (textLength > lineWidth) {
+      return trimmed
+    }
+    
+    const textCenter = textLength / 2
+    const leftPadding = Math.round(centerPosition - textCenter)
+    const rightPadding = lineWidth - leftPadding - textLength
+    
+    const leftSpaces = ' '.repeat(leftPadding)
+    const rightSpaces = ' '.repeat(rightPadding)
+    
+    return leftSpaces + trimmed + rightSpaces
+  }
+
+  // Right align text helper
+  const rightAlignText = (text: string) => {
+    const lineWidth = 80
+    const trimmed = text.trim()
+    const textLength = trimmed.length
+    const leftPadding = Math.max(0, lineWidth - textLength)
+    return ' '.repeat(leftPadding) + trimmed
+  }
+
+  // Align text
+  const alignText = (alignment: 'left' | 'center' | 'right') => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) return
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const currentContent = getCurrentPageEditContent()
+    
+    const lines = currentContent.split('\n')
+    let startLine = 0
+    let endLine = 0
+    let charCount = 0
+    
+    for (let i = 0; i < lines.length; i++) {
+      const lineLength = lines[i].length + 1
+      if (charCount <= start && start < charCount + lineLength) {
+        startLine = i
+      }
+      if (charCount <= end && end <= charCount + lineLength) {
+        endLine = i
+        break
+      }
+      charCount += lineLength
+    }
+    
+    for (let i = startLine; i <= endLine; i++) {
+      if (lines[i] && lines[i].trim()) {
+        const trimmed = lines[i].trim()
+        if (alignment === 'center') {
+          lines[i] = centerText(trimmed)
+        } else if (alignment === 'right') {
+          lines[i] = rightAlignText(trimmed)
+        } else {
+          lines[i] = trimmed
+        }
+      }
+    }
+    
+    const newContent = lines.join('\n')
+    saveCurrentPageEdit(newContent)
+    
+    textarea.value = newContent
+    textarea.focus()
+    
+    const event = new Event('input', { bubbles: true })
+    textarea.dispatchEvent(event)
+  }
+
+  // Combine edited pages
+  const combineEditedPages = (): string => {
+    const maxPage = Math.max(
+      totalPages,
+      editedPages.size > 0 ? Math.max(...Array.from(editedPages.keys())) : 1
+    )
+    
+    const combinedPages: string[] = []
+    for (let i = 1; i <= maxPage; i++) {
+      if (i === currentPage && screenplayTextareaRef.current) {
+        const textareaContent = screenplayTextareaRef.current.value
+        if (textareaContent !== undefined) {
+          combinedPages.push(textareaContent)
+          continue
+        }
+      }
+      
+      const editedContent = editedPages.get(i)
+      if (editedContent !== undefined) {
+        combinedPages.push(editedContent)
+      } else if (pages[i - 1] !== undefined) {
+        combinedPages.push(pages[i - 1])
+      } else {
+        combinedPages.push("")
+      }
+    }
+    
+    const paddedPages: string[] = []
+    for (let i = 0; i < combinedPages.length; i++) {
+      const pageContent = combinedPages[i]
+      const lineCount = pageContent.split('\n').length
+      
+      if (lineCount < LINES_PER_PAGE && i < combinedPages.length - 1) {
+        const paddingNeeded = LINES_PER_PAGE - lineCount
+        const padding = '\n'.repeat(paddingNeeded)
+        paddedPages.push(pageContent + padding)
+      } else {
+        paddedPages.push(pageContent)
+      }
+    }
+    
+    return paddedPages.filter(page => page !== undefined).join('\n')
+  }
+
+  // Go to page
+  const goToPage = (page: number) => {
+    if (page < 1 || page > totalPages) return
+    
+    // Save current page before switching
+    if (screenplayTextareaRef.current) {
+      saveCurrentPageEdit(screenplayTextareaRef.current.value)
+    }
+    
+    setCurrentPage(page)
+    const pageContent = editedPages.get(page) || pages[page - 1] || ""
+    setCurrentPageContent(pageContent)
+  }
+
+  // Load screenplay when scenes are loaded and view mode is screenplay
+  useEffect(() => {
+    if (viewMode === 'screenplay' && scenes.length > 0 && session) {
+      loadFullScreenplay()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, scenes.length, session?.access_code])
+
+  // Update current page content when page changes
+  useEffect(() => {
+    if (viewMode === 'screenplay') {
+      const pageContent = editedPages.get(currentPage) || pages[currentPage - 1] || ""
+      setCurrentPageContent(pageContent)
+    }
+  }, [currentPage, viewMode])
+
   // Load scene content when scene is selected
   useEffect(() => {
     if (selectedSceneId && session) {
@@ -445,7 +815,12 @@ function CollaboratePageClient({ code }: { code: string }) {
       setEnablePolling(true)
       setPollingAutoEnabled(true)
     }
-  }, [isEditing, enablePolling])
+    // Turn off live updates when exiting edit mode (unless user manually enabled it)
+    if (!isEditing && pollingAutoEnabled) {
+      setEnablePolling(false)
+      setPollingAutoEnabled(false)
+    }
+  }, [isEditing, enablePolling, pollingAutoEnabled])
   
   // Cleanup auto-save timeout on unmount or when leaving edit mode
   useEffect(() => {
@@ -589,36 +964,49 @@ function CollaboratePageClient({ code }: { code: string }) {
     }
   }, [enablePolling])
 
-  // Setup real-time polling (always active for live collaboration)
+  // Setup real-time polling (only when live updates enabled and editing)
   useEffect(() => {
-    if (!selectedSceneId || !session || !enablePolling) {
-      console.log('⏸️ [COLLAB] Polling paused:', { 
-        selectedSceneId: !!selectedSceneId, 
-        session: !!session, 
-        enablePolling 
-      })
+    if (!selectedSceneId || !session) {
       return
     }
 
-    console.log('🔄 [COLLAB] Starting live polling for scene:', selectedSceneId, 'isEditing:', isEditing)
-    const pollInterval = setInterval(async () => {
-      try {
-        // Skip update if editing and has unsaved changes (smart conflict resolution)
-        await loadSceneContent(selectedSceneId, true) // Pass true to skip update if editing
-      } catch (error) {
-        console.error('❌ [COLLAB] Polling error (silent):', error)
-        // Silently fail polling
-      }
-    }, 1000) // Poll every 1 second for more real-time feel
+    // Fast polling (1 second) when live updates enabled and editing
+    if (enablePolling && isEditing) {
+      console.log('🔄 [COLLAB] Starting live polling for scene:', selectedSceneId, 'isEditing:', isEditing)
+      const pollInterval = setInterval(async () => {
+        try {
+          // Skip update if editing and has unsaved changes (smart conflict resolution)
+          await loadSceneContent(selectedSceneId, true) // Pass true to skip update if editing
+        } catch (error) {
+          console.error('❌ [COLLAB] Polling error (silent):', error)
+          // Silently fail polling
+        }
+      }, 1000) // Poll every 1 second for more real-time feel
 
-    return () => {
-      console.log('🛑 [COLLAB] Stopping live polling')
-      clearInterval(pollInterval)
+      return () => {
+        console.log('🛑 [COLLAB] Stopping live polling')
+        clearInterval(pollInterval)
+      }
+    }
+
+    // Slow polling (5 minutes) when live updates is off
+    if (!enablePolling) {
+      console.log('⏰ [COLLAB] Starting slow polling (5 min) for scene:', selectedSceneId)
+      const slowPollInterval = setInterval(async () => {
+        try {
+          await loadSceneContent(selectedSceneId, false) // Don't skip update for slow polling
+        } catch (error) {
+          console.error('❌ [COLLAB] Slow polling error (silent):', error)
+        }
+      }, 5 * 60 * 1000) // Poll every 5 minutes
+
+      return () => {
+        console.log('🛑 [COLLAB] Stopping slow polling')
+        clearInterval(slowPollInterval)
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSceneId, session?.access_code, enablePolling, isEditing, hasUnsavedChanges])
-
-  // Note: Secondary slow polling removed since live polling is now enabled by default
 
   // Handle scene selection
   const handleSceneSelect = async (sceneId: string) => {
@@ -629,6 +1017,11 @@ function CollaboratePageClient({ code }: { code: string }) {
     setSelectedSceneId(sceneId)
     setSelectedScene(scene || null)
     setIsEditing(false)
+    // Turn off live updates when switching scenes or clicking off
+    if (pollingAutoEnabled) {
+      setEnablePolling(false)
+      setPollingAutoEnabled(false)
+    }
     await loadSceneContent(sceneId)
   }
 
@@ -1337,8 +1730,26 @@ function CollaboratePageClient({ code }: { code: string }) {
             </div>
           </div>
 
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-2 mb-3">
+            <Button
+              variant={viewMode === 'scenes' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('scenes')}
+            >
+              Scenes
+            </Button>
+            <Button
+              variant={viewMode === 'screenplay' ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('screenplay')}
+            >
+              Screenplay
+            </Button>
+          </div>
+
           {/* Scene Selector */}
-          {scenes.length > 0 && (
+          {scenes.length > 0 && viewMode === 'scenes' && (
             <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2">
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <Button
@@ -1458,7 +1869,286 @@ function CollaboratePageClient({ code }: { code: string }) {
 
         {/* Script Content Card */}
         <div className="flex-1 overflow-y-auto p-3 md:p-6">
-          {selectedScene ? (
+          {viewMode === 'screenplay' ? (
+            /* Screenplay View */
+            <Card className="mb-6">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    Screenplay
+                  </CardTitle>
+                  {fullScript && (
+                    <div className="flex items-center gap-4">
+                      <Badge variant="outline">
+                        Page {currentPage} of {totalPages}
+                      </Badge>
+                      {totalPages > 1 && (
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage - 1)}
+                            disabled={currentPage === 1}
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={totalPages}
+                            value={currentPage}
+                            onChange={(e) => goToPage(parseInt(e.target.value) || 1)}
+                            className="w-20 text-center"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => goToPage(currentPage + 1)}
+                            disabled={currentPage === totalPages}
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4" data-script-content>
+                  {!fullScript ? (
+                    <div className="text-center py-12">
+                      <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                      <h3 className="text-lg font-medium mb-2">No Screenplay Found</h3>
+                      <p className="text-muted-foreground mb-4">
+                        No screenplay content available. Switch to Scenes view to add content.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Page number and action buttons row */}
+                      <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
+                        <div className="flex items-center gap-4">
+                          <Label className="text-sm font-medium text-muted-foreground">
+                            Page {currentPage} of {totalPages}
+                          </Label>
+                          {totalPages > 1 && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => goToPage(currentPage - 1)}
+                                disabled={currentPage === 1}
+                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                              >
+                                <ChevronLeft className="h-4 w-4" />
+                              </Button>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={totalPages}
+                                value={currentPage}
+                                onChange={(e) => {
+                                  const page = parseInt(e.target.value)
+                                  if (page && page >= 1 && page <= totalPages) {
+                                    goToPage(page)
+                                  }
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault()
+                                    const page = parseInt((e.target as HTMLInputElement).value)
+                                    if (page && page >= 1 && page <= totalPages) {
+                                      goToPage(page)
+                                    }
+                                  }
+                                }}
+                                className="w-20 text-center"
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => goToPage(currentPage + 1)}
+                                disabled={currentPage === totalPages}
+                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                              >
+                                <ChevronRight className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {/* Toolbar for inserting screenplay elements */}
+                      <div className="flex items-center gap-2 pb-2 border-b border-purple-500/20 flex-wrap">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertActionLine}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Action
+                        </Button>
+                        {loadingCharacters || characters.length === 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                          >
+                            {loadingCharacters ? "Loading..." : "No characters"}
+                          </Button>
+                        ) : (
+                          <Select onValueChange={insertCharacter}>
+                            <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                              <SelectValue placeholder="Character" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {characters.map((char) => (
+                                <SelectItem key={char.id} value={char.name}>
+                                  {char.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        {loadingLocations || locations.length === 0 ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled
+                            className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                          >
+                            {loadingLocations ? "Loading..." : "No locations"}
+                          </Button>
+                        ) : (
+                          <Select onValueChange={(locationName) => {
+                            const location = locations.find(l => l.name === locationName)
+                            insertLocation(locationName, location?.type)
+                          }}>
+                            <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                              <SelectValue placeholder="Location" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {locations.map((loc) => (
+                                <SelectItem key={loc.id} value={loc.name}>
+                                  {loc.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertSceneHeading}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <MapPin className="h-3 w-3 mr-1" />
+                          INT/EXT
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertDialogue}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <MessageSquare className="h-3 w-3 mr-1" />
+                          Dialogue
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={insertTitlePage}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Title Page
+                        </Button>
+                        <div className="h-6 w-px bg-border mx-1" />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('left')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Left"
+                        >
+                          <AlignLeft className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('center')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Center"
+                        >
+                          <AlignCenter className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => alignText('right')}
+                          className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                          title="Align Right"
+                        >
+                          <AlignRight className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      
+                      <div className="space-y-2 relative w-full">
+                        <div className="relative w-full">
+                          {/* Visual ruler for 80-character line width with center marker */}
+                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
+                            <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                              <span className="absolute left-0 opacity-30">0</span>
+                              <span className="absolute left-[20%] opacity-30">16</span>
+                              <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
+                              <span className="absolute left-[80%] opacity-30">64</span>
+                              <span className="absolute right-0 opacity-30">80</span>
+                              {/* Center line indicator */}
+                              <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
+                            </div>
+                          </div>
+                          <Textarea
+                            ref={screenplayTextareaRef}
+                            key={`page-${currentPage}`}
+                            data-screenplay-editor
+                            value={currentPageContent}
+                            onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                            onSelect={handleTextSelection}
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                            style={{ 
+                              fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              tabSize: 1,
+                              letterSpacing: '0px',
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'break-word',
+                              wordWrap: 'break-word',
+                              fontVariantNumeric: 'normal',
+                              fontFeatureSettings: 'normal',
+                              width: 'calc(80ch + 24px)',
+                              maxWidth: 'calc(80ch + 24px)',
+                              minWidth: 'calc(80ch + 24px)',
+                              margin: '0 auto',
+                              display: 'block',
+                              overflowX: 'hidden',
+                              backgroundColor: 'transparent'
+                            }}
+                            placeholder="Enter your screenplay here..."
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          ) : selectedScene ? (
             <Card>
               <CardHeader className="p-4 md:p-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -1529,30 +2219,66 @@ function CollaboratePageClient({ code }: { code: string }) {
               <CardContent>
                 {isEditing ? (
                   <div className="space-y-4 relative">
-                    <Textarea
-                      ref={contentTextareaRef}
-                      data-screenplay-editor
-                      value={sceneContent}
-                      onChange={(e) => {
-                        const newContent = e.target.value
-                        setSceneContent(newContent)
-                        setHasUnsavedChanges(true)
-                        
-                        // Clear existing timeout
-                        if (autoSaveTimeoutRef.current) {
-                          clearTimeout(autoSaveTimeoutRef.current)
-                        }
-                        
-                        // Auto-save after 1.5 seconds of inactivity
-                        autoSaveTimeoutRef.current = setTimeout(() => {
-                          console.log('💾 [COLLAB] Auto-saving after typing pause...')
-                          saveSceneContent(true) // Silent save
-                        }, 1500)
-                      }}
-                      onSelect={handleTextSelection}
-                      className="min-h-[400px] md:min-h-[600px] font-mono text-sm leading-relaxed resize-none w-full"
-                      placeholder="Enter your screenplay content here..."
-                    />
+                    <div className="space-y-2 relative w-full">
+                      <div className="relative w-full">
+                        {/* Visual ruler for 80-character line width with center marker */}
+                        <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
+                          <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                            <span className="absolute left-0 opacity-30">0</span>
+                            <span className="absolute left-[20%] opacity-30">16</span>
+                            <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
+                            <span className="absolute left-[80%] opacity-30">64</span>
+                            <span className="absolute right-0 opacity-30">80</span>
+                            {/* Center line indicator */}
+                            <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
+                          </div>
+                        </div>
+                        <Textarea
+                          ref={contentTextareaRef}
+                          data-screenplay-editor
+                          value={sceneContent}
+                          onChange={(e) => {
+                            const newContent = e.target.value
+                            setSceneContent(newContent)
+                            setHasUnsavedChanges(true)
+                            
+                            // Clear existing timeout
+                            if (autoSaveTimeoutRef.current) {
+                              clearTimeout(autoSaveTimeoutRef.current)
+                            }
+                            
+                            // Auto-save after 1.5 seconds of inactivity
+                            autoSaveTimeoutRef.current = setTimeout(() => {
+                              console.log('💾 [COLLAB] Auto-saving after typing pause...')
+                              saveSceneContent(true) // Silent save
+                            }, 1500)
+                          }}
+                          onSelect={handleTextSelection}
+                          className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                          style={{ 
+                            fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                            tabSize: 1,
+                            letterSpacing: '0px',
+                            paddingLeft: '12px',
+                            paddingRight: '12px',
+                            textAlign: 'left',
+                            whiteSpace: 'pre-wrap',
+                            overflowWrap: 'break-word',
+                            wordWrap: 'break-word',
+                            fontVariantNumeric: 'normal',
+                            fontFeatureSettings: 'normal',
+                            width: 'calc(80ch + 24px)',
+                            maxWidth: 'calc(80ch + 24px)',
+                            minWidth: 'calc(80ch + 24px)',
+                            margin: '0 auto',
+                            display: 'block',
+                            overflowX: 'hidden',
+                            backgroundColor: 'transparent'
+                          }}
+                          placeholder="Enter your screenplay here..."
+                        />
+                      </div>
+                    </div>
                     
                     {/* Floating Selection Toolbar */}
                     {selectedText && toolbarPosition && (
@@ -1638,6 +2364,8 @@ function CollaboratePageClient({ code }: { code: string }) {
                           variant="outline"
                           onClick={() => {
                             setIsEditing(false)
+                            setEnablePolling(false) // Turn off live updates when canceling
+                            setPollingAutoEnabled(false)
                             loadSceneContent(selectedScene.id)
                           }}
                           disabled={saving}
@@ -1651,10 +2379,46 @@ function CollaboratePageClient({ code }: { code: string }) {
                 ) : (
                   <div className="space-y-4">
                     {sceneContent ? (
-                      <div className="bg-muted/20 p-3 md:p-6 rounded-lg border overflow-x-auto">
-                        <pre className="font-mono text-xs md:text-sm leading-relaxed whitespace-pre-wrap break-words">
-                          {sceneContent}
-                        </pre>
+                      <div className="space-y-2 relative w-full">
+                        <div className="relative w-full">
+                          {/* Visual ruler for 80-character line width with center marker */}
+                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
+                            <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                              <span className="absolute left-0 opacity-30">0</span>
+                              <span className="absolute left-[20%] opacity-30">16</span>
+                              <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
+                              <span className="absolute left-[80%] opacity-30">64</span>
+                              <span className="absolute right-0 opacity-30">80</span>
+                              {/* Center line indicator */}
+                              <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
+                            </div>
+                          </div>
+                          <div 
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                            style={{ 
+                              fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              tabSize: 1,
+                              letterSpacing: '0px',
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
+                              textAlign: 'left',
+                              whiteSpace: 'pre-wrap',
+                              overflowWrap: 'break-word',
+                              wordWrap: 'break-word',
+                              fontVariantNumeric: 'normal',
+                              fontFeatureSettings: 'normal',
+                              width: 'calc(80ch + 24px)',
+                              maxWidth: 'calc(80ch + 24px)',
+                              minWidth: 'calc(80ch + 24px)',
+                              margin: '0 auto',
+                              display: 'block',
+                              overflowX: 'hidden',
+                              backgroundColor: 'transparent'
+                            }}
+                          >
+                            {sceneContent}
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="text-center py-12">

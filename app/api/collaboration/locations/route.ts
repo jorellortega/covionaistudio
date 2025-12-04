@@ -3,7 +3,7 @@ import { CollaborationService } from '@/lib/collaboration-service'
 import { createClient } from '@supabase/supabase-js'
 import { Database } from '@/lib/supabase'
 
-// GET project info (for guests)
+// GET locations (for guests)
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -37,49 +37,28 @@ export async function GET(request: NextRequest) {
       }
     )
 
-    // Get project info
-    const { data: project, error } = await supabaseAdmin
-      .from('projects')
-      .select('id, name, thumbnail')
-      .eq('id', validation.session.project_id)
-      .single()
+    // Get locations for the project
+    const { data: locations, error } = await supabaseAdmin
+      .from('locations')
+      .select('id, name, description, type, address, image_url, shooting_notes')
+      .eq('project_id', validation.session.project_id)
+      .order('updated_at', { ascending: false })
 
     if (error) {
-      console.error('Error fetching project:', error)
+      console.error('Error fetching locations:', error)
       return NextResponse.json(
-        { error: 'Failed to fetch project' },
+        { error: 'Failed to fetch locations' },
         { status: 500 }
       )
     }
 
-    return NextResponse.json({ success: true, project })
+    return NextResponse.json({ success: true, locations: locations || [] })
   } catch (error: any) {
-    console.error('Error fetching project:', error)
+    console.error('Error fetching locations:', error)
     return NextResponse.json(
-      { error: error.message || 'Failed to fetch project' },
+      { error: error.message || 'Failed to fetch locations' },
       { status: 500 }
     )
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 

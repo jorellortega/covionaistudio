@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Edit, Trash2, Image as ImageIcon, FileText, Film, Wand2, Loader2, List, File, Download, Sparkles, Eye, Copy, Save, Upload, ChevronLeft, ChevronRight } from "lucide-react"
+import { ArrowLeft, Edit, Trash2, Image as ImageIcon, FileText, Film, Wand2, Loader2, List, File, Download, Sparkles, Eye, Copy, Save, Upload, ChevronLeft, ChevronRight, ChevronDown, X } from "lucide-react"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieIdeasService, type MovieIdea } from "@/lib/movie-ideas-service"
 import { IdeaImagesService } from "@/lib/idea-images-service"
@@ -13,6 +13,7 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { toast } from "@/hooks/use-toast"
 import { Navigation } from "@/components/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { sanitizeFilename } from '@/lib/utils'
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Checkbox } from "@/components/ui/checkbox"
 import AITextEditor from "@/components/ai-text-editor"
 
 export default function IdeaDetailPage() {
@@ -32,6 +37,8 @@ export default function IdeaDetailPage() {
   const { user, userId, ready } = useAuthReady()
   const [idea, setIdea] = useState<MovieIdea | null>(null)
   const [ideaImages, setIdeaImages] = useState<string[]>([])
+  const [coverImage, setCoverImage] = useState<string | null>(null)
+  const [showCoverImageDialog, setShowCoverImageDialog] = useState(false)
   const [ideaFiles, setIdeaFiles] = useState<Array<{url: string, name: string, type: string, id?: string}>>([])
   const [loading, setLoading] = useState(true)
   const [fileTexts, setFileTexts] = useState<{[key: string]: string}>({})
@@ -54,7 +61,41 @@ export default function IdeaDetailPage() {
   const [userApiKeys, setUserApiKeys] = useState<{openai_api_key?: string; anthropic_api_key?: string}>({})
   const [isEnhancingText, setIsEnhancingText] = useState(false)
 
+  // Treatment & Scenes state
+  const [treatment, setTreatment] = useState<any>(null)
+  const [scenes, setScenes] = useState<any[]>([])
+  const [sceneList, setSceneList] = useState<any>(null)
+  const [loadingTreatmentScenes, setLoadingTreatmentScenes] = useState(false)
+  
+  // Editing state for Treatment & Scenes tab
+  const [editingSynopsis, setEditingSynopsis] = useState(false)
+  const [synopsisValue, setSynopsisValue] = useState("")
+  const [editingTreatment, setEditingTreatment] = useState(false)
+  const [treatmentContent, setTreatmentContent] = useState("")
+  const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
+  const [editingSceneData, setEditingSceneData] = useState<any>(null)
+  const [isSavingSynopsis, setIsSavingSynopsis] = useState(false)
+  const [isSavingTreatment, setIsSavingTreatment] = useState(false)
+  const [isSavingScene, setIsSavingScene] = useState(false)
+
+  // Edit dialog state
+  const [showEditDialog, setShowEditDialog] = useState(false)
+  const [editTitle, setEditTitle] = useState("")
+  const [editDescription, setEditDescription] = useState("")
+  const [editGenres, setEditGenres] = useState<string[]>([])
+  const [editMainCreator, setEditMainCreator] = useState("")
+  const [editCoCreators, setEditCoCreators] = useState<string[]>([])
+  const [editSynopsis, setEditSynopsis] = useState("")
+  const [editStatus, setEditStatus] = useState<"concept" | "development" | "pre-production" | "production" | "post-production" | "completed">("concept")
+  const [isSavingEdit, setIsSavingEdit] = useState(false)
+
   const ideaId = params.id as string
+
+  const genres = [
+    "Action", "Adventure", "Comedy", "Crime", "Drama", "Fantasy", 
+    "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller", "Western",
+    "Animation", "Documentary", "Musical", "War", "Biography", "History"
+  ]
 
   useEffect(() => {
     if (ready && userId && ideaId) {
@@ -63,6 +104,86 @@ export default function IdeaDetailPage() {
       fetchUserApiKeys()
     }
   }, [ready, userId, ideaId])
+
+  const loadTreatmentAndScenes = async () => {
+    if (!userId || !ideaId || !idea) return
+    
+    setLoadingTreatmentScenes(true)
+    try {
+      const supabase = getSupabaseClient()
+      
+      // Load scenes for this idea
+      const { data: existingSceneList } = await supabase
+        .from('scene_lists')
+        .select('*')
+        .eq('movie_idea_id', ideaId)
+        .single()
+      
+      if (existingSceneList) {
+        setSceneList(existingSceneList)
+        const { data: scenesData } = await supabase
+          .from('scenes')
+          .select('*')
+          .eq('scene_list_id', existingSceneList.id)
+          .order('order_index', { ascending: true })
+        
+        if (scenesData) {
+          setScenes(scenesData)
+        }
+      }
+      
+      // Try to find a treatment - treatments are linked to projects, not ideas directly
+      // We'll check if there's a treatment with a matching title
+      // First try exact title match, then try partial match
+      let treatmentsData = null
+      
+      // Try exact title match first (most reliable)
+      const { data: exactMatch } = await supabase
+        .from('treatments')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('title', idea.title)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+      
+      if (exactMatch && exactMatch.length > 0) {
+        treatmentsData = exactMatch
+      } else {
+        // Fallback to partial match
+        const { data: partialMatch } = await supabase
+          .from('treatments')
+          .select('*')
+          .eq('user_id', userId)
+          .ilike('title', `%${idea.title}%`)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+        
+        if (partialMatch && partialMatch.length > 0) {
+          treatmentsData = partialMatch
+        }
+      }
+      
+      if (treatmentsData && treatmentsData.length > 0) {
+        const foundTreatment = treatmentsData[0]
+        console.log('✅ Found treatment for idea:', foundTreatment.id, foundTreatment.title)
+        console.log('📝 Treatment prompt:', {
+          hasPrompt: !!foundTreatment.prompt,
+          promptLength: foundTreatment.prompt?.length || 0,
+          promptPreview: foundTreatment.prompt?.substring(0, 100) || 'empty'
+        })
+        setTreatment(foundTreatment)
+        // Sync treatmentContent state with loaded treatment
+        setTreatmentContent(foundTreatment.prompt || "")
+      } else {
+        console.log('❌ No treatment found for idea:', idea.title)
+        setTreatmentContent("")
+      }
+    } catch (error) {
+      console.error('Error loading treatment and scenes:', error)
+    } finally {
+      setLoadingTreatmentScenes(false)
+    }
+  }
 
   // Debug: Log when fileTexts changes
   useEffect(() => {
@@ -157,6 +278,17 @@ export default function IdeaDetailPage() {
       setIdeaImages(images)
       setIdeaFiles(files)
       setFileTexts(texts)
+      
+      // Set cover image (first image if available)
+      if (images.length > 0) {
+        setCoverImage(images[0])
+      } else {
+        setCoverImage(null)
+      }
+      
+      // Load treatment and scenes after idea is loaded
+      await loadTreatmentAndScenes()
+      
       console.log('📚 Loaded fileTexts on page load:', Object.keys(texts).length, 'files with extracted text')
       Object.keys(texts).forEach(key => {
         console.log(`  - ${key}: ${texts[key].length} characters`)
@@ -299,6 +431,118 @@ export default function IdeaDetailPage() {
            fileType.includes('pdf') || 
            fileType.includes('word') || 
            fileType.includes('document')
+  }
+
+  const handleImportFiles = async (files: File[]) => {
+    if (!ready || !user || !idea || files.length === 0) {
+      toast({
+        title: "Error",
+        description: "Please select files to import",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const results: { success: string[], failed: string[] } = { success: [], failed: [] }
+
+    for (const file of files) {
+      try {
+        const fileName = file.name
+        const isImage = file.type.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|svg|bmp)$/i.test(fileName)
+
+        if (isImage) {
+          // Handle image import
+          const formData = new FormData()
+          formData.append('image', file)
+          formData.append('prompt', `Imported image: ${fileName}`)
+          formData.append('ideaId', idea.id)
+
+          const response = await fetch('/api/import/image-file', {
+            method: 'POST',
+            body: formData
+          })
+
+          if (response.ok) {
+            results.success.push(fileName)
+          } else {
+            results.failed.push(fileName)
+          }
+        } else {
+          // Handle all other file types - upload to storage and save to idea
+          try {
+            const timestamp = Date.now()
+            const fileExtension = fileName.split('.').pop()
+            const sanitizedName = sanitizeFilename(fileName)
+            const storageFileName = `${timestamp}-${sanitizedName}.${fileExtension}`
+            const filePath = `${user.id}/ideas/${idea.id}/${storageFileName}`
+
+            // Upload to storage
+            const { data: uploadData, error: uploadError } = await getSupabaseClient().storage
+              .from('cinema_files')
+              .upload(filePath, file, {
+                cacheControl: '3600',
+                upsert: false
+              })
+
+            if (uploadError) {
+              console.error(`Storage upload error for ${fileName}:`, uploadError)
+              results.failed.push(fileName)
+              continue
+            }
+
+            // Get public URL
+            const { data: { publicUrl } } = getSupabaseClient().storage
+              .from('cinema_files')
+              .getPublicUrl(filePath)
+
+            // Save file reference to idea_images table
+            const { data: fileData, error: dbError } = await getSupabaseClient()
+              .from('idea_images')
+              .insert({
+                user_id: user.id,
+                idea_id: idea.id,
+                image_url: publicUrl,
+                prompt: `Imported file: ${fileName}`,
+                bucket_path: filePath
+              })
+              .select()
+              .single()
+
+            if (dbError) {
+              console.error(`Database insert error for ${fileName}:`, dbError)
+              results.failed.push(fileName)
+            } else {
+              results.success.push(fileName)
+              console.log(`File ${fileName} uploaded and saved successfully for idea ${idea.id}`)
+            }
+          } catch (error) {
+            console.error(`Error processing file ${fileName}:`, error)
+            results.failed.push(fileName)
+          }
+        }
+      } catch (error) {
+        console.error(`Error importing ${file.name}:`, error)
+        results.failed.push(file.name)
+      }
+    }
+
+    // Show results and reload files
+    if (results.success.length > 0) {
+      toast({
+        title: "Success",
+        description: `Successfully imported ${results.success.length} file${results.success.length !== 1 ? 's' : ''}${results.failed.length > 0 ? `, ${results.failed.length} failed` : ''}`,
+      })
+      // Reload idea to refresh files
+      loadIdea()
+    }
+
+    if (results.failed.length > 0) {
+      toast({
+        title: "Some Files Failed",
+        description: `Failed to import ${results.failed.length} file${results.failed.length !== 1 ? 's' : ''}: ${results.failed.join(', ')}`,
+        variant: "destructive",
+      })
+    }
   }
 
   const handleExtractText = async (file: {url: string, name: string, type: string, id?: string}) => {
@@ -818,6 +1062,48 @@ export default function IdeaDetailPage() {
     }
   }
 
+  const saveEdit = async () => {
+    if (!idea || !editTitle.trim() || !editMainCreator.trim()) {
+      toast({
+        title: "Missing Required Fields",
+        description: "Please fill in Title and Main Creator.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSavingEdit(true)
+
+    try {
+      const updatedIdea = await MovieIdeasService.updateIdea(idea.id, {
+        title: editTitle.trim(),
+        description: editDescription.trim(),
+        genre: editGenres[0] || "Unspecified",
+        genres: editGenres,
+        main_creator: editMainCreator.trim(),
+        co_creators: editCoCreators,
+        synopsis: editSynopsis.trim() || undefined,
+        status: editStatus,
+      })
+
+      setIdea(updatedIdea)
+      setShowEditDialog(false)
+      toast({
+        title: "Success",
+        description: "Idea updated successfully",
+      })
+    } catch (error) {
+      console.error('Error updating idea:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update idea",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingEdit(false)
+    }
+  }
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "concept": return "bg-blue-500/20 text-blue-400 border-blue-500/30"
@@ -866,9 +1152,24 @@ export default function IdeaDetailPage() {
           </Button>
           
           <div className="flex items-start justify-between gap-4">
-            <div className="flex-1">
-              <h1 className="text-3xl font-bold mb-2">{idea.title}</h1>
-              <div className="flex items-center gap-2 flex-wrap mb-4">
+            <div className="flex items-start gap-4 flex-1">
+              {/* Cover Image Thumbnail */}
+              {coverImage && (
+                <div className="flex-shrink-0">
+                  <div className="w-24 h-32 rounded-lg overflow-hidden border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                       onClick={() => setShowCoverImageDialog(true)}>
+                    <img
+                      src={coverImage}
+                      alt={`Cover for ${idea.title}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                </div>
+              )}
+              
+              <div className="flex-1">
+                <h1 className="text-3xl font-bold mb-2">{idea.title}</h1>
+                <div className="flex items-center gap-2 flex-wrap mb-4">
                 {(idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : [])).map((g, index) => (
                   <Badge key={index} variant="secondary" className="text-sm">
                     {g}
@@ -883,6 +1184,7 @@ export default function IdeaDetailPage() {
                   </Badge>
                 )}
               </div>
+              </div>
             </div>
             
             <div className="flex gap-2">
@@ -895,7 +1197,18 @@ export default function IdeaDetailPage() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => router.push(`/ideas?edit=${idea.id}`)}
+                onClick={() => {
+                  if (idea) {
+                    setEditTitle(idea.title)
+                    setEditDescription(idea.description || "")
+                    setEditGenres(idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : []))
+                    setEditMainCreator(idea.main_creator || "")
+                    setEditCoCreators(idea.co_creators || [])
+                    setEditSynopsis(idea.synopsis || "")
+                    setEditStatus(idea.status as any)
+                    setShowEditDialog(true)
+                  }
+                }}
               >
                 <Edit className="h-4 w-4 mr-2" />
                 Edit
@@ -913,8 +1226,9 @@ export default function IdeaDetailPage() {
 
         {/* Main Content */}
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="treatment">Treatment & Scenes</TabsTrigger>
             <TabsTrigger value="content">Content</TabsTrigger>
             <TabsTrigger value="images">Images</TabsTrigger>
             <TabsTrigger value="files">Files</TabsTrigger>
@@ -934,19 +1248,6 @@ export default function IdeaDetailPage() {
               </CardContent>
             </Card>
 
-            {/* Synopsis */}
-            {idea.synopsis && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Synopsis</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-muted-foreground whitespace-pre-wrap">
-                    {idea.synopsis}
-                  </p>
-                </CardContent>
-              </Card>
-            )}
 
             {/* Creator Information */}
             {(idea.main_creator || (idea.co_creators && idea.co_creators.length > 0)) && (
@@ -970,6 +1271,500 @@ export default function IdeaDetailPage() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          <TabsContent value="treatment" className="space-y-6 mt-6">
+            {/* Synopsis */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Synopsis</CardTitle>
+                  {!editingSynopsis && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setSynopsisValue(idea.synopsis || "")
+                        setEditingSynopsis(true)
+                      }}
+                    >
+                      <Edit className="h-4 w-4 mr-2" />
+                      {idea.synopsis ? "Edit" : "Add"}
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {editingSynopsis ? (
+                  <div className="space-y-3">
+                    <Textarea
+                      value={synopsisValue}
+                      onChange={(e) => setSynopsisValue(e.target.value)}
+                      placeholder="Paste or type synopsis here..."
+                      className="min-h-[200px] font-mono text-sm"
+                      rows={8}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          setIsSavingSynopsis(true)
+                          try {
+                            const updatedIdea = await MovieIdeasService.updateIdea(idea.id, {
+                              synopsis: synopsisValue.trim() || undefined,
+                            })
+                            setIdea(updatedIdea)
+                            setEditingSynopsis(false)
+                            toast({
+                              title: "Success",
+                              description: "Synopsis updated successfully",
+                            })
+                          } catch (error) {
+                            console.error('Error saving synopsis:', error)
+                            toast({
+                              title: "Error",
+                              description: "Failed to save synopsis",
+                              variant: "destructive",
+                            })
+                          } finally {
+                            setIsSavingSynopsis(false)
+                          }
+                        }}
+                        disabled={isSavingSynopsis}
+                      >
+                        {isSavingSynopsis ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setEditingSynopsis(false)
+                          setSynopsisValue(idea.synopsis || "")
+                        }}
+                        disabled={isSavingSynopsis}
+                      >
+                        <X className="h-4 w-4 mr-2" />
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground whitespace-pre-wrap">
+                    {idea.synopsis || "No synopsis available. Click Edit to add one."}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Treatment */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Treatment</CardTitle>
+                  <div className="flex gap-2">
+                    {!editingTreatment && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (treatment) {
+                            setTreatmentContent(treatment.prompt || "")
+                          } else {
+                            setTreatmentContent("")
+                          }
+                          setEditingTreatment(true)
+                        }}
+                      >
+                        <Edit className="h-4 w-4 mr-2" />
+                        {treatment ? "Edit" : "Add Treatment"}
+                      </Button>
+                    )}
+                    {!treatment && !editingTreatment && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => router.push(`/treatments?createFromIdea=${idea.id}`)}
+                      >
+                        Create Treatment
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {editingTreatment ? (
+                  <div className="space-y-4">
+                    {treatment && (
+                      <div>
+                        <h3 className="font-semibold mb-2">{treatment.title}</h3>
+                        {treatment.synopsis && (
+                          <p className="text-muted-foreground whitespace-pre-wrap mb-4">
+                            {treatment.synopsis}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <div>
+                      <Label className="text-sm font-medium mb-2 block">Treatment Content:</Label>
+                      <Textarea
+                        value={treatmentContent}
+                        onChange={(e) => setTreatmentContent(e.target.value)}
+                        placeholder="Paste or type treatment content here..."
+                        className="min-h-[400px] font-mono text-sm"
+                        rows={15}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={async () => {
+                          setIsSavingTreatment(true)
+                          try {
+                            const supabase = getSupabaseClient()
+                            
+                            if (treatment) {
+                              // Update existing treatment
+                              const { error } = await supabase
+                                .from('treatments')
+                                .update({ prompt: treatmentContent.trim() })
+                                .eq('id', treatment.id)
+                              
+                              if (error) throw error
+                              
+                              setTreatment({ ...treatment, prompt: treatmentContent.trim() })
+                            } else {
+                              // Create new treatment with content
+                              const { data: newTreatment, error } = await supabase
+                                .from('treatments')
+                                .insert({
+                                  user_id: userId,
+                                  title: idea.title,
+                                  genre: (idea.genres && idea.genres.length > 0 ? idea.genres[0] : idea.genre) || "Unspecified",
+                                  status: 'draft',
+                                  synopsis: idea.synopsis || idea.description || "",
+                                  prompt: treatmentContent.trim(),
+                                })
+                                .select()
+                                .single()
+                              
+                              if (error) throw error
+                              
+                              setTreatment(newTreatment)
+                            }
+                            
+                            setEditingTreatment(false)
+                            toast({
+                              title: "Success",
+                              description: treatment ? "Treatment content updated successfully" : "Treatment created successfully",
+                            })
+                          } catch (error) {
+                            console.error('Error saving treatment:', error)
+                            toast({
+                              title: "Error",
+                              description: "Failed to save treatment content",
+                              variant: "destructive",
+                            })
+                          } finally {
+                            setIsSavingTreatment(false)
+                          }
+                        }}
+                        disabled={isSavingTreatment}
+                      >
+                        {isSavingTreatment ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="h-4 w-4 mr-2" />
+                            Save
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setEditingTreatment(false)
+                          setTreatmentContent(treatment?.prompt || "")
+                        }}
+                        disabled={isSavingTreatment}
+                      >
+                        <X className="h-4 w-4 mr-2" />
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : treatment ? (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="font-semibold mb-2">{treatment.title}</h3>
+                      {treatment.synopsis && (
+                        <p className="text-muted-foreground whitespace-pre-wrap mb-4">
+                          {treatment.synopsis}
+                        </p>
+                      )}
+                      {treatment.prompt ? (
+                        <div className="mt-4">
+                          <p className="text-sm font-medium mb-2">Treatment Content:</p>
+                          <div className="bg-muted/50 rounded-lg p-4 max-h-96 overflow-y-auto">
+                            <p className="text-sm whitespace-pre-wrap text-muted-foreground">
+                              {treatment.prompt}
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-4 p-4 border border-dashed rounded-lg">
+                          <p className="text-sm text-muted-foreground italic mb-2">
+                            No treatment content yet. Click Edit to add content.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => router.push(`/treatments/${treatment.id}`)}
+                      >
+                        View Full Treatment
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground italic">
+                    No treatment created yet. Click "Add Treatment" to paste content, or "Create Treatment" to generate one from this idea.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Scenes */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Scenes</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
+                  >
+                    <List className="h-4 w-4 mr-2" />
+                    Manage Scenes
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {loadingTreatmentScenes ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin" />
+                  </div>
+                ) : scenes.length > 0 ? (
+                  <div className="space-y-4">
+                    {scenes.map((scene, index) => (
+                      <div key={scene.id} className="border rounded-lg p-4">
+                        {editingSceneId === scene.id ? (
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label className="text-xs">Title</Label>
+                                <Input
+                                  value={editingSceneData.title}
+                                  onChange={(e) => setEditingSceneData({ ...editingSceneData, title: e.target.value })}
+                                  className="mt-1"
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Scene Number</Label>
+                                <Input
+                                  type="number"
+                                  value={editingSceneData.scene_number || ""}
+                                  onChange={(e) => setEditingSceneData({ ...editingSceneData, scene_number: parseInt(e.target.value) || 0 })}
+                                  className="mt-1"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-xs">Description</Label>
+                              <Textarea
+                                value={editingSceneData.description || ""}
+                                onChange={(e) => setEditingSceneData({ ...editingSceneData, description: e.target.value })}
+                                className="mt-1 min-h-[100px]"
+                                placeholder="Paste or type scene description..."
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label className="text-xs">Location</Label>
+                                <Input
+                                  value={editingSceneData.location || ""}
+                                  onChange={(e) => setEditingSceneData({ ...editingSceneData, location: e.target.value })}
+                                  className="mt-1"
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Duration (minutes)</Label>
+                                <Input
+                                  type="number"
+                                  value={editingSceneData.duration_minutes || ""}
+                                  onChange={(e) => setEditingSceneData({ ...editingSceneData, duration_minutes: parseInt(e.target.value) || 0 })}
+                                  className="mt-1"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <Label className="text-xs">Characters (comma separated)</Label>
+                              <Input
+                                value={Array.isArray(editingSceneData.characters) ? editingSceneData.characters.join(', ') : (editingSceneData.characters || "")}
+                                onChange={(e) => {
+                                  const chars = e.target.value.split(',').map(s => s.trim()).filter(s => s !== '')
+                                  setEditingSceneData({ ...editingSceneData, characters: chars })
+                                }}
+                                className="mt-1"
+                                placeholder="Character 1, Character 2"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button
+                                size="sm"
+                                onClick={async () => {
+                                  setIsSavingScene(true)
+                                  try {
+                                    const supabase = getSupabaseClient()
+                                    const { error } = await supabase
+                                      .from('scenes')
+                                      .update({
+                                        title: editingSceneData.title,
+                                        description: editingSceneData.description || null,
+                                        scene_number: editingSceneData.scene_number || null,
+                                        location: editingSceneData.location || null,
+                                        duration_minutes: editingSceneData.duration_minutes || null,
+                                        characters: editingSceneData.characters || [],
+                                      })
+                                      .eq('id', scene.id)
+                                    
+                                    if (error) throw error
+                                    
+                                    setScenes(scenes.map(s => s.id === scene.id ? editingSceneData : s))
+                                    setEditingSceneId(null)
+                                    setEditingSceneData(null)
+                                    toast({
+                                      title: "Success",
+                                      description: "Scene updated successfully",
+                                    })
+                                  } catch (error) {
+                                    console.error('Error saving scene:', error)
+                                    toast({
+                                      title: "Error",
+                                      description: "Failed to save scene",
+                                      variant: "destructive",
+                                    })
+                                  } finally {
+                                    setIsSavingScene(false)
+                                  }
+                                }}
+                                disabled={isSavingScene || !editingSceneData.title.trim()}
+                              >
+                                {isSavingScene ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Saving...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Save className="h-4 w-4 mr-2" />
+                                    Save
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingSceneId(null)
+                                  setEditingSceneData(null)
+                                }}
+                                disabled={isSavingScene}
+                              >
+                                <X className="h-4 w-4 mr-2" />
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex items-start justify-between mb-2">
+                              <div className="flex-1">
+                                <h4 className="font-semibold">
+                                  {scene.scene_number ? `Scene ${scene.scene_number}: ` : ''}
+                                  {scene.title}
+                                </h4>
+                                {scene.location && (
+                                  <p className="text-sm text-muted-foreground mt-1">
+                                    Location: {scene.location}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {scene.duration_minutes && (
+                                  <Badge variant="secondary">
+                                    {scene.duration_minutes} min
+                                  </Badge>
+                                )}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingSceneId(scene.id)
+                                    setEditingSceneData({ ...scene })
+                                  }}
+                                  className="gap-1"
+                                >
+                                  <Edit className="h-3.5 w-3.5" />
+                                  Edit
+                                </Button>
+                              </div>
+                            </div>
+                            {scene.description ? (
+                              <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
+                                {scene.description}
+                              </p>
+                            ) : (
+                              <p className="text-sm text-muted-foreground italic mt-2">
+                                No description. Click Edit to add one.
+                              </p>
+                            )}
+                            {scene.characters && scene.characters.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {scene.characters.map((char: string, i: number) => (
+                                  <Badge key={i} variant="outline" className="text-xs">
+                                    {char}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-muted-foreground italic">
+                    No scenes created yet. Click "Manage Scenes" to add scenes to this idea.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="content" className="space-y-6 mt-6">
@@ -1024,6 +1819,32 @@ export default function IdeaDetailPage() {
           </TabsContent>
 
           <TabsContent value="files" className="space-y-6 mt-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Files</h3>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.multiple = true
+                  input.accept = '*/*'
+                  input.onchange = async (e) => {
+                    const files = (e.target as HTMLInputElement).files
+                    if (!files || files.length === 0) return
+                    
+                    const fileArray = Array.from(files)
+                    await handleImportFiles(fileArray)
+                  }
+                  input.click()
+                }}
+                className="gap-2"
+              >
+                <Upload className="h-4 w-4" />
+                Import Files
+              </Button>
+            </div>
+            
             {ideaFiles.length > 0 ? (
               <div className="space-y-4">
                 {/* Pagination */}
@@ -1279,6 +2100,172 @@ export default function IdeaDetailPage() {
                                 </div>
                               ) : (
                                 <div className="space-y-3">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <Label className="text-sm font-medium">Extracted Text</Label>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={async () => {
+                                          // Get full text from fileTexts, not just current page
+                                          const fullText = fileTexts[file.name] || fileText || ''
+                                          if (!fullText.trim()) {
+                                            toast({
+                                              title: "No Text",
+                                              description: "No text available to save. Please extract text first.",
+                                              variant: "destructive",
+                                            })
+                                            return
+                                          }
+                                          
+                                          try {
+                                            const updatedIdea = await MovieIdeasService.updateIdea(idea.id, {
+                                              synopsis: fullText.trim(),
+                                            })
+                                            setIdea(updatedIdea)
+                                            toast({
+                                              title: "Success",
+                                              description: "Text saved to synopsis",
+                                            })
+                                          } catch (error) {
+                                            console.error('Error saving to synopsis:', error)
+                                            toast({
+                                              title: "Error",
+                                              description: "Failed to save to synopsis",
+                                              variant: "destructive",
+                                            })
+                                          }
+                                        }}
+                                        className="h-7 px-2 text-xs border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                                        disabled={!fileTexts[file.name] && !fileText}
+                                      >
+                                        <Save className="h-3 w-3 mr-1" />
+                                        Save to Synopsis
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={async () => {
+                                          // Get full text from fileTexts, not just current page
+                                          const fullText = fileTexts[file.name] || fileText || ''
+                                          if (!fullText.trim()) {
+                                            toast({
+                                              title: "No Text",
+                                              description: "No text available to save. Please extract text first.",
+                                              variant: "destructive",
+                                            })
+                                            return
+                                          }
+                                          
+                                          try {
+                                            const supabase = getSupabaseClient()
+                                            
+                                            if (treatment) {
+                                              console.log('💾 Updating existing treatment:', treatment.id, 'with', fullText.trim().length, 'characters')
+                                              
+                                              // Update existing treatment
+                                              const { error: updateError } = await supabase
+                                                .from('treatments')
+                                                .update({ prompt: fullText.trim() })
+                                                .eq('id', treatment.id)
+                                              
+                                              if (updateError) {
+                                                console.error('❌ Error updating treatment:', updateError)
+                                                throw updateError
+                                              }
+                                              
+                                              console.log('✅ Treatment updated successfully, reloading...')
+                                              
+                                              // Reload the treatment to get the latest data
+                                              const { data: updatedTreatment, error: reloadError } = await supabase
+                                                .from('treatments')
+                                                .select('*')
+                                                .eq('id', treatment.id)
+                                                .single()
+                                              
+                                              if (reloadError) {
+                                                console.error('❌ Error reloading treatment:', reloadError)
+                                              }
+                                              
+                                              if (updatedTreatment) {
+                                                console.log('✅ Reloaded treatment:', {
+                                                  id: updatedTreatment.id,
+                                                  hasPrompt: !!updatedTreatment.prompt,
+                                                  promptLength: updatedTreatment.prompt?.length || 0
+                                                })
+                                                setTreatment(updatedTreatment)
+                                                setTreatmentContent(updatedTreatment.prompt || "")
+                                              } else {
+                                                console.warn('⚠️ Updated treatment not found, using local state')
+                                                const updated = { ...treatment, prompt: fullText.trim() }
+                                                setTreatment(updated)
+                                                setTreatmentContent(fullText.trim())
+                                              }
+                                              
+                                              // Also reload to ensure everything is in sync
+                                              await loadTreatmentAndScenes()
+                                              
+                                              toast({
+                                                title: "Success",
+                                                description: "Text saved to treatment",
+                                              })
+                                            } else {
+                                              console.log('💾 Creating new treatment with', fullText.trim().length, 'characters')
+                                              
+                                              // Create new treatment with content
+                                              const { data: newTreatment, error: insertError } = await supabase
+                                                .from('treatments')
+                                                .insert({
+                                                  user_id: userId,
+                                                  title: idea.title,
+                                                  genre: (idea.genres && idea.genres.length > 0 ? idea.genres[0] : idea.genre) || "Unspecified",
+                                                  status: 'draft',
+                                                  synopsis: idea.synopsis || idea.description || "",
+                                                  prompt: fullText.trim(),
+                                                })
+                                                .select()
+                                                .single()
+                                              
+                                              if (insertError) {
+                                                console.error('❌ Error creating treatment:', insertError)
+                                                throw insertError
+                                              }
+                                              
+                                              console.log('✅ Treatment created:', {
+                                                id: newTreatment.id,
+                                                title: newTreatment.title,
+                                                hasPrompt: !!newTreatment.prompt,
+                                                promptLength: newTreatment.prompt?.length || 0
+                                              })
+                                              
+                                              setTreatment(newTreatment)
+                                              setTreatmentContent(newTreatment.prompt || "")
+                                              
+                                              // Reload treatment and scenes to ensure everything is in sync
+                                              await loadTreatmentAndScenes()
+                                              
+                                              toast({
+                                                title: "Success",
+                                                description: "Treatment created with text content",
+                                              })
+                                            }
+                                          } catch (error) {
+                                            console.error('❌ Error saving to treatment:', error)
+                                            toast({
+                                              title: "Error",
+                                              description: error instanceof Error ? error.message : "Failed to save to treatment",
+                                              variant: "destructive",
+                                            })
+                                          }
+                                        }}
+                                        className="h-7 px-2 text-xs border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                                        disabled={!fileTexts[file.name] && !fileText}
+                                      >
+                                        <Save className="h-3 w-3 mr-1" />
+                                        Save to Treatment
+                                      </Button>
+                                    </div>
+                                  </div>
                                   <div className="group relative">
                                     <pre className="text-sm text-foreground whitespace-pre-wrap font-mono min-h-[200px] p-4 bg-muted/10 rounded border border-border">
                                       {getTextPage(fileText || fileTexts[file.name] || '', textPages[file.name] || 1)}
@@ -1395,6 +2382,207 @@ export default function IdeaDetailPage() {
           />
         )}
       </div>
+
+      {/* Cover Image Dialog */}
+      {coverImage && (
+        <Dialog open={showCoverImageDialog} onOpenChange={setShowCoverImageDialog}>
+          <DialogContent className="max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>Cover Image - {idea.title}</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-center justify-center p-4">
+              <img
+                src={coverImage}
+                alt={`Cover for ${idea.title}`}
+                className="max-w-full max-h-[80vh] object-contain rounded-lg"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => window.open(coverImage, '_blank')}>
+                Open in New Tab
+              </Button>
+              <Button onClick={() => setShowCoverImageDialog(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Edit Idea Dialog */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Movie Idea</DialogTitle>
+            <DialogDescription>
+              Update your movie idea details
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="edit-title">Title *</Label>
+                <Input
+                  id="edit-title"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder=""
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="edit-genres">Genres</Label>
+                </div>
+                {editGenres.length > 0 && (
+                  <div className="flex flex-wrap gap-2 py-2">
+                    {editGenres.map((g) => (
+                      <Badge 
+                        key={g} 
+                        variant="secondary" 
+                        className="flex items-center gap-1"
+                      >
+                        {g}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditGenres(editGenres.filter(genre => genre !== g))
+                          }}
+                          className="ml-1 hover:text-destructive focus:outline-none"
+                          aria-label={`Remove ${g}`}
+                        >
+                          ×
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-8">
+                      Select Genres
+                      <ChevronDown className="h-3 w-3 ml-2" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-3">
+                    <div className="max-h-56 overflow-y-auto">
+                      <div className="grid grid-cols-1 gap-2">
+                        {genres.map((g) => {
+                          const isSelected = editGenres.includes(g)
+                          return (
+                            <div key={g} className="flex items-center space-x-2">
+                              <Checkbox
+                                id={`edit-genre-${g}`}
+                                checked={isSelected}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setEditGenres([...editGenres, g])
+                                  } else {
+                                    setEditGenres(editGenres.filter(item => item !== g))
+                                  }
+                                }}
+                              />
+                              <label htmlFor={`edit-genre-${g}`} className="text-sm leading-none">
+                                {g}
+                              </label>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="edit-main-creator">Main Creator *</Label>
+                <Input
+                  id="edit-main-creator"
+                  value={editMainCreator}
+                  onChange={(e) => setEditMainCreator(e.target.value)}
+                  placeholder=""
+                />
+              </div>
+              <div>
+                <Label htmlFor="edit-co-creators">Co-Creators</Label>
+                <Input
+                  id="edit-co-creators"
+                  value={editCoCreators.join(', ')}
+                  onChange={(e) => {
+                    const value = e.target.value
+                    if (value.trim() === '') {
+                      setEditCoCreators([])
+                    } else {
+                      setEditCoCreators(value.split(',').map(s => s.trim()).filter(s => s !== ''))
+                    }
+                  }}
+                  placeholder=""
+                />
+              </div>
+            </div>
+            
+            <div>
+              <Label htmlFor="edit-description">Description *</Label>
+              <Textarea
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder=""
+                rows={3}
+              />
+            </div>
+            
+            <div>
+              <Label htmlFor="edit-synopsis">Synopsis</Label>
+              <Textarea
+                id="edit-synopsis"
+                value={editSynopsis}
+                onChange={(e) => setEditSynopsis(e.target.value)}
+                placeholder=""
+                rows={4}
+              />
+            </div>
+            
+            <div>
+              <Label htmlFor="edit-status">Status</Label>
+              <Select value={editStatus} onValueChange={(value: any) => setEditStatus(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="concept">Concept</SelectItem>
+                  <SelectItem value="development">Development</SelectItem>
+                  <SelectItem value="pre-production">Pre-Production</SelectItem>
+                  <SelectItem value="production">Production</SelectItem>
+                  <SelectItem value="post-production">Post-Production</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowEditDialog(false)} disabled={isSavingEdit}>
+              Cancel
+            </Button>
+            <Button onClick={saveEdit} disabled={isSavingEdit}>
+              {isSavingEdit ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Changes
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
