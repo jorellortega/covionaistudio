@@ -26,17 +26,24 @@ import {
   LayoutGrid,
   Download,
   Save,
-  Square
+  Square,
+  Star,
+  MoreVertical,
+  Volume2,
+  Music,
+  Zap
 } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
-import { KlingService } from "@/lib/ai-services"
+import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import { AISettingsService } from "@/lib/ai-settings-service"
 
 type VideoModel = 
   | "Kling T2V" 
@@ -47,6 +54,9 @@ type VideoModel =
   | "Runway Act-Two" 
   | "Runway Gen-4 Aleph"
   | "Leonardo Motion 2.0"
+  | "Kling 2.1 Pro (Frame-to-Frame)"
+  | "Veo 3.1 (Frame-to-Frame)"
+  | "Veo 3.1 Fast (Frame-to-Frame)"
 
 interface ShotGenerationState {
   shotId: string
@@ -65,6 +75,169 @@ interface ShotGenerationState {
   generationStatus: string | null
   motionControl?: string // For Leonardo Motion 2.0
   motionStrength?: number // For Leonardo Motion 2.0
+  videoModelType?: 'KLING2_1' | 'VEO3_1' | 'VEO3_1FAST' // For Kling/Veo frame-to-frame
+  videoDuration?: number // Duration in seconds for Kling/Veo (4/6/8 for Veo, 5/10 for Kling)
+  startFrameImageUrl?: string | null // URL to storyboard image for start frame
+  endFrameImageUrl?: string | null // URL to storyboard image for end frame
+}
+
+interface StoryboardVideo {
+  id: string
+  storyboard_id: string
+  user_id: string
+  video_url: string
+  video_name: string | null
+  is_default: boolean
+  generation_model: string | null
+  generation_prompt: string | null
+  metadata: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+// Sound Effect Generator Component
+function SoundEffectGenerator({ 
+  storyboard, 
+  onGenerate, 
+  isGenerating, 
+  audioUrl,
+  hasApiKey,
+  onSaveAudio,
+  userId,
+  projectId,
+  sceneId
+}: { 
+  storyboard: Storyboard
+  onGenerate: (storyboard: Storyboard, prompt: string, duration?: number, prompt_influence?: number, looping?: boolean) => void
+  isGenerating: boolean
+  audioUrl: string | null
+  hasApiKey: boolean
+  onSaveAudio?: (audioUrl: string, prompt: string) => Promise<void>
+  userId?: string
+  projectId?: string
+  sceneId?: string
+}) {
+  const [prompt, setPrompt] = useState("")
+  const [duration, setDuration] = useState<number | undefined>(undefined)
+  const [promptInfluence, setPromptInfluence] = useState<number>(0.5)
+  const [looping, setLooping] = useState(false)
+  const [savingAudio, setSavingAudio] = useState(false)
+
+  return (
+    <div className="space-y-3">
+      <Textarea
+        placeholder="Describe the sound effect (e.g., 'Glass shattering on concrete', 'Thunder rumbling in the distance')"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={2}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-xs">Duration (seconds, optional)</Label>
+          <Input
+            type="number"
+            min="0.1"
+            max="30"
+            step="0.1"
+            value={duration || ''}
+            onChange={(e) => setDuration(e.target.value ? parseFloat(e.target.value) : undefined)}
+            placeholder="Auto"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Prompt Influence: {promptInfluence}</Label>
+          <Input
+            type="range"
+            min="0"
+            max="1"
+            step="0.1"
+            value={promptInfluence}
+            onChange={(e) => setPromptInfluence(parseFloat(e.target.value))}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id={`looping-${storyboard.id}`}
+          checked={looping}
+          onChange={(e) => setLooping(e.target.checked)}
+          className="rounded"
+        />
+        <Label htmlFor={`looping-${storyboard.id}`} className="text-sm cursor-pointer">
+          Enable looping (for seamless repeating sounds)
+        </Label>
+      </div>
+      <Button
+        onClick={() => onGenerate(storyboard, prompt, duration, promptInfluence, looping)}
+        disabled={!prompt.trim() || isGenerating || !hasApiKey}
+        className="w-full"
+      >
+        {isGenerating ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Generating...
+          </>
+        ) : (
+          <>
+            <Zap className="h-4 w-4 mr-2" />
+            Generate Sound Effect
+          </>
+        )}
+      </Button>
+      {audioUrl && (
+        <div className="space-y-2">
+          <audio controls src={audioUrl} className="w-full" />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1"
+              onClick={() => {
+                const link = document.createElement('a')
+                link.href = audioUrl
+                link.download = `sound_effect_shot_${storyboard.shot_number}_${Date.now()}.mp3`
+                document.body.appendChild(link)
+                link.click()
+                document.body.removeChild(link)
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download
+            </Button>
+            {onSaveAudio && userId && projectId && sceneId && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1"
+                disabled={savingAudio}
+                onClick={async () => {
+                  setSavingAudio(true)
+                  try {
+                    await onSaveAudio(audioUrl, prompt)
+                  } finally {
+                    setSavingAudio(false)
+                  }
+                }}
+              >
+                {savingAudio ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4 mr-2" />
+                    Save to Storage
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function CinemaProductionPage() {
@@ -95,6 +268,31 @@ export default function CinemaProductionPage() {
   
   // Generation state for each storyboard
   const [storyboardGenerations, setStoryboardGenerations] = useState<Map<string, ShotGenerationState>>(new Map())
+  
+  // Videos for each storyboard
+  const [storyboardVideos, setStoryboardVideos] = useState<Map<string, StoryboardVideo[]>>(new Map())
+  
+  // Video selector dialog state
+  const [videoSelectorOpen, setVideoSelectorOpen] = useState(false)
+  const [selectedStoryboardForVideos, setSelectedStoryboardForVideos] = useState<string | null>(null)
+  const [selectedVideoUrl, setSelectedVideoUrl] = useState<string | null>(null)
+  
+  // Toggle between image and video in detail view (per storyboard)
+  const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
+  
+  // Audio generation state
+  const [aiSettings, setAiSettings] = useState<any[]>([])
+  const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+  const [userApiKeys, setUserApiKeys] = useState<any>({})
+  const [audioGenerations, setAudioGenerations] = useState<Map<string, {
+    type: 'dialogue' | 'sound-effect'
+    prompt: string
+    audioUrl: string | null
+    isGenerating: boolean
+    duration?: number
+    prompt_influence?: number
+    looping?: boolean
+  }>>(new Map())
 
   useEffect(() => {
     if (!session?.user) {
@@ -146,6 +344,108 @@ export default function CinemaProductionPage() {
       setSelectedStoryboard(null)
     }
   }, [selectedStoryboardId, storyboards])
+
+  // Load videos for all storyboards when they change
+  useEffect(() => {
+    if (storyboards.length > 0 && userId) {
+      storyboards.forEach(storyboard => {
+        loadStoryboardVideos(storyboard.id)
+      })
+    }
+  }, [storyboards, userId])
+
+  // Update selected video when dialog opens (only on initial open, not on every render)
+  useEffect(() => {
+    if (videoSelectorOpen && selectedStoryboardForVideos) {
+      const videos = storyboardVideos.get(selectedStoryboardForVideos) || []
+      const storyboard = storyboards.find(s => s.id === selectedStoryboardForVideos)
+      const generation = storyboardGenerations.get(selectedStoryboardForVideos)
+      
+      // Include current generated video if it exists and isn't in database
+      const allVideos = [...videos]
+      if (generation?.generatedVideoUrl && !videos.some(v => v.video_url === generation.generatedVideoUrl)) {
+        allVideos.unshift({
+          id: 'generated-temp',
+          storyboard_id: selectedStoryboardForVideos,
+          user_id: userId || '',
+          video_url: generation.generatedVideoUrl,
+          video_name: `${storyboard?.title || 'storyboard'}-shot-${storyboard?.shot_number} (Generated)`,
+          is_default: false,
+          generation_model: generation.model || null,
+          generation_prompt: generation.prompt || null,
+          metadata: {},
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+      }
+      
+      const defaultVideo = allVideos.find(v => v.is_default) || allVideos[0]
+      // Only set initial value if selectedVideoUrl is null or doesn't match any video
+      if (!selectedVideoUrl || !allVideos.some(v => v.video_url === selectedVideoUrl)) {
+        setSelectedVideoUrl(defaultVideo?.video_url || null)
+      }
+    } else if (!videoSelectorOpen) {
+      // Reset when dialog closes
+      setSelectedVideoUrl(null)
+    }
+  }, [videoSelectorOpen, selectedStoryboardForVideos])
+
+  // Load AI settings for audio
+  useEffect(() => {
+    const loadAISettings = async () => {
+      if (!ready || !userId || aiSettingsLoaded) return
+      
+      try {
+        const settings = await AISettingsService.getSystemSettings()
+        const audioSetting = await AISettingsService.getOrCreateDefaultTabSetting('audio')
+        const finalSetting = settings.find(s => s.tab_type === 'audio') || audioSetting
+        
+        setAiSettings([finalSetting])
+        setAiSettingsLoaded(true)
+        
+        // Load user API keys from users table
+        const supabase = getSupabaseClient()
+        const { data: userData, error: userError } = await supabase
+          .from('users')
+          .select('elevenlabs_api_key, openai_api_key, anthropic_api_key')
+          .eq('id', userId)
+          .maybeSingle()
+        
+        if (!userError && userData) {
+          setUserApiKeys({
+            elevenlabs_api_key: userData.elevenlabs_api_key || null,
+            openai_api_key: userData.openai_api_key || null,
+            anthropic_api_key: userData.anthropic_api_key || null,
+          })
+          console.log('✅ Loaded user API keys:', {
+            hasElevenLabs: !!userData.elevenlabs_api_key,
+            hasOpenAI: !!userData.openai_api_key,
+            hasAnthropic: !!userData.anthropic_api_key,
+          })
+        } else {
+          console.warn('⚠️ Could not load user API keys:', userError?.message)
+          // Try system-wide key as fallback
+          try {
+            const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
+            if (response.ok) {
+              const systemKey = await response.json()
+              if (systemKey?.key) {
+                setUserApiKeys({ elevenlabs_api_key: systemKey.key })
+                console.log('✅ Using system-wide ElevenLabs API key')
+              }
+            }
+          } catch (error) {
+            console.error('Error fetching system API key:', error)
+          }
+        }
+      } catch (error) {
+        console.error('Error loading AI settings:', error)
+        setAiSettingsLoaded(true) // Set to true even on error to prevent blocking
+      }
+    }
+    
+    loadAISettings()
+  }, [ready, userId, aiSettingsLoaded])
 
   // Load Leonardo API key
   const loadLeonardoApiKey = async () => {
@@ -421,6 +721,10 @@ export default function CinemaProductionPage() {
         return 'image'
       case "Kling I2V Extended":
         return 'start-end-frames'
+      case "Kling 2.1 Pro (Frame-to-Frame)":
+      case "Veo 3.1 (Frame-to-Frame)":
+      case "Veo 3.1 Fast (Frame-to-Frame)":
+        return 'start-end-frames'
       case "Runway Gen-4 Turbo":
       case "Runway Gen-3A Turbo":
         return 'image'
@@ -453,7 +757,11 @@ export default function CinemaProductionPage() {
         generatedVideoUrl: null,
         generationStatus: null,
         motionControl: "",
-        motionStrength: 2
+        motionStrength: 2,
+        videoModelType: undefined,
+        videoDuration: undefined,
+        startFrameImageUrl: null,
+        endFrameImageUrl: null
       }
       newMap.set(storyboardId, { ...current, ...updates })
       return newMap
@@ -533,11 +841,13 @@ export default function CinemaProductionPage() {
     }
 
     try {
+      const generation = storyboardGenerations.get(storyboard.id)
       updateStoryboardGeneration(storyboard.id, { generationStatus: "Saving video..." })
       
       const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
       
-      const response = await fetch('/api/ai/download-and-store-video', {
+      // First, save to bucket
+      const bucketResponse = await fetch('/api/ai/download-and-store-video', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -549,33 +859,433 @@ export default function CinemaProductionPage() {
         }),
       })
 
-      const result = await response.json()
+      const bucketResult = await bucketResponse.json()
 
-      if (response.ok && result.success) {
-        // Update the generatedVideoUrl to use the saved bucket URL
-        if (result.supabaseUrl) {
+      if (!bucketResponse.ok || !bucketResult.success) {
+        throw new Error(bucketResult.error || "Failed to save video to bucket")
+      }
+
+      const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
+
+      // Then, save to database
+      const dbResponse = await fetch('/api/storyboard-videos', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          storyboardId: storyboard.id,
+          videoUrl: savedVideoUrl,
+          videoName: fileName,
+          generationModel: generation?.model || null,
+          generationPrompt: generation?.prompt || null,
+          metadata: {
+            duration: generation?.duration,
+            resolution: generation?.resolution,
+          },
+          isDefault: false, // New videos are not default by default
+        }),
+      })
+
+      const dbResult = await dbResponse.json()
+
+      if (!dbResponse.ok || !dbResult.success) {
+        console.warn('Failed to save video to database, but bucket save succeeded:', dbResult.error)
+        // Still update UI with bucket URL
+        if (savedVideoUrl) {
           updateStoryboardGeneration(storyboard.id, { 
             generationStatus: "Saved",
-            generatedVideoUrl: result.supabaseUrl // Update to bucket URL
+            generatedVideoUrl: savedVideoUrl
           })
-          console.log('✅ Video saved and URL updated to bucket:', result.supabaseUrl)
-        } else {
-          updateStoryboardGeneration(storyboard.id, { generationStatus: "Saved" })
         }
-        
         toast({
-          title: "Video Saved",
-          description: "Video has been saved to your storage.",
+          title: "Video Saved to Storage",
+          description: "Video saved to bucket but not registered in database.",
         })
-      } else {
-        throw new Error(result.error || "Failed to save video")
+        return
       }
+
+      // Reload videos for this storyboard
+      await loadStoryboardVideos(storyboard.id)
+
+      // Update the generatedVideoUrl to use the saved bucket URL
+      if (savedVideoUrl) {
+        updateStoryboardGeneration(storyboard.id, { 
+          generationStatus: "Saved",
+          generatedVideoUrl: savedVideoUrl
+        })
+        console.log('✅ Video saved and URL updated to bucket:', savedVideoUrl)
+      } else {
+        updateStoryboardGeneration(storyboard.id, { generationStatus: "Saved" })
+      }
+      
+      toast({
+        title: "Video Saved",
+        description: "Video has been saved to your storage.",
+      })
     } catch (error) {
       console.error('Error saving video:', error)
       updateStoryboardGeneration(storyboard.id, { generationStatus: "Save failed" })
       toast({
         title: "Save Failed",
         description: error instanceof Error ? error.message : "Failed to save video. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Load videos for a storyboard
+  const loadStoryboardVideos = async (storyboardId: string) => {
+    if (!userId) return
+
+    try {
+      const response = await fetch(`/api/storyboard-videos?storyboardId=${storyboardId}`)
+      const result = await response.json()
+
+      if (response.ok && result.success) {
+        const videos = result.data || []
+        console.log(`📹 Loaded ${videos.length} videos for storyboard ${storyboardId}:`, videos.map(v => ({ id: v.id, name: v.video_name, isDefault: v.is_default })))
+        setStoryboardVideos(prev => {
+          const newMap = new Map(prev)
+          newMap.set(storyboardId, videos)
+          return newMap
+        })
+
+        // Update generatedVideoUrl to default video if available
+        const defaultVideo = videos.find((v: StoryboardVideo) => v.is_default)
+        if (defaultVideo) {
+          const generation = storyboardGenerations.get(storyboardId)
+          if (!generation?.generatedVideoUrl || !generation.generatedVideoUrl.includes('cinema_files')) {
+            updateStoryboardGeneration(storyboardId, {
+              generatedVideoUrl: defaultVideo.video_url
+            })
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error loading storyboard videos:', error)
+    }
+  }
+
+  // Set video as default
+  const handleSetDefaultVideo = async (videoId: string, storyboardId: string) => {
+    if (!userId) return
+
+    try {
+      const response = await fetch('/api/storyboard-videos', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoId,
+          isDefault: true,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok && result.success) {
+        await loadStoryboardVideos(storyboardId)
+        toast({
+          title: "Default Video Set",
+          description: "This video is now the default for this storyboard.",
+        })
+      } else {
+        throw new Error(result.error || "Failed to set default video")
+      }
+    } catch (error) {
+      console.error('Error setting default video:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to set default video.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Generate dialogue audio (text-to-speech)
+  const handleGenerateDialogue = async (storyboard: Storyboard, text: string) => {
+    if (!userId || !userApiKeys.elevenlabs_api_key) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key in Settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioKey = `${storyboard.id}-dialogue`
+    setAudioGenerations(prev => {
+      const newMap = new Map(prev)
+      newMap.set(audioKey, {
+        type: 'dialogue',
+        prompt: text,
+        audioUrl: null,
+        isGenerating: true,
+      })
+      return newMap
+    })
+
+    try {
+      const response = await fetch('/api/ai/text-to-speech', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: text.trim(),
+          voiceId: "21m00Tcm4TlvDq8ikWAM", // Default voice
+          apiKey: userApiKeys.elevenlabs_api_key,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate speech`)
+      }
+
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      setAudioGenerations(prev => {
+        const newMap = new Map(prev)
+        newMap.set(audioKey, {
+          type: 'dialogue',
+          prompt: text,
+          audioUrl,
+          isGenerating: false,
+        })
+        return newMap
+      })
+
+      toast({
+        title: "Dialogue Generated",
+        description: "Audio has been generated successfully!",
+      })
+    } catch (error) {
+      console.error('Error generating dialogue:', error)
+      setAudioGenerations(prev => {
+        const newMap = new Map(prev)
+        newMap.set(audioKey, {
+          type: 'dialogue',
+          prompt: text,
+          audioUrl: null,
+          isGenerating: false,
+        })
+        return newMap
+      })
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate dialogue.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Generate sound effect
+  const handleGenerateSoundEffect = async (
+    storyboard: Storyboard,
+    prompt: string,
+    duration?: number,
+    prompt_influence?: number,
+    looping?: boolean
+  ) => {
+    if (!userId || !userApiKeys.elevenlabs_api_key) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your ElevenLabs API key in Settings.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioKey = `${storyboard.id}-sound-effect`
+    setAudioGenerations(prev => {
+      const newMap = new Map(prev)
+      newMap.set(audioKey, {
+        type: 'sound-effect',
+        prompt,
+        audioUrl: null,
+        isGenerating: true,
+        duration,
+        prompt_influence,
+        looping,
+      })
+      return newMap
+    })
+
+    try {
+      const response = await fetch('/api/ai/sound-effects', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: prompt.trim(),
+          duration,
+          prompt_influence,
+          looping,
+          apiKey: userApiKeys.elevenlabs_api_key,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error('🔊 Sound effects API error:', {
+          status: response.status,
+          error: errorText,
+          prompt: prompt.substring(0, 50)
+        })
+        
+        // If 404, provide helpful error message
+        if (response.status === 404) {
+          throw new Error(`Sound Effects API not available. This feature may require a specific ElevenLabs subscription tier. Please check your ElevenLabs account or use dialogue generation instead.`)
+        }
+        
+        throw new Error(`HTTP ${response.status}: ${errorText}`)
+      }
+
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      setAudioGenerations(prev => {
+        const newMap = new Map(prev)
+        newMap.set(audioKey, {
+          type: 'sound-effect',
+          prompt,
+          audioUrl,
+          isGenerating: false,
+          duration,
+          prompt_influence,
+          looping,
+        })
+        return newMap
+      })
+
+      toast({
+        title: "Sound Effect Generated",
+        description: "Audio has been generated successfully!",
+      })
+    } catch (error) {
+      console.error('Error generating sound effect:', error)
+      setAudioGenerations(prev => {
+        const newMap = new Map(prev)
+        newMap.set(audioKey, {
+          type: 'sound-effect',
+          prompt,
+          audioUrl: null,
+          isGenerating: false,
+          duration,
+          prompt_influence,
+          looping,
+        })
+        return newMap
+      })
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate sound effect.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Save audio to storage
+  const handleSaveAudio = async (audioUrl: string, prompt: string, type: 'dialogue' | 'sound-effect' = 'sound-effect', storyboard?: Storyboard) => {
+    if (!userId || !selectedProjectId || !selectedSceneId || !storyboard) {
+      toast({
+        title: "Missing Information",
+        description: "Please select a project and scene.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      // Convert blob URL to blob
+      const response = await fetch(audioUrl)
+      const audioBlob = await response.blob()
+      
+      // Convert blob to base64 for API
+      const reader = new FileReader()
+      reader.onloadend = async () => {
+        const base64Audio = reader.result as string
+        const audioBlobForApi = base64Audio.split(',')[1] // Remove data:audio/mpeg;base64, prefix
+        
+        const saveResponse = await fetch('/api/ai/save-audio', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            audioBlob: audioBlobForApi,
+            fileName: `${type}_shot_${storyboard.shot_number}_${Date.now()}`,
+            audioTitle: `${type === 'dialogue' ? 'Dialogue' : 'Sound Effect'} - Shot ${storyboard.shot_number}: ${storyboard.title || 'Untitled'}`,
+            projectId: selectedProjectId,
+            sceneId: selectedSceneId,
+            userId: userId,
+            metadata: {
+              storyboard_id: storyboard.id,
+              shot_number: storyboard.shot_number,
+              type: type,
+              prompt: prompt
+            }
+          })
+        })
+        
+        if (!saveResponse.ok) {
+          const errorData = await saveResponse.json().catch(() => ({}))
+          throw new Error(errorData.error || 'Failed to save audio')
+        }
+        
+        toast({
+          title: "Audio Saved",
+          description: `${type === 'dialogue' ? 'Dialogue' : 'Sound effect'} audio has been saved to storage.`,
+        })
+      }
+      reader.readAsDataURL(audioBlob)
+    } catch (error) {
+      console.error('Error saving audio:', error)
+      toast({
+        title: "Save Failed",
+        description: error instanceof Error ? error.message : "Failed to save audio.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  // Unset default video
+  const handleUnsetDefaultVideo = async (videoId: string, storyboardId: string) => {
+    if (!userId) return
+
+    try {
+      const response = await fetch('/api/storyboard-videos', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          videoId,
+          isDefault: false,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok && result.success) {
+        await loadStoryboardVideos(storyboardId)
+        toast({
+          title: "Default Removed",
+          description: "Default video has been removed.",
+        })
+      } else {
+        throw new Error(result.error || "Failed to remove default video")
+      }
+    } catch (error) {
+      console.error('Error removing default video:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to remove default video.",
         variant: "destructive",
       })
     }
@@ -614,13 +1324,33 @@ export default function CinemaProductionPage() {
       return
     }
     
-    if (fileRequirement === 'start-end-frames' && (!generation.startFrame || !generation.endFrame)) {
-      toast({
-        title: "Missing Frames",
-        description: `${generation.model} requires both start and end frames.`,
-        variant: "destructive"
-      })
-      return
+    if (fileRequirement === 'start-end-frames') {
+      // For Kling/Veo frame-to-frame, start frame is required, end frame is optional
+      const isKlingVeoFrameToFrame = generation.model === "Kling 2.1 Pro (Frame-to-Frame)" || 
+                                     generation.model === "Veo 3.1 (Frame-to-Frame)" || 
+                                     generation.model === "Veo 3.1 Fast (Frame-to-Frame)"
+      
+      if (isKlingVeoFrameToFrame) {
+        // Start frame required (can be from file or image URL)
+        if (!generation.startFrame && !generation.startFrameImageUrl && !storyboard.image_url) {
+          toast({
+            title: "Missing Start Frame",
+            description: `${generation.model} requires at least a start frame. End frame is optional.`,
+            variant: "destructive"
+          })
+          return
+        }
+      } else {
+        // For other models, both frames required
+        if (!generation.startFrame || !generation.endFrame) {
+          toast({
+            title: "Missing Frames",
+            description: `${generation.model} requires both start and end frames.`,
+            variant: "destructive"
+          })
+          return
+        }
+      }
     }
 
     updateStoryboardGeneration(storyboard.id, { isGenerating: true, generationStatus: "Starting generation..." })
@@ -1198,6 +1928,79 @@ export default function CinemaProductionPage() {
                       generatedVideoUrl: videoUrl,
                       generationStatus: "Completed"
                     })
+                    
+                    // Auto-save generated video to database
+                    try {
+                      const generation = storyboardGenerations.get(storyboard.id)
+                      if (generation && userId) {
+                        console.log('💾 [AUTO-SAVE] Starting auto-save for video:', videoUrl?.substring(0, 50))
+                        const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
+                        
+                        // First save to bucket
+                        console.log('💾 [AUTO-SAVE] Saving to bucket...')
+                        const bucketResponse = await fetch('/api/ai/download-and-store-video', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            videoUrl,
+                            fileName,
+                            userId,
+                          }),
+                        })
+                        
+                        const bucketResult = await bucketResponse.json()
+                        console.log('💾 [AUTO-SAVE] Bucket response:', bucketResponse.ok, bucketResult.success)
+                        
+                        if (!bucketResponse.ok || !bucketResult.success) {
+                          console.warn('💾 [AUTO-SAVE] Bucket save failed, using original URL')
+                        }
+                        
+                        const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
+                        
+                        // Then save to database
+                        console.log('💾 [AUTO-SAVE] Saving to database...')
+                        const dbResponse = await fetch('/api/storyboard-videos', {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                          },
+                          body: JSON.stringify({
+                            storyboardId: storyboard.id,
+                            videoUrl: savedVideoUrl,
+                            videoName: fileName,
+                            generationModel: generation.model || null,
+                            generationPrompt: generation.prompt || null,
+                            metadata: {
+                              duration: generation.duration,
+                              resolution: generation.resolution,
+                            },
+                            isDefault: false, // New videos are not default by default
+                          }),
+                        })
+                        
+                        const dbResult = await dbResponse.json()
+                        console.log('💾 [AUTO-SAVE] Database response:', dbResponse.ok, dbResponse.status, dbResult)
+                        
+                        if (dbResponse.ok && dbResult.success) {
+                          await loadStoryboardVideos(storyboard.id)
+                          console.log('✅ Auto-saved generated video to database')
+                        } else {
+                          console.error('❌ [AUTO-SAVE] Database save failed:', dbResult.error || 'Unknown error')
+                          // Check if it's a table doesn't exist error
+                          if (dbResult.error?.includes('relation') || dbResult.error?.includes('does not exist')) {
+                            console.error('❌ [AUTO-SAVE] Table might not exist - please run migration 072_add_storyboard_videos_table.sql')
+                          }
+                        }
+                      } else {
+                        console.warn('💾 [AUTO-SAVE] Skipping - missing generation or userId')
+                      }
+                    } catch (error) {
+                      console.error('❌ [AUTO-SAVE] Failed to auto-save video to database:', error)
+                      // Don't fail the generation if auto-save fails
+                    }
+                    
                     toast({
                       title: "Success",
                       description: "Video generated successfully!",
@@ -1255,6 +2058,582 @@ export default function CinemaProductionPage() {
         }
         
         pollForVideo()
+      } else if (generation.model === "Kling 2.1 Pro (Frame-to-Frame)" || 
+                 generation.model === "Veo 3.1 (Frame-to-Frame)" || 
+                 generation.model === "Veo 3.1 Fast (Frame-to-Frame)") {
+        // Handle Kling/Veo frame-to-frame via Leonardo API
+        if (!leonardoApiKey && userId) {
+          try {
+            const supabase = getSupabaseClient()
+            const { data, error } = await supabase
+              .from('users')
+              .select('leonardo_api_key')
+              .eq('id', userId)
+              .single()
+            
+            if (!error && data?.leonardo_api_key) {
+              setLeonardoApiKey(data.leonardo_api_key)
+            } else {
+              throw new Error("Leonardo API key required for Kling/Veo models")
+            }
+          } catch (error) {
+            toast({
+              title: "API Key Required",
+              description: "Please set your Leonardo API key in settings.",
+              variant: "destructive"
+            })
+            updateStoryboardGeneration(storyboard.id, {
+              isGenerating: false,
+              generationStatus: "Failed - API key required"
+            })
+            return
+          }
+        }
+
+        const apiKeyToUse = leonardoApiKey
+        if (!apiKeyToUse) {
+          toast({
+            title: "API Key Required",
+            description: "Please set your Leonardo API key in settings.",
+            variant: "destructive"
+          })
+          updateStoryboardGeneration(storyboard.id, {
+            isGenerating: false,
+            generationStatus: "Failed - API key required"
+          })
+          return
+        }
+
+        // Get start frame - from uploaded file, image URL, or storyboard image
+        let startFrameFile: File | null = generation.startFrame
+        let startFrameUrl: string | null = generation.startFrameImageUrl
+
+        if (!startFrameFile && !startFrameUrl) {
+          // Try to use storyboard image as start frame
+          if (storyboard.image_url) {
+            startFrameUrl = storyboard.image_url
+          }
+        }
+
+        if (!startFrameFile && !startFrameUrl) {
+          toast({
+            title: "Start Frame Required",
+            description: "Please upload a start frame or select one from a storyboard.",
+            variant: "destructive"
+          })
+          updateStoryboardGeneration(storyboard.id, {
+            isGenerating: false,
+            generationStatus: "Failed - Start frame required"
+          })
+          return
+        }
+
+        try {
+          updateStoryboardGeneration(storyboard.id, { generationStatus: "Uploading start frame..." })
+          
+          // Upload start frame
+          let startImageId: string | null = null
+          
+          if (startFrameFile) {
+            const fileName = startFrameFile.name
+            const fileExtension = fileName.split('.').pop()?.toLowerCase() || 'png'
+            const formData = new FormData()
+            formData.append('file', startFrameFile)
+            formData.append('extension', fileExtension)
+            
+            const uploadResponse = await fetch('https://cloud.leonardo.ai/api/rest/v1/init-image', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${apiKeyToUse}`,
+              },
+              body: formData
+            })
+            
+            if (!uploadResponse.ok) {
+              const errorText = await uploadResponse.text()
+              throw new Error(`Failed to upload start frame: ${uploadResponse.status} - ${errorText}`)
+            }
+            
+            const uploadData = await uploadResponse.json()
+            startImageId = uploadData.uploadInitImage?.id || uploadData.id || uploadData.initImageId || uploadData.imageId
+            
+            if (!startImageId) {
+              throw new Error('No image ID returned from start frame upload')
+            }
+            
+            // Handle S3 upload if needed
+            if (uploadData.uploadInitImage?.fields && uploadData.uploadInitImage?.url) {
+              const s3Fields = JSON.parse(uploadData.uploadInitImage.fields)
+              const s3FormData = new FormData()
+              Object.keys(s3Fields).forEach(key => {
+                s3FormData.append(key, s3Fields[key])
+              })
+              s3FormData.append('file', startFrameFile)
+              
+              const s3Response = await fetch('/api/leonardo/upload-s3', {
+                method: 'POST',
+                headers: {
+                  'x-s3-url': uploadData.uploadInitImage.url,
+                },
+                body: s3FormData
+              })
+              
+              if (!s3Response.ok) {
+                console.warn('S3 upload failed, continuing anyway')
+              }
+              
+              await new Promise(resolve => setTimeout(resolve, 5000))
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 5000))
+            }
+          } else if (startFrameUrl) {
+            // For URL-based images, we need to fetch and upload
+            updateStoryboardGeneration(storyboard.id, { generationStatus: "Loading start frame from URL..." })
+            const imageResponse = await fetch(startFrameUrl)
+            if (imageResponse.ok) {
+              const imageBlob = await imageResponse.blob()
+              const file = new File([imageBlob], 'start-frame.jpg', { type: imageBlob.type || 'image/jpeg' })
+              
+              const fileName = file.name
+              const fileExtension = fileName.split('.').pop()?.toLowerCase() || 'png'
+              const formData = new FormData()
+              formData.append('file', file)
+              formData.append('extension', fileExtension)
+              
+              const uploadResponse = await fetch('https://cloud.leonardo.ai/api/rest/v1/init-image', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${apiKeyToUse}`,
+                },
+                body: formData
+              })
+              
+              if (!uploadResponse.ok) {
+                const errorText = await uploadResponse.text()
+                throw new Error(`Failed to upload start frame: ${uploadResponse.status} - ${errorText}`)
+              }
+              
+              const uploadData = await uploadResponse.json()
+              startImageId = uploadData.uploadInitImage?.id || uploadData.id || uploadData.initImageId || uploadData.imageId
+              
+              if (!startImageId) {
+                throw new Error('No image ID returned from start frame upload')
+              }
+              
+              if (uploadData.uploadInitImage?.fields && uploadData.uploadInitImage?.url) {
+                const s3Fields = JSON.parse(uploadData.uploadInitImage.fields)
+                const s3FormData = new FormData()
+                Object.keys(s3Fields).forEach(key => {
+                  s3FormData.append(key, s3Fields[key])
+                })
+                s3FormData.append('file', file)
+                
+                const s3Response = await fetch('/api/leonardo/upload-s3', {
+                  method: 'POST',
+                  headers: {
+                    'x-s3-url': uploadData.uploadInitImage.url,
+                  },
+                  body: s3FormData
+                })
+                
+                if (!s3Response.ok) {
+                  console.warn('S3 upload failed, continuing anyway')
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 5000))
+              } else {
+                await new Promise(resolve => setTimeout(resolve, 5000))
+              }
+            } else {
+              throw new Error('Failed to load start frame from URL')
+            }
+          }
+
+          // Upload end frame if provided
+          let endImageId: string | null = null
+          let endFrameFile: File | null = generation.endFrame
+          let endFrameUrl: string | null = generation.endFrameImageUrl
+
+          if (endFrameFile || endFrameUrl) {
+            updateStoryboardGeneration(storyboard.id, { generationStatus: "Uploading end frame..." })
+            
+            if (endFrameFile) {
+              const fileName = endFrameFile.name
+              const fileExtension = fileName.split('.').pop()?.toLowerCase() || 'png'
+              const formData = new FormData()
+              formData.append('file', endFrameFile)
+              formData.append('extension', fileExtension)
+              
+              const uploadResponse = await fetch('https://cloud.leonardo.ai/api/rest/v1/init-image', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${apiKeyToUse}`,
+                },
+                body: formData
+              })
+              
+              if (!uploadResponse.ok) {
+                const errorText = await uploadResponse.text()
+                throw new Error(`Failed to upload end frame: ${uploadResponse.status} - ${errorText}`)
+              }
+              
+              const uploadData = await uploadResponse.json()
+              endImageId = uploadData.uploadInitImage?.id || uploadData.id || uploadData.initImageId || uploadData.imageId
+              
+              if (!endImageId) {
+                throw new Error('No image ID returned from end frame upload')
+              }
+              
+              if (uploadData.uploadInitImage?.fields && uploadData.uploadInitImage?.url) {
+                const s3Fields = JSON.parse(uploadData.uploadInitImage.fields)
+                const s3FormData = new FormData()
+                Object.keys(s3Fields).forEach(key => {
+                  s3FormData.append(key, s3Fields[key])
+                })
+                s3FormData.append('file', endFrameFile)
+                
+                const s3Response = await fetch('/api/leonardo/upload-s3', {
+                  method: 'POST',
+                  headers: {
+                    'x-s3-url': uploadData.uploadInitImage.url,
+                  },
+                  body: s3FormData
+                })
+                
+                if (!s3Response.ok) {
+                  console.warn('S3 upload failed, continuing anyway')
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 2000))
+              } else {
+                await new Promise(resolve => setTimeout(resolve, 2000))
+              }
+            } else if (endFrameUrl) {
+              updateStoryboardGeneration(storyboard.id, { generationStatus: "Loading end frame from URL..." })
+              const imageResponse = await fetch(endFrameUrl)
+              if (imageResponse.ok) {
+                const imageBlob = await imageResponse.blob()
+                const file = new File([imageBlob], 'end-frame.jpg', { type: imageBlob.type || 'image/jpeg' })
+                
+                const fileName = file.name
+                const fileExtension = fileName.split('.').pop()?.toLowerCase() || 'png'
+                const formData = new FormData()
+                formData.append('file', file)
+                formData.append('extension', fileExtension)
+                
+                const uploadResponse = await fetch('https://cloud.leonardo.ai/api/rest/v1/init-image', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${apiKeyToUse}`,
+                  },
+                  body: formData
+                })
+                
+                if (!uploadResponse.ok) {
+                  const errorText = await uploadResponse.text()
+                  throw new Error(`Failed to upload end frame: ${uploadResponse.status} - ${errorText}`)
+                }
+                
+                const uploadData = await uploadResponse.json()
+                endImageId = uploadData.uploadInitImage?.id || uploadData.id || uploadData.initImageId || uploadData.imageId
+                
+                if (!endImageId) {
+                  throw new Error('No image ID returned from end frame upload')
+                }
+                
+                if (uploadData.uploadInitImage?.fields && uploadData.uploadInitImage?.url) {
+                  const s3Fields = JSON.parse(uploadData.uploadInitImage.fields)
+                  const s3FormData = new FormData()
+                  Object.keys(s3Fields).forEach(key => {
+                    s3FormData.append(key, s3Fields[key])
+                  })
+                  s3FormData.append('file', file)
+                  
+                  const s3Response = await fetch('/api/leonardo/upload-s3', {
+                    method: 'POST',
+                    headers: {
+                      'x-s3-url': uploadData.uploadInitImage.url,
+                    },
+                    body: s3FormData
+                  })
+                  
+                  if (!s3Response.ok) {
+                    console.warn('S3 upload failed, continuing anyway')
+                  }
+                  
+                  await new Promise(resolve => setTimeout(resolve, 2000))
+                } else {
+                  await new Promise(resolve => setTimeout(resolve, 2000))
+                }
+              } else {
+                throw new Error('Failed to load end frame from URL')
+              }
+            }
+          }
+
+          // Generate video using Leonardo image-to-video endpoint
+          updateStoryboardGeneration(storyboard.id, { generationStatus: "Generating video..." })
+          
+          const validDurations = generation.videoModelType === 'KLING2_1' ? [5, 10] : [4, 6, 8]
+          const duration = generation.videoDuration || (generation.videoModelType === 'KLING2_1' ? 5 : 8)
+          
+          if (!validDurations.includes(duration)) {
+            throw new Error(`Duration must be ${validDurations.join(', ')} seconds for ${generation.videoModelType}`)
+          }
+
+          const requestBody: any = {
+            prompt: generation.prompt.trim() || "Smooth transition between frames",
+            imageId: startImageId,
+            imageType: "UPLOADED",
+            model: generation.videoModelType,
+            resolution: "RESOLUTION_1080",
+            height: 1080,
+            width: 1920,
+            duration: duration,
+          }
+
+          if (endImageId) {
+            requestBody.endFrameImage = {
+              id: endImageId,
+              type: "UPLOADED"
+            }
+          }
+
+          const response = await fetch('https://cloud.leonardo.ai/api/rest/v1/generations-image-to-video', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${apiKeyToUse}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+          })
+
+          if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`Video generation failed: ${response.status} - ${errorText}`)
+          }
+
+          const result = await response.json()
+          console.log('🎬 [KLING/VEO] Response data:', JSON.stringify(result, null, 2))
+          
+          // Handle different response structures (same as test-leonardo)
+          const generationId = result.motionVideoGenerationJob?.generationId ||
+                              result.motionSvdGenerationJob?.id || 
+                              result.motionSvdGenerationJob?.generationId ||
+                              result.generationId || 
+                              result.id ||
+                              result.imageToVideoGenerationJob?.id ||
+                              result.imageToVideoGenerationJob?.generationId ||
+                              result.jobId ||
+                              result.sdGenerationJob?.generationId ||
+                              result.textToVideoGenerationJob?.id ||
+                              result.textToVideoGenerationJob?.generationId
+
+          console.log('🎬 [KLING/VEO] Extracted generation ID:', generationId)
+          console.log('🎬 [KLING/VEO] Full result structure:', {
+            hasMotionVideoJob: !!result.motionVideoGenerationJob,
+            motionVideoJobGenerationId: result.motionVideoGenerationJob?.generationId,
+            hasMotionSvdJob: !!result.motionSvdGenerationJob,
+            hasImageToVideoJob: !!result.imageToVideoGenerationJob,
+            hasGenerationId: !!result.generationId,
+            hasId: !!result.id,
+            hasJobId: !!result.jobId,
+            hasSdGenerationJob: !!result.sdGenerationJob,
+          })
+
+          if (!generationId) {
+            console.error('🎬 [KLING/VEO] No generation ID found in response')
+            console.error('🎬 [KLING/VEO] Full response:', result)
+            throw new Error('No generation ID returned. Check console for full response.')
+          }
+
+          // Poll for video
+          updateStoryboardGeneration(storyboard.id, { generationStatus: "Processing video..." })
+          
+          const pollForVideo = async () => {
+              let attempts = 0
+              const maxAttempts = 60 // 5 minutes max
+              
+              const poll = async () => {
+                attempts++
+                try {
+                  // Try multiple endpoints like test-leonardo does
+                  let statusResponse: Response | null = null
+                  let statusData: any = null
+                  
+                  const endpoints = [
+                    `https://cloud.leonardo.ai/api/rest/v1/generations/${generationId}`,
+                    `https://cloud.leonardo.ai/api/rest/v1/generations-image-to-video/${generationId}`,
+                    `https://cloud.leonardo.ai/api/rest/v1/motion-video/${generationId}`,
+                  ]
+                  
+                  for (const endpoint of endpoints) {
+                    try {
+                      statusResponse = await fetch(endpoint, {
+                        headers: {
+                          'Authorization': `Bearer ${apiKeyToUse}`,
+                        },
+                      })
+                      
+                      if (statusResponse.ok) {
+                        statusData = await statusResponse.json()
+                        break
+                      }
+                    } catch (e) {
+                      console.warn(`Failed to fetch from ${endpoint}:`, e)
+                      continue
+                    }
+                  }
+                  
+                  if (statusResponse?.ok && statusData) {
+                    console.log('🎬 [KLING/VEO POLLING] Status response:', JSON.stringify(statusData, null, 2))
+                    
+                    // Check multiple possible locations for status (same as test-leonardo)
+                    const jobStatus = statusData.generations_by_pk?.status ||
+                                    statusData.motionVideoGenerationJob?.status ||
+                                    statusData.imageToVideoGenerationJob?.status ||
+                                    statusData.motionSvdGenerationJob?.status ||
+                                    statusData.generation?.status ||
+                                    statusData.status
+                    
+                    console.log('🎬 [KLING/VEO POLLING] Job status:', jobStatus)
+                    
+                    if (jobStatus === 'COMPLETE' || jobStatus === 'complete' || jobStatus === 'COMPLETED' || jobStatus === 'succeeded') {
+                      // Check multiple possible locations for video URL (same as test-leonardo)
+                      const videoUrl = statusData.generations_by_pk?.generated_images?.[0]?.motionMP4URL ||
+                                     statusData.generations_by_pk?.generated_images?.[0]?.url ||
+                                     statusData.motionVideoGenerationJob?.videoURL ||
+                                     statusData.motionVideoGenerationJob?.url ||
+                                     statusData.imageToVideoGenerationJob?.videoURL ||
+                                     statusData.imageToVideoGenerationJob?.videoUrl ||
+                                     statusData.generations_by_pk?.generated_videos?.[0]?.url ||
+                                     statusData.generated_videos?.[0]?.url ||
+                                     statusData.generation?.videoURL ||
+                                     statusData.videoUrl ||
+                                     statusData.url ||
+                                     statusData.motionSvdGenerationJob?.motionMP4URL
+                      
+                      console.log('🎬 [KLING/VEO POLLING] Video URL found:', !!videoUrl, videoUrl)
+                      
+                      updateStoryboardGeneration(storyboard.id, {
+                        isGenerating: false,
+                        generatedVideoUrl: videoUrl || null,
+                        generationStatus: videoUrl ? "Completed" : "Processing - check back soon"
+                      })
+                      
+                      // Auto-save generated video to database
+                      if (videoUrl && userId) {
+                        try {
+                          const generation = storyboardGenerations.get(storyboard.id)
+                          if (generation) {
+                            const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
+                            
+                            // First save to bucket
+                            const bucketResponse = await fetch('/api/ai/download-and-store-video', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({
+                                videoUrl,
+                                fileName,
+                                userId,
+                              }),
+                            })
+                            
+                            const bucketResult = await bucketResponse.json()
+                            const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
+                            
+                            // Then save to database
+                            const dbResponse = await fetch('/api/storyboard-videos', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                              },
+                              body: JSON.stringify({
+                                storyboardId: storyboard.id,
+                                videoUrl: savedVideoUrl,
+                                videoName: fileName,
+                                generationModel: generation.model || null,
+                                generationPrompt: generation.prompt || null,
+                                metadata: {
+                                  duration: generation.duration,
+                                  resolution: generation.resolution,
+                                },
+                                isDefault: false,
+                              }),
+                            })
+                            
+                            if (dbResponse.ok) {
+                              await loadStoryboardVideos(storyboard.id)
+                              console.log('✅ Auto-saved Kling/Veo video to database')
+                            }
+                          }
+                        } catch (error) {
+                          console.warn('Failed to auto-save Kling/Veo video to database:', error)
+                        }
+                      }
+                      
+                      toast({
+                        title: "Success",
+                        description: videoUrl ? "Video generated successfully!" : "Video generation completed.",
+                      })
+                      return
+                    } else if (jobStatus === 'FAILED' || jobStatus === 'failed' || jobStatus === 'error') {
+                      updateStoryboardGeneration(storyboard.id, {
+                        isGenerating: false,
+                        generationStatus: "Failed"
+                      })
+                      toast({
+                        title: "Generation Failed",
+                        description: "Video generation failed. Please try again.",
+                        variant: "destructive"
+                      })
+                      return
+                    }
+                  }
+                  
+                  if (attempts < maxAttempts) {
+                    setTimeout(poll, 5000)
+                  } else {
+                    updateStoryboardGeneration(storyboard.id, {
+                      isGenerating: false,
+                      generationStatus: "Processing - check back soon"
+                    })
+                    toast({
+                      title: "Generation Started",
+                      description: "Video generation is in progress. Check back in a few minutes.",
+                    })
+                  }
+                } catch (error) {
+                  console.error('Error polling:', error)
+                  if (attempts < maxAttempts) {
+                    setTimeout(poll, 5000)
+                  } else {
+                    updateStoryboardGeneration(storyboard.id, {
+                      isGenerating: false,
+                      generationStatus: "Error polling"
+                    })
+                  }
+                }
+              }
+              
+              setTimeout(poll, 5000)
+            }
+            
+            pollForVideo()
+        } catch (error) {
+          console.error('Error generating Kling/Veo video:', error)
+          updateStoryboardGeneration(storyboard.id, {
+            isGenerating: false,
+            generationStatus: "Failed"
+          })
+          toast({
+            title: "Generation Failed",
+            description: error instanceof Error ? error.message : "Unknown error occurred",
+            variant: "destructive"
+          })
+        }
       } else if (generation.model.startsWith("Kling")) {
         // Handle Kling models
         // Convert storyboard image_url to File if no uploaded file
@@ -1291,6 +2670,60 @@ export default function CinemaProductionPage() {
             generatedVideoUrl: videoUrl || null,
             generationStatus: videoUrl ? "Completed" : "Processing - check back soon"
           })
+          
+          // Auto-save generated video to database
+          if (videoUrl && userId) {
+            try {
+              const generation = storyboardGenerations.get(storyboard.id)
+              if (generation) {
+                const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
+                
+                // First save to bucket
+                const bucketResponse = await fetch('/api/ai/download-and-store-video', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    videoUrl,
+                    fileName,
+                    userId,
+                  }),
+                })
+                
+                const bucketResult = await bucketResponse.json()
+                const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
+                
+                // Then save to database
+                const dbResponse = await fetch('/api/storyboard-videos', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    storyboardId: storyboard.id,
+                    videoUrl: savedVideoUrl,
+                    videoName: fileName,
+                    generationModel: generation.model || null,
+                    generationPrompt: generation.prompt || null,
+                    metadata: {
+                      duration: generation.duration,
+                      resolution: generation.resolution,
+                    },
+                    isDefault: false,
+                  }),
+                })
+                
+                if (dbResponse.ok) {
+                  await loadStoryboardVideos(storyboard.id)
+                  console.log('✅ Auto-saved Kling video to database')
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to auto-save Kling video to database:', error)
+            }
+          }
+          
           toast({
             title: "Success",
             description: videoUrl ? "Video generated successfully!" : "Video generation started. Check back in a few minutes.",
@@ -1930,7 +3363,11 @@ export default function CinemaProductionPage() {
                     generatedVideoUrl: null,
                     generationStatus: null,
                     motionControl: "",
-                    motionStrength: 2
+                    motionStrength: 2,
+                    videoModelType: undefined,
+                    videoDuration: undefined,
+                    startFrameImageUrl: null,
+                    endFrameImageUrl: null
                   }
                   return (
                     <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className="cinema-card">
@@ -1984,35 +3421,63 @@ export default function CinemaProductionPage() {
                         </div>
 
                         {/* Video or Generate Button */}
-                        {generation.generatedVideoUrl ? (
-                          <div className="space-y-2">
-                            <video 
-                              src={generation.generatedVideoUrl} 
-                              controls 
-                              className="w-full rounded-md"
-                            />
-                            <div className="flex gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="flex-1"
-                                onClick={() => handleDownloadVideo(generation.generatedVideoUrl!, storyboard)}
-                              >
-                                <Download className="h-3 w-3 mr-1" />
-                                Download
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="flex-1"
-                                onClick={() => handleSaveVideo(generation.generatedVideoUrl!, storyboard)}
-                              >
-                                <Save className="h-3 w-3 mr-1" />
-                                Save
-                              </Button>
+                        {(() => {
+                          const videos = storyboardVideos.get(storyboard.id) || []
+                          // Prioritize: 1) default/starred video, 2) any saved video, 3) generated video
+                          const defaultVideo = videos.find(v => v.is_default)
+                          const displayVideoUrl = defaultVideo?.video_url || (videos.length > 0 ? videos[0]?.video_url : null) || generation.generatedVideoUrl
+                          // Check if there are multiple videos (in DB or currently generated)
+                          const generatedVideoInDb = generation.generatedVideoUrl && videos.some(v => v.video_url === generation.generatedVideoUrl)
+                          const totalVideoCount = videos.length + (generation.generatedVideoUrl && !generatedVideoInDb ? 1 : 0)
+                          const hasMultipleVideos = totalVideoCount > 1
+                          
+                          return displayVideoUrl ? (
+                            <div className="space-y-2">
+                              <div className="relative">
+                                <video 
+                                  src={displayVideoUrl} 
+                                  controls 
+                                  className="w-full rounded-md"
+                                  preload="metadata"
+                                  playsInline
+                                />
+                                {hasMultipleVideos && (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    className="absolute top-2 right-2"
+                                    onClick={() => {
+                                      setSelectedStoryboardForVideos(storyboard.id)
+                                      setVideoSelectorOpen(true)
+                                    }}
+                                  >
+                                    <MoreVertical className="h-3 w-3 mr-1" />
+                                    {totalVideoCount} Videos
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="flex-1"
+                                  onClick={() => handleDownloadVideo(displayVideoUrl, storyboard)}
+                                >
+                                  <Download className="h-3 w-3 mr-1" />
+                                  Download
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="flex-1"
+                                  onClick={() => handleSaveVideo(displayVideoUrl, storyboard)}
+                                >
+                                  <Save className="h-3 w-3 mr-1" />
+                                  Save
+                                </Button>
+                              </div>
                             </div>
-                          </div>
-                        ) : (
+                          ) : (
                           <Button
                             size="sm"
                             variant="outline"
@@ -2027,7 +3492,8 @@ export default function CinemaProductionPage() {
                             <Play className="h-3 w-3 mr-1" />
                             Generate Video
                           </Button>
-                        )}
+                          )
+                        })()}
                       </CardContent>
                     </Card>
                   )
@@ -2061,30 +3527,184 @@ export default function CinemaProductionPage() {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      {/* Storyboard Image */}
-                      {storyboard.image_url ? (
-                        <div className="relative w-full bg-muted rounded-lg overflow-hidden border">
-                          <img
-                            src={storyboard.image_url}
-                            alt={storyboard.title || "Storyboard"}
-                            className="w-full h-auto max-h-[600px] object-contain mx-auto"
-                            onLoad={() => {
-                              console.log('🎬 Storyboard image loaded successfully:', storyboard.image_url)
-                            }}
-                            onError={(e) => {
-                              console.error('🎬 Failed to load storyboard image:', storyboard.image_url)
-                              e.currentTarget.style.display = 'none'
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <div className="py-12 text-center bg-muted rounded-lg">
-                          <ImageIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                          <p className="text-muted-foreground">
-                            No image available for this storyboard.
-                          </p>
-                        </div>
-                      )}
+                      {/* Toggle between Image and Video */}
+                      {(() => {
+                        const videos = storyboardVideos.get(storyboard.id) || []
+                        const generation = storyboardGenerations.get(storyboard.id) || {
+                          shotId: storyboard.id,
+                          model: "",
+                          prompt: "",
+                          duration: "5s",
+                          resolution: "1280x720",
+                          uploadedFile: null,
+                          startFrame: null,
+                          endFrame: null,
+                          filePreview: null,
+                          startFramePreview: null,
+                          endFramePreview: null,
+                          isGenerating: false,
+                          generatedVideoUrl: null,
+                          generationStatus: null,
+                          motionControl: "",
+                          motionStrength: 2,
+                          videoModelType: undefined,
+                          videoDuration: undefined,
+                          startFrameImageUrl: null,
+                          endFrameImageUrl: null
+                        }
+                        
+                        const defaultVideo = videos.find(v => v.is_default)
+                        const hasVideo = defaultVideo?.video_url || (videos.length > 0 ? videos[0]?.video_url : null) || generation.generatedVideoUrl
+                        const currentViewMode = detailViewMode.get(storyboard.id) || (hasVideo ? 'video' : 'image')
+                        
+                        return (
+                          <>
+                            {/* Toggle Button */}
+                            {storyboard.image_url && hasVideo && (
+                              <div className="flex gap-2 justify-end">
+                                <Button
+                                  size="sm"
+                                  variant={currentViewMode === 'image' ? 'default' : 'outline'}
+                                  onClick={() => setDetailViewMode(prev => {
+                                    const newMap = new Map(prev)
+                                    newMap.set(storyboard.id, 'image')
+                                    return newMap
+                                  })}
+                                >
+                                  <ImageIcon className="h-4 w-4 mr-2" />
+                                  Image
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant={currentViewMode === 'video' ? 'default' : 'outline'}
+                                  onClick={() => setDetailViewMode(prev => {
+                                    const newMap = new Map(prev)
+                                    newMap.set(storyboard.id, 'video')
+                                    return newMap
+                                  })}
+                                >
+                                  <Video className="h-4 w-4 mr-2" />
+                                  Video
+                                </Button>
+                              </div>
+                            )}
+                            
+                            {/* Display Image or Video based on toggle */}
+                            {currentViewMode === 'image' ? (
+                              storyboard.image_url ? (
+                                <div className="relative w-full bg-muted rounded-lg overflow-hidden border">
+                                  <img
+                                    src={storyboard.image_url}
+                                    alt={storyboard.title || "Storyboard"}
+                                    className="w-full h-auto max-h-[600px] object-contain mx-auto"
+                                    onLoad={() => {
+                                      console.log('🎬 Storyboard image loaded successfully:', storyboard.image_url)
+                                    }}
+                                    onError={(e) => {
+                                      console.error('🎬 Failed to load storyboard image:', storyboard.image_url)
+                                      e.currentTarget.style.display = 'none'
+                                    }}
+                                  />
+                                </div>
+                              ) : (
+                                <div className="py-12 text-center bg-muted rounded-lg">
+                                  <ImageIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                                  <p className="text-muted-foreground">
+                                    No image available for this storyboard.
+                                  </p>
+                                </div>
+                              )
+                            ) : (
+                              // Video view
+                              (() => {
+                                const videos = storyboardVideos.get(storyboard.id) || []
+                                const generation = storyboardGenerations.get(storyboard.id) || {
+                                  shotId: storyboard.id,
+                                  model: "",
+                                  prompt: "",
+                                  duration: "5s",
+                                  resolution: "1280x720",
+                                  uploadedFile: null,
+                                  startFrame: null,
+                                  endFrame: null,
+                                  filePreview: null,
+                                  startFramePreview: null,
+                                  endFramePreview: null,
+                                  isGenerating: false,
+                                  generatedVideoUrl: null,
+                                  generationStatus: null,
+                                  motionControl: "",
+                                  motionStrength: 2,
+                                  videoModelType: undefined,
+                                  videoDuration: undefined,
+                                  startFrameImageUrl: null,
+                                  endFrameImageUrl: null
+                                }
+                                
+                                const defaultVideo = videos.find(v => v.is_default)
+                                const displayVideoUrl = defaultVideo?.video_url || (videos.length > 0 ? videos[0]?.video_url : null) || generation.generatedVideoUrl
+                                const hasMultipleVideos = videos.length > 1 || (generation.generatedVideoUrl && !videos.some(v => v.video_url === generation.generatedVideoUrl))
+                                
+                                return displayVideoUrl ? (
+                                  <div className="space-y-2">
+                                    <div className="relative">
+                                      <video 
+                                        src={displayVideoUrl} 
+                                        controls 
+                                        preload="metadata"
+                                        playsInline
+                                        className="w-full rounded-md"
+                                        key={displayVideoUrl}
+                                      />
+                                      {hasMultipleVideos && (
+                                        <Button
+                                          size="sm"
+                                          variant="secondary"
+                                          className="absolute top-2 right-2"
+                                          onClick={() => {
+                                            setSelectedStoryboardForVideos(storyboard.id)
+                                            setVideoSelectorOpen(true)
+                                          }}
+                                        >
+                                          <MoreVertical className="h-4 w-4 mr-1" />
+                                          {videos.length} Videos
+                                        </Button>
+                                      )}
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="flex-1"
+                                        onClick={() => handleDownloadVideo(displayVideoUrl, storyboard)}
+                                      >
+                                        <Download className="h-4 w-4 mr-2" />
+                                        Download Video
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="flex-1"
+                                        onClick={() => handleSaveVideo(displayVideoUrl, storyboard)}
+                                      >
+                                        <Save className="h-4 w-4 mr-2" />
+                                        Save to Storage
+                                      </Button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="py-12 text-center bg-muted rounded-lg">
+                                    <Video className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
+                                    <p className="text-muted-foreground">
+                                      No video available for this storyboard.
+                                    </p>
+                                  </div>
+                                )
+                              })()
+                            )}
+                          </>
+                        )
+                      })()}
 
                       {/* Storyboard Details */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
@@ -2143,7 +3763,11 @@ export default function CinemaProductionPage() {
                             generatedVideoUrl: null,
                             generationStatus: null,
                             motionControl: "",
-                            motionStrength: 2
+                            motionStrength: 2,
+                            videoModelType: undefined,
+                            videoDuration: undefined,
+                            startFrameImageUrl: null,
+                            endFrameImageUrl: null
                           }
                           const defaultPrompt = buildPromptFromStoryboard(storyboard)
                           const fileRequirement = generation.model ? getModelFileRequirement(generation.model) : 'none'
@@ -2155,8 +3779,14 @@ export default function CinemaProductionPage() {
                                 <Select
                                   value={generation.model}
                                   onValueChange={(value) => {
+                                    const newModel = value as VideoModel
+                                    const isKlingVeo = newModel === "Kling 2.1 Pro (Frame-to-Frame)" || 
+                                                     newModel === "Veo 3.1 (Frame-to-Frame)" || 
+                                                     newModel === "Veo 3.1 Fast (Frame-to-Frame)"
+                                    const isVeo = newModel === "Veo 3.1 (Frame-to-Frame)" || newModel === "Veo 3.1 Fast (Frame-to-Frame)"
+                                    
                                     updateStoryboardGeneration(storyboard.id, { 
-                                      model: value as VideoModel,
+                                      model: newModel,
                                       // Clear files when model changes
                                       uploadedFile: null,
                                       startFrame: null,
@@ -2164,6 +3794,11 @@ export default function CinemaProductionPage() {
                                       filePreview: null,
                                       startFramePreview: null,
                                       endFramePreview: null,
+                                      startFrameImageUrl: null,
+                                      endFrameImageUrl: null,
+                                      // Set videoModelType and duration for Kling/Veo
+                                      videoModelType: isKlingVeo ? (isVeo ? (newModel === "Veo 3.1 Fast (Frame-to-Frame)" ? 'VEO3_1FAST' : 'VEO3_1') : 'KLING2_1') : undefined,
+                                      videoDuration: isKlingVeo ? (isVeo ? 8 : 5) : undefined,
                                       // Clear motion control when switching away from Leonardo
                                       motionControl: value === "Leonardo Motion 2.0" ? (storyboardGenerations.get(storyboard.id)?.motionControl || "") : "",
                                       motionStrength: value === "Leonardo Motion 2.0" ? (storyboardGenerations.get(storyboard.id)?.motionStrength || 2) : 2
@@ -2177,6 +3812,9 @@ export default function CinemaProductionPage() {
                                     <SelectItem value="Kling T2V">Kling T2V (Text-to-Video)</SelectItem>
                                     <SelectItem value="Kling I2V">Kling I2V (Image-to-Video)</SelectItem>
                                     <SelectItem value="Kling I2V Extended">Kling I2V Extended (Frame-to-Frame)</SelectItem>
+                                    <SelectItem value="Kling 2.1 Pro (Frame-to-Frame)">Kling 2.1 Pro (Frame-to-Frame via Leonardo)</SelectItem>
+                                    <SelectItem value="Veo 3.1 (Frame-to-Frame)">Veo 3.1 (Frame-to-Frame via Leonardo)</SelectItem>
+                                    <SelectItem value="Veo 3.1 Fast (Frame-to-Frame)">Veo 3.1 Fast (Frame-to-Frame via Leonardo)</SelectItem>
                                     <SelectItem value="Runway Gen-4 Turbo">Runway Gen-4 Turbo</SelectItem>
                                     <SelectItem value="Runway Gen-3A Turbo">Runway Gen-3A Turbo</SelectItem>
                                     <SelectItem value="Runway Act-Two">Runway Act-Two</SelectItem>
@@ -2339,71 +3977,199 @@ export default function CinemaProductionPage() {
                             )}
 
                             {fileRequirement === 'start-end-frames' && (
-                              <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                  <Label>Start Frame</Label>
-                                  {generation.startFramePreview ? (
-                                    <div className="relative mt-2">
-                                      <img 
-                                        src={generation.startFramePreview} 
-                                        alt="Start Frame" 
-                                        className="w-full h-48 object-cover rounded-md"
-                                      />
-                                      <Button
-                                        variant="destructive"
-                                        size="sm"
-                                        className="absolute top-2 right-2"
-                                        onClick={() => handleRemoveFile(storyboard.id, 'startFrame')}
+                              <>
+                                {/* Model Type and Duration for Kling/Veo */}
+                                {(generation.model === "Kling 2.1 Pro (Frame-to-Frame)" || 
+                                  generation.model === "Veo 3.1 (Frame-to-Frame)" || 
+                                  generation.model === "Veo 3.1 Fast (Frame-to-Frame)") && (
+                                  <>
+                                    <div>
+                                      <Label>Duration (seconds)</Label>
+                                      <Select 
+                                        value={generation.videoDuration?.toString() || (generation.videoModelType === 'KLING2_1' ? '5' : '8')} 
+                                        onValueChange={(v) => updateStoryboardGeneration(storyboard.id, { videoDuration: parseInt(v) })}
                                       >
-                                        <X className="h-4 w-4" />
-                                      </Button>
+                                        <SelectTrigger>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {(generation.videoModelType === 'VEO3_1' || generation.videoModelType === 'VEO3_1FAST') ? (
+                                            <>
+                                              <SelectItem value="4">4 seconds</SelectItem>
+                                              <SelectItem value="6">6 seconds</SelectItem>
+                                              <SelectItem value="8">8 seconds</SelectItem>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <SelectItem value="5">5 seconds</SelectItem>
+                                              <SelectItem value="10">10 seconds</SelectItem>
+                                            </>
+                                          )}
+                                        </SelectContent>
+                                      </Select>
+                                      <p className="text-xs text-muted-foreground mt-1">
+                                        {generation.videoModelType === 'VEO3_1' || generation.videoModelType === 'VEO3_1FAST' 
+                                          ? 'Veo 3.1 supports 4, 6, or 8 seconds with end frames'
+                                          : 'Kling 2.1 Pro supports 5 or 10 seconds'}
+                                      </p>
                                     </div>
-                                  ) : (
-                                    <div className="mt-2">
-                                      <Input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => {
-                                          const file = e.target.files?.[0]
-                                          if (file) handleFileUpload(storyboard.id, file, 'startFrame')
-                                        }}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
+                                  </>
+                                )}
 
-                                <div>
-                                  <Label>End Frame</Label>
-                                  {generation.endFramePreview ? (
-                                    <div className="relative mt-2">
-                                      <img 
-                                        src={generation.endFramePreview} 
-                                        alt="End Frame" 
-                                        className="w-full h-48 object-cover rounded-md"
-                                      />
-                                      <Button
-                                        variant="destructive"
-                                        size="sm"
-                                        className="absolute top-2 right-2"
-                                        onClick={() => handleRemoveFile(storyboard.id, 'endFrame')}
-                                      >
-                                        <X className="h-4 w-4" />
-                                      </Button>
-                                    </div>
-                                  ) : (
-                                    <div className="mt-2">
-                                      <Input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => {
-                                          const file = e.target.files?.[0]
-                                          if (file) handleFileUpload(storyboard.id, file, 'endFrame')
-                                        }}
-                                      />
-                                    </div>
-                                  )}
+                                <div className="grid grid-cols-2 gap-4">
+                                  <div>
+                                    <Label>Start Frame (Required)</Label>
+                                    {generation.startFramePreview || generation.startFrameImageUrl ? (
+                                      <div className="relative mt-2">
+                                        <img 
+                                          src={generation.startFramePreview || generation.startFrameImageUrl || ''} 
+                                          alt="Start Frame" 
+                                          className="w-full h-48 object-cover rounded-md"
+                                        />
+                                        <Button
+                                          variant="destructive"
+                                          size="sm"
+                                          className="absolute top-2 right-2"
+                                          onClick={() => updateStoryboardGeneration(storyboard.id, { 
+                                            startFrame: null, 
+                                            startFramePreview: null,
+                                            startFrameImageUrl: null
+                                          })}
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </Button>
+                                        {generation.startFrameImageUrl && (
+                                          <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
+                                            From Storyboard
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="mt-2 space-y-2">
+                                        <Input
+                                          type="file"
+                                          accept="image/*"
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0]
+                                            if (file) handleFileUpload(storyboard.id, file, 'startFrame')
+                                          }}
+                                        />
+                                        {/* Link to storyboard images */}
+                                        {storyboards.length > 0 && (
+                                          <Select
+                                            value=""
+                                            onValueChange={(storyboardId) => {
+                                              const selectedStoryboard = storyboards.find(s => s.id === storyboardId)
+                                              if (selectedStoryboard?.image_url) {
+                                                updateStoryboardGeneration(storyboard.id, { 
+                                                  startFrameImageUrl: selectedStoryboard.image_url,
+                                                  startFramePreview: selectedStoryboard.image_url
+                                                })
+                                              }
+                                            }}
+                                          >
+                                            <SelectTrigger>
+                                              <SelectValue placeholder="Or select from storyboard images..." />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {/* Show current shot first with special label */}
+                                              {storyboard.image_url && (
+                                                <SelectItem key={storyboard.id} value={storyboard.id}>
+                                                  This shot (Shot {storyboard.shot_number}: {storyboard.title || 'Untitled'})
+                                                </SelectItem>
+                                              )}
+                                              {/* Then show other storyboards */}
+                                              {storyboards
+                                                .filter(s => s.image_url && s.id !== storyboard.id)
+                                                .map((sb) => (
+                                                  <SelectItem key={sb.id} value={sb.id}>
+                                                    Shot {sb.shot_number}: {sb.title || 'Untitled'}
+                                                  </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                          </Select>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <Label>End Frame (Optional)</Label>
+                                    {generation.endFramePreview || generation.endFrameImageUrl ? (
+                                      <div className="relative mt-2">
+                                        <img 
+                                          src={generation.endFramePreview || generation.endFrameImageUrl || ''} 
+                                          alt="End Frame" 
+                                          className="w-full h-48 object-cover rounded-md"
+                                        />
+                                        <Button
+                                          variant="destructive"
+                                          size="sm"
+                                          className="absolute top-2 right-2"
+                                          onClick={() => updateStoryboardGeneration(storyboard.id, { 
+                                            endFrame: null, 
+                                            endFramePreview: null,
+                                            endFrameImageUrl: null
+                                          })}
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </Button>
+                                        {generation.endFrameImageUrl && (
+                                          <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
+                                            From Storyboard
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="mt-2 space-y-2">
+                                        <Input
+                                          type="file"
+                                          accept="image/*"
+                                          onChange={(e) => {
+                                            const file = e.target.files?.[0]
+                                            if (file) handleFileUpload(storyboard.id, file, 'endFrame')
+                                          }}
+                                        />
+                                        {/* Link to storyboard images */}
+                                        {storyboards.length > 0 && (
+                                          <Select
+                                            value=""
+                                            onValueChange={(storyboardId) => {
+                                              const selectedStoryboard = storyboards.find(s => s.id === storyboardId)
+                                              if (selectedStoryboard?.image_url) {
+                                                updateStoryboardGeneration(storyboard.id, { 
+                                                  endFrameImageUrl: selectedStoryboard.image_url,
+                                                  endFramePreview: selectedStoryboard.image_url
+                                                })
+                                              }
+                                            }}
+                                          >
+                                            <SelectTrigger>
+                                              <SelectValue placeholder="Or select from storyboard images..." />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {/* Show current shot first with special label */}
+                                              {storyboard.image_url && (
+                                                <SelectItem key={storyboard.id} value={storyboard.id}>
+                                                  This shot (Shot {storyboard.shot_number}: {storyboard.title || 'Untitled'})
+                                                </SelectItem>
+                                              )}
+                                              {/* Then show other storyboards */}
+                                              {storyboards
+                                                .filter(s => s.image_url && s.id !== storyboard.id)
+                                                .map((sb) => (
+                                                  <SelectItem key={sb.id} value={sb.id}>
+                                                    Shot {sb.shot_number}: {sb.title || 'Untitled'}
+                                                  </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                          </Select>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
+                              </>
                             )}
 
                             {/* Motion Control for Leonardo Motion 2.0 */}
@@ -2502,40 +4268,222 @@ export default function CinemaProductionPage() {
                               </div>
                             )}
 
-                            {generation.generatedVideoUrl && (
-                              <div className="mt-4 space-y-2">
-                                <video 
-                                  src={generation.generatedVideoUrl} 
-                                  controls 
-                                  className="w-full rounded-md"
-                                />
-                                <div className="flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="flex-1"
-                                    onClick={() => handleDownloadVideo(generation.generatedVideoUrl!, storyboard)}
-                                  >
-                                    <Download className="h-4 w-4 mr-2" />
-                                    Download Video
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="flex-1"
-                                    onClick={() => handleSaveVideo(generation.generatedVideoUrl!, storyboard)}
-                                  >
-                                    <Save className="h-4 w-4 mr-2" />
-                                    Save to Storage
-                                  </Button>
-                                </div>
-                              </div>
-                            )}
+                            {(() => {
+                              const videos = storyboardVideos.get(storyboard.id) || []
+                              // Include current generated video if it exists and isn't already in the database
+                              const hasGeneratedVideo = !!generation.generatedVideoUrl
+                              const generatedVideoInDb = hasGeneratedVideo && videos.some(v => v.video_url === generation.generatedVideoUrl)
+                              const totalVideoCount = videos.length + (hasGeneratedVideo && !generatedVideoInDb ? 1 : 0)
+                              // Always show button if there are 2+ videos in database (persistent across refreshes)
+                              const hasMultipleVideos = videos.length > 1
+                              
+                              console.log(`📹 Storyboard ${storyboard.id} videos:`, {
+                                dbVideos: videos.length,
+                                hasGenerated: hasGeneratedVideo,
+                                generatedInDb: generatedVideoInDb,
+                                totalCount: totalVideoCount,
+                                hasMultiple: hasMultipleVideos,
+                                willShowButton: hasMultipleVideos
+                              })
+                              
+                              // Prioritize: 1) default/starred video, 2) any saved video, 3) generated video
+                              const defaultVideo = videos.find(v => v.is_default)
+                              const displayVideoUrl = defaultVideo?.video_url || (videos.length > 0 ? videos[0]?.video_url : null) || generation.generatedVideoUrl
+
+                              console.log(`📹 Storyboard ${storyboard.id} videos:`, {
+                                dbVideos: videos.length,
+                                hasGenerated: hasGeneratedVideo,
+                                generatedInDb: generatedVideoInDb,
+                                totalCount: totalVideoCount,
+                                hasMultiple: hasMultipleVideos,
+                                willShowButton: hasMultipleVideos,
+                                displayVideoUrl: displayVideoUrl ? 'exists' : 'null',
+                                defaultVideoUrl: defaultVideo?.video_url ? 'exists' : 'null',
+                                generatedVideoUrl: generation.generatedVideoUrl ? 'exists' : 'null',
+                                defaultVideo: defaultVideo ? { id: defaultVideo.id, url: defaultVideo.video_url?.substring(0, 50) } : 'null'
+                              })
+
+                              // Video is now displayed in the toggle section above, so we don't need to show it here
+                              // This section is only for the generation form
+                              return null
+                            })()}
                           </>
                         )}
                             </>
                           )
                         })()}
+
+                        {/* Audio Generation Section */}
+                        <div className="mt-6 pt-6 border-t">
+                          <div className="flex items-center gap-2 mb-4">
+                            <Volume2 className="h-5 w-5" />
+                            <h3 className="text-lg font-semibold">Audio Generation</h3>
+                          </div>
+
+                          {/* Dialogue Generation */}
+                          <div className="mb-4">
+                            <Label className="flex items-center gap-2 mb-2">
+                              <Music className="h-4 w-4" />
+                              Dialogue (Text-to-Speech)
+                            </Label>
+                            <div className="space-y-2">
+                              <div className="flex gap-2">
+                                <Textarea
+                                  value={storyboard.action || ''}
+                                  onChange={(e) => {
+                                    // Update storyboard action in real-time
+                                    const updatedStoryboards = storyboards.map(sb => 
+                                      sb.id === storyboard.id 
+                                        ? { ...sb, action: e.target.value }
+                                        : sb
+                                    )
+                                    setStoryboards(updatedStoryboards)
+                                  }}
+                                  onBlur={async (e) => {
+                                    // Save to database when user finishes editing
+                                    const newValue = e.target.value.trim()
+                                    if (newValue !== (storyboard.action || '')) {
+                                      try {
+                                        const supabase = getSupabaseClient()
+                                        const { error } = await supabase
+                                          .from('storyboards')
+                                          .update({ action: newValue || null })
+                                          .eq('id', storyboard.id)
+                                        
+                                        if (error) {
+                                          console.error('Error saving dialogue:', error)
+                                        }
+                                      } catch (error) {
+                                        console.error('Error saving dialogue:', error)
+                                      }
+                                    }
+                                  }}
+                                  placeholder="Enter dialogue text to generate speech..."
+                                  className="flex-1"
+                                  rows={3}
+                                />
+                                <div className="flex flex-col gap-2">
+                                  <Button
+                                    onClick={() => {
+                                      if (storyboard.action) {
+                                        handleGenerateDialogue(storyboard, storyboard.action)
+                                      }
+                                    }}
+                                    disabled={!storyboard.action?.trim() || audioGenerations.get(`${storyboard.id}-dialogue`)?.isGenerating || !userApiKeys.elevenlabs_api_key}
+                                    size="sm"
+                                  >
+                                    {audioGenerations.get(`${storyboard.id}-dialogue`)?.isGenerating ? (
+                                      <>
+                                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                        Generating...
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Volume2 className="h-4 w-4 mr-2" />
+                                        Generate
+                                      </>
+                                    )}
+                                  </Button>
+                                  {storyboard.action && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={async () => {
+                                        // Clear the action text
+                                        try {
+                                          const supabase = getSupabaseClient()
+                                          const { error } = await supabase
+                                            .from('storyboards')
+                                            .update({ action: null })
+                                            .eq('id', storyboard.id)
+                                          
+                                          if (!error) {
+                                            const updatedStoryboards = storyboards.map(sb => 
+                                              sb.id === storyboard.id 
+                                                ? { ...sb, action: null }
+                                                : sb
+                                            )
+                                            setStoryboards(updatedStoryboards)
+                                            toast({
+                                              title: "Dialogue Cleared",
+                                              description: "The dialogue text has been removed.",
+                                            })
+                                          }
+                                        } catch (error) {
+                                          console.error('Error clearing dialogue:', error)
+                                        }
+                                      }}
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                              {audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl && (
+                                <div className="space-y-2">
+                                  <audio controls src={audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl || ''} className="w-full" />
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="flex-1"
+                                      onClick={() => {
+                                        const audioUrl = audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl
+                                        if (audioUrl) {
+                                          const link = document.createElement('a')
+                                          link.href = audioUrl
+                                          link.download = `dialogue_shot_${storyboard.shot_number}_${Date.now()}.mp3`
+                                          document.body.appendChild(link)
+                                          link.click()
+                                          document.body.removeChild(link)
+                                        }
+                                      }}
+                                    >
+                                      <Download className="h-4 w-4 mr-2" />
+                                      Download
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="flex-1"
+                                      onClick={async () => {
+                                        const audioUrl = audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl
+                                        const prompt = storyboard.action || ''
+                                        if (audioUrl) {
+                                          await handleSaveAudio(audioUrl, prompt, 'dialogue', storyboard)
+                                        }
+                                      }}
+                                    >
+                                      <Save className="h-4 w-4 mr-2" />
+                                      Save to Storage
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Sound Effects Generation */}
+                          <div>
+                            <Label className="flex items-center gap-2 mb-2">
+                              <Zap className="h-4 w-4" />
+                              Sound Effects
+                            </Label>
+                            <SoundEffectGenerator
+                              storyboard={storyboard}
+                              onGenerate={handleGenerateSoundEffect}
+                              isGenerating={audioGenerations.get(`${storyboard.id}-sound-effect`)?.isGenerating || false}
+                              audioUrl={audioGenerations.get(`${storyboard.id}-sound-effect`)?.audioUrl || null}
+                              hasApiKey={!!userApiKeys.elevenlabs_api_key}
+                              onSaveAudio={async (audioUrl, prompt) => {
+                                await handleSaveAudio(audioUrl, prompt, 'sound-effect', storyboard)
+                              }}
+                              userId={userId || undefined}
+                              projectId={selectedProjectId || undefined}
+                              sceneId={selectedSceneId || undefined}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </CardContent>
                   </Card>
@@ -2545,6 +4493,126 @@ export default function CinemaProductionPage() {
           </div>
         )}
       </div>
+
+      {/* Video Selector Dialog */}
+      <Dialog open={videoSelectorOpen} onOpenChange={setVideoSelectorOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Select Video</DialogTitle>
+            <DialogDescription>
+              Choose a video to play or set as default
+            </DialogDescription>
+          </DialogHeader>
+          {selectedStoryboardForVideos && (() => {
+            const videos = storyboardVideos.get(selectedStoryboardForVideos) || []
+            const storyboard = storyboards.find(s => s.id === selectedStoryboardForVideos)
+            const generation = storyboardGenerations.get(selectedStoryboardForVideos)
+            
+            // Include current generated video if it exists and isn't in database
+            const allVideos = [...videos]
+            if (generation?.generatedVideoUrl && !videos.some(v => v.video_url === generation.generatedVideoUrl)) {
+              // Add generated video as a temporary entry
+              allVideos.unshift({
+                id: 'generated-temp',
+                storyboard_id: selectedStoryboardForVideos,
+                user_id: userId || '',
+                video_url: generation.generatedVideoUrl,
+                video_name: `${storyboard?.title || 'storyboard'}-shot-${storyboard?.shot_number} (Generated)`,
+                is_default: false,
+                generation_model: generation.model || null,
+                generation_prompt: generation.prompt || null,
+                metadata: {},
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+            }
+
+            return (
+              <div className="space-y-4 mt-4">
+                {allVideos.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">No videos saved for this storyboard.</p>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {allVideos.map((video) => (
+                      <div
+                        key={video.id}
+                        className={`border-2 rounded-lg overflow-hidden cursor-pointer transition-all ${
+                          selectedVideoUrl === video.video_url
+                            ? 'border-primary'
+                            : 'border-border hover:border-primary/50'
+                        }`}
+                        onClick={() => setSelectedVideoUrl(video.video_url)}
+                      >
+                        <div className="relative">
+                          <video
+                            src={video.video_url}
+                            className="w-full aspect-video object-cover"
+                            muted
+                            onMouseEnter={(e) => e.currentTarget.play()}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.pause()
+                              e.currentTarget.currentTime = 0
+                            }}
+                          />
+                          <div className="absolute top-2 right-2">
+                            {video.id !== 'generated-temp' ? (
+                              <Button
+                                size="sm"
+                                variant={video.is_default ? "default" : "secondary"}
+                                className="h-8 w-8 p-0"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (video.is_default) {
+                                    handleUnsetDefaultVideo(video.id, video.storyboard_id)
+                                  } else {
+                                    handleSetDefaultVideo(video.id, video.storyboard_id)
+                                  }
+                                }}
+                                title={video.is_default ? "Remove as default" : "Set as default"}
+                              >
+                                <Star className={`h-4 w-4 ${video.is_default ? 'fill-yellow-400 text-yellow-400' : ''}`} />
+                              </Button>
+                            ) : (
+                              <Badge variant="outline" className="text-xs">
+                                New
+                              </Badge>
+                            )}
+                          </div>
+                          {video.is_default && (
+                            <div className="absolute top-2 left-2 bg-primary text-primary-foreground text-xs px-2 py-1 rounded">
+                              Default
+                            </div>
+                          )}
+                        </div>
+                        <div className="bg-muted p-2">
+                          <div className="truncate text-sm font-medium">{video.video_name || 'Video'}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selectedVideoUrl && (
+                  <div className="mt-4">
+                    <video
+                      src={selectedVideoUrl}
+                      controls
+                      className="w-full rounded-md"
+                      key={selectedVideoUrl}
+                      autoPlay
+                      onLoadedData={(e) => {
+                        // Ensure video plays when loaded
+                        e.currentTarget.play().catch(() => {
+                          // Autoplay might be blocked, that's okay
+                        })
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

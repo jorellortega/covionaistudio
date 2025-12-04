@@ -703,6 +703,146 @@ export class ElevenLabsService {
     }
   }
 
+  static async generateSoundEffect(request: {
+    prompt: string
+    apiKey: string
+    duration?: number
+    prompt_influence?: number
+    looping?: boolean
+  }): Promise<AIResponse> {
+    try {
+      console.log('🔊 ElevenLabs generateSoundEffect called with:', {
+        promptLength: request.prompt?.length || 0,
+        duration: request.duration,
+        prompt_influence: request.prompt_influence,
+        looping: request.looping,
+        hasApiKey: !!request.apiKey,
+      })
+      
+      // Check user subscription first to provide better error message
+      try {
+        const userInfo = await this.getUserInfo(request.apiKey)
+        if (userInfo.success && userInfo.data?.subscription) {
+          console.log('🔊 User subscription tier:', userInfo.data.subscription.tier)
+        }
+      } catch (error) {
+        console.warn('🔊 Could not check user subscription:', error)
+      }
+      
+      const requestBody: any = {
+        text: request.prompt,
+      }
+      
+      // Add optional parameters
+      if (request.duration !== undefined) {
+        requestBody.duration = request.duration
+      }
+      if (request.prompt_influence !== undefined) {
+        requestBody.prompt_influence = request.prompt_influence
+      }
+      if (request.looping !== undefined) {
+        requestBody.looping = request.looping
+      }
+      
+      console.log('📤 Sound effect request body:', requestBody)
+      
+      // ElevenLabs Sound Effects API endpoint
+      // Try multiple possible endpoints as the API documentation may vary
+      // Note: The actual API endpoint may differ from the documentation URL structure
+      const endpoints = [
+        'https://api.elevenlabs.io/v1/sound-generation', // Most commonly used endpoint
+        'https://api.elevenlabs.io/v1/text-to-sound-effects/convert', // As per documentation page
+        'https://api.elevenlabs.io/v1/text-to-sound-effects', // Without /convert
+      ]
+      
+      let response: Response | null = null
+      let lastError: string = ''
+      let lastEndpoint = ''
+      
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`🔊 Trying endpoint: ${endpoint}`)
+          lastEndpoint = endpoint
+          response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'xi-api-key': request.apiKey,
+            },
+            body: JSON.stringify(requestBody),
+          })
+          
+          if (response.ok) {
+            console.log(`✅ Success with endpoint: ${endpoint}`)
+            break // Success, use this response
+          } else if (response.status !== 404) {
+            // If it's not a 404, this might be the right endpoint but with a different error
+            const errorText = await response.text()
+            lastError = errorText
+            console.log(`⚠️ Endpoint ${endpoint} returned ${response.status}: ${errorText}`)
+            break // Stop trying other endpoints
+          } else {
+            // 404 - try next endpoint
+            const errorText = await response.text()
+            lastError = errorText
+            console.log(`❌ Endpoint ${endpoint} returned 404, trying next...`)
+            response = null
+          }
+        } catch (error) {
+          console.error(`❌ Error with endpoint ${endpoint}:`, error)
+          lastError = error instanceof Error ? error.message : 'Unknown error'
+          response = null
+        }
+      }
+
+      if (!response || !response.ok) {
+        const errorText = lastError || (response ? await response.text() : 'No response')
+        console.error('🔊 ElevenLabs Sound Effects API error:', {
+          status: response?.status || 'No response',
+          statusText: response?.statusText || 'No response',
+          error: errorText,
+          lastEndpoint: lastEndpoint
+        })
+        
+        // If 404, provide helpful error message
+        if (response?.status === 404) {
+          throw new Error(`Sound Effects API endpoint not found (404). Tried multiple endpoints. Please verify your ElevenLabs API key has access to sound effects. Error: ${errorText}`)
+        }
+        
+        throw new Error(`ElevenLabs Sound Effects API error (${response?.status || 'Unknown'}): ${errorText}`)
+      }
+      
+      // For audio, we need to handle the binary response
+      const arrayBuffer = await response.arrayBuffer()
+      const contentType = response.headers.get('content-type') || 'audio/mpeg'
+      
+      if (typeof window === 'undefined') {
+        return {
+          success: true,
+          data: {
+            audio_array_buffer: arrayBuffer,
+            content_type: contentType,
+          }
+        }
+      }
+
+      const audioBlob = new Blob([arrayBuffer], { type: contentType })
+      const audioUrl = URL.createObjectURL(audioBlob)
+      
+      return { 
+        success: true, 
+        data: {
+          url: audioUrl,
+          blob: audioBlob,
+          audio_blob: audioBlob,
+          content_type: contentType,
+        }
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
   static async validateApiKey(apiKey: string): Promise<boolean> {
     try {
       const response = await fetch('https://api.elevenlabs.io/v1/user', {

@@ -4,7 +4,7 @@ import { cookies } from 'next/headers'
 
 export async function POST(request: NextRequest) {
   try {
-    const { videoUrl, fileName, userId } = await request.json()
+    const { videoUrl, fileName, userId, generationId } = await request.json()
     
     if (!videoUrl || !fileName || !userId) {
       console.error('Missing required fields:', { videoUrl: !!videoUrl, fileName: !!fileName, userId: !!userId })
@@ -13,6 +13,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+    
+    console.log('Generation ID (optional):', generationId)
 
     // Create server-side Supabase client with service role for bucket operations
     const supabase = createServerClient(
@@ -95,12 +97,20 @@ export async function POST(request: NextRequest) {
 
     console.log('Bucket access successful, proceeding with upload...')
 
+    // Prepare metadata including generation ID if provided
+    const metadata: Record<string, string> = {}
+    if (generationId) {
+      metadata.leonardoGenerationId = generationId
+      console.log('Storing generation ID in file metadata:', generationId)
+    }
+    
     const { data, error } = await supabase.storage
       .from('cinema_files')
       .upload(filePath, videoBlob, {
         contentType: mimeType,
         cacheControl: '3600',
-        upsert: false
+        upsert: false,
+        metadata: metadata
       })
 
     if (error) {
@@ -124,7 +134,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       supabaseUrl: urlData.publicUrl,
-      filePath: filePath
+      filePath: filePath,
+      generationId: generationId || null // Return the generation ID if it was provided
     })
 
   } catch (error) {

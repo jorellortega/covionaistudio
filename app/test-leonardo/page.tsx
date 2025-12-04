@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { 
   Loader2, 
   Image as ImageIcon, 
@@ -55,6 +56,7 @@ export default function TestLeonardoPage() {
   const [apiKeyLoaded, setApiKeyLoaded] = useState(false)
   const [loading, setLoading] = useState(false)
   const [generations, setGenerations] = useState<Generation[]>([])
+  const [activeTab, setActiveTab] = useState("image")
   
   // Image Generation State
   const [imagePrompt, setImagePrompt] = useState("")
@@ -103,6 +105,11 @@ export default function TestLeonardoPage() {
   const [videoUpscaleVideoId, setVideoUpscaleVideoId] = useState("")
   const [videoUpscaleVideoFile, setVideoUpscaleVideoFile] = useState<File | null>(null)
   const [videoUpscaleVideoPreview, setVideoUpscaleVideoPreview] = useState<string | null>(null)
+  const [videoUpscaleModel, setVideoUpscaleModel] = useState<string>("") // Selected upscale model/scaler
+  const [upscaleModels, setUpscaleModels] = useState<any[]>([]) // Available upscale models
+  const [videoUpscaleResolution, setVideoUpscaleResolution] = useState<string>("1080p") // Target resolution
+  const [upscaleDialogOpen, setUpscaleDialogOpen] = useState(false) // Dialog open state
+  const [selectedVideoForUpscale, setSelectedVideoForUpscale] = useState<string>("") // Video ID selected for upscaling
   
   // Tools State
   const [promptToImprove, setPromptToImprove] = useState("")
@@ -197,6 +204,49 @@ export default function TestLeonardoPage() {
             id: m.id || m.modelId 
           })))
           console.log('ℹ️ Motion 2.0 will be used as default for motion-svd endpoint')
+        }
+        
+        // Find upscale models - look for models with "upscale" in name or category
+        // Note: Video upscale may use a single default scaler, so models might not be in platformModels
+        const upscaleModelsList = (Array.isArray(models) ? models : []).filter((model: any) => {
+          const name = (model.name || model.title || '').toLowerCase()
+          const category = (model.category || model.type || '').toLowerCase()
+          const description = (model.description || '').toLowerCase()
+          
+          return (
+            name.includes('upscale') ||
+            name.includes('scaler') ||
+            name.includes('video-upscale') ||
+            category.includes('upscale') ||
+            category.includes('video-upscale') ||
+            description.includes('upscale') ||
+            description.includes('scaler') ||
+            description.includes('video-upscale')
+          )
+        })
+        
+        console.log('🔍 [UPSCALE MODELS] Checking for video upscale models...')
+        console.log('🔍 [UPSCALE MODELS] Total models from API:', (Array.isArray(models) ? models : []).length)
+        console.log('🔍 [UPSCALE MODELS] Sample model names:', (Array.isArray(models) ? models : []).slice(0, 5).map((m: any) => m.name || m.title))
+        
+        if (upscaleModelsList.length > 0) {
+          setUpscaleModels(upscaleModelsList)
+          console.log('✅ [UPSCALE MODELS] Found upscale models:', upscaleModelsList.map((m: any) => ({
+            name: m.name || m.title,
+            id: m.id || m.modelId,
+            category: m.category || m.type
+          })))
+          // Set first upscale model as default if none selected
+          if (!videoUpscaleModel && upscaleModelsList[0]) {
+            const firstModelId = upscaleModelsList[0].id || upscaleModelsList[0].modelId
+            setVideoUpscaleModel(firstModelId)
+          }
+        } else {
+          console.log('ℹ️ [UPSCALE MODELS] No upscale models found in platform models')
+          console.log('ℹ️ [UPSCALE MODELS] Video upscale likely uses a single default scaler')
+          console.log('ℹ️ [UPSCALE MODELS] The API will use the default scaler automatically')
+          // Set empty array - no model selection will be shown
+          setUpscaleModels([])
         }
       } catch (error) {
         console.error('Error fetching platform models:', error)
@@ -1775,7 +1825,7 @@ export default function TestLeonardoPage() {
         </Card>
 
         {/* Main Features Tabs */}
-        <Tabs defaultValue="image" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <TabsList className="grid w-full grid-cols-5 mb-6">
             <TabsTrigger value="image">
               <ImageIcon className="h-4 w-4 mr-2" />
@@ -2320,6 +2370,610 @@ export default function TestLeonardoPage() {
             </Card>
           </TabsContent>
 
+          {/* Video Upscale Dialog - Shown when clicking Upscale button on a video */}
+          <Dialog open={upscaleDialogOpen} onOpenChange={(open) => {
+            setUpscaleDialogOpen(open)
+            if (!open) {
+              setSelectedVideoForUpscale("")
+            }
+          }}>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Upscale Video</DialogTitle>
+                <DialogDescription>
+                  Upscale this video to higher resolution using Leonardo AI upscale models
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 mt-4">
+                {/* Upscale Model Selection - Only show if multiple models are available */}
+                {upscaleModels.length > 0 ? (
+                  <div>
+                    <Label>Upscale Model / Scaler</Label>
+                    <Select 
+                      value={videoUpscaleModel || ""} 
+                      onValueChange={setVideoUpscaleModel}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select upscale model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {upscaleModels.map((model: any) => {
+                          const modelId = model.id || model.modelId
+                          const modelName = model.name || model.title || modelId
+                          return (
+                            <SelectItem key={modelId} value={modelId}>
+                              {modelName}
+                            </SelectItem>
+                          )
+                        })}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {upscaleModels.length} upscale model{upscaleModels.length > 1 ? 's' : ''} available. Select one to use.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-muted rounded-md">
+                    <p className="text-sm text-muted-foreground">
+                      <strong>Note:</strong> Video upscaling uses Leonardo's default scaler. 
+                      {upscaleModels.length === 0 && ' No additional upscale models found in your account.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Resolution Selection - Note: API doesn't support resolution parameters */}
+                <div>
+                  <Label>Target Resolution (Info Only)</Label>
+                  <Select 
+                    value={videoUpscaleResolution} 
+                    onValueChange={setVideoUpscaleResolution}
+                    disabled
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="720p">720p (1280x720) - HD</SelectItem>
+                      <SelectItem value="1080p">1080p (1920x1080) - Full HD</SelectItem>
+                      <SelectItem value="4K">4K (3840x2160) - Ultra HD</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    <strong>Note:</strong> The Leonardo API does not support custom resolution selection. The API will use its default upscale resolution automatically.
+                  </p>
+                </div>
+
+                {selectedVideoForUpscale && (
+                  <div className="p-3 bg-muted rounded-md">
+                    <p className="text-sm">
+                      <strong>Video ID:</strong> <code className="text-xs bg-background px-2 py-1 rounded">{selectedVideoForUpscale}</code>
+                    </p>
+                  </div>
+                )}
+
+                <Button
+                  onClick={async () => {
+                    console.log('🎬 [VIDEO UPSCALE] Button clicked!')
+                    console.log('🎬 [VIDEO UPSCALE] Current state:', {
+                      hasApiKey: !!apiKey,
+                      hasVideoId: !!videoUpscaleVideoId,
+                      hasVideoFile: !!videoUpscaleVideoFile,
+                      videoId: videoUpscaleVideoId,
+                      loading: loading
+                    })
+                    
+                    if (!apiKey) {
+                      console.error('🎬 [VIDEO UPSCALE] No API key')
+                      toast({
+                        title: "Missing API Key",
+                        description: "Please set your Leonardo API key.",
+                        variant: "destructive"
+                      })
+                      return
+                    }
+
+                    if (!videoUpscaleVideoId) {
+                      console.error('🎬 [VIDEO UPSCALE] No video ID')
+                      toast({
+                        title: "Missing Video ID",
+                        description: "Video ID is required for upscaling.",
+                        variant: "destructive"
+                      })
+                      return
+                    }
+
+                    setLoading(true)
+                    try {
+                      console.log('🎬 [VIDEO UPSCALE] Starting video upscale...')
+                      console.log('🎬 [VIDEO UPSCALE] Video ID:', videoUpscaleVideoId)
+                      console.log('🎬 [VIDEO UPSCALE] Selected model:', videoUpscaleModel || 'default')
+                      console.log('🎬 [VIDEO UPSCALE] Target resolution:', videoUpscaleResolution)
+                      
+                      // First, fetch the generation details to ensure it exists and get the correct ID
+                      console.log('🎬 [VIDEO UPSCALE] Fetching generation details to verify...')
+                      const generationCheckResponse = await fetch(`https://cloud.leonardo.ai/api/rest/v1/generations/${videoUpscaleVideoId}`, {
+                        method: 'GET',
+                        headers: {
+                          'Authorization': `Bearer ${apiKey}`,
+                          'Accept': 'application/json',
+                        },
+                      })
+                      
+                      if (!generationCheckResponse.ok) {
+                        const errorText = await generationCheckResponse.text()
+                        throw new Error(`Generation not found or inaccessible: ${errorText}`)
+                      }
+                      
+                      const generationData = await generationCheckResponse.json()
+                      console.log('🎬 [VIDEO UPSCALE] Generation details:', JSON.stringify(generationData, null, 2))
+                      
+                      // Check if generation is completed and has video
+                      const generation = generationData.generations_by_pk || generationData.generation || generationData
+                      if (!generation) {
+                        throw new Error('Generation not found in response')
+                      }
+                      
+                      if (generation.status !== 'COMPLETE' && generation.status !== 'complete') {
+                        throw new Error(`Generation is not complete. Current status: ${generation.status}`)
+                      }
+                      
+                      // Check if it has generated video
+                      const generatedImages = generation.generated_images || []
+                      const hasVideo = generatedImages.some((img: any) => img.motionMP4URL || img.videoUrl)
+                      
+                      if (!hasVideo && generatedImages.length === 0) {
+                        throw new Error('Generation does not contain a video. Please ensure the generation is a video generation.')
+                      }
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Generation verified - status:', generation.status, 'has video:', hasVideo)
+                      
+                      // Try both the generation ID and the video file ID
+                      // The API might need the video file ID from generated_images[0].id
+                      const videoFileId = generatedImages[0]?.id
+                      console.log('🎬 [VIDEO UPSCALE] Generation ID:', videoUpscaleVideoId)
+                      console.log('🎬 [VIDEO UPSCALE] Video file ID:', videoFileId)
+                      
+                      const endpoint = 'https://cloud.leonardo.ai/api/rest/v1/generations-video-upscale'
+                      
+                      // Try with generation ID first, then video file ID if that fails
+                      let requestBody: any = {
+                        sourceGenerationId: videoUpscaleVideoId,
+                      }
+                      
+                      // Note: The API does not accept resolution, width, or height parameters
+                      // The upscale resolution is likely determined by the API automatically
+                      console.log('🎬 [VIDEO UPSCALE] Note: Resolution selection (720p/1080p/4K) is not supported by the API')
+                      console.log('🎬 [VIDEO UPSCALE] The API will use its default upscale resolution')
+                      
+                      // Add model if selected
+                      if (videoUpscaleModel) {
+                        requestBody.modelId = videoUpscaleModel
+                        console.log('🎬 [VIDEO UPSCALE] Using model:', videoUpscaleModel)
+                      }
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Request endpoint:', endpoint)
+                      console.log('🎬 [VIDEO UPSCALE] Request body:', JSON.stringify(requestBody, null, 2))
+                      console.log('🎬 [VIDEO UPSCALE] API Key present:', !!apiKey, 'Length:', apiKey?.length)
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Sending request...')
+                      
+                      const response = await fetch(endpoint, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${apiKey}`,
+                          'Accept': 'application/json',
+                        },
+                        body: JSON.stringify(requestBody)
+                      })
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Response received')
+                      console.log('🎬 [VIDEO UPSCALE] Response status:', response.status)
+                      console.log('🎬 [VIDEO UPSCALE] Response headers:', Object.fromEntries(response.headers.entries()))
+                      
+                      const responseText = await response.text()
+                      console.log('🎬 [VIDEO UPSCALE] Response text:', responseText)
+                      
+                      if (!response.ok) {
+                        console.error('🎬 [VIDEO UPSCALE] Error response:', responseText)
+                        let errorData
+                        try {
+                          errorData = JSON.parse(responseText)
+                          console.error('🎬 [VIDEO UPSCALE] Parsed error data:', errorData)
+                        } catch {
+                          errorData = { error: responseText }
+                        }
+                        
+                        // If error mentions unsupported parameters, try without resolution
+                        const errorMessage = errorData.error || errorData.message || responseText
+                        // If "Source generation not found", try with video file ID instead
+                        if (errorMessage.includes('Source generation not found') && videoFileId) {
+                          console.log('🎬 [VIDEO UPSCALE] Generation ID not found, trying video file ID instead...')
+                          
+                          const retryBody: any = {
+                            sourceGenerationId: videoFileId, // Try video file ID
+                          }
+                          
+                          if (videoUpscaleModel) {
+                            retryBody.modelId = videoUpscaleModel
+                          }
+                          
+                          console.log('🎬 [VIDEO UPSCALE] Retry with video file ID:', videoFileId)
+                          
+                          const retryResponse = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${apiKey}`,
+                              'Accept': 'application/json',
+                            },
+                            body: JSON.stringify(retryBody)
+                          })
+                          
+                          const retryText = await retryResponse.text()
+                          console.log('🎬 [VIDEO UPSCALE] Retry response status:', retryResponse.status)
+                          console.log('🎬 [VIDEO UPSCALE] Retry response:', retryText)
+                          
+                          if (retryResponse.ok) {
+                            const retryResult = JSON.parse(retryText)
+                            const upscaleId = retryResult.videoUpscaleGenerationJob?.id ||
+                                            retryResult.generationId ||
+                                            retryResult.id ||
+                                            retryResult.jobId
+                            
+                            if (upscaleId) {
+                              const newGeneration: Generation = {
+                                id: upscaleId,
+                                type: 'video-upscale',
+                                prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                                status: 'processing',
+                                createdAt: new Date().toISOString(),
+                                originalVideoId: videoUpscaleVideoId
+                              }
+                              
+                              setGenerations(prev => [newGeneration, ...prev])
+                              pollGenerationStatus(upscaleId, 'video-upscale')
+                              
+                              toast({
+                                title: "Video Upscale Started",
+                                description: "Your video is being upscaled. This may take a few minutes.",
+                              })
+                              setLoading(false)
+                              setUpscaleDialogOpen(false)
+                              setSelectedVideoForUpscale("")
+                              return
+                            }
+                          }
+                          
+                          // If video file ID also failed, throw error
+                          let retryErrorData
+                          try {
+                            retryErrorData = JSON.parse(retryText)
+                          } catch {
+                            retryErrorData = { error: retryText }
+                          }
+                          throw new Error(`Upscale failed with both generation ID and video file ID. Last error: ${retryErrorData.error || retryText}`)
+                        }
+                        
+                        if (errorMessage.includes('resolution') || errorMessage.includes('width') || errorMessage.includes('height')) {
+                          console.log('🎬 [VIDEO UPSCALE] Resolution parameters rejected, retrying with only sourceGenerationId...')
+                          
+                          // Retry with just sourceGenerationId (no resolution parameters)
+                          const retryBody: any = {
+                            sourceGenerationId: videoUpscaleVideoId,
+                          }
+                          
+                          if (videoUpscaleModel) {
+                            retryBody.modelId = videoUpscaleModel
+                          }
+                          
+                          console.log('🎬 [VIDEO UPSCALE] Retry body (without resolution):', JSON.stringify(retryBody))
+                          
+                          const retryResponse = await fetch(endpoint, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${apiKey}`,
+                              'Accept': 'application/json',
+                            },
+                            body: JSON.stringify(retryBody)
+                          })
+                          
+                          const retryText = await retryResponse.text()
+                          console.log('🎬 [VIDEO UPSCALE] Retry response status:', retryResponse.status)
+                          console.log('🎬 [VIDEO UPSCALE] Retry response:', retryText)
+                          
+                          if (retryResponse.ok) {
+                            const retryResult = JSON.parse(retryText)
+                            const upscaleId = retryResult.videoUpscaleGenerationJob?.id ||
+                                            retryResult.generationId ||
+                                            retryResult.id ||
+                                            retryResult.jobId
+                            
+                            if (upscaleId) {
+                              const newGeneration: Generation = {
+                                id: upscaleId,
+                                type: 'video-upscale',
+                                prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                                status: 'processing',
+                                createdAt: new Date().toISOString(),
+                                originalVideoId: videoUpscaleVideoId
+                              }
+                              
+                              setGenerations(prev => [newGeneration, ...prev])
+                              pollGenerationStatus(upscaleId, 'video-upscale')
+                              
+                              toast({
+                                title: "Video Upscale Started",
+                                description: "Your video is being upscaled (API default resolution). This may take a few minutes.",
+                              })
+                              setLoading(false)
+                              setUpscaleDialogOpen(false)
+                              setSelectedVideoForUpscale("")
+                              return
+                            }
+                          }
+                          
+                          // If retry also failed, throw error
+                          let retryErrorData
+                          try {
+                            retryErrorData = JSON.parse(retryText)
+                          } catch {
+                            retryErrorData = { error: retryText }
+                          }
+                          throw new Error(retryErrorData.error || retryErrorData.message || `API Error: ${retryResponse.status}`)
+                        }
+                        
+                        // If error is about unexpected variable (not resolution), try different parameter formats
+                        if (errorMessage.includes('Unexpected variable')) {
+                          console.log('🎬 [VIDEO UPSCALE] Retrying with different parameter formats...')
+                          
+                          // Try different parameter name combinations and structures
+                          const retryOptions = [
+                            { generation: { id: videoUpscaleVideoId } }, // Nested generation object
+                            { video: { id: videoUpscaleVideoId } }, // Nested video object
+                          ]
+                          
+                          for (const retryBody of retryOptions) {
+                            const bodyKey = Object.keys(retryBody)[0] || 'empty'
+                            console.log('🎬 [VIDEO UPSCALE] Trying parameter structure:', bodyKey)
+                            
+                            const retryResponse = await fetch(endpoint, {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${apiKey}`,
+                                'Accept': 'application/json',
+                              },
+                              body: JSON.stringify(retryBody)
+                            })
+                            
+                            const retryText = await retryResponse.text()
+                            console.log('🎬 [VIDEO UPSCALE] Retry status:', retryResponse.status, 'Response:', retryText.substring(0, 100))
+                            
+                            if (retryResponse.ok) {
+                              console.log('🎬 [VIDEO UPSCALE] ✅ Success with format:', Object.keys(retryBody)[0])
+                              const retryResult = JSON.parse(retryText)
+                              const upscaleId = retryResult.videoUpscaleGenerationJob?.id ||
+                                              retryResult.generationId ||
+                                              retryResult.id ||
+                                              retryResult.jobId
+                              
+                              if (upscaleId) {
+                                const newGeneration: Generation = {
+                                  id: upscaleId,
+                                  type: 'video-upscale',
+                                  prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                                  status: 'processing',
+                                  createdAt: new Date().toISOString(),
+                                  originalVideoId: videoUpscaleVideoId
+                                }
+                                
+                                setGenerations(prev => [newGeneration, ...prev])
+                                pollGenerationStatus(upscaleId, 'video-upscale')
+                                
+                                toast({
+                                  title: "Video Upscale Started",
+                                  description: "Your video is being upscaled. This may take a few minutes.",
+                                })
+                                setLoading(false)
+                                setUpscaleDialogOpen(false)
+                                setSelectedVideoForUpscale("")
+                                return
+                              }
+                            }
+                          }
+                          
+                          // Try with ID in query parameter
+                          console.log('🎬 [VIDEO UPSCALE] Trying with ID in query parameter...')
+                          const queryParamResponse = await fetch(`${endpoint}?id=${videoUpscaleVideoId}`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${apiKey}`,
+                              'Accept': 'application/json',
+                            },
+                            body: JSON.stringify({})
+                          })
+                          
+                          const queryParamText = await queryParamResponse.text()
+                          if (queryParamResponse.ok) {
+                            const queryParamResult = JSON.parse(queryParamText)
+                            const upscaleId = queryParamResult.videoUpscaleGenerationJob?.id ||
+                                            queryParamResult.generationId ||
+                                            queryParamResult.id ||
+                                            queryParamResult.jobId
+                            
+                            if (upscaleId) {
+                              const newGeneration: Generation = {
+                                id: upscaleId,
+                                type: 'video-upscale',
+                                prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                                status: 'processing',
+                                createdAt: new Date().toISOString(),
+                                originalVideoId: videoUpscaleVideoId
+                              }
+                              
+                              setGenerations(prev => [newGeneration, ...prev])
+                              pollGenerationStatus(upscaleId, 'video-upscale')
+                              
+                              toast({
+                                title: "Video Upscale Started",
+                                description: "Your video is being upscaled. This may take a few minutes.",
+                              })
+                              setLoading(false)
+                              setUpscaleDialogOpen(false)
+                              setSelectedVideoForUpscale("")
+                              return
+                            }
+                          }
+                          
+                          // Try with ID in URL path as last resort
+                          console.log('🎬 [VIDEO UPSCALE] Trying with ID in URL path...')
+                          const urlPathResponse = await fetch(`${endpoint}/${videoUpscaleVideoId}`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${apiKey}`,
+                              'Accept': 'application/json',
+                            },
+                            body: JSON.stringify({})
+                          })
+                          
+                          const urlPathText = await urlPathResponse.text()
+                          console.log('🎬 [VIDEO UPSCALE] URL path response status:', urlPathResponse.status)
+                          
+                          if (urlPathResponse.ok) {
+                            const urlPathResult = JSON.parse(urlPathText)
+                            const upscaleId = urlPathResult.videoUpscaleGenerationJob?.id ||
+                                            urlPathResult.generationId ||
+                                            urlPathResult.id ||
+                                            urlPathResult.jobId
+                            
+                            if (upscaleId) {
+                              const newGeneration: Generation = {
+                                id: upscaleId,
+                                type: 'video-upscale',
+                                prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                                status: 'processing',
+                                createdAt: new Date().toISOString(),
+                                originalVideoId: videoUpscaleVideoId
+                              }
+                              
+                              setGenerations(prev => [newGeneration, ...prev])
+                              pollGenerationStatus(upscaleId, 'video-upscale')
+                              
+                              toast({
+                                title: "Video Upscale Started",
+                                description: "Your video is being upscaled. This may take a few minutes.",
+                              })
+                              setLoading(false)
+                              setUpscaleDialogOpen(false)
+                              setSelectedVideoForUpscale("")
+                              return
+                            }
+                          }
+                          
+                          // All attempts failed - provide helpful error message
+                          const errorMsg = `The Leonardo API video upscale endpoint is rejecting all parameter formats we've tried. 
+                          
+Attempted formats:
+- videoId, generationVideoId, videoGenerationId (in request body)
+- Empty body with ID in URL path
+- ID in query parameter
+
+The API may require:
+1. A different parameter name (check Leonardo API documentation)
+2. The video file ID from the generation response (not the generation ID)
+3. A different endpoint structure
+4. The ID in a custom header
+
+Please check the Leonardo AI API documentation for the correct format for video upscaling, or contact Leonardo support for the correct parameter structure.
+
+Last error: ${urlPathText.substring(0, 200)}`
+                          
+                          toast({
+                            title: "API Format Unknown",
+                            description: "Could not determine correct parameter format. Please check Leonardo API documentation.",
+                            variant: "destructive",
+                            duration: 10000,
+                          })
+                          
+                          throw new Error(errorMsg)
+                        }
+                        
+                        throw new Error(errorMessage || `API Error: ${response.status}`)
+                      }
+                      
+                      let result
+                      try {
+                        result = JSON.parse(responseText)
+                      } catch (e) {
+                        console.error('🎬 [VIDEO UPSCALE] Failed to parse response as JSON:', e)
+                        throw new Error(`Invalid response format: ${responseText.substring(0, 100)}`)
+                      }
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Response data:', JSON.stringify(result, null, 2))
+                      
+                      const upscaleId = result.videoUpscaleGenerationJob?.id ||
+                                      result.generationId ||
+                                      result.id ||
+                                      result.jobId
+                      
+                      console.log('🎬 [VIDEO UPSCALE] Upscale ID:', upscaleId)
+                      
+                      if (!upscaleId) {
+                        throw new Error('No upscale ID returned')
+                      }
+                      
+                      const newGeneration: Generation = {
+                        id: upscaleId,
+                        type: 'video-upscale',
+                        prompt: `Video upscale for generation ${videoUpscaleVideoId}${videoUpscaleModel ? ` (model: ${videoUpscaleModel})` : ''}`,
+                        status: 'processing',
+                        createdAt: new Date().toISOString(),
+                        originalVideoId: videoUpscaleVideoId
+                      }
+                      
+                      setGenerations(prev => [newGeneration, ...prev])
+                      pollGenerationStatus(upscaleId, 'video-upscale')
+                      
+                      toast({
+                        title: "Video Upscale Started",
+                        description: "Your video is being upscaled. This may take a few minutes.",
+                      })
+                      setUpscaleDialogOpen(false)
+                      setSelectedVideoForUpscale("")
+                    } catch (error) {
+                      console.error('🎬 [VIDEO UPSCALE] Failed:', error)
+                      toast({
+                        title: "Upscale Failed",
+                        description: error instanceof Error ? error.message : "Unknown error",
+                        variant: "destructive",
+                      })
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={loading || !apiKey || !videoUpscaleVideoId}
+                  className="w-full"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Upscaling...
+                    </>
+                  ) : (
+                    <>
+                      <Maximize2 className="h-4 w-4 mr-2" />
+                      Upscale Video
+                    </>
+                  )}
+                </Button>
+              </div>
+            </DialogContent>
+          </Dialog>
+
           {/* 3D Texture Tab */}
           <TabsContent value="texture" className="space-y-6">
             <Card className="cinema-card">
@@ -2510,184 +3164,6 @@ export default function TestLeonardoPage() {
                 </Button>
               </CardContent>
             </Card>
-
-            {/* Video Upscale Card */}
-            <Card className="cinema-card">
-              <CardHeader>
-                <CardTitle>Video Upscale</CardTitle>
-                <CardDescription>
-                  Upscale generated videos to higher resolution
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div>
-                  <Label>Video ID (from previous generation)</Label>
-                  <Input
-                    value={videoUpscaleVideoId}
-                    onChange={(e) => setVideoUpscaleVideoId(e.target.value)}
-                    placeholder="Enter video generation ID from history below"
-                  />
-                </div>
-
-                <div>
-                  <Label>Or Upload Video File</Label>
-                  {videoUpscaleVideoPreview ? (
-                    <div className="relative mt-2">
-                      <video 
-                        src={videoUpscaleVideoPreview} 
-                        controls 
-                        className="w-full h-48 rounded-md"
-                      />
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="absolute top-2 right-2"
-                        onClick={() => {
-                          setVideoUpscaleVideoFile(null)
-                          setVideoUpscaleVideoPreview(null)
-                        }}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="mt-2 border-2 border-dashed border-border rounded-md p-6 text-center">
-                      <Video className="h-6 w-6 mx-auto mb-2 text-muted-foreground" />
-                      <Input
-                        type="file"
-                        accept="video/*"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0]
-                          if (file) {
-                            setVideoUpscaleVideoFile(file)
-                            const reader = new FileReader()
-                            reader.onload = (e) => {
-                              setVideoUpscaleVideoPreview(e.target?.result as string)
-                            }
-                            reader.readAsDataURL(file)
-                          }
-                        }}
-                        className="hidden"
-                        id="video-upscale-upload"
-                      />
-                      <Label htmlFor="video-upscale-upload" className="cursor-pointer">
-                        <Button variant="outline" size="sm" asChild>
-                          <span>Upload Video</span>
-                        </Button>
-                      </Label>
-                    </div>
-                  )}
-                </div>
-
-                <p className="text-xs text-muted-foreground">
-                  Note: Video upscale typically requires a video generation ID from a previous Leonardo AI generation. Uploading a video file may require additional processing.
-                </p>
-
-                <Button
-                  onClick={async () => {
-                    if (!apiKey || !videoUpscaleVideoId) {
-                      toast({
-                        title: "Missing Information",
-                        description: "Please enter a video generation ID.",
-                        variant: "destructive"
-                      })
-                      return
-                    }
-
-                    setLoading(true)
-                    try {
-                      console.log('🎬 [VIDEO UPSCALE] Starting video upscale...')
-                      console.log('🎬 [VIDEO UPSCALE] Video ID:', videoUpscaleVideoId)
-                      
-                      const endpoint = 'https://cloud.leonardo.ai/api/rest/v1/generations-video-upscale'
-                      const requestBody = {
-                        generationId: videoUpscaleVideoId,
-                      }
-                      
-                      console.log('🎬 [VIDEO UPSCALE] Request endpoint:', endpoint)
-                      console.log('🎬 [VIDEO UPSCALE] Request body:', JSON.stringify(requestBody, null, 2))
-                      
-                      const response = await fetch(endpoint, {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                          'Authorization': `Bearer ${apiKey}`,
-                        },
-                        body: JSON.stringify(requestBody)
-                      })
-                      
-                      console.log('🎬 [VIDEO UPSCALE] Response status:', response.status)
-                      
-                      if (!response.ok) {
-                        const errorText = await response.text()
-                        console.error('🎬 [VIDEO UPSCALE] Error response:', errorText)
-                        let errorData
-                        try {
-                          errorData = JSON.parse(errorText)
-                        } catch {
-                          errorData = { error: errorText }
-                        }
-                        throw new Error(errorData.error || errorData.message || `API Error: ${response.status}`)
-                      }
-                      
-                      const result = await response.json()
-                      console.log('🎬 [VIDEO UPSCALE] Response data:', JSON.stringify(result, null, 2))
-                      
-                      const upscaleId = result.videoUpscaleGenerationJob?.id ||
-                                      result.generationId ||
-                                      result.id ||
-                                      result.jobId
-                      
-                      console.log('🎬 [VIDEO UPSCALE] Upscale ID:', upscaleId)
-                      
-                      if (!upscaleId) {
-                        throw new Error('No upscale ID returned')
-                      }
-                      
-                      const newGeneration: Generation = {
-                        id: upscaleId,
-                        type: 'video-upscale',
-                        prompt: `Video upscale for generation ${videoUpscaleVideoId}`,
-                        status: 'processing',
-                        createdAt: new Date().toISOString(),
-                        originalVideoId: videoUpscaleVideoId
-                      }
-                      
-                      setGenerations(prev => [newGeneration, ...prev])
-                      pollGenerationStatus(upscaleId, 'video')
-                      
-                      toast({
-                        title: "Video Upscale Started",
-                        description: "Your video is being upscaled. This may take a few minutes.",
-                      })
-                    } catch (error) {
-                      console.error('🎬 [VIDEO UPSCALE] Failed:', error)
-                      toast({
-                        title: "Upscale Failed",
-                        description: error instanceof Error ? error.message : "Unknown error",
-                        variant: "destructive",
-                      })
-                    } finally {
-                      setLoading(false)
-                    }
-                  }}
-                  disabled={loading || !apiKey || !videoUpscaleVideoId}
-                  className="w-full"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Upscaling...
-                    </>
-                  ) : (
-                    <>
-                      <Maximize2 className="h-4 w-4 mr-2" />
-                      Upscale Video
-                    </>
-                  )}
-                </Button>
-              </CardContent>
-            </Card>
           </TabsContent>
 
           {/* Tools Tab */}
@@ -2863,6 +3339,29 @@ export default function TestLeonardoPage() {
                       
                       <p className="text-sm mb-3">{gen.prompt}</p>
                       
+                      {/* Show Generation ID for video types - useful for upscaling */}
+                      {(gen.type === 'video' || gen.type === 'image-to-video' || gen.type === 'text-to-video' || gen.type === 'motion-svd') && (
+                        <div className="mb-2 p-2 bg-muted rounded text-xs">
+                          <strong>Generation ID:</strong>{' '}
+                          <code className="text-xs bg-background px-1 py-0.5 rounded">{gen.id}</code>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-5 px-2 ml-2 text-xs"
+                            onClick={() => {
+                              navigator.clipboard.writeText(gen.id)
+                              toast({
+                                title: "Copied!",
+                                description: "Generation ID copied to clipboard.",
+                                duration: 2000,
+                              })
+                            }}
+                          >
+                            Copy ID
+                          </Button>
+                        </div>
+                      )}
+                      
                       {gen.status === 'processing' && (
                         <div className="flex items-center gap-2 text-blue-400">
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -2976,6 +3475,22 @@ export default function TestLeonardoPage() {
                                 className="w-full rounded-md"
                               />
                               <div className="absolute top-2 right-2 flex gap-2">
+                                {/* Upscale button - only show for completed video generations (not upscale results) */}
+                                {gen.status === 'completed' && gen.type !== 'video-upscale' && (
+                                  <Button
+                                    variant="default"
+                                    size="sm"
+                                    onClick={() => {
+                                      setSelectedVideoForUpscale(gen.id)
+                                      setVideoUpscaleVideoId(gen.id)
+                                      setUpscaleDialogOpen(true)
+                                    }}
+                                    className="bg-primary"
+                                  >
+                                    <Maximize2 className="h-4 w-4 mr-1" />
+                                    Upscale
+                                  </Button>
+                                )}
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -3001,6 +3516,7 @@ export default function TestLeonardoPage() {
                                           videoUrl: gen.videoUrl,
                                           fileName: filename.replace(/\.(mp4|webm|mov|avi)$/i, ''),
                                           userId: userId,
+                                          generationId: gen.id, // Store the generation ID for upscaling
                                         }),
                                       })
 
