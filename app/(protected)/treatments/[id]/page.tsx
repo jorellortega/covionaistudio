@@ -32,6 +32,10 @@ import { OpenAIService } from '@/lib/ai-services'
 import { CharactersService, type Character } from '@/lib/characters-service'
 import { LocationsService, type Location } from '@/lib/locations-service'
 
+// Treatment pagination constant (standard: ~4000 characters per page)
+// Standard page: ~80 chars per line × 50 lines = ~4000 characters
+const CHARS_PER_PAGE = 4000
+
 export default function TreatmentDetailPage() {
   const { id } = useParams()
   const router = useRouter()
@@ -59,6 +63,10 @@ export default function TreatmentDetailPage() {
   const [isEditingMovieName, setIsEditingMovieName] = useState(false)
   const [editingMovieName, setEditingMovieName] = useState('')
   const [isSavingMovieName, setIsSavingMovieName] = useState(false)
+  const [isEditingTitleStatus, setIsEditingTitleStatus] = useState(false)
+  const [editingTitle, setEditingTitle] = useState('')
+  const [editingStatus, setEditingStatus] = useState('draft')
+  const [isSavingTitleStatus, setIsSavingTitleStatus] = useState(false)
   const [isEditingPrompt, setIsEditingPrompt] = useState(false)
   const [editingPrompt, setEditingPrompt] = useState('')
   const [isSavingPrompt, setIsSavingPrompt] = useState(false)
@@ -99,6 +107,10 @@ export default function TreatmentDetailPage() {
   const [isScriptExpanded, setIsScriptExpanded] = useState(false)
   // Default to collapsed - user can expand to view treatment document
   const [isTreatmentExpanded, setIsTreatmentExpanded] = useState(false)
+  // Treatment pagination states
+  const [treatmentCurrentPage, setTreatmentCurrentPage] = useState(1)
+  const [treatmentTotalPages, setTreatmentTotalPages] = useState(1)
+  const [treatmentPages, setTreatmentPages] = useState<string[]>([])
   // Default to collapsed - user can expand to view scenes
   const [isScenesExpanded, setIsScenesExpanded] = useState(false)
   // Default to collapsed - user can expand to view characters
@@ -172,6 +184,77 @@ export default function TreatmentDetailPage() {
     
     loadSavedCharacters()
   }, [treatment?.project_id, ready])
+
+  // Calculate pages from treatment content based on character count
+  useEffect(() => {
+    if (!treatment?.prompt) {
+      setTreatmentPages([])
+      setTreatmentTotalPages(1)
+      setTreatmentCurrentPage(1)
+      return
+    }
+
+    const content = treatment.prompt
+    const totalChars = content.length
+    const estimatedPageCount = Math.ceil(totalChars / CHARS_PER_PAGE)
+    
+    // Split treatment into pages based on character count, trying to break at word boundaries
+    const pageArray: string[] = []
+    let currentPos = 0
+    
+    while (currentPos < content.length) {
+      const remainingChars = content.length - currentPos
+      const targetEnd = Math.min(currentPos + CHARS_PER_PAGE, content.length)
+      
+      if (remainingChars <= CHARS_PER_PAGE) {
+        // Last page - take everything remaining
+        pageArray.push(content.substring(currentPos))
+        break
+      }
+      
+      // Try to find a good breaking point near the target end
+      // Look for line breaks first, then word boundaries, then just use target
+      let breakPoint = targetEnd
+      
+      // Try to find a line break within 200 characters of target
+      const searchStart = Math.max(currentPos, targetEnd - 200)
+      const searchEnd = Math.min(content.length, targetEnd + 50)
+      const searchArea = content.substring(searchStart, searchEnd)
+      
+      // Find the last newline before or near the target
+      const lastNewline = searchArea.lastIndexOf('\n')
+      if (lastNewline > 0 && searchStart + lastNewline < targetEnd + 50) {
+        breakPoint = searchStart + lastNewline + 1
+      } else {
+        // Try to find a word boundary (space) near the target
+        const lastSpace = searchArea.lastIndexOf(' ')
+        if (lastSpace > 0 && searchStart + lastSpace < targetEnd + 50 && searchStart + lastSpace > targetEnd - 200) {
+          breakPoint = searchStart + lastSpace + 1
+        }
+      }
+      
+      pageArray.push(content.substring(currentPos, breakPoint))
+      currentPos = breakPoint
+    }
+    
+    const pageCount = pageArray.length || 1
+    setTreatmentTotalPages(pageCount)
+    setTreatmentPages(pageArray)
+    // Reset to page 1 when treatment changes
+    setTreatmentCurrentPage(1)
+  }, [treatment?.prompt])
+
+  // Go to specific page
+  const goToTreatmentPage = (page: number) => {
+    if (page >= 1 && page <= treatmentTotalPages) {
+      setTreatmentCurrentPage(page)
+    }
+  }
+
+  // Get current page content
+  const getCurrentTreatmentPageContent = () => {
+    return treatmentPages[treatmentCurrentPage - 1] || treatment?.prompt || ""
+  }
 
   const fetchUserApiKeys = async () => {
     if (!ready || !userId) return
@@ -1267,6 +1350,67 @@ Treatment:`
       })
     } finally {
       setIsSavingMovieName(false)
+    }
+  }
+
+  const handleStartEditTitleStatus = () => {
+    if (!treatment) return
+    // If there's a movie, edit movie name; otherwise edit treatment title
+    const currentTitle = treatment.project_id && movie ? movie.name : treatment.title
+    setEditingTitle(currentTitle || '')
+    setEditingStatus(treatment.status || 'draft')
+    setIsEditingTitleStatus(true)
+  }
+
+  const handleCancelEditTitleStatus = () => {
+    setIsEditingTitleStatus(false)
+    setEditingTitle('')
+    setEditingStatus('draft')
+  }
+
+  const handleSaveTitleStatus = async () => {
+    if (!treatment) return
+
+    try {
+      setIsSavingTitleStatus(true)
+      
+      // Update title - either movie name or treatment title
+      if (treatment.project_id && movie) {
+        // Update movie name
+        const updatedMovie = await MovieService.updateMovie(movie.id, {
+          name: editingTitle,
+        })
+        setMovie(updatedMovie)
+      }
+      
+      // Update treatment - include title if no movie, and always update status
+      const updateData: any = {
+        status: editingStatus as any,
+      }
+      
+      // Only update treatment title if there's no movie (movie name is separate)
+      if (!treatment.project_id || !movie) {
+        updateData.title = editingTitle
+      }
+      
+      const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, updateData)
+      setTreatment(updatedTreatment)
+      
+      setIsEditingTitleStatus(false)
+      
+      toast({
+        title: "Success",
+        description: "Title and status updated successfully",
+      })
+    } catch (error) {
+      console.error('Error updating title and status:', error)
+      toast({
+        title: "Error",
+        description: "Failed to update title and status",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingTitleStatus(false)
     }
   }
 
@@ -5397,13 +5541,13 @@ Return ONLY the JSON object, no other text:`
                       >
                         {isGeneratingCover ? (
                           <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Generating...
+                            <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                            <span className="hidden sm:inline">Generating...</span>
                           </>
                         ) : (
                           <>
-                            <Zap className="h-4 w-4 mr-2" />
-                            Quick Generate
+                            <Zap className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Quick Generate</span>
                           </>
                         )}
                       </Button>
@@ -5419,8 +5563,8 @@ Return ONLY the JSON object, no other text:`
                       }}
                       className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
                     >
-                      <Edit className="h-4 w-4 mr-2" />
-                      {treatment.cover_image_url || coverImageAssets.length > 0 ? 'Edit Cover' : 'Add Cover'}
+                      <Edit className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">{treatment.cover_image_url || coverImageAssets.length > 0 ? 'Edit Cover' : 'Add Cover'}</span>
                     </Button>
                     {/* Set as Default Button - Only show if current cover is not default */}
                     {(coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex] && !coverImageAssets[currentCoverIndex].is_default_cover) && (
@@ -5517,36 +5661,6 @@ Return ONLY the JSON object, no other text:`
                 </>
               )}
               
-              {/* Edit and Delete Buttons - Above thumbnails */}
-              <div className={`absolute ${coverImageAssets.length > 1 ? 'bottom-20' : 'bottom-4'} right-4 flex gap-2 z-30 pointer-events-auto`}>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleStartEditTreatment()
-                  }}
-                  className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
-                >
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={(e) => {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleDelete()
-                  }}
-                  disabled={isDeleting}
-                  className="backdrop-blur-sm bg-red-500/20 text-white border-red-500/30 hover:bg-red-500/30 pointer-events-auto"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  {isDeleting ? 'Deleting...' : 'Delete'}
-                </Button>
-              </div>
 
               {/* Thumbnail Strip - Show in bottom-right */}
               {coverImageAssets.length > 1 && (
@@ -5602,13 +5716,13 @@ Return ONLY the JSON object, no other text:`
                     >
                       {isGeneratingCover ? (
                         <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Generating...
+                          <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                          <span className="hidden sm:inline">Generating...</span>
                         </>
                       ) : (
                         <>
-                          <Zap className="h-4 w-4 mr-2" />
-                          Quick Generate
+                          <Zap className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">Quick Generate</span>
                         </>
                       )}
                     </Button>
@@ -5618,8 +5732,8 @@ Return ONLY the JSON object, no other text:`
                     size="sm"
                     onClick={() => setIsEditingCover(true)}
                   >
-                    <Edit className="h-4 w-4 mr-2" />
-                    Add Cover
+                    <Edit className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Add Cover</span>
                   </Button>
                 </div>
               </div>
@@ -5653,12 +5767,19 @@ Return ONLY the JSON object, no other text:`
                   <Badge className={`text-base px-3 py-1 backdrop-blur-sm ${getStatusColor(treatment.status)}`}>
                     {treatment.status.replace('-', ' ')}
                   </Badge>
-                  {treatment.project_id && movie && (
-                    <Badge variant="secondary" className="text-base px-3 py-1 backdrop-blur-sm bg-white/20 text-white border-white/30">
-                      <Film className="h-3 w-3 mr-1" />
-                      {movie.name}
-                    </Badge>
-                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      handleStartEditTitleStatus()
+                    }}
+                    className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 text-xs sm:text-sm"
+                  >
+                    <Edit className="h-4 w-4 mr-2" />
+                    Edit
+                  </Button>
                 </div>
               </div>
             </div>
@@ -5722,6 +5843,77 @@ Return ONLY the JSON object, no other text:`
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Title and Status Dialog */}
+      <Dialog open={isEditingTitleStatus} onOpenChange={(open) => {
+        if (!open && !isSavingTitleStatus) {
+          handleCancelEditTitleStatus()
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Title and Status</DialogTitle>
+            <DialogDescription>
+              Update the {treatment?.project_id && movie ? 'movie' : 'treatment'} title and status
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {/* Title */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-title-status">
+                {treatment?.project_id && movie ? 'Movie Title' : 'Treatment Title'}
+              </Label>
+              <Input
+                id="edit-title-status"
+                value={editingTitle}
+                onChange={(e) => setEditingTitle(e.target.value)}
+                placeholder={`Enter ${treatment?.project_id && movie ? 'movie' : 'treatment'} title`}
+              />
+            </div>
+
+            {/* Status */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-status">Status</Label>
+              <Select value={editingStatus} onValueChange={setEditingStatus}>
+                <SelectTrigger id="edit-status">
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="draft">Draft</SelectItem>
+                  <SelectItem value="in-progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="archived">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={handleCancelEditTitleStatus}
+              disabled={isSavingTitleStatus}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleSaveTitleStatus}
+              disabled={isSavingTitleStatus || !editingTitle.trim()}
+            >
+              {isSavingTitleStatus ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -5826,15 +6018,37 @@ Return ONLY the JSON object, no other text:`
             </div>
 
             {/* Dialog Actions */}
-            <div className="flex justify-end gap-2 pt-4 border-t">
-              <Button variant="outline" onClick={handleCancelEditTreatment}>
-                <X className="h-4 w-4 mr-2" />
-                Cancel
-              </Button>
-              <Button onClick={handleSaveTreatment} disabled={isSavingTreatment}>
-                <Save className="h-4 w-4 mr-2" />
-                {isSavingTreatment ? 'Saving...' : 'Save Changes'}
-              </Button>
+            <div className="space-y-4 pt-4 border-t">
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={handleCancelEditTreatment}>
+                  <X className="h-4 w-4 mr-2" />
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveTreatment} disabled={isSavingTreatment}>
+                  <Save className="h-4 w-4 mr-2" />
+                  {isSavingTreatment ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+              
+              {/* Delete Treatment Section */}
+              <div className="pt-4 border-t">
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">Danger Zone</p>
+                  <Button 
+                    variant="outline" 
+                    className="w-full text-red-400 hover:text-red-300 hover:bg-red-500/10 border-red-500/30" 
+                    size="sm"
+                    onClick={handleDelete}
+                    disabled={isDeleting || isSavingTreatment}
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    {isDeleting ? 'Deleting...' : 'Delete Treatment'}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    This action cannot be undone. This will permanently delete the treatment and all associated data.
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </DialogContent>
@@ -5872,12 +6086,12 @@ Return ONLY the JSON object, no other text:`
           return (
             <Card className="mb-8">
               <CardHeader>
-                <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="flex items-center gap-2 flex-1 min-w-0">
+                <div className="flex flex-col gap-3 sm:gap-4">
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
                     <FileText className="h-5 w-5 flex-shrink-0" />
-                    <span className="truncate">Synopsis</span>
+                    <span>Synopsis</span>
                   </CardTitle>
-                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {!isEditingSynopsis ? (
                       <>
                         {/* AI Regenerate Button - Show when treatment has content */}
@@ -5887,35 +6101,37 @@ Return ONLY the JSON object, no other text:`
                             size="sm" 
                             onClick={generateAISynopsis}
                             disabled={isGeneratingSynopsis || !aiSettingsLoaded}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                             title="Generate new synopsis from treatment content using AI"
                           >
                             {isGeneratingSynopsis ? (
                               <>
-                                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                Generating...
+                                <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                                <span className="hidden sm:inline">Generating...</span>
+                                <span className="sm:hidden">Gen...</span>
                               </>
                             ) : (
                               <>
-                                <Sparkles className="h-4 w-4 mr-2" />
-                                AI Regenerate
+                                <Sparkles className="h-4 w-4 sm:mr-2" />
+                                <span className="hidden sm:inline">AI Regenerate</span>
+                                <span className="sm:hidden">AI</span>
                               </>
                             )}
                           </Button>
                         )}
-                        <Button variant="outline" size="sm" onClick={handleStartEditSynopsis}>
-                          <Edit className="h-4 w-4 mr-2" />
+                        <Button variant="outline" size="sm" onClick={handleStartEditSynopsis} className="text-xs sm:text-sm flex-1 sm:flex-initial">
+                          <Edit className="h-4 w-4 sm:mr-2" />
                           Edit
                         </Button>
                       </>
                     ) : (
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={handleCancelEditSynopsis}>
-                          <X className="h-4 w-4 mr-2" />
+                      <div className="flex gap-2 w-full">
+                        <Button variant="outline" size="sm" onClick={handleCancelEditSynopsis} className="text-xs sm:text-sm flex-1 sm:flex-initial">
+                          <X className="h-4 w-4 sm:mr-2" />
                           Cancel
                         </Button>
-                        <Button variant="default" size="sm" onClick={handleSaveSynopsis} disabled={isSavingSynopsis}>
-                          <Save className="h-4 w-4 mr-2" />
+                        <Button variant="default" size="sm" onClick={handleSaveSynopsis} disabled={isSavingSynopsis} className="text-xs sm:text-sm flex-1 sm:flex-initial">
+                          <Save className="h-4 w-4 sm:mr-2" />
                           {isSavingSynopsis ? 'Saving...' : 'Save'}
                         </Button>
                       </div>
@@ -6080,7 +6296,62 @@ Return ONLY the JSON object, no other text:`
                   ) : (
                     <>
                       {treatment.prompt ? (
-                        <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{treatment.prompt}</p>
+                        <div className="space-y-4">
+                          {/* Pagination Controls */}
+                          {treatmentTotalPages > 1 && (
+                            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 sm:gap-4 pb-3 border-b border-border/40">
+                              <div className="flex items-center gap-2 sm:gap-4">
+                                <Badge variant="outline" className="text-xs sm:text-sm">
+                                  Page {treatmentCurrentPage} of {treatmentTotalPages}
+                                </Badge>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => goToTreatmentPage(treatmentCurrentPage - 1)}
+                                    disabled={treatmentCurrentPage === 1}
+                                    className="text-xs sm:text-sm"
+                                  >
+                                    <ChevronLeft className="h-4 w-4" />
+                                  </Button>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={treatmentTotalPages}
+                                    value={treatmentCurrentPage}
+                                    onChange={(e) => {
+                                      const page = parseInt(e.target.value)
+                                      if (page && page >= 1 && page <= treatmentTotalPages) {
+                                        goToTreatmentPage(page)
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault()
+                                        const page = parseInt((e.target as HTMLInputElement).value)
+                                        if (page && page >= 1 && page <= treatmentTotalPages) {
+                                          goToTreatmentPage(page)
+                                        }
+                                      }
+                                    }}
+                                    className="w-16 sm:w-20 text-center text-xs sm:text-sm"
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => goToTreatmentPage(treatmentCurrentPage + 1)}
+                                    disabled={treatmentCurrentPage === treatmentTotalPages}
+                                    className="text-xs sm:text-sm"
+                                  >
+                                    <ChevronRight className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          {/* Treatment Content */}
+                          <p className="text-base leading-relaxed whitespace-pre-wrap font-mono">{getCurrentTreatmentPageContent()}</p>
+                        </div>
                       ) : (
                         <div className="text-center py-12 border-2 border-dashed border-muted rounded-lg">
                           <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
@@ -7401,10 +7672,7 @@ Return ONLY the JSON object, no other text:`
                     variant="outline" 
                     className="w-full justify-start" 
                     size="sm"
-                    onClick={() => {
-                      const element = document.getElementById('treatment-details')
-                      element?.scrollIntoView({ behavior: 'smooth' })
-                    }}
+                    onClick={handleStartEditTreatment}
                   >
                     <Edit className="h-4 w-4 mr-2" />
                     Edit Details

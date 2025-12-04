@@ -1329,40 +1329,40 @@ export default function MoviesPage() {
 
         {/* Edit Movie Dialog */}
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-          <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] flex flex-col">
-            <DialogHeader className="flex-shrink-0">
-              <DialogTitle className="text-foreground">Edit Movie Project</DialogTitle>
-              <DialogDescription>Update your movie project details and cover.</DialogDescription>
+          <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] flex flex-col p-4 sm:p-6">
+            <DialogHeader className="flex-shrink-0 pb-4 sm:pb-6">
+              <DialogTitle className="text-foreground text-lg sm:text-xl">Edit Movie Project</DialogTitle>
+              <DialogDescription className="text-xs sm:text-sm">Update your movie project details and cover.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4 overflow-y-auto flex-1 min-h-0">
               <div className="grid gap-2">
-                <Label htmlFor="edit-name">Project Title</Label>
+                <Label htmlFor="edit-name" className="text-xs sm:text-sm">Project Title</Label>
                 <Input
                   id="edit-name"
                   value={newMovie.name}
                   onChange={(e) => setNewMovie({ ...newMovie, name: e.target.value })}
                   placeholder="Enter movie title..."
-                  className="bg-input border-border"
+                  className="bg-input border-border text-xs sm:text-sm"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="edit-genre">Genre</Label>
+                <Label htmlFor="edit-genre" className="text-xs sm:text-sm">Genre</Label>
                 <Input
                   id="edit-genre"
                   value={newMovie.genre}
                   onChange={(e) => setNewMovie({ ...newMovie, genre: e.target.value })}
                   placeholder="e.g., Sci-Fi, Drama, Action..."
-                  className="bg-input border-border"
+                  className="bg-input border-border text-xs sm:text-sm"
                 />
               </div>
               <div className="grid gap-2">
-                <Label htmlFor="edit-writer">Writer</Label>
+                <Label htmlFor="edit-writer" className="text-xs sm:text-sm">Writer</Label>
                 <Input
                   id="edit-writer"
                   value={newMovie.writer || ""}
                   onChange={(e) => setNewMovie({ ...newMovie, writer: e.target.value })}
                   placeholder="e.g., John Smith"
-                  className="bg-input border-border"
+                  className="bg-input border-border text-xs sm:text-sm"
                 />
               </div>
               <div className="grid gap-2">
@@ -1584,19 +1584,27 @@ export default function MoviesPage() {
                 </div>
               </div>
             </div>
-            <DialogFooter className="flex-shrink-0 bg-background border-t pt-4">
-              <Button variant="outline" onClick={() => {
-                setIsEditDialogOpen(false)
-                setEditingMovie(null)
-                resetMovieForm()
-              }}>
+            <DialogFooter className="flex-shrink-0 bg-background border-t pt-4 flex flex-col sm:flex-row gap-2 sm:gap-0">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setIsEditDialogOpen(false)
+                  setEditingMovie(null)
+                  resetMovieForm()
+                }}
+                className="w-full sm:w-auto text-xs sm:text-sm"
+              >
                 Cancel
               </Button>
-              <Button onClick={handleUpdateMovie} disabled={isUpdating} className="gradient-button text-white">
+              <Button 
+                onClick={handleUpdateMovie} 
+                disabled={isUpdating} 
+                className="gradient-button text-white w-full sm:w-auto text-xs sm:text-sm"
+              >
                 {isUpdating ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="sm:mr-2 h-4 w-4 animate-spin" />
                 ) : (
-                  <Edit className="mr-2 h-4 w-4" />
+                  <Edit className="sm:mr-2 h-4 w-4" />
                 )}
                 {isUpdating ? 'Updating...' : 'Update Movie'}
               </Button>
@@ -1605,42 +1613,48 @@ export default function MoviesPage() {
         </Dialog>
 
         {/* Search and Filter Bar */}
-        <div className="flex items-center gap-4 mb-8">
-          <div className="relative flex-1 max-w-md">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
+          {/* Search Bar - Full width on mobile, own row */}
+          <div className="relative flex-1 w-full sm:max-w-md">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Search movies..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 bg-input border-border"
+              className="pl-10 bg-input border-border text-xs sm:text-sm"
             />
           </div>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
-                <Filter className="mr-2 h-4 w-4" />
-                {selectedStatus}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent className="cinema-card border-border">
-              <DropdownMenuItem onClick={() => setSelectedStatus("All")}>All Phases</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSelectedStatus("Pre-Production")}>Pre-Production</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSelectedStatus("Production")}>Production</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSelectedStatus("Post-Production")}>Post-Production</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setSelectedStatus("Distribution")}>Distribution</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Filter and Share Key Buttons - Row below on mobile */}
+          <div className="flex items-center gap-2 sm:gap-4">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="border-border bg-transparent hover:bg-muted text-xs sm:text-sm flex-1 sm:flex-initial">
+                  <Filter className="sm:mr-2 h-4 w-4" />
+                  <span className="hidden sm:inline">{selectedStatus}</span>
+                  <span className="sm:hidden">Filter</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="cinema-card border-border">
+                <DropdownMenuItem onClick={() => setSelectedStatus("All")}>All Phases</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSelectedStatus("Pre-Production")}>Pre-Production</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSelectedStatus("Production")}>Production</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSelectedStatus("Post-Production")}>Post-Production</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSelectedStatus("Distribution")}>Distribution</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsShareKeyDialogOpen(true)}
-            className="border-primary/30 hover:bg-primary/10"
-          >
-            <Share2 className="h-4 w-4 mr-2" />
-            Enter Share Key
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsShareKeyDialogOpen(true)}
+              className="border-primary/30 hover:bg-primary/10 text-xs sm:text-sm flex-1 sm:flex-initial"
+            >
+              <Share2 className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Enter Share Key</span>
+              <span className="sm:hidden">Share Key</span>
+            </Button>
+          </div>
         </div>
 
         {/* Status Tabs */}

@@ -2623,22 +2623,22 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
-      <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-6 sm:py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent">
+      <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-6 lg:py-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4 sm:mb-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent break-words">
               Characters
             </h1>
-            <p className="text-sm sm:text-base text-muted-foreground">
+            <p className="text-xs sm:text-sm lg:text-base text-muted-foreground break-words">
               Aggregate characters from scenes and manage casting roles.
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-shrink-0">
             {projectId && (
-              <Link href={`/casting/${projectId}`}>
-                <Button variant="outline" size="sm" className="gap-2 w-full sm:w-auto">
+              <Link href={`/casting/${projectId}`} className="w-full sm:w-auto">
+                <Button variant="outline" size="sm" className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
                   <Users className="h-4 w-4" />
                   <span className="hidden sm:inline">Open Casting</span>
                   <span className="sm:hidden">Casting</span>
@@ -2670,11 +2670,11 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         ) : (
           <>
             {/* Character Viewer Card */}
-            <Card className="cinema-card mb-6">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <Users className="h-5 w-5" />
+            <Card className="cinema-card mb-4 sm:mb-6">
+              <CardHeader className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
+                    <Users className="h-5 w-5 flex-shrink-0" />
                     View Character
                   </CardTitle>
                   {selectedCharacterId && (
@@ -2684,17 +2684,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                       onClick={() => {
                         router.push(`/characters/${selectedCharacterId}`)
                       }}
-                      className="gap-2"
+                      className="gap-2 w-full sm:w-auto text-xs sm:text-sm"
                     >
                       <ExternalLink className="h-4 w-4" />
-                      View Full Page
+                      <span className="hidden sm:inline">View Full Page</span>
+                      <span className="sm:hidden">Full Page</span>
                     </Button>
                   )}
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 <div className="space-y-2">
-                  <Label htmlFor="character-selector">Select Character</Label>
+                  <Label htmlFor="character-selector" className="text-xs sm:text-sm">Select Character</Label>
                   <Select
                     value={selectedCharacterId || ""}
                     onValueChange={(value) => {
@@ -2702,7 +2703,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     }}
                     disabled={characters.length === 0}
                   >
-                    <SelectTrigger id="character-selector" className="bg-input border-border">
+                    <SelectTrigger id="character-selector" className="bg-input border-border text-xs sm:text-sm">
                       <SelectValue placeholder={characters.length === 0 ? "No characters available. Create one below." : "Select a character to view details..."} />
                     </SelectTrigger>
                     <SelectContent>
@@ -2725,24 +2726,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     if (!selectedChar) return null
                     
                     return (
-                      <div className="space-y-4 p-4 bg-muted/20 rounded-lg border border-border">
+                      <div className="space-y-4 p-3 sm:p-4 bg-muted/20 rounded-lg border border-border overflow-x-hidden">
                         {/* Character Assets Section */}
                         <div className="space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                            <Label className="text-sm font-medium">Assets</Label>
+                            <Label className="text-xs sm:text-sm font-medium">Assets</Label>
                             <div className="flex items-center gap-2 flex-wrap">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={handleQuickGenerateCharacterImage}
                                 disabled={isGeneratingQuickImage || !selectedCharacterId || !aiSettingsLoaded}
-                                className="gap-2 flex-shrink-0"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                                 title="Quick generate using system locked AI model"
                               >
                                 {isGeneratingQuickImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
                                   </>
                                 ) : (
                                   <>
@@ -2757,12 +2759,13 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                 size="sm"
                                 onClick={() => setIsGenerateImageDialogOpen(true)}
                                 disabled={isGeneratingImage || isGeneratingQuickImage}
-                                className="gap-2 flex-shrink-0"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
                                 {isGeneratingImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
                                   </>
                                 ) : (
                                   <>
@@ -2786,17 +2789,19 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                 size="sm"
                                 onClick={() => document.getElementById('character-asset-upload')?.click()}
                                 disabled={isUploadingAsset}
-                                className="gap-2"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
                                 {isUploadingAsset ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                    Uploading...
+                                    <span className="hidden sm:inline">Uploading...</span>
+                                    <span className="sm:hidden">Up...</span>
                                   </>
                                 ) : (
                                   <>
                                     <Upload className="h-4 w-4" />
-                                    Upload Assets
+                                    <span className="hidden sm:inline">Upload Assets</span>
+                                    <span className="sm:hidden">Upload</span>
                                   </>
                                 )}
                               </Button>
@@ -2804,12 +2809,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                           </div>
                           
                           {isLoadingAssets ? (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                            <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground py-4">
                               <Loader2 className="h-4 w-4 animate-spin" />
                               Loading assets...
                             </div>
                           ) : characterAssets.length === 0 ? (
-                            <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
+                            <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words">
                               No assets uploaded yet. Generate or upload images, videos, or files to help build up this character.
                             </div>
                           ) : (() => {
@@ -3012,27 +3017,27 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                         <Separator />
                         
                         {/* Character Details Section */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                           <div>
                             <Label className="text-xs text-muted-foreground">Name</Label>
-                            <p className="font-semibold text-lg">{selectedChar.name}</p>
+                            <p className="font-semibold text-base sm:text-lg break-words">{selectedChar.name}</p>
                           </div>
                           {selectedChar.archetype && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Archetype</Label>
-                              <p className="font-medium">{selectedChar.archetype}</p>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedChar.archetype}</p>
                             </div>
                           )}
                           {selectedChar.gender && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Gender</Label>
-                              <p className="font-medium">{selectedChar.gender}</p>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedChar.gender}</p>
                             </div>
                           )}
                           {selectedChar.species && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Species</Label>
-                              <p className="font-medium">{selectedChar.species}</p>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedChar.species}</p>
                             </div>
                           )}
                         </div>
@@ -3044,7 +3049,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="h-6 w-6 p-0"
+                                className="h-6 w-6 p-0 flex-shrink-0"
                                 onClick={() => {
                                   setEditingDescriptionId(selectedChar.id)
                                   setEditingDescriptionValue(selectedChar.description || "")
@@ -3059,13 +3064,14 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               <Textarea
                                 value={editingDescriptionValue}
                                 onChange={(e) => setEditingDescriptionValue(e.target.value)}
-                                className="bg-input border-border min-h-[100px] text-sm"
+                                className="bg-input border-border min-h-[100px] text-xs sm:text-sm"
                                 placeholder="Enter character description..."
                               />
-                              <div className="flex gap-2">
+                              <div className="flex flex-wrap gap-2">
                                 <Button
                                   size="sm"
                                   variant="default"
+                                  className="text-xs sm:text-sm flex-1 sm:flex-initial"
                                   onClick={async () => {
                                     try {
                                       const updated = await CharactersService.updateCharacter(selectedChar.id, {
@@ -3094,6 +3100,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                 <Button
                                   size="sm"
                                   variant="outline"
+                                  className="text-xs sm:text-sm flex-1 sm:flex-initial"
                                   onClick={() => {
                                     setEditingDescriptionId(null)
                                     setEditingDescriptionValue("")
@@ -3104,38 +3111,38 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               </div>
                             </div>
                           ) : selectedChar.description ? (
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.description}</p>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.description}</p>
                           ) : (
-                            <p className="text-sm mt-1 text-muted-foreground italic">No description yet. Click the edit icon to add one.</p>
+                            <p className="text-xs sm:text-sm mt-1 text-muted-foreground italic break-words">No description yet. Click the edit icon to add one.</p>
                           )}
                         </div>
                         
                         {selectedChar.ai_image_analysis && (
                           <div>
                             <Label className="text-xs text-muted-foreground">AI Analysis from Image</Label>
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.ai_image_analysis}</p>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.ai_image_analysis}</p>
                           </div>
                         )}
                         
                         {selectedChar.backstory && (
                           <div>
                             <Label className="text-xs text-muted-foreground">Backstory</Label>
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.backstory}</p>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.backstory}</p>
                           </div>
                         )}
                         
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                           {selectedChar.goals && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Goals / Motivations</Label>
-                              <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.goals}</p>
+                              <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.goals}</p>
                             </div>
                           )}
                           
                           {selectedChar.conflicts && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Conflicts</Label>
-                              <p className="text-sm mt-1 whitespace-pre-wrap">{selectedChar.conflicts}</p>
+                              <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.conflicts}</p>
                             </div>
                           )}
                         </div>
@@ -3162,7 +3169,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             onClick={() => {
                               loadCharacterIntoForm(selectedChar)
                             }}
-                            className="gap-2 w-full sm:w-auto"
+                            className="gap-2 w-full sm:w-auto text-xs sm:text-sm"
                           >
                             <Edit className="h-4 w-4" />
                             <span className="hidden sm:inline">Edit Character</span>
@@ -3172,7 +3179,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             variant="outline"
                             size="sm"
                             onClick={() => addRole(selectedChar.name)}
-                            className="gap-2 w-full sm:w-auto"
+                            className="gap-2 w-full sm:w-auto text-xs sm:text-sm"
                           >
                             <Plus className="h-4 w-4" />
                             <span className="hidden sm:inline">Add to Casting</span>
@@ -3190,25 +3197,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   )}
                   
                   {characters.length === 0 && (
-                    <div className="text-sm text-muted-foreground text-center py-4">
+                    <div className="text-xs sm:text-sm text-muted-foreground text-center py-4 px-2 break-words">
                       No characters created yet. Create your first character below.
                     </div>
                   )}
                 </CardContent>
               </Card>
             
-            <div className="space-y-6">
+            <div className="space-y-4 sm:space-y-6">
             {/* Characters list and create */}
             <Card id="characters-form-card" className="cinema-card">
-              <CardHeader className="pb-4">
-                <CardTitle>Characters</CardTitle>
-                <p className="text-sm text-muted-foreground">
+              <CardHeader className="pb-4 p-4 sm:p-6">
+                <CardTitle className="text-lg sm:text-xl">Characters</CardTitle>
+                <p className="text-xs sm:text-sm text-muted-foreground break-words">
                   {editingCharacterInFormId ? "Edit character details below." : "Create and manage full character profiles for this movie."}
                 </p>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 <div>
-                  <Button variant="outline" size="sm" onClick={generateCharactersFromTreatment} disabled={isGeneratingFromTreatment || !treatmentId} className="gap-2 w-full sm:w-auto">
+                  <Button variant="outline" size="sm" onClick={generateCharactersFromTreatment} disabled={isGeneratingFromTreatment || !treatmentId} className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
                     {isGeneratingFromTreatment ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                     <span className="hidden sm:inline">{selectedCharacterId ? "Generate Details for Selected Character" : "Generate from Treatment"}</span>
                     <span className="sm:hidden">{selectedCharacterId ? "Generate Details" : "Generate from Treatment"}</span>
@@ -3216,7 +3223,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                 </div>
                 <div className="space-y-4">
                   {/* Basic Info */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-2">
                       <Label htmlFor="char-name">Name *</Label>
                     <Input id="char-name" value={newCharName} onChange={(e) => setNewCharName(e.target.value)} className="bg-input border-border" placeholder="e.g., Jane Carter" />
@@ -3291,25 +3298,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="char-description">Description</Label>
-                    <Textarea id="char-description" value={newCharDescription} onChange={(e) => setNewCharDescription(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Brief overview of the character..." />
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="char-description" className="text-xs sm:text-sm">Description</Label>
+                    <Textarea id="char-description" value={newCharDescription} onChange={(e) => setNewCharDescription(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Brief overview of the character..." />
                   </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="char-backstory">Backstory</Label>
-                    <Textarea id="char-backstory" value={newCharBackstory} onChange={(e) => setNewCharBackstory(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Key events that shaped them..." />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="char-goals">Goals/Motivations</Label>
-                    <Textarea id="char-goals" value={newCharGoals} onChange={(e) => setNewCharGoals(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="What do they want? Why?" />
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="char-backstory" className="text-xs sm:text-sm">Backstory</Label>
+                    <Textarea id="char-backstory" value={newCharBackstory} onChange={(e) => setNewCharBackstory(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Key events that shaped them..." />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="char-conflicts">Conflicts</Label>
-                    <Textarea id="char-conflicts" value={newCharConflicts} onChange={(e) => setNewCharConflicts(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Internal or external obstacles..." />
+                    <Label htmlFor="char-goals" className="text-xs sm:text-sm">Goals/Motivations</Label>
+                    <Textarea id="char-goals" value={newCharGoals} onChange={(e) => setNewCharGoals(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="What do they want? Why?" />
                   </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="char-traits">Personality Traits (comma-separated)</Label>
-                    <Input id="char-traits" value={newCharPersonalityTraits} onChange={(e) => setNewCharPersonalityTraits(e.target.value)} className="bg-input border-border" placeholder="loyal, impulsive, analytical" />
+                  <div className="space-y-2">
+                    <Label htmlFor="char-conflicts" className="text-xs sm:text-sm">Conflicts</Label>
+                    <Textarea id="char-conflicts" value={newCharConflicts} onChange={(e) => setNewCharConflicts(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Internal or external obstacles..." />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="char-traits" className="text-xs sm:text-sm">Personality Traits (comma-separated)</Label>
+                    <Input id="char-traits" value={newCharPersonalityTraits} onChange={(e) => setNewCharPersonalityTraits(e.target.value)} className="bg-input border-border text-xs sm:text-sm" placeholder="loyal, impulsive, analytical" />
                   </div>
                   </div>
 
@@ -4544,45 +4551,46 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             </Card>
 
             {/* Detected Characters and Casting Roles in a row */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
             <Card className="cinema-card">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <ListFilter className="h-4 w-4" />
+              <CardHeader className="pb-4 p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                    <ListFilter className="h-4 w-4 flex-shrink-0" />
                     Detected Characters
                   </CardTitle>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                     <Input
                       placeholder="Filter characters..."
                       value={filter}
                       onChange={(e) => setFilter(e.target.value)}
-                      className="h-8 bg-input border-border"
+                      className="h-8 bg-input border-border text-xs sm:text-sm"
                     />
                     <Button
                       variant="outline"
                       size="sm"
                       disabled={missingInRoles.length === 0 || syncing}
                       onClick={syncAllMissingToRoles}
-                      className="gap-2"
+                      className="gap-2 text-xs sm:text-sm w-full sm:w-auto"
                     >
                       {syncing ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
                         <RefreshCw className="h-4 w-4" />
                       )}
-                      Sync All To Casting
+                      <span className="hidden sm:inline">Sync All To Casting</span>
+                      <span className="sm:hidden">Sync All</span>
                     </Button>
                   </div>
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs sm:text-sm text-muted-foreground break-words">
                   {detectedCharacters.length} unique character{detectedCharacters.length === 1 ? "" : "s"} detected
                   {treatmentId ? " (Treatment + Screenplay)" : " (Screenplay)"}
                 </p>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-3 p-4 sm:p-6">
                 {detectedCharacters.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No characters found in scenes.</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">No characters found in scenes.</div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {detectedCharacters.map((c) => {
@@ -4618,24 +4626,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             </Card>
 
             <Card className="cinema-card">
-              <CardHeader className="pb-4">
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-4 w-4" />
+              <CardHeader className="pb-4 p-4 sm:p-6">
+                <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                  <Users className="h-4 w-4 flex-shrink-0" />
                   Casting Roles
                 </CardTitle>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs sm:text-sm text-muted-foreground">
                   {rolesAvailable.length} role{rolesAvailable.length === 1 ? "" : "s"} configured
                 </p>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <Label htmlFor="new-character">Add role</Label>
+              <CardContent className="space-y-4 p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                  <div className="flex-1 min-w-0">
+                    <Label htmlFor="new-character" className="text-xs sm:text-sm">Add role</Label>
                     <Input
                       id="new-character"
                       placeholder="e.g., Protagonist, Detective Jane"
                       value={newCharacter}
                       onChange={(e) => setNewCharacter(e.target.value)}
+                      className="text-xs sm:text-sm"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
@@ -4686,9 +4695,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       {/* Generate Image Dialog */}
       <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
-        <DialogContent className="cinema-card border-border max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Generate Character Image</DialogTitle>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl">
+            <DialogHeader className="p-4 sm:p-6">
+            <DialogTitle className="text-lg sm:text-xl">Generate Character Image</DialogTitle>
             <DialogDescription>
               Create an AI-generated image for {selectedCharacterId ? characters.find(c => c.id === selectedCharacterId)?.name || 'this character' : 'the selected character'}
             </DialogDescription>
@@ -4744,7 +4753,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               )}
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
             <Button
               variant="outline"
               onClick={() => {
@@ -4752,23 +4761,26 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                 setImagePrompt("")
                 setIncludeCharacterDetails(true) // Reset to default
               }}
+              className="w-full sm:w-auto text-xs sm:text-sm"
             >
               Cancel
             </Button>
             <Button
               onClick={handleGenerateCharacterImage}
               disabled={isGeneratingImage || !imagePrompt.trim() || !selectedCharacterId}
-              className="gap-2"
+              className="gap-2 w-full sm:w-auto text-xs sm:text-sm"
             >
               {isGeneratingImage ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Generating...
+                  <span className="hidden sm:inline">Generating...</span>
+                  <span className="sm:hidden">Gen...</span>
                 </>
               ) : (
                 <>
                   <Sparkles className="h-4 w-4" />
-                  Generate Image
+                  <span className="hidden sm:inline">Generate Image</span>
+                  <span className="sm:hidden">Generate</span>
                 </>
               )}
             </Button>
@@ -4793,7 +4805,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               </div>
             )}
           </div>
-          <DialogFooter className="px-6 pb-6">
+          <DialogFooter className="px-4 sm:px-6 pb-4 sm:pb-6 flex flex-col sm:flex-row gap-2 sm:gap-0">
             <Button
               variant="outline"
               onClick={() => {
@@ -4801,13 +4813,16 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   window.open(viewingImage.content_url, '_blank')
                 }
               }}
+              className="w-full sm:w-auto text-xs sm:text-sm"
             >
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open in New Tab
+              <ExternalLink className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Open in New Tab</span>
+              <span className="sm:hidden">Open</span>
             </Button>
             <Button
               variant="outline"
               onClick={() => setViewImageDialogOpen(false)}
+              className="w-full sm:w-auto text-xs sm:text-sm"
             >
               Close
             </Button>
@@ -4817,9 +4832,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       {/* Analysis Review Dialog */}
       <Dialog open={showAnalysisReview} onOpenChange={setShowAnalysisReview}>
-          <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Review Extracted Character Details</DialogTitle>
+          <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+              <DialogHeader>
+              <DialogTitle className="text-lg sm:text-xl">Review Extracted Character Details</DialogTitle>
               <DialogDescription>
                 Review the character details extracted from the image. Click "Save All" to apply these details to your character, or close to discard.
               </DialogDescription>
@@ -5298,7 +5313,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               </div>
             )}
 
-            <DialogFooter>
+            <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
               <Button 
                 variant="outline" 
                 onClick={() => {
@@ -5306,12 +5321,14 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   setAnalysisExtractedData(null)
                   setAnalysisImageUrl(null)
                 }}
+                className="w-full sm:w-auto text-xs sm:text-sm"
               >
                 Cancel
               </Button>
-              <Button onClick={handleSaveAnalysisData}>
-                <Save className="h-4 w-4 mr-2" />
-                Save All Details
+              <Button onClick={handleSaveAnalysisData} className="w-full sm:w-auto text-xs sm:text-sm">
+                <Save className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Save All Details</span>
+                <span className="sm:hidden">Save All</span>
               </Button>
             </DialogFooter>
           </DialogContent>

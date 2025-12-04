@@ -2399,8 +2399,8 @@ ${centerText('AUTHOR NAME')}
   // Simple loading state
   if (loading || !ready) {
     return (
-      <div className="min-h-screen bg-background">
-        <div className="container mx-auto max-w-7xl px-6 py-8">
+      <div className="min-h-screen bg-background overflow-x-hidden">
+        <div className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-8 overflow-x-hidden">
           <div className="flex flex-col items-center justify-center py-12 space-y-4">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
             <span className="text-lg">Loading scene...</span>
@@ -3060,7 +3060,7 @@ ${centerText('AUTHOR NAME')}
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       {/* Navigation Bar */}
       <div className="border-b border-border/40 bg-card/50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 sm:py-4">
@@ -3068,7 +3068,7 @@ ${centerText('AUTHOR NAME')}
         </div>
       </div>
       
-      <div className="p-4 sm:p-6">
+      <div className="p-4 sm:p-6 overflow-x-hidden">
         <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="mb-6">
@@ -3102,10 +3102,10 @@ ${centerText('AUTHOR NAME')}
           </div>
 
           {/* Second Row: Scene Navigation and Action Buttons */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex flex-col gap-4">
             {/* Scene Navigation */}
             {allScenes.length > 1 && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 w-full">
                 <Button
                   variant="outline"
                   size="sm"
@@ -3116,7 +3116,7 @@ ${centerText('AUTHOR NAME')}
                     }
                   }}
                   disabled={currentSceneIndex <= 0}
-                  className="border-primary/30 text-primary hover:bg-primary/10"
+                  className="border-primary/30 text-primary hover:bg-primary/10 text-xs sm:text-sm flex-shrink-0"
                 >
                   <ChevronLeft className="h-4 w-4" />
                   <span className="hidden sm:inline ml-1">Previous</span>
@@ -3128,13 +3128,13 @@ ${centerText('AUTHOR NAME')}
                     router.push(`/timeline-scene/${value}`)
                   }}
                 >
-                  <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
+                  <SelectTrigger className="flex-1 sm:w-[200px] lg:w-[250px] border-primary/30 text-xs sm:text-sm">
                     <SelectValue>
                       {scene ? (
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{scene.name}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium truncate">{scene.name}</span>
                           {scene.metadata?.sceneNumber && (
-                            <Badge variant="outline" className="text-xs">
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
                               {scene.metadata.sceneNumber}
                             </Badge>
                           )}
@@ -3177,7 +3177,7 @@ ${centerText('AUTHOR NAME')}
                     }
                   }}
                   disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
-                  className="border-primary/30 text-primary hover:bg-primary/10"
+                  className="border-primary/30 text-primary hover:bg-primary/10 text-xs sm:text-sm flex-shrink-0"
                 >
                   <span className="hidden sm:inline mr-1">Next</span>
                   <ChevronRight className="h-4 w-4" />
@@ -3187,15 +3187,15 @@ ${centerText('AUTHOR NAME')}
             
             {/* Description Dialog */}
             <Dialog open={showDescriptionDialog} onOpenChange={setShowDescriptionDialog}>
-              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>Scene Description</DialogTitle>
-                  <DialogDescription>
+              <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[80vh] overflow-y-auto p-4 sm:p-6">
+                <DialogHeader className="pb-4 sm:pb-6">
+                  <DialogTitle className="text-lg sm:text-xl">Scene Description</DialogTitle>
+                  <DialogDescription className="text-xs sm:text-sm break-words">
                     {scene?.name && `Description for "${scene.name}"`}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="mt-4">
-                  <p className="text-muted-foreground whitespace-pre-wrap">
+                  <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                     {scene?.description || "No description available for this scene."}
                   </p>
                 </div>
@@ -3203,7 +3203,7 @@ ${centerText('AUTHOR NAME')}
             </Dialog>
             
             {/* Action Buttons - Grouped together */}
-            <div className="flex flex-wrap items-center gap-2 sm:gap-2">
+            <div className="flex flex-wrap items-center gap-2 w-full">
               {/* Start Collaboration Button */}
               {projectId && (
                 <Button
@@ -3215,11 +3215,11 @@ ${centerText('AUTHOR NAME')}
                     setNewCollaborationExpiresAt('')
                     setShowCreateCollaborationDialog(true)
                   }}
-                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                 >
-                  <Users className="h-4 w-4 mr-2" />
+                  <Users className="h-4 w-4 sm:mr-2" />
                   <span className="hidden sm:inline">Collab</span>
-                  <span className="sm:hidden">Collaborate</span>
+                  <span className="sm:hidden">Collab</span>
                 </Button>
               )}
               
@@ -3228,13 +3228,13 @@ ${centerText('AUTHOR NAME')}
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
                   asChild
                 >
                   <Link href={`/screenplay/${projectId}`}>
-                    <FileText className="h-4 w-4 mr-2" />
+                    <FileText className="h-4 w-4 sm:mr-2" />
                     <span className="hidden sm:inline">Screenplay</span>
-                    <span className="sm:hidden">Screenplay</span>
+                    <span className="sm:hidden">Script</span>
                   </Link>
                 </Button>
               )}
@@ -3243,11 +3243,11 @@ ${centerText('AUTHOR NAME')}
               <Button
                 variant="outline"
                 size="sm"
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
                 asChild
               >
                 <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
-                  <Film className="h-4 w-4 mr-2" />
+                  <Film className="h-4 w-4 sm:mr-2" />
                   <span className="hidden sm:inline">Movie</span>
                   <span className="sm:hidden">Movie</span>
                 </Link>
@@ -3257,9 +3257,9 @@ ${centerText('AUTHOR NAME')}
                 variant="outline"
                 size="sm"
                 onClick={() => setActiveTab("import")}
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
               >
-                <Upload className="h-4 w-4 mr-2" />
+                <Upload className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">Import</span>
                 <span className="sm:hidden">Import</span>
               </Button>
@@ -3268,9 +3268,9 @@ ${centerText('AUTHOR NAME')}
                 variant="outline"
                 size="sm"
                 onClick={startEditing}
-                className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
+                className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
               >
-                <Edit3 className="h-4 w-4 mr-2" />
+                <Edit3 className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">Edit</span>
                 <span className="sm:hidden">Edit</span>
               </Button>
@@ -3281,9 +3281,9 @@ ${centerText('AUTHOR NAME')}
                   variant="outline"
                   size="sm"
                   onClick={() => setShowAIImageDialog(true)}
-                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
                 >
-                  <Bot className="h-4 w-4 mr-2" />
+                  <Bot className="h-4 w-4 sm:mr-2" />
                   <span className="hidden sm:inline">Generate AI Image</span>
                   <span className="sm:hidden">AI Image</span>
                 </Button>
@@ -3294,23 +3294,23 @@ ${centerText('AUTHOR NAME')}
                   <Button
                     variant="outline"
                     size="sm"
-                    className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
                   >
-                    <Trash2 className="h-4 w-4 mr-2" />
+                    <Trash2 className="h-4 w-4 sm:mr-2" />
                     <span className="hidden sm:inline">Delete</span>
                     <span className="sm:hidden">Delete</span>
                   </Button>
                 </AlertDialogTrigger>
-            <AlertDialogContent className="bg-background border-destructive/20">
-              <AlertDialogHeader>
-                <AlertDialogTitle className="text-destructive">Delete Scene</AlertDialogTitle>
-                <AlertDialogDescription className="text-muted-foreground">
+            <AlertDialogContent className="bg-background border-destructive/20 max-w-[95vw] sm:max-w-md p-4 sm:p-6">
+              <AlertDialogHeader className="pb-4 sm:pb-6">
+                <AlertDialogTitle className="text-lg sm:text-xl text-destructive">Delete Scene</AlertDialogTitle>
+                <AlertDialogDescription className="text-xs sm:text-sm text-muted-foreground break-words">
                   This action cannot be undone. This will permanently delete the scene and all associated media.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
-                <AlertDialogAction className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
+              <AlertDialogFooter className="flex-col sm:flex-row gap-2 sm:gap-0">
+                <AlertDialogCancel className="border-muted/30 text-xs sm:text-sm w-full sm:w-auto">Cancel</AlertDialogCancel>
+                <AlertDialogAction className="bg-destructive hover:bg-destructive/90 text-xs sm:text-sm w-full sm:w-auto">Delete</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -3319,7 +3319,7 @@ ${centerText('AUTHOR NAME')}
               <Button
                 variant="outline"
                 size="sm"
-                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                 onClick={() => {
                   const params = new URLSearchParams({
                     scope: 'scene',
@@ -3331,9 +3331,9 @@ ${centerText('AUTHOR NAME')}
                   router.push(`/mood-boards?${params.toString()}`)
                 }}
               >
-                <ImageIcon className="h-4 w-4 mr-2" />
+                <ImageIcon className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">Mood Board</span>
-                <span className="sm:hidden">Mood Board</span>
+                <span className="sm:hidden">Mood</span>
               </Button>
             </div>
           </div>
@@ -3341,48 +3341,50 @@ ${centerText('AUTHOR NAME')}
 
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
-          <TabsList className="bg-card border-primary/20 flex-wrap">
+          <TabsList className="bg-card border-primary/20 flex-wrap overflow-x-auto">
             <TabsTrigger
               value="scripts"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
               Scripts ({assets.filter(a => a.content_type === 'script').length})
             </TabsTrigger>
             <TabsTrigger 
               value="images" 
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
               Images ({assets.filter(a => a.content_type === 'image').length})
             </TabsTrigger>
             <TabsTrigger 
               value="video" 
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
               Video ({assets.filter(a => a.content_type === 'video').length})
             </TabsTrigger>
             <TabsTrigger
               value="audio"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
               Audio ({assets.filter(a => a.content_type === 'audio').length})
             </TabsTrigger>
             <TabsTrigger
               value="import"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
-              Import Files
+              <span className="hidden sm:inline">Import Files</span>
+              <span className="sm:hidden">Import</span>
             </TabsTrigger>
             <TabsTrigger
               value="shot-list"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
             >
               Shot List
             </TabsTrigger>
             <TabsTrigger
               value="link-assets"
-              className="data-[state=active]:bg-orange-500/20 data-[state=active]:text-orange-500"
+              className="data-[state=active]:bg-orange-500/20 data-[state=active]:text-orange-500 text-xs sm:text-sm"
             >
-              Link Assets
+              <span className="hidden sm:inline">Link Assets</span>
+              <span className="sm:hidden">Link</span>
             </TabsTrigger>
           </TabsList>
 
@@ -5073,11 +5075,11 @@ ${centerText('AUTHOR NAME')}
                         </Button>
                       </div>
                       
-                      <div className="space-y-2 relative w-full">
-                        <div className="relative w-full">
+                      <div className="space-y-2 relative w-full overflow-x-hidden">
+                        <div className="relative w-full overflow-x-hidden">
                           {/* Visual ruler for 80-character line width with center marker */}
-                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
-                            <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10 overflow-x-hidden">
+                            <div className="flex items-center w-full relative max-w-full sm:max-w-[calc(80ch+24px)] mx-auto px-3 sm:px-[12px]">
                               <span className="absolute left-0 opacity-30">0</span>
                               <span className="absolute left-[20%] opacity-30">16</span>
                               <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
@@ -5095,7 +5097,7 @@ ${centerText('AUTHOR NAME')}
                             onChange={(e) => saveCurrentPageEdit(e.target.value)}
                             onPaste={handlePaste}
                             onSelect={handleScreenplayTextSelection}
-                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8"
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
                             style={{ 
                               fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
                               tabSize: 1,
@@ -5108,12 +5110,8 @@ ${centerText('AUTHOR NAME')}
                               wordWrap: 'break-word',
                               fontVariantNumeric: 'normal',
                               fontFeatureSettings: 'normal',
-                              width: 'calc(80ch + 24px)',
-                              maxWidth: 'calc(80ch + 24px)',
-                              minWidth: 'calc(80ch + 24px)',
-                              margin: '0 auto',
-                              display: 'block',
-                              overflowX: 'hidden'
+                              overflowX: 'hidden',
+                              boxSizing: 'border-box'
                             }}
                             placeholder="Enter your screenplay here..."
                             onFocus={() => {

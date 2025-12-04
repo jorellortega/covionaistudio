@@ -464,12 +464,12 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
   if (!ready || !user) {
     return (
-      <div className="min-h-screen bg-background text-foreground p-6 flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Authentication Required</h1>
-          <p className="text-muted-foreground mb-4">Please log in to view your assets.</p>
+      <div className="min-h-screen bg-background text-foreground p-4 sm:p-6 flex items-center justify-center overflow-x-hidden">
+        <div className="text-center px-4">
+          <h1 className="text-xl sm:text-2xl font-bold mb-4">Authentication Required</h1>
+          <p className="text-sm sm:text-base text-muted-foreground mb-4">Please log in to view your assets.</p>
           <Link href="/login">
-            <Button>Go to Login</Button>
+            <Button className="text-xs sm:text-sm">Go to Login</Button>
           </Link>
         </div>
       </div>
@@ -477,33 +477,34 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       <Header />
-      <div className="max-w-7xl mx-auto p-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
         {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard">
-              <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 min-w-0">
+            <Link href="/dashboard" className="flex-shrink-0">
+              <Button variant="ghost" size="sm" className="text-primary hover:bg-primary/10 text-xs sm:text-sm w-full sm:w-auto">
                 <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Dashboard
+                <span className="hidden sm:inline">Back to Dashboard</span>
+                <span className="sm:hidden">Back</span>
               </Button>
             </Link>
-            <div>
-              <h1 className="text-3xl font-bold text-primary">Asset Library</h1>
-              <p className="text-muted-foreground mt-1">Manage and organize your generated content</p>
+            <div className="min-w-0">
+              <h1 className="text-2xl sm:text-3xl font-bold text-primary break-words">Asset Library</h1>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1 break-words">Manage and organize your generated content</p>
             </div>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-2 sm:gap-3">
             <Button
               variant="outline"
               size="sm"
               onClick={refreshAssets}
               disabled={loading}
-              className="border-primary/30 text-primary bg-transparent"
+              className="border-primary/30 text-primary bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
             >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              <RefreshCw className={`h-4 w-4 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
             <Button
               variant="outline"
@@ -520,15 +521,17 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                   }
                 }, 200)
               }}
-              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
+              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
             >
-              <Upload className="h-4 w-4 mr-2" />
-              Import Files
+              <Upload className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Import Files</span>
+              <span className="sm:hidden">Import</span>
             </Button>
-            <Link href="/ai-studio">
-              <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
-                <Plus className="h-4 w-4 mr-2" />
-                Generate New
+            <Link href="/ai-studio" className="flex-1 sm:flex-initial">
+              <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 w-full sm:w-auto text-xs sm:text-sm">
+                <Plus className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Generate New</span>
+                <span className="sm:hidden">Generate</span>
               </Button>
             </Link>
           </div>
@@ -537,16 +540,16 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
 
         {/* Filters and Search */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 sm:mb-8">
           <div>
-            <label className="text-sm font-medium mb-2 block">Project</label>
+            <label className="text-xs sm:text-sm font-medium mb-2 block">Project</label>
             <Select value={selectedProject} onValueChange={setSelectedProject}>
-              <SelectTrigger className="bg-input border-border">
+              <SelectTrigger className="bg-input border-border text-xs sm:text-sm">
                 <SelectValue placeholder="Select a project" />
               </SelectTrigger>
               <SelectContent className="cinema-card border-border">
                 {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
+                  <SelectItem key={project.id} value={project.id} className="text-xs sm:text-sm">
                     {project.name}
                   </SelectItem>
                 ))}
@@ -555,31 +558,31 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
           </div>
 
           <div>
-            <label className="text-sm font-medium mb-2 block">Content Type</label>
+            <label className="text-xs sm:text-sm font-medium mb-2 block">Content Type</label>
             <Select value={contentTypeFilter} onValueChange={setContentTypeFilter}>
-              <SelectTrigger className="bg-input border-border">
+              <SelectTrigger className="bg-input border-border text-xs sm:text-sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="cinema-card border-border">
-                <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="script">Scripts</SelectItem>
-                <SelectItem value="image">Images</SelectItem>
-                <SelectItem value="video">Videos</SelectItem>
-                <SelectItem value="audio">Audio</SelectItem>
+                <SelectItem value="all" className="text-xs sm:text-sm">All Types</SelectItem>
+                <SelectItem value="script" className="text-xs sm:text-sm">Scripts</SelectItem>
+                <SelectItem value="image" className="text-xs sm:text-sm">Images</SelectItem>
+                <SelectItem value="video" className="text-xs sm:text-sm">Videos</SelectItem>
+                <SelectItem value="audio" className="text-xs sm:text-sm">Audio</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div>
-            <label className="text-sm font-medium mb-2 block">Search</label>
-            <div className="relative flex-1 max-w-md">
+            <label className="text-xs sm:text-sm font-medium mb-2 block">Search</label>
+            <div className="relative flex-1 max-w-full md:max-w-md">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 type="text"
                 placeholder="Search assets..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10 pr-10"
+                className="pl-10 pr-10 text-xs sm:text-sm"
               />
               {searchTerm && (
                 <Button
@@ -596,72 +599,73 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6 sm:mb-8">
           <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="flex items-center gap-2 mb-2">
-                <FileText className="h-4 w-4 text-blue-500" />
-                <span className="text-sm text-muted-foreground">Scripts</span>
+                <FileText className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                <span className="text-xs sm:text-sm text-muted-foreground">Scripts</span>
               </div>
-              <p className="text-2xl font-bold text-blue-500">{assetsByType.script?.length || 0}</p>
+              <p className="text-xl sm:text-2xl font-bold text-blue-500">{assetsByType.script?.length || 0}</p>
             </CardContent>
           </Card>
 
           <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="flex items-center gap-2 mb-2">
-                <ImageIcon className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-muted-foreground">Images</span>
+                <ImageIcon className="h-4 w-4 text-green-500 flex-shrink-0" />
+                <span className="text-xs sm:text-sm text-muted-foreground">Images</span>
               </div>
-              <p className="text-2xl font-bold text-green-500">{assetsByType.image?.length || 0}</p>
+              <p className="text-xl sm:text-2xl font-bold text-green-500">{assetsByType.image?.length || 0}</p>
             </CardContent>
           </Card>
 
           <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="flex items-center gap-2 mb-2">
-                <Play className="h-4 w-4 text-purple-500" />
-                <span className="text-sm text-muted-foreground">Videos</span>
+                <Play className="h-4 w-4 text-purple-500 flex-shrink-0" />
+                <span className="text-xs sm:text-sm text-muted-foreground">Videos</span>
               </div>
-              <p className="text-2xl font-bold text-purple-500">{assetsByType.video?.length || 0}</p>
+              <p className="text-xl sm:text-2xl font-bold text-purple-500">{assetsByType.video?.length || 0}</p>
             </CardContent>
           </Card>
 
           <Card className="bg-card border-primary/20">
-            <CardContent className="p-4">
+            <CardContent className="p-3 sm:p-4">
               <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="h-4 w-4 text-orange-500" />
-                <span className="text-sm text-muted-foreground">Audio</span>
+                <MessageSquare className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                <span className="text-xs sm:text-sm text-muted-foreground">Audio</span>
               </div>
-              <p className="text-2xl font-bold text-orange-500">{assetsByType.audio?.length || 0}</p>
+              <p className="text-xl sm:text-2xl font-bold text-orange-500">{assetsByType.audio?.length || 0}</p>
             </CardContent>
           </Card>
         </div>
 
         {/* Main Content Tabs */}
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-card border-primary/20">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
+          <TabsList className="bg-card border-primary/20 w-full overflow-x-auto flex-nowrap sm:flex-wrap">
             <TabsTrigger
               value="all"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0"
             >
               All Assets ({filteredAssets.length})
             </TabsTrigger>
-            <TabsTrigger value="scripts" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+            <TabsTrigger value="scripts" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0">
               Scripts ({assetsByType.script.length})
             </TabsTrigger>
-            <TabsTrigger value="images" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+            <TabsTrigger value="images" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0">
               Images ({assetsByType.image.length})
             </TabsTrigger>
-            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+            <TabsTrigger value="videos" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0">
               Videos ({assetsByType.video.length})
             </TabsTrigger>
-            <TabsTrigger value="audio" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
+            <TabsTrigger value="audio" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0">
               Audio ({assetsByType.audio.length})
             </TabsTrigger>
-            <TabsTrigger value="import" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary">
-              <Upload className="h-4 w-4 mr-2" />
-              Import Files
+            <TabsTrigger value="import" className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm flex-shrink-0">
+              <Upload className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Import Files</span>
+              <span className="sm:hidden">Import</span>
             </TabsTrigger>
           </TabsList>
 
@@ -669,13 +673,13 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
           <TabsContent value="all" className="space-y-6">
             {loading ? (
               <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
+                <CardContent className="p-6 sm:p-8 text-center">
                   <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-                  <p className="text-muted-foreground">Loading assets...</p>
+                  <p className="text-sm sm:text-base text-muted-foreground">Loading assets...</p>
                 </CardContent>
               </Card>
             ) : filteredAssets.length > 0 ? (
-              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 {filteredAssets.map((asset) => (
                   <AssetCard 
                     key={asset.id} 
@@ -689,18 +693,19 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
               </div>
             ) : (
               <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
-                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground mb-4">
+                <CardContent className="p-6 sm:p-8 text-center">
+                  <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-sm sm:text-base text-muted-foreground mb-4 break-words">
                     {searchTerm || contentTypeFilter !== "all" 
                       ? "No assets match your current filters" 
                       : "No assets found for this project"
                     }
                   </p>
                   <Link href="/ai-studio">
-                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Generate Your First Asset
+                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
+                      <Plus className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Generate Your First Asset</span>
+                      <span className="sm:hidden">Generate Asset</span>
                     </Button>
                   </Link>
                 </CardContent>
@@ -712,9 +717,9 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
           <TabsContent value="scripts" className="space-y-6">
             {loading ? (
               <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
+                <CardContent className="p-6 sm:p-8 text-center">
                   <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-                  <p className="text-muted-foreground">Loading scripts...</p>
+                  <p className="text-sm sm:text-base text-muted-foreground">Loading scripts...</p>
                 </CardContent>
               </Card>
             ) : assetsByType.script.length > 0 ? (
@@ -722,74 +727,77 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 {assetsByType.script.map((script) => (
                   <Card key={script.id} className="bg-card border-primary/20">
                     {editingScriptId === script.id ? (
-                      <CardContent className="p-6 space-y-4">
-                        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4 mb-4">
-                          <p className="text-blue-400 font-medium flex items-center gap-2">
-                            <Edit3 className="h-4 w-4" />
-                            Editing Mode - Make your changes below
+                      <CardContent className="p-4 sm:p-6 space-y-4">
+                        <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 sm:p-4 mb-4">
+                          <p className="text-blue-400 font-medium flex items-center gap-2 text-xs sm:text-sm">
+                            <Edit3 className="h-4 w-4 flex-shrink-0" />
+                            <span className="break-words">Editing Mode - Make your changes below</span>
                           </p>
                         </div>
                         <div>
-                          <label className="text-sm font-medium mb-2 block">Title</label>
+                          <label className="text-xs sm:text-sm font-medium mb-2 block">Title</label>
                           <Input
                             value={editingScriptTitle}
                             onChange={(e) => setEditingScriptTitle(e.target.value)}
-                            className="bg-background"
+                            className="bg-background text-xs sm:text-sm"
                           />
                         </div>
                         <div>
-                          <label className="text-sm font-medium mb-2 block">Content</label>
+                          <label className="text-xs sm:text-sm font-medium mb-2 block">Content</label>
                           <Textarea
                             value={editingScriptContent}
                             onChange={(e) => setEditingScriptContent(e.target.value)}
-                            className="bg-background font-mono min-h-[300px]"
+                            className="bg-background font-mono min-h-[200px] sm:min-h-[300px] text-xs sm:text-sm"
                             placeholder="Edit your script content here..."
                           />
                         </div>
-                        <div className="flex gap-3 pt-4 border-t border-border">
+                        <div className="flex flex-wrap gap-2 sm:gap-3 pt-4 border-t border-border">
                           <Button
                             onClick={saveScriptChanges}
                             disabled={loading}
-                            className="bg-green-500 hover:bg-green-600"
+                            className="bg-green-500 hover:bg-green-600 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Save className="h-4 w-4 mr-2" />
-                            Save Changes
+                            <Save className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Save Changes</span>
+                            <span className="sm:hidden">Save</span>
                           </Button>
                           <Button
                             onClick={saveScriptAsNewVersion}
                             disabled={loading}
                             variant="outline"
-                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Copy className="h-4 w-4 mr-2" />
-                            Save as New Version
+                            <Copy className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Save as New Version</span>
+                            <span className="sm:hidden">New Version</span>
                           </Button>
                           <Button
                             onClick={cancelEditingScript}
                             variant="outline"
                             disabled={loading}
+                            className="text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
                             Cancel
                           </Button>
                         </div>
                       </CardContent>
                     ) : (
-                      <CardContent className="p-6">
-                        <div className="flex items-start justify-between mb-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                              <h3 className="text-xl font-bold text-primary">{script.title}</h3>
-                              <Badge className="bg-blue-500/20 text-blue-500 border-blue-500/30">
+                      <CardContent className="p-4 sm:p-6">
+                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-0 mb-4">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2 mb-2">
+                              <h3 className="text-lg sm:text-xl font-bold text-primary break-words">{script.title}</h3>
+                              <Badge className="bg-blue-500/20 text-blue-500 border-blue-500/30 text-xs flex-shrink-0">
                                 v{script.version}
                               </Badge>
                               {script.is_latest_version && (
-                                <Badge className="bg-green-500/20 text-green-500 border-green-500/30">
+                                <Badge className="bg-green-500/20 text-green-500 border-green-500/30 text-xs flex-shrink-0">
                                   Latest
                                 </Badge>
                               )}
                             </div>
-                            <div className="bg-muted/20 rounded-lg p-4 max-h-96 overflow-y-auto mb-4">
-                              <div className="text-sm text-foreground font-mono break-words select-text" style={{ lineHeight: '1.6' }}>
+                            <div className="bg-muted/20 rounded-lg p-3 sm:p-4 max-h-64 sm:max-h-96 overflow-y-auto mb-4">
+                              <div className="text-xs sm:text-sm text-foreground font-mono break-words select-text" style={{ lineHeight: '1.6' }}>
                                 {script.content.split('\n').map((line, idx) => {
                                   // Highlight and style page markers
                                   const pageMatch = line.trim().match(/^---\s*PAGE\s+(\d+)\s*---$/i)
@@ -815,15 +823,16 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                             </div>
                           </div>
                         </div>
-                        <div className="flex gap-2 pt-4 border-t border-border">
+                        <div className="flex flex-wrap gap-2 pt-4 border-t border-border">
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => startEditingScript(script)}
-                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                            className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Edit3 className="h-4 w-4 mr-2" />
-                            Edit Script
+                            <Edit3 className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">Edit Script</span>
+                            <span className="sm:hidden">Edit</span>
                           </Button>
                           <Button
                             size="sm"
@@ -836,36 +845,37 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                                 handleAITextEdit(script, textToEdit)
                               }
                             }}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Bot className="h-4 w-4 mr-2" />
-                            AI Edit
+                            <Bot className="h-4 w-4 sm:mr-2" />
+                            <span className="hidden sm:inline">AI Edit</span>
+                            <span className="sm:hidden">AI</span>
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleViewAsset(script)}
-                            className="border-primary/30 text-primary hover:bg-primary/10"
+                            className="border-primary/30 text-primary hover:bg-primary/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Eye className="h-4 w-4 mr-2" />
+                            <Eye className="h-4 w-4 sm:mr-2" />
                             View
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleCopyScript(script.content || "")}
-                            className="border-green-500/30 text-green-400 hover:bg-green-500/10"
+                            className="border-green-500/30 text-green-400 hover:bg-green-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Copy className="h-4 w-4 mr-2" />
+                            <Copy className="h-4 w-4 sm:mr-2" />
                             Copy
                           </Button>
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => handleDeleteAsset(script)}
-                            className="border-red-500/30 text-red-500 hover:bg-red-500/10"
+                            className="border-red-500/30 text-red-500 hover:bg-red-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                           >
-                            <Trash2 className="h-4 w-4 mr-2" />
+                            <Trash2 className="h-4 w-4 sm:mr-2" />
                             Delete
                           </Button>
                         </div>
@@ -876,13 +886,14 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
               </div>
             ) : (
               <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
-                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground mb-4">No scripts found for this project</p>
+                <CardContent className="p-6 sm:p-8 text-center">
+                  <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-sm sm:text-base text-muted-foreground mb-4">No scripts found for this project</p>
                   <Link href="/ai-studio">
-                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Generate Script
+                    <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
+                      <Plus className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Generate Script</span>
+                      <span className="sm:hidden">Generate</span>
                     </Button>
                   </Link>
                 </CardContent>
@@ -895,13 +906,13 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
             <TabsContent key={type} value={type} className="space-y-6">
               {loading ? (
                 <Card className="bg-card border-primary/20">
-                  <CardContent className="p-8 text-center">
+                  <CardContent className="p-6 sm:p-8 text-center">
                     <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-                    <p className="text-muted-foreground">Loading {type}...</p>
+                    <p className="text-sm sm:text-base text-muted-foreground">Loading {type}...</p>
                   </CardContent>
                 </Card>
               ) : (assetsByType[type.slice(0, -1) as keyof typeof assetsByType]?.length || 0) > 0 ? (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                   {assetsByType[type.slice(0, -1) as keyof typeof assetsByType]?.map((asset) => (
                     <AssetCard 
                       key={asset.id} 
@@ -915,13 +926,14 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 </div>
               ) : (
                 <Card className="bg-card border-primary/20">
-                  <CardContent className="p-8 text-center">
-                    <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                    <p className="text-muted-foreground mb-4">No {type} found for this project</p>
+                  <CardContent className="p-6 sm:p-8 text-center">
+                    <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
+                    <p className="text-sm sm:text-base text-muted-foreground mb-4">No {type} found for this project</p>
                     <Link href="/ai-studio">
-                      <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90">
-                        <Plus className="h-4 w-4 mr-2" />
-                        Generate {type.slice(0, -1)}
+                      <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
+                        <Plus className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Generate {type.slice(0, -1)}</span>
+                        <span className="sm:hidden">Generate</span>
                       </Button>
                     </Link>
                   </CardContent>
@@ -931,11 +943,11 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
           ))}
 
           {/* Import Files Tab */}
-          <TabsContent value="import" className="space-y-6">
-            <div className="flex justify-between items-center">
+          <TabsContent value="import" className="space-y-4 sm:space-y-6">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
               <div>
-                <h3 className="text-xl font-semibold text-primary">Import Documents</h3>
-                <p className="text-sm text-muted-foreground mt-1">
+                <h3 className="text-lg sm:text-xl font-semibold text-primary break-words">Import Documents</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1 break-words">
                   Import PDF, Word, and text files into your project as assets
                 </p>
               </div>
@@ -956,9 +968,9 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
               />
             ) : (
               <Card className="bg-card border-primary/20">
-                <CardContent className="p-8 text-center">
-                  <FileText className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground mb-4">Please select a project to import files</p>
+                <CardContent className="p-6 sm:p-8 text-center">
+                  <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
+                  <p className="text-sm sm:text-base text-muted-foreground mb-4 break-words">Please select a project to import files</p>
                 </CardContent>
               </Card>
             )}
@@ -967,22 +979,22 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
         {/* Asset Details Dialog */}
         <Dialog open={showAssetDetails} onOpenChange={setShowAssetDetails}>
-          <DialogContent className="bg-background border-primary/20 w-[95vw] max-w-[95vw] max-h-[85vh] overflow-y-auto">
-            <DialogHeader className="pb-6">
-              <DialogTitle className="text-primary text-2xl">Asset Details</DialogTitle>
+          <DialogContent className="bg-background border-primary/20 max-w-[95vw] sm:max-w-3xl max-h-[85vh] overflow-y-auto p-4 sm:p-6">
+            <DialogHeader className="pb-4 sm:pb-6">
+              <DialogTitle className="text-primary text-xl sm:text-2xl break-words">Asset Details</DialogTitle>
             </DialogHeader>
             {selectedAsset && (
-              <div className="space-y-8 min-w-0 overflow-hidden">
+              <div className="space-y-4 sm:space-y-8 min-w-0 overflow-hidden">
                 {/* Clean Header with Essential Info */}
-                <div className="flex items-center justify-between pb-4 border-b border-border/30">
-                  <div className="flex items-center gap-4">
-                    <h2 className="text-2xl font-bold text-foreground">{selectedAsset.title}</h2>
-                    <Badge className={`${getContentTypeColor(selectedAsset.content_type)}`}>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 pb-4 border-b border-border/30">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-4 min-w-0">
+                    <h2 className="text-lg sm:text-2xl font-bold text-foreground break-words">{selectedAsset.title}</h2>
+                    <Badge className={`${getContentTypeColor(selectedAsset.content_type)} text-xs sm:text-sm flex-shrink-0`}>
                       {selectedAsset.content_type}
                     </Badge>
-                    <span className="text-muted-foreground">v{selectedAsset.version}</span>
+                    <span className="text-xs sm:text-sm text-muted-foreground flex-shrink-0">v{selectedAsset.version}</span>
                   </div>
-                  <div className="text-right text-sm text-muted-foreground">
+                  <div className="text-left sm:text-right text-xs sm:text-sm text-muted-foreground">
                     <div>Created: {new Date(selectedAsset.created_at).toLocaleDateString()}</div>
                     {selectedAsset.model && <div>Model: {selectedAsset.model}</div>}
                   </div>
@@ -990,33 +1002,33 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 
                 {/* Prompt Section - Only if exists */}
                 {selectedAsset.prompt && (
-                  <div className="bg-muted/20 rounded-lg p-4">
-                    <span className="text-sm font-medium text-muted-foreground">Prompt:</span>
-                    <p className="text-foreground mt-1">{selectedAsset.prompt}</p>
+                  <div className="bg-muted/20 rounded-lg p-3 sm:p-4">
+                    <span className="text-xs sm:text-sm font-medium text-muted-foreground">Prompt:</span>
+                    <p className="text-xs sm:text-sm text-foreground mt-1 break-words">{selectedAsset.prompt}</p>
                   </div>
                 )}
 
                 {selectedAsset.content_type === 'script' && selectedAsset.content && (
-                  <div className="space-y-6">
+                  <div className="space-y-4 sm:space-y-6">
                     {/* Script Content Section - Takes up most space */}
-                    <div className="bg-muted/20 rounded-xl p-6">
-                      <h3 className="text-lg font-semibold mb-4 text-foreground">Script Content</h3>
-                      <div className="bg-background rounded-lg p-6 max-h-[60vh] overflow-y-auto border border-border/30">
-                        <pre className="text-sm text-foreground font-mono whitespace-pre-wrap break-words leading-relaxed max-w-full">
+                    <div className="bg-muted/20 rounded-xl p-4 sm:p-6">
+                      <h3 className="text-base sm:text-lg font-semibold mb-3 sm:mb-4 text-foreground">Script Content</h3>
+                      <div className="bg-background rounded-lg p-3 sm:p-6 max-h-[50vh] sm:max-h-[60vh] overflow-y-auto border border-border/30">
+                        <pre className="text-xs sm:text-sm text-foreground font-mono whitespace-pre-wrap break-words leading-relaxed max-w-full">
                           {selectedAsset.content}
                         </pre>
                       </div>
                     </div>
                     
                     {/* Text to Speech Component */}
-                    <div className="bg-muted/20 rounded-xl p-8" data-tts-asset={selectedAsset.id}>
-                      <h3 className="text-xl font-semibold mb-6 text-foreground">Text to Speech</h3>
+                    <div className="bg-muted/20 rounded-xl p-4 sm:p-8" data-tts-asset={selectedAsset.id}>
+                      <h3 className="text-lg sm:text-xl font-semibold mb-4 sm:mb-6 text-foreground">Text to Speech</h3>
                       <TextToSpeech 
                         text={selectedAsset.content}
                         title={selectedAsset.title}
                         projectId={selectedAsset.project_id}
                         sceneId={selectedAsset.scene_id as string | undefined}
-                        className="mt-6"
+                        className="mt-4 sm:mt-6"
                         onAudioSaved={() => refreshAssets({ showToast: false })}
                       />
                     </div>
@@ -1024,34 +1036,34 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 )}
 
                 {selectedAsset.content_type === 'image' && selectedAsset.content_url && (
-                  <div className="bg-muted/20 rounded-xl p-8">
-                    <h3 className="text-xl font-semibold mb-6 text-foreground">Image Preview</h3>
-                    <div className="flex justify-center p-4">
+                  <div className="bg-muted/20 rounded-xl p-4 sm:p-8">
+                    <h3 className="text-lg sm:text-xl font-semibold mb-4 sm:mb-6 text-foreground">Image Preview</h3>
+                    <div className="flex justify-center p-2 sm:p-4">
                       <img 
                         src={selectedAsset.content_url} 
                         alt={selectedAsset.title}
-                        className="max-w-full max-h-96 object-contain rounded-xl border border-border/30 shadow-lg"
+                        className="max-w-full max-h-[50vh] sm:max-h-96 object-contain rounded-xl border border-border/30 shadow-lg"
                       />
                     </div>
                   </div>
                 )}
 
                 {/* Action Buttons */}
-                <div className="flex gap-4 pt-8 border-t border-border/30">
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 pt-4 sm:pt-8 border-t border-border/30">
                   {selectedAsset.content_type === 'script' && selectedAsset.content && (
                     <Button
                       variant="outline"
                       onClick={() => handleCopyScript(selectedAsset.content!)}
-                      className="border-primary/30 text-primary bg-transparent hover:bg-primary/10 px-6 py-2"
+                      className="border-primary/30 text-primary bg-transparent hover:bg-primary/10 px-4 sm:px-6 py-2 text-xs sm:text-sm w-full sm:w-auto"
                     >
-                      <Copy className="h-4 w-4 mr-2" />
+                      <Copy className="h-4 w-4 sm:mr-2" />
                       Copy Script
                     </Button>
                   )}
                   <Button 
                     variant="outline" 
                     onClick={() => setShowAssetDetails(false)}
-                    className="ml-auto border-border hover:bg-muted px-6 py-2"
+                    className="border-border hover:bg-muted px-4 sm:px-6 py-2 text-xs sm:text-sm w-full sm:w-auto sm:ml-auto"
                   >
                     Close
                   </Button>
@@ -1063,14 +1075,14 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
 
         {/* Delete Confirmation Dialog */}
         <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-          <DialogContent className="bg-background border-primary/20">
+          <DialogContent className="bg-background border-primary/20 max-w-[95vw] sm:max-w-md p-4 sm:p-6">
             <DialogHeader>
-              <DialogTitle className="text-primary text-xl">Delete Asset</DialogTitle>
-              <DialogDescription className="text-muted-foreground">
+              <DialogTitle className="text-primary text-lg sm:text-xl break-words">Delete Asset</DialogTitle>
+              <DialogDescription className="text-xs sm:text-sm text-muted-foreground break-words">
                 Are you sure you want to delete "{assetToDelete?.title}"? This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter className="flex gap-3">
+            <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-3">
               <Button
                 variant="outline"
                 onClick={() => {
@@ -1078,6 +1090,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                   setAssetToDelete(null)
                 }}
                 disabled={deleting}
+                className="w-full sm:w-auto text-xs sm:text-sm"
               >
                 Cancel
               </Button>
@@ -1085,16 +1098,16 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 variant="destructive"
                 onClick={confirmDeleteAsset}
                 disabled={deleting}
-                className="bg-red-600 hover:bg-red-700"
+                className="bg-red-600 hover:bg-red-700 w-full sm:w-auto text-xs sm:text-sm"
               >
                 {deleting ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Deleting...
+                    <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                    <span className="hidden sm:inline">Deleting...</span>
                   </>
                 ) : (
                   <>
-                    <Trash2 className="h-4 w-4 mr-2" />
+                    <Trash2 className="h-4 w-4 sm:mr-2" />
                     Delete Asset
                   </>
                 )}
@@ -1159,37 +1172,37 @@ function AssetCard({
   }
 
   return (
-    <Card className="bg-card border-primary/20 hover:border-primary/40 transition-colors">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <CardTitle className="text-primary text-lg line-clamp-2">{asset.title}</CardTitle>
-            <div className="flex items-center gap-2 mt-2">
-              <Badge variant="outline" className="text-xs">
+    <Card className="bg-card border-primary/20 hover:border-primary/40 transition-colors h-full">
+      <CardHeader className="pb-3 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-0">
+          <div className="flex-1 min-w-0">
+            <CardTitle className="text-primary text-base sm:text-lg line-clamp-2 break-words">{asset.title}</CardTitle>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <Badge variant="outline" className="text-xs flex-shrink-0">
                 v{asset.version}
               </Badge>
               {asset.is_latest_version && (
-                <Badge className="bg-green-500/20 text-green-500 border-green-500/30 text-xs">
+                <Badge className="bg-green-500/20 text-green-500 border-green-500/30 text-xs flex-shrink-0">
                   Latest
                 </Badge>
               )}
-              <Badge className={`text-xs ${getContentTypeColor(asset.content_type)}`}>
+              <Badge className={`text-xs flex-shrink-0 ${getContentTypeColor(asset.content_type)}`}>
                 {asset.content_type}
               </Badge>
             </div>
           </div>
-          <div className="text-right text-xs text-muted-foreground">
+          <div className="text-left sm:text-right text-xs text-muted-foreground flex-shrink-0">
             {new Date(asset.created_at).toLocaleDateString()}
           </div>
         </div>
       </CardHeader>
       
-      <CardContent className="space-y-4">
+      <CardContent className="p-4 sm:p-6 space-y-4">
         {/* Content Preview */}
         {asset.content_type === 'script' && asset.content && (
           <div className="space-y-3">
             <div className="bg-muted/20 rounded-lg p-3 max-h-24 overflow-y-auto">
-              <p className="text-sm text-muted-foreground font-mono line-clamp-3">
+              <p className="text-xs sm:text-sm text-muted-foreground font-mono line-clamp-3 break-words">
                 {asset.content}
               </p>
             </div>
@@ -1206,7 +1219,7 @@ function AssetCard({
               />
               {/* Debug info for TTS */}
               {process.env.NODE_ENV === 'development' && (
-                <div className="text-xs text-muted-foreground mt-1">
+                <div className="text-xs text-muted-foreground mt-1 break-words">
                   Debug: projectId={asset.project_id}, sceneId={asset.scene_id}
                 </div>
               )}
@@ -1225,30 +1238,30 @@ function AssetCard({
         )}
         
         {/* Metadata */}
-        <div className="space-y-2 text-sm">
+        <div className="space-y-2 text-xs sm:text-sm">
           {asset.prompt && (
             <div>
               <span className="text-muted-foreground">Prompt:</span>
-              <p className="text-foreground line-clamp-2">{asset.prompt}</p>
+              <p className="text-foreground line-clamp-2 break-words">{asset.prompt}</p>
             </div>
           )}
           {asset.model && (
             <div>
               <span className="text-muted-foreground">Model:</span>
-              <span className="text-foreground ml-1">{asset.model}</span>
+              <span className="text-foreground ml-1 break-words">{asset.model}</span>
             </div>
           )}
         </div>
         
         {/* Actions */}
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button 
             size="sm" 
             variant="outline" 
-            className="border-primary/30 text-primary bg-transparent flex-1"
+            className="border-primary/30 text-primary bg-transparent flex-1 sm:flex-initial text-xs sm:text-sm"
             onClick={() => onView(asset)}
           >
-            <Eye className="h-4 w-4 mr-2" />
+            <Eye className="h-4 w-4 sm:mr-2" />
             View
           </Button>
           
@@ -1257,17 +1270,17 @@ function AssetCard({
               <Button 
                 size="sm" 
                 variant="outline" 
-                className="border-blue-500/30 text-blue-500 bg-transparent"
+                className="border-blue-500/30 text-blue-500 bg-transparent flex-1 sm:flex-initial text-xs sm:text-sm"
                 onClick={() => onCopy(asset.content!)}
               >
-                <Copy className="h-4 w-4 mr-2" />
+                <Copy className="h-4 w-4 sm:mr-2" />
                 Copy
               </Button>
               
               <Button 
                 size="sm" 
                 variant="outline" 
-                className="border-green-500/30 text-green-400 bg-transparent"
+                className="border-green-500/30 text-green-400 bg-transparent flex-1 sm:flex-initial text-xs sm:text-sm"
                 onClick={() => {
                   // Scroll to the text-to-speech component
                   const ttsElement = document.querySelector(`[data-tts-asset="${asset.id}"]`)
@@ -1276,8 +1289,8 @@ function AssetCard({
                   }
                 }}
               >
-                <span className="mr-2">🎤</span>
-                Listen
+                <span className="sm:mr-2">🎤</span>
+                <span className="hidden sm:inline">Listen</span>
               </Button>
             </>
           )}
@@ -1285,10 +1298,10 @@ function AssetCard({
           <Button 
             size="sm" 
             variant="outline" 
-            className="border-red-500/30 text-red-500 bg-transparent hover:bg-red-500/10"
+            className="border-red-500/30 text-red-500 bg-transparent hover:bg-red-500/10 flex-1 sm:flex-initial text-xs sm:text-sm"
             onClick={() => onDelete(asset)}
           >
-            <Trash2 className="h-4 w-4 mr-2" />
+            <Trash2 className="h-4 w-4 sm:mr-2" />
             Delete
           </Button>
         </div>

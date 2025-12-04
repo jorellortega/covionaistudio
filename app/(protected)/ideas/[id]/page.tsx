@@ -1139,24 +1139,25 @@ export default function IdeaDetailPage() {
   return (
     <>
       <Navigation />
-      <div className="container mx-auto px-4 py-8 max-w-6xl">
+      <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-8 max-w-6xl overflow-x-hidden">
         {/* Header */}
-        <div className="mb-6">
+        <div className="mb-4 sm:mb-6">
           <Button
             variant="ghost"
             onClick={() => router.push("/ideas")}
-            className="mb-4"
+            className="mb-3 sm:mb-4 text-xs sm:text-sm w-full sm:w-auto"
           >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Ideas
+            <ArrowLeft className="h-4 w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Back to Ideas</span>
+            <span className="sm:hidden">Back</span>
           </Button>
           
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-4 flex-1">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="flex flex-col sm:flex-row sm:items-start gap-3 sm:gap-4 flex-1 min-w-0">
               {/* Cover Image Thumbnail */}
               {coverImage && (
-                <div className="flex-shrink-0">
-                  <div className="w-24 h-32 rounded-lg overflow-hidden border border-border cursor-pointer hover:opacity-90 transition-opacity"
+                <div className="flex-shrink-0 mx-auto sm:mx-0">
+                  <div className="w-20 h-28 sm:w-24 sm:h-32 rounded-lg overflow-hidden border border-border cursor-pointer hover:opacity-90 transition-opacity"
                        onClick={() => setShowCoverImageDialog(true)}>
                     <img
                       src={coverImage}
@@ -1167,32 +1168,34 @@ export default function IdeaDetailPage() {
                 </div>
               )}
               
-              <div className="flex-1">
-                <h1 className="text-3xl font-bold mb-2">{idea.title}</h1>
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-2 break-words">{idea.title}</h1>
                 <div className="flex items-center gap-2 flex-wrap mb-4">
                 {(idea.genres && idea.genres.length > 0 ? idea.genres : (idea.genre ? [idea.genre] : [])).map((g, index) => (
-                  <Badge key={index} variant="secondary" className="text-sm">
+                  <Badge key={index} variant="secondary" className="text-xs sm:text-sm flex-shrink-0">
                     {g}
                   </Badge>
                 ))}
-                <Badge className={`text-sm ${getStatusColor(idea.status)}`}>
+                <Badge className={`text-xs sm:text-sm flex-shrink-0 ${getStatusColor(idea.status)}`}>
                   {idea.status}
                 </Badge>
                 {idea.main_creator && (
-                  <Badge variant="outline" className="text-sm">
-                    👤 {idea.main_creator}
+                  <Badge variant="outline" className="text-xs sm:text-sm flex-shrink-0">
+                    <span className="hidden sm:inline">👤 </span>
+                    {idea.main_creator}
                   </Badge>
                 )}
               </div>
               </div>
             </div>
             
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
               <Button
                 variant="outline"
                 onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
+                className="flex-1 sm:flex-initial text-xs sm:text-sm"
               >
-                <List className="h-4 w-4 mr-2" />
+                <List className="h-4 w-4 sm:mr-2" />
                 Scenes
               </Button>
               <Button
@@ -1209,15 +1212,17 @@ export default function IdeaDetailPage() {
                     setShowEditDialog(true)
                   }
                 }}
+                className="flex-1 sm:flex-initial text-xs sm:text-sm"
               >
-                <Edit className="h-4 w-4 mr-2" />
+                <Edit className="h-4 w-4 sm:mr-2" />
                 Edit
               </Button>
               <Button
                 variant="destructive"
                 onClick={deleteIdea}
+                className="flex-1 sm:flex-initial text-xs sm:text-sm"
               >
-                <Trash2 className="h-4 w-4 mr-2" />
+                <Trash2 className="h-4 w-4 sm:mr-2" />
                 Delete
               </Button>
             </div>
@@ -1226,23 +1231,26 @@ export default function IdeaDetailPage() {
 
         {/* Main Content */}
         <Tabs defaultValue="overview" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="treatment">Treatment & Scenes</TabsTrigger>
-            <TabsTrigger value="content">Content</TabsTrigger>
-            <TabsTrigger value="images">Images</TabsTrigger>
-            <TabsTrigger value="files">Files</TabsTrigger>
-            <TabsTrigger value="details">Details</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 overflow-x-auto">
+            <TabsTrigger value="overview" className="text-xs sm:text-sm">Overview</TabsTrigger>
+            <TabsTrigger value="treatment" className="text-xs sm:text-sm">
+              <span className="hidden sm:inline">Treatment & Scenes</span>
+              <span className="sm:hidden">Treatment</span>
+            </TabsTrigger>
+            <TabsTrigger value="content" className="text-xs sm:text-sm">Content</TabsTrigger>
+            <TabsTrigger value="images" className="text-xs sm:text-sm">Images</TabsTrigger>
+            <TabsTrigger value="files" className="text-xs sm:text-sm">Files</TabsTrigger>
+            <TabsTrigger value="details" className="text-xs sm:text-sm">Details</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="space-y-6 mt-6">
+          <TabsContent value="overview" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             {/* Description */}
             <Card>
-              <CardHeader>
-                <CardTitle>Description</CardTitle>
+              <CardHeader className="p-4 sm:p-6">
+                <CardTitle className="text-lg sm:text-xl">Description</CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-muted-foreground whitespace-pre-wrap">
+              <CardContent className="p-4 sm:p-6">
+                <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                   {idea.description || "No description provided."}
                 </p>
               </CardContent>
@@ -1252,20 +1260,20 @@ export default function IdeaDetailPage() {
             {/* Creator Information */}
             {(idea.main_creator || (idea.co_creators && idea.co_creators.length > 0)) && (
               <Card>
-                <CardHeader>
-                  <CardTitle>Creators</CardTitle>
+                <CardHeader className="p-4 sm:p-6">
+                  <CardTitle className="text-lg sm:text-xl">Creators</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-2">
+                <CardContent className="space-y-2 p-4 sm:p-6">
                   {idea.main_creator && (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">Main Creator:</span>
-                      <span>{idea.main_creator}</span>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                      <span className="font-medium text-xs sm:text-sm">Main Creator:</span>
+                      <span className="text-xs sm:text-sm break-words">{idea.main_creator}</span>
                     </div>
                   )}
                   {idea.co_creators && idea.co_creators.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">Co-Creators:</span>
-                      <span>{idea.co_creators.join(", ")}</span>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                      <span className="font-medium text-xs sm:text-sm">Co-Creators:</span>
+                      <span className="text-xs sm:text-sm break-words">{idea.co_creators.join(", ")}</span>
                     </div>
                   )}
                 </CardContent>
@@ -1273,12 +1281,12 @@ export default function IdeaDetailPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="treatment" className="space-y-6 mt-6">
+          <TabsContent value="treatment" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             {/* Synopsis */}
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Synopsis</CardTitle>
+              <CardHeader className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="text-lg sm:text-xl">Synopsis</CardTitle>
                   {!editingSynopsis && (
                     <Button
                       variant="ghost"
@@ -1287,24 +1295,25 @@ export default function IdeaDetailPage() {
                         setSynopsisValue(idea.synopsis || "")
                         setEditingSynopsis(true)
                       }}
+                      className="w-full sm:w-auto text-xs sm:text-sm"
                     >
-                      <Edit className="h-4 w-4 mr-2" />
+                      <Edit className="h-4 w-4 sm:mr-2" />
                       {idea.synopsis ? "Edit" : "Add"}
                     </Button>
                   )}
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-4 sm:p-6">
                 {editingSynopsis ? (
                   <div className="space-y-3">
                     <Textarea
                       value={synopsisValue}
                       onChange={(e) => setSynopsisValue(e.target.value)}
                       placeholder="Paste or type synopsis here..."
-                      className="min-h-[200px] font-mono text-sm"
+                      className="min-h-[200px] font-mono text-xs sm:text-sm"
                       rows={8}
                     />
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
                         onClick={async () => {
@@ -1359,7 +1368,7 @@ export default function IdeaDetailPage() {
                     </div>
                   </div>
                 ) : (
-                  <p className="text-muted-foreground whitespace-pre-wrap">
+                  <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                     {idea.synopsis || "No synopsis available. Click Edit to add one."}
                   </p>
                 )}
@@ -1368,10 +1377,10 @@ export default function IdeaDetailPage() {
 
             {/* Treatment */}
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Treatment</CardTitle>
-                  <div className="flex gap-2">
+              <CardHeader className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="text-lg sm:text-xl">Treatment</CardTitle>
+                  <div className="flex flex-wrap gap-2">
                     {!editingTreatment && (
                       <Button
                         variant="outline"
@@ -1384,9 +1393,11 @@ export default function IdeaDetailPage() {
                           }
                           setEditingTreatment(true)
                         }}
+                        className="text-xs sm:text-sm flex-1 sm:flex-initial"
                       >
-                        <Edit className="h-4 w-4 mr-2" />
-                        {treatment ? "Edit" : "Add Treatment"}
+                        <Edit className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">{treatment ? "Edit" : "Add Treatment"}</span>
+                        <span className="sm:hidden">{treatment ? "Edit" : "Add"}</span>
                       </Button>
                     )}
                     {!treatment && !editingTreatment && (
@@ -1394,37 +1405,39 @@ export default function IdeaDetailPage() {
                         variant="outline"
                         size="sm"
                         onClick={() => router.push(`/treatments?createFromIdea=${idea.id}`)}
+                        className="text-xs sm:text-sm flex-1 sm:flex-initial"
                       >
-                        Create Treatment
+                        <span className="hidden sm:inline">Create Treatment</span>
+                        <span className="sm:hidden">Create</span>
                       </Button>
                     )}
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-4 sm:p-6">
                 {editingTreatment ? (
                   <div className="space-y-4">
                     {treatment && (
                       <div>
-                        <h3 className="font-semibold mb-2">{treatment.title}</h3>
+                        <h3 className="font-semibold mb-2 text-base sm:text-lg break-words">{treatment.title}</h3>
                         {treatment.synopsis && (
-                          <p className="text-muted-foreground whitespace-pre-wrap mb-4">
+                          <p className="text-xs sm:text-sm text-muted-foreground whitespace-pre-wrap mb-4 break-words">
                             {treatment.synopsis}
                           </p>
                         )}
                       </div>
                     )}
                     <div>
-                      <Label className="text-sm font-medium mb-2 block">Treatment Content:</Label>
+                      <Label className="text-xs sm:text-sm font-medium mb-2 block">Treatment Content:</Label>
                       <Textarea
                         value={treatmentContent}
                         onChange={(e) => setTreatmentContent(e.target.value)}
                         placeholder="Paste or type treatment content here..."
-                        className="min-h-[400px] font-mono text-sm"
+                        className="min-h-[300px] sm:min-h-[400px] font-mono text-xs sm:text-sm"
                         rows={15}
                       />
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
                         onClick={async () => {
@@ -1551,20 +1564,22 @@ export default function IdeaDetailPage() {
 
             {/* Scenes */}
             <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <CardTitle>Scenes</CardTitle>
+              <CardHeader className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="text-lg sm:text-xl">Scenes</CardTitle>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => router.push(`/ideas/${idea.id}/scenes`)}
+                    className="w-full sm:w-auto text-xs sm:text-sm"
                   >
-                    <List className="h-4 w-4 mr-2" />
-                    Manage Scenes
+                    <List className="h-4 w-4 sm:mr-2" />
+                    <span className="hidden sm:inline">Manage Scenes</span>
+                    <span className="sm:hidden">Manage</span>
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="p-4 sm:p-6">
                 {loadingTreatmentScenes ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-6 w-6 animate-spin" />
@@ -1572,10 +1587,10 @@ export default function IdeaDetailPage() {
                 ) : scenes.length > 0 ? (
                   <div className="space-y-4">
                     {scenes.map((scene, index) => (
-                      <div key={scene.id} className="border rounded-lg p-4">
+                      <div key={scene.id} className="border rounded-lg p-3 sm:p-4 overflow-x-hidden">
                         {editingSceneId === scene.id ? (
                           <div className="space-y-3">
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
                                 <Label className="text-xs">Title</Label>
                                 <Input
@@ -1603,38 +1618,38 @@ export default function IdeaDetailPage() {
                                 placeholder="Paste or type scene description..."
                               />
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
-                                <Label className="text-xs">Location</Label>
+                                <Label className="text-xs sm:text-sm">Location</Label>
                                 <Input
                                   value={editingSceneData.location || ""}
                                   onChange={(e) => setEditingSceneData({ ...editingSceneData, location: e.target.value })}
-                                  className="mt-1"
+                                  className="mt-1 text-xs sm:text-sm"
                                 />
                               </div>
                               <div>
-                                <Label className="text-xs">Duration (minutes)</Label>
+                                <Label className="text-xs sm:text-sm">Duration (minutes)</Label>
                                 <Input
                                   type="number"
                                   value={editingSceneData.duration_minutes || ""}
                                   onChange={(e) => setEditingSceneData({ ...editingSceneData, duration_minutes: parseInt(e.target.value) || 0 })}
-                                  className="mt-1"
+                                  className="mt-1 text-xs sm:text-sm"
                                 />
                               </div>
                             </div>
                             <div>
-                              <Label className="text-xs">Characters (comma separated)</Label>
+                              <Label className="text-xs sm:text-sm">Characters (comma separated)</Label>
                               <Input
                                 value={Array.isArray(editingSceneData.characters) ? editingSceneData.characters.join(', ') : (editingSceneData.characters || "")}
                                 onChange={(e) => {
                                   const chars = e.target.value.split(',').map(s => s.trim()).filter(s => s !== '')
                                   setEditingSceneData({ ...editingSceneData, characters: chars })
                                 }}
-                                className="mt-1"
+                                className="mt-1 text-xs sm:text-sm"
                                 placeholder="Character 1, Character 2"
                               />
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex flex-wrap gap-2">
                               <Button
                                 size="sm"
                                 onClick={async () => {
@@ -1767,13 +1782,13 @@ export default function IdeaDetailPage() {
             </Card>
           </TabsContent>
 
-          <TabsContent value="content" className="space-y-6 mt-6">
+          <TabsContent value="content" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             <Card>
-              <CardHeader>
-                <CardTitle>Original Prompt</CardTitle>
+              <CardHeader className="p-4 sm:p-6">
+                <CardTitle className="text-lg sm:text-xl">Original Prompt</CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-muted-foreground whitespace-pre-wrap">
+              <CardContent className="p-4 sm:p-6">
+                <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                   {idea.original_prompt || idea.prompt || "No prompt available."}
                 </p>
               </CardContent>
@@ -1781,11 +1796,11 @@ export default function IdeaDetailPage() {
 
             {idea.prompt && idea.prompt !== idea.original_prompt && (
               <Card>
-                <CardHeader>
-                  <CardTitle>Current Prompt</CardTitle>
+                <CardHeader className="p-4 sm:p-6">
+                  <CardTitle className="text-lg sm:text-xl">Current Prompt</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <p className="text-muted-foreground whitespace-pre-wrap">
+                <CardContent className="p-4 sm:p-6">
+                  <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                     {idea.prompt}
                   </p>
                 </CardContent>
@@ -1793,9 +1808,9 @@ export default function IdeaDetailPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="images" className="space-y-6 mt-6">
+          <TabsContent value="images" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             {ideaImages.length > 0 ? (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                 {ideaImages.map((imageUrl, index) => (
                   <div key={index} className="aspect-square overflow-hidden rounded-lg border">
                     <img 
@@ -1810,20 +1825,21 @@ export default function IdeaDetailPage() {
               </div>
             ) : (
               <Card>
-                <CardContent className="py-12 text-center">
-                  <ImageIcon className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground">No images available for this idea.</p>
+                <CardContent className="py-8 sm:py-12 text-center px-4">
+                  <ImageIcon className="h-10 w-10 sm:h-12 sm:w-12 mx-auto text-muted-foreground mb-4" />
+                  <p className="text-xs sm:text-sm text-muted-foreground break-words">No images available for this idea.</p>
                 </CardContent>
               </Card>
             )}
           </TabsContent>
 
-          <TabsContent value="files" className="space-y-6 mt-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Files</h3>
+          <TabsContent value="files" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
+              <h3 className="text-base sm:text-lg font-semibold">Files</h3>
               <Button
                 variant="outline"
                 size="sm"
+                className="text-xs sm:text-sm w-full sm:w-auto"
                 onClick={() => {
                   const input = document.createElement('input')
                   input.type = 'file'
@@ -2332,12 +2348,12 @@ export default function IdeaDetailPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="details" className="space-y-6 mt-6">
+          <TabsContent value="details" className="space-y-4 sm:space-y-6 mt-4 sm:mt-6">
             <Card>
-              <CardHeader>
-                <CardTitle>Metadata</CardTitle>
+              <CardHeader className="p-4 sm:p-6">
+                <CardTitle className="text-lg sm:text-xl">Metadata</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <span className="text-sm font-medium text-muted-foreground">Status</span>
@@ -2386,22 +2402,23 @@ export default function IdeaDetailPage() {
       {/* Cover Image Dialog */}
       {coverImage && (
         <Dialog open={showCoverImageDialog} onOpenChange={setShowCoverImageDialog}>
-          <DialogContent className="max-w-4xl">
-            <DialogHeader>
-              <DialogTitle>Cover Image - {idea.title}</DialogTitle>
+          <DialogContent className="max-w-[95vw] sm:max-w-4xl p-4 sm:p-6">
+            <DialogHeader className="pb-4 sm:pb-6">
+              <DialogTitle className="text-lg sm:text-xl break-words">Cover Image - {idea.title}</DialogTitle>
             </DialogHeader>
-            <div className="flex items-center justify-center p-4">
+            <div className="flex items-center justify-center p-2 sm:p-4">
               <img
                 src={coverImage}
                 alt={`Cover for ${idea.title}`}
-                className="max-w-full max-h-[80vh] object-contain rounded-lg"
+                className="max-w-full max-h-[70vh] sm:max-h-[80vh] object-contain rounded-lg"
               />
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => window.open(coverImage, '_blank')}>
-                Open in New Tab
+            <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => window.open(coverImage, '_blank')} className="w-full sm:w-auto text-xs sm:text-sm">
+                <span className="hidden sm:inline">Open in New Tab</span>
+                <span className="sm:hidden">Open</span>
               </Button>
-              <Button onClick={() => setShowCoverImageDialog(false)}>
+              <Button onClick={() => setShowCoverImageDialog(false)} className="w-full sm:w-auto text-xs sm:text-sm">
                 Close
               </Button>
             </DialogFooter>
@@ -2411,16 +2428,16 @@ export default function IdeaDetailPage() {
 
       {/* Edit Idea Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Edit Movie Idea</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-4 sm:pb-6">
+            <DialogTitle className="text-lg sm:text-xl">Edit Movie Idea</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
               Update your movie idea details
             </DialogDescription>
           </DialogHeader>
           
           <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="edit-title">Title *</Label>
                 <Input
@@ -2495,18 +2512,19 @@ export default function IdeaDetailPage() {
               </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="edit-main-creator">Main Creator *</Label>
+                <Label htmlFor="edit-main-creator" className="text-xs sm:text-sm">Main Creator *</Label>
                 <Input
                   id="edit-main-creator"
                   value={editMainCreator}
                   onChange={(e) => setEditMainCreator(e.target.value)}
                   placeholder=""
+                  className="text-xs sm:text-sm"
                 />
               </div>
               <div>
-                <Label htmlFor="edit-co-creators">Co-Creators</Label>
+                <Label htmlFor="edit-co-creators" className="text-xs sm:text-sm">Co-Creators</Label>
                 <Input
                   id="edit-co-creators"
                   value={editCoCreators.join(', ')}
@@ -2519,64 +2537,69 @@ export default function IdeaDetailPage() {
                     }
                   }}
                   placeholder=""
+                  className="text-xs sm:text-sm"
                 />
               </div>
             </div>
             
             <div>
-              <Label htmlFor="edit-description">Description *</Label>
+              <Label htmlFor="edit-description" className="text-xs sm:text-sm">Description *</Label>
               <Textarea
                 id="edit-description"
                 value={editDescription}
                 onChange={(e) => setEditDescription(e.target.value)}
                 placeholder=""
                 rows={3}
+                className="text-xs sm:text-sm"
               />
             </div>
             
             <div>
-              <Label htmlFor="edit-synopsis">Synopsis</Label>
+              <Label htmlFor="edit-synopsis" className="text-xs sm:text-sm">Synopsis</Label>
               <Textarea
                 id="edit-synopsis"
                 value={editSynopsis}
                 onChange={(e) => setEditSynopsis(e.target.value)}
                 placeholder=""
                 rows={4}
+                className="text-xs sm:text-sm"
               />
             </div>
             
             <div>
-              <Label htmlFor="edit-status">Status</Label>
+              <Label htmlFor="edit-status" className="text-xs sm:text-sm">Status</Label>
               <Select value={editStatus} onValueChange={(value: any) => setEditStatus(value)}>
-                <SelectTrigger>
+                <SelectTrigger className="text-xs sm:text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="concept">Concept</SelectItem>
-                  <SelectItem value="development">Development</SelectItem>
-                  <SelectItem value="pre-production">Pre-Production</SelectItem>
-                  <SelectItem value="production">Production</SelectItem>
-                  <SelectItem value="post-production">Post-Production</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="concept" className="text-xs sm:text-sm">Concept</SelectItem>
+                  <SelectItem value="development" className="text-xs sm:text-sm">Development</SelectItem>
+                  <SelectItem value="pre-production" className="text-xs sm:text-sm">Pre-Production</SelectItem>
+                  <SelectItem value="production" className="text-xs sm:text-sm">Production</SelectItem>
+                  <SelectItem value="post-production" className="text-xs sm:text-sm">Post-Production</SelectItem>
+                  <SelectItem value="completed" className="text-xs sm:text-sm">Completed</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
           
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowEditDialog(false)} disabled={isSavingEdit}>
+          <DialogFooter className="flex flex-col sm:flex-row gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setShowEditDialog(false)} disabled={isSavingEdit} className="w-full sm:w-auto text-xs sm:text-sm">
               Cancel
             </Button>
-            <Button onClick={saveEdit} disabled={isSavingEdit}>
+            <Button onClick={saveEdit} disabled={isSavingEdit} className="w-full sm:w-auto text-xs sm:text-sm">
               {isSavingEdit ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Saving...
+                  <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                  <span className="hidden sm:inline">Saving...</span>
+                  <span className="sm:hidden">Saving...</span>
                 </>
               ) : (
                 <>
-                  <Save className="h-4 w-4 mr-2" />
-                  Save Changes
+                  <Save className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Save Changes</span>
+                  <span className="sm:hidden">Save</span>
                 </>
               )}
             </Button>

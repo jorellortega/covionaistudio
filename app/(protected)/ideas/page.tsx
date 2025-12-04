@@ -2669,24 +2669,25 @@ ${pastedContent}`
   return (
     <>
       <Navigation />
-      <div className="container mx-auto px-4 py-8">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Lightbulb className="h-8 w-8 text-yellow-500" />
+      <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-8 overflow-x-hidden">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 sm:mb-8 gap-4">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 break-words">
+            <Lightbulb className="h-6 w-6 sm:h-8 sm:w-8 text-yellow-500 flex-shrink-0" />
             Movie Ideas
           </h1>
-          <p className="text-muted-foreground mt-2">
+          <p className="text-xs sm:text-sm lg:text-base text-muted-foreground mt-2 break-words">
             Capture your creative sparks and develop them into full concepts
           </p>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
-              <Button onClick={() => resetForm()} className="flex items-center gap-2">
+              <Button onClick={() => resetForm()} className="flex items-center gap-2 w-full sm:w-auto text-xs sm:text-sm">
                 <Plus className="h-4 w-4" />
-                Add New Idea
+                <span className="hidden sm:inline">Add New Idea</span>
+                <span className="sm:hidden">Add Idea</span>
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
@@ -2916,7 +2917,7 @@ ${pastedContent}`
           <Button 
             variant="outline" 
             onClick={() => setShowImportDialog(true)}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
           >
             <Upload className="h-4 w-4" />
             Import
@@ -2925,10 +2926,11 @@ ${pastedContent}`
           <Button 
             variant="outline" 
             onClick={() => setShowPasteDialog(true)}
-            className="flex items-center gap-2"
+            className="flex items-center gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
           >
             <Clipboard className="h-4 w-4" />
-            Paste Content
+            <span className="hidden sm:inline">Paste Content</span>
+            <span className="sm:hidden">Paste</span>
           </Button>
         </div>
       </div>

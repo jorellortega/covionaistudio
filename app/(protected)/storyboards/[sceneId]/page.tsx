@@ -2015,58 +2015,58 @@ export default function SceneStoryboardsPage() {
   }, [aiSettingsLoaded, aiSettings])
   
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
         {/* Breadcrumb Navigation */}
-        <div className="mb-6">
-          <nav className="flex items-center space-x-2 text-sm text-muted-foreground">
-            <Link href="/movies" className="hover:text-foreground">Movies</Link>
+        <div className="mb-4 sm:mb-6">
+          <nav className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted-foreground overflow-x-auto">
+            <Link href="/movies" className="hover:text-foreground whitespace-nowrap">Movies</Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground">
+            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground whitespace-nowrap break-words">
               {sceneInfo?.project_name || "Unknown Project"}
             </Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground">
+            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground whitespace-nowrap break-words">
               {sceneInfo?.timeline_name || "Unknown Timeline"}
             </Link>
             <span>/</span>
-            <span className="text-foreground">
+            <span className="text-foreground whitespace-nowrap break-words">
               {sceneInfo?.scene_number ? `Scene ${sceneInfo.scene_number}: ` : ''}{sceneInfo?.name || "Unknown Scene"}
             </span>
           </nav>
         </div>
 
         {/* Scene Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-4 mb-4">
-            <Button variant="outline" size="sm" onClick={() => router.back()}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
+        <div className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 mb-4">
+            <Button variant="outline" size="sm" onClick={() => router.back()} className="w-full sm:w-auto text-xs sm:text-sm">
+              <ArrowLeft className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Back</span>
             </Button>
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 mb-2">
                 {sceneInfo?.scene_number && (
-                  <Badge variant="secondary" className="text-lg px-3 py-1">
+                  <Badge variant="secondary" className="text-sm sm:text-lg px-2 sm:px-3 py-1 flex-shrink-0">
                     Scene {sceneInfo.scene_number}
                   </Badge>
                 )}
-                <h1 className="text-4xl font-bold">{sceneInfo?.name || "Loading Scene..."}</h1>
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold break-words">{sceneInfo?.name || "Loading Scene..."}</h1>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowDescriptionDialog(true)}
-                className="text-muted-foreground hover:text-foreground -ml-2"
+                className="text-muted-foreground hover:text-foreground text-xs sm:text-sm -ml-2 w-full sm:w-auto"
               >
-                <FileText className="h-4 w-4 mr-2" />
+                <FileText className="h-4 w-4 sm:mr-2" />
                 View Description
               </Button>
             </div>
             
             {/* Scene Navigation */}
             {allScenes.length > 1 && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 w-full sm:w-auto">
                 <Button
                   variant="outline"
                   size="sm"
@@ -2089,13 +2089,13 @@ export default function SceneStoryboardsPage() {
                     router.push(`/storyboards/${value}`)
                   }}
                 >
-                  <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
+                  <SelectTrigger className="w-full sm:w-[200px] lg:w-[250px] border-primary/30 text-xs sm:text-sm">
                     <SelectValue>
                       {sceneInfo ? (
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{sceneInfo.name}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-medium truncate">{sceneInfo.name}</span>
                           {sceneInfo.metadata?.sceneNumber && (
-                            <Badge variant="outline" className="text-xs">
+                            <Badge variant="outline" className="text-xs flex-shrink-0">
                               {sceneInfo.metadata.sceneNumber}
                             </Badge>
                           )}
@@ -2149,15 +2149,15 @@ export default function SceneStoryboardsPage() {
           
           {/* Description Dialog */}
           <Dialog open={showDescriptionDialog} onOpenChange={setShowDescriptionDialog}>
-            <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Scene Description</DialogTitle>
-                <DialogDescription>
+            <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[80vh] overflow-y-auto p-4 sm:p-6">
+              <DialogHeader className="pb-4 sm:pb-6">
+                <DialogTitle className="text-lg sm:text-xl">Scene Description</DialogTitle>
+                <DialogDescription className="text-xs sm:text-sm break-words">
                   {sceneInfo?.name && `Description for "${sceneInfo.name}"`}
                 </DialogDescription>
               </DialogHeader>
               <div className="mt-4">
-                <p className="text-muted-foreground whitespace-pre-wrap">
+                <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
                   {sceneInfo?.description || "No description available for this scene."}
                 </p>
               </div>
@@ -2166,19 +2166,19 @@ export default function SceneStoryboardsPage() {
         </div>
 
         {/* Scene Script Section */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <h2 className="text-2xl font-bold">Scene Script</h2>
+        <div className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-bold">Scene Script</h2>
               {sceneScript && (
-                <Badge variant="outline" className="text-xs">
+                <Badge variant="outline" className="text-xs flex-shrink-0">
                   {totalScriptPages} {totalScriptPages === 1 ? 'page' : 'pages'}
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {isLoadingScript && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
                   Loading...
                 </div>
@@ -2188,19 +2188,11 @@ export default function SceneStoryboardsPage() {
                   variant="outline"
                   size="sm"
                   onClick={() => setShowSceneScript(!showSceneScript)}
-                  className="text-xs"
+                  className="text-xs flex-1 sm:flex-initial"
                 >
-                  {showSceneScript ? (
-                    <>
-                      <Eye className="h-3 w-3 mr-1" />
-                      Hide Script
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="h-3 w-3 mr-1" />
-                      Show Script
-                    </>
-                  )}
+                  <Eye className="h-3 w-3 sm:mr-1" />
+                  <span className="hidden sm:inline">{showSceneScript ? "Hide Script" : "Show Script"}</span>
+                  <span className="sm:hidden">{showSceneScript ? "Hide" : "Show"}</span>
                 </Button>
               )}
               <Button
@@ -2208,10 +2200,11 @@ export default function SceneStoryboardsPage() {
                 size="sm"
                 onClick={fetchSceneScript}
                 disabled={isLoadingScript}
-                className="text-xs"
+                className="text-xs flex-1 sm:flex-initial"
               >
-                <RefreshCw className="h-3 w-3 mr-1" />
-                Refresh Script
+                <RefreshCw className="h-3 w-3 sm:mr-1" />
+                <span className="hidden sm:inline">Refresh Script</span>
+                <span className="sm:hidden">Refresh</span>
               </Button>
             </div>
           </div>
@@ -2238,7 +2231,7 @@ export default function SceneStoryboardsPage() {
                 {editingShotDetails ? (
                   // Edit Mode
                   <div className="space-y-3">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <div>
                         <Label htmlFor="edit-shot-type" className="text-xs text-blue-300">Shot Type</Label>
                         <Select 
@@ -2361,7 +2354,7 @@ export default function SceneStoryboardsPage() {
                 ) : (
                   // View Mode
                   <div className="space-y-3">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <div>
                         <Label htmlFor="shot-type" className="text-xs text-blue-300">Shot Type</Label>
                         <Select 
@@ -2768,38 +2761,38 @@ export default function SceneStoryboardsPage() {
 
 
         {/* Storyboards Section */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-2xl font-bold">Storyboards</h2>
-            <div className="flex gap-2">
-
+        <div className="mb-6 sm:mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
+            <h2 className="text-xl sm:text-2xl font-bold">Storyboards</h2>
+            <div className="flex gap-2 w-full sm:w-auto">
               <Button 
                 onClick={() => setShowCreateForm(true)}
-                className="gradient-button neon-glow text-white"
+                className="gradient-button neon-glow text-white w-full sm:w-auto text-xs sm:text-sm"
               >
-                <Plus className="mr-2 h-4 w-4" />
-                New Storyboard
+                <Plus className="sm:mr-2 h-4 w-4" />
+                <span className="hidden sm:inline">New Storyboard</span>
+                <span className="sm:hidden">New</span>
               </Button>
             </div>
           </div>
 
           {/* Search and Filter Controls */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-6">
-            <div className="flex-1">
+          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-4 sm:mb-6">
+            <div className="flex-1 min-w-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
                 <Input
                   placeholder="Search storyboards..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
+                  className="pl-10 text-xs sm:text-sm"
                 />
               </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 w-full sm:w-auto">
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-[140px]">
-                  <Filter className="h-4 w-4 mr-2" />
+                <SelectTrigger className="w-full sm:w-[140px] text-xs sm:text-sm">
+                  <Filter className="h-4 w-4 sm:mr-2" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -2819,9 +2812,9 @@ export default function SceneStoryboardsPage() {
 
           {/* Sequence Overview */}
           {filteredStoryboards.length > 0 && (
-            <div className="mb-6 p-4 bg-muted/50 rounded-lg border">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-sm font-medium">
+            <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-muted/50 rounded-lg border overflow-x-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
+                <span className="text-xs sm:text-sm font-medium break-words">
                   {sceneInfo?.scene_number ? `Scene ${sceneInfo.scene_number} - ` : ''}Shot Sequence:
                 </span>
                 <span className="text-xs text-muted-foreground">
@@ -2830,7 +2823,7 @@ export default function SceneStoryboardsPage() {
               </div>
               <div className="flex flex-wrap gap-2">
                 {filteredStoryboards.map((storyboard, index) => (
-                  <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border">
+                  <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border flex-shrink-0">
                     {index + 1}. Shot {storyboard.shot_number || 1}
                   </span>
                 ))}
@@ -2841,20 +2834,21 @@ export default function SceneStoryboardsPage() {
 
         {/* Create Form */}
         {showCreateForm && (
-          <Card className="mb-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
-                Create New Storyboard for {sceneInfo?.name || "Loading Scene..."}
+          <Card className="mb-6 sm:mb-8">
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
+                <FileText className="h-5 w-5 flex-shrink-0" />
+                <span className="hidden sm:inline">Create New Storyboard for {sceneInfo?.name || "Loading Scene..."}</span>
+                <span className="sm:hidden">New Storyboard</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-xs sm:text-sm break-words">
                 Fill in the details below. Use AI assistance for text and image generation.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
 
               {/* Basic Info */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="title">Title *</Label>
                   <Input
@@ -2933,7 +2927,7 @@ export default function SceneStoryboardsPage() {
               </div>
 
               {/* Technical Details */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="shot_type">Shot Type</Label>
                   <Select value={formData.shot_type} onValueChange={(value) => setFormData(prev => ({ ...prev, shot_type: value }))}>
@@ -3064,55 +3058,59 @@ export default function SceneStoryboardsPage() {
               </div>
 
               {/* Content Fields */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="dialogue">Dialogue</Label>
+                  <Label htmlFor="dialogue" className="text-xs sm:text-sm">Dialogue</Label>
                   <Textarea
                     id="dialogue"
                     value={formData.dialogue}
                     onChange={(e) => setFormData(prev => ({ ...prev, dialogue: e.target.value }))}
                     placeholder="Character dialogue or narration"
                     rows={3}
+                    className="text-xs sm:text-sm"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="action">Action</Label>
+                  <Label htmlFor="action" className="text-xs sm:text-sm">Action</Label>
                   <Textarea
                     id="action"
                     value={formData.action}
                     onChange={(e) => setFormData(prev => ({ ...prev, action: e.target.value }))}
                     placeholder="What happens in this shot"
                     rows={3}
+                    className="text-xs sm:text-sm"
                   />
                 </div>
               </div>
 
               <div>
-                <Label htmlFor="visual_notes">Visual Notes</Label>
+                <Label htmlFor="visual_notes" className="text-xs sm:text-sm">Visual Notes</Label>
                 <Textarea
                   id="visual_notes"
                   value={formData.visual_notes}
                   onChange={(e) => setFormData(prev => ({ ...prev, visual_notes: e.target.value }))}
                   placeholder="Lighting, color, mood, special effects"
                   rows={3}
+                  className="text-xs sm:text-sm"
                 />
               </div>
 
               {/* Form Actions */}
-              <div className="flex gap-2 justify-end">
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
                 <Button
                   variant="outline"
                   onClick={() => {
                     setShowCreateForm(false)
                     resetForm()
                   }}
+                  className="w-full sm:w-auto text-xs sm:text-sm"
                 >
                   Cancel
                 </Button>
                 <Button
                   onClick={handleCreateStoryboard}
                   disabled={isCreating}
-                  className="gradient-button neon-glow text-white"
+                  className="gradient-button neon-glow text-white w-full sm:w-auto text-xs sm:text-sm"
                 >
                   {isCreating ? "Creating..." : "Create Storyboard"}
                 </Button>
@@ -3123,19 +3121,20 @@ export default function SceneStoryboardsPage() {
 
         {/* Edit Storyboard Form */}
         {showEditForm && editingStoryboard && (
-          <Card className="mb-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Edit className="h-5 w-5" />
-                Edit Storyboard: {editingStoryboard.title}
+          <Card className="mb-6 sm:mb-8">
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
+                <Edit className="h-5 w-5 flex-shrink-0" />
+                <span className="hidden sm:inline">Edit Storyboard: {editingStoryboard.title}</span>
+                <span className="sm:hidden">Edit Storyboard</span>
               </CardTitle>
-              <CardDescription>
+              <CardDescription className="text-xs sm:text-sm break-words">
                 Update the storyboard details below. Use AI assistance for image generation.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
+            <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
               {/* Basic Info */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="edit-title">Title *</Label>
                   <Input
@@ -3215,7 +3214,7 @@ export default function SceneStoryboardsPage() {
               </div>
 
               {/* Technical Details */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="edit-shot_type">Shot Type</Label>
                   <Select value={formData.shot_type} onValueChange={(value) => setFormData(prev => ({ ...prev, shot_type: value }))}>
@@ -3346,7 +3345,7 @@ export default function SceneStoryboardsPage() {
               </div>
 
               {/* Content Fields */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="edit-dialogue">Dialogue</Label>
                   <Textarea
@@ -3624,20 +3623,20 @@ export default function SceneStoryboardsPage() {
         )}
 
         {/* Storyboards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {filteredStoryboards.map((storyboard, index) => (
             <Card key={storyboard.id} className="cinema-card hover:neon-glow transition-all duration-300">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center justify-center w-8 h-8 bg-primary text-primary-foreground rounded-full text-sm font-bold">
+              <CardHeader className="p-4 sm:p-6">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <div className="flex items-center justify-center w-8 h-8 bg-primary text-primary-foreground rounded-full text-xs sm:text-sm font-bold flex-shrink-0">
                       {index + 1}
                     </div>
-                    <CardTitle className="text-lg">{storyboard.title}</CardTitle>
+                    <CardTitle className="text-base sm:text-lg break-words">{storyboard.title}</CardTitle>
                   </div>
                   <Badge
                     variant="secondary"
-                    className="bg-blue-500/20 text-blue-500 border-blue-500/30"
+                    className="bg-blue-500/20 text-blue-500 border-blue-500/30 text-xs flex-shrink-0"
                   >
                     Shot
                   </Badge>
@@ -3720,9 +3719,9 @@ export default function SceneStoryboardsPage() {
                   </DropdownMenu>
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 {storyboard.image_url && (
-                  <div className="relative h-48 bg-muted rounded-lg overflow-hidden group">
+                  <div className="relative h-40 sm:h-48 bg-muted rounded-lg overflow-hidden group">
                     <img
                       src={storyboard.image_url}
                       alt={storyboard.title}
@@ -3764,21 +3763,22 @@ export default function SceneStoryboardsPage() {
                 )}
                 
                 <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground line-clamp-2">
+                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 break-words">
                     {storyboard.description}
                   </p>
                   
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="outline" className="text-xs">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline" className="text-xs flex-shrink-0">
                       {storyboard.shot_type}
                     </Badge>
-                    <Badge variant="outline" className="text-xs">
+                    <Badge variant="outline" className="text-xs flex-shrink-0">
                       {storyboard.camera_angle}
                     </Badge>
                     {storyboard.image_url && (
-                      <Badge className="text-xs bg-green-500/20 text-green-500 border-green-500/30">
-                        <ImageIcon className="h-3 w-3 mr-1" />
-                        Has Image
+                      <Badge className="text-xs bg-green-500/20 text-green-500 border-green-500/30 flex-shrink-0">
+                        <ImageIcon className="h-3 w-3 sm:mr-1" />
+                        <span className="hidden sm:inline">Has Image</span>
+                        <span className="sm:hidden">Image</span>
                       </Badge>
                     )}
                   </div>
@@ -3786,10 +3786,10 @@ export default function SceneStoryboardsPage() {
 
                 <Separator />
 
-                <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Updated {new Date(storyboard.updated_at).toLocaleDateString()}</span>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-muted-foreground">
+                  <span className="break-words">Updated {new Date(storyboard.updated_at).toLocaleDateString()}</span>
+                  <div className="flex gap-1 flex-wrap">
+                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 flex-shrink-0">
                       <Eye className="h-4 w-4" />
                     </Button>
                     
@@ -3797,7 +3797,7 @@ export default function SceneStoryboardsPage() {
                     <Button 
                       variant="ghost" 
                       size="sm" 
-                      className="h-8 w-8 p-0 hover:text-purple-600"
+                      className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
                       title="Generate AI Image"
                       onClick={() => {
                         // Set the editing storyboard and show edit form with AI focus
@@ -3901,11 +3901,11 @@ export default function SceneStoryboardsPage() {
         </div>
 
         {filteredStoryboards.length === 0 && !isLoadingStoryboards && (
-          <div className="text-center py-12">
+          <div className="text-center py-8 sm:py-12 px-4">
             <div className="text-muted-foreground mb-4">
-              <FileText className="h-12 w-12 mx-auto mb-4" />
-              <h3 className="text-lg font-medium mb-2">No storyboards for this scene</h3>
-              <p className="text-sm">
+              <FileText className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-4" />
+              <h3 className="text-base sm:text-lg font-medium mb-2 break-words">No storyboards for this scene</h3>
+              <p className="text-xs sm:text-sm break-words">
                 {searchTerm || filterStatus !== "all" 
                   ? "Try adjusting your search or filters" 
                   : "Get started by creating your first storyboard for this scene"
@@ -3915,9 +3915,9 @@ export default function SceneStoryboardsPage() {
             {!searchTerm && filterStatus === "all" && (
               <Button 
                 onClick={() => setShowCreateForm(true)}
-                className="gradient-button neon-glow text-white"
+                className="gradient-button neon-glow text-white text-xs sm:text-sm w-full sm:w-auto"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="sm:mr-2 h-4 w-4" />
                 Create Storyboard
               </Button>
             )}

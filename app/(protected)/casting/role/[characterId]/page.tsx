@@ -435,9 +435,9 @@ export default function RoleDetailsPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-background overflow-x-hidden">
         <Header />
-        <main className="container mx-auto max-w-4xl px-6 py-8">
+        <main className="container mx-auto max-w-4xl px-4 sm:px-6 py-4 sm:py-8">
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>
@@ -448,12 +448,12 @@ export default function RoleDetailsPage() {
 
   if (!character) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-background overflow-x-hidden">
         <Header />
-        <main className="container mx-auto max-w-4xl px-6 py-8">
+        <main className="container mx-auto max-w-4xl px-4 sm:px-6 py-4 sm:py-8">
           <Card className="cinema-card">
-            <CardContent className="pt-6">
-              <p className="text-center text-muted-foreground">Character not found</p>
+            <CardContent className="p-4 sm:pt-6">
+              <p className="text-center text-sm sm:text-base text-muted-foreground">Character not found</p>
             </CardContent>
           </Card>
         </main>
@@ -462,27 +462,30 @@ export default function RoleDetailsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
 
       <main className="container mx-auto max-w-4xl px-4 sm:px-6 py-4 sm:py-8">
         {/* Back Button and Manage Submissions */}
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex flex-wrap items-center gap-2 mb-4">
           <Button
             variant="ghost"
             onClick={() => router.back()}
+            className="text-xs sm:text-sm"
           >
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
           </Button>
           {isOwner && (
-            <Link href="/manage-submissions">
+            <Link href="/manage-submissions" className="flex-1 sm:flex-initial">
               <Button
                 variant="outline"
                 size="sm"
+                className="w-full sm:w-auto text-xs sm:text-sm"
               >
                 <Users className="h-4 w-4 mr-2" />
-                Manage Submissions
+                <span className="hidden sm:inline">Manage Submissions</span>
+                <span className="sm:hidden">Manage</span>
               </Button>
             </Link>
           )}
@@ -490,11 +493,11 @@ export default function RoleDetailsPage() {
 
         {/* Role Header */}
         <Card className="cinema-card mb-6">
-          <CardHeader>
-            <div className="flex flex-col md:flex-row gap-6">
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex flex-col md:flex-row gap-4 md:gap-6">
               {/* Character Image */}
-              <div className="w-full md:w-48 flex-shrink-0">
-                <div className="aspect-[2/3] rounded-lg overflow-hidden bg-muted">
+              <div className="w-full md:w-48 flex-shrink-0 mx-auto md:mx-0">
+                <div className="aspect-[2/3] rounded-lg overflow-hidden bg-muted max-w-[200px] md:max-w-none">
                   {character.image_url ? (
                     <img
                       src={character.image_url}
@@ -503,7 +506,7 @@ export default function RoleDetailsPage() {
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
-                      <User className="h-16 w-16 text-muted-foreground" />
+                      <User className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground" />
                     </div>
                   )}
                 </div>
@@ -544,7 +547,7 @@ export default function RoleDetailsPage() {
                 </div>
 
                 {character.description && (
-                  <CardDescription className="text-base mb-4">
+                  <CardDescription className="text-sm sm:text-base mb-4 break-words">
                     {character.description}
                   </CardDescription>
                 )}
@@ -620,11 +623,11 @@ export default function RoleDetailsPage() {
         {/* Role Description */}
         {character.role_description && (
           <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Role Description</CardTitle>
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="text-lg sm:text-xl">Role Description</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="whitespace-pre-wrap">{character.role_description}</p>
+            <CardContent className="p-4 sm:p-6">
+              <p className="text-sm sm:text-base whitespace-pre-wrap break-words">{character.role_description}</p>
             </CardContent>
           </Card>
         )}
@@ -632,11 +635,11 @@ export default function RoleDetailsPage() {
         {/* Requirements */}
         {character.role_requirements && (
           <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Requirements</CardTitle>
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="text-lg sm:text-xl">Requirements</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="whitespace-pre-wrap">{character.role_requirements}</p>
+            <CardContent className="p-4 sm:p-6">
+              <p className="text-sm sm:text-base whitespace-pre-wrap break-words">{character.role_requirements}</p>
             </CardContent>
           </Card>
         )}
@@ -644,11 +647,11 @@ export default function RoleDetailsPage() {
         {/* Preferred Qualifications */}
         {character.role_preferred_qualifications && (
           <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Preferred Qualifications</CardTitle>
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="text-lg sm:text-xl">Preferred Qualifications</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="whitespace-pre-wrap">{character.role_preferred_qualifications}</p>
+            <CardContent className="p-4 sm:p-6">
+              <p className="text-sm sm:text-base whitespace-pre-wrap break-words">{character.role_preferred_qualifications}</p>
             </CardContent>
           </Card>
         )}
@@ -656,21 +659,21 @@ export default function RoleDetailsPage() {
         {/* Audition Info */}
         {character.role_audition_info && (
           <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Audition Information</CardTitle>
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="text-lg sm:text-xl">Audition Information</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="whitespace-pre-wrap">{character.role_audition_info}</p>
+            <CardContent className="p-4 sm:p-6">
+              <p className="text-sm sm:text-base whitespace-pre-wrap break-words">{character.role_audition_info}</p>
             </CardContent>
           </Card>
         )}
 
         {/* Character Details (for actors) */}
         <Card className="cinema-card mb-6">
-          <CardHeader>
-            <CardTitle>Character Details</CardTitle>
+          <CardHeader className="p-4 sm:p-6">
+            <CardTitle className="text-lg sm:text-xl">Character Details</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="p-4 sm:p-6 space-y-4">
             {character.archetype && (
               <div>
                 <Label className="text-sm font-semibold">Archetype</Label>
@@ -698,7 +701,7 @@ export default function RoleDetailsPage() {
             {character.backstory && (
               <div>
                 <Label className="text-sm font-semibold">Backstory</Label>
-                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{character.backstory}</p>
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap break-words">{character.backstory}</p>
               </div>
             )}
           </CardContent>
@@ -719,24 +722,24 @@ export default function RoleDetailsPage() {
         {/* Owner View - Submissions for This Role */}
         {isOwner && (
           <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                Submissions for {character.name} ({submissions.length})
+            <CardHeader className="p-4 sm:p-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
+                <Users className="h-5 w-5 flex-shrink-0" />
+                <span>Submissions for {character.name} ({submissions.length})</span>
               </CardTitle>
-              <CardDescription>Review and manage actor applications for this role</CardDescription>
+              <CardDescription className="text-xs sm:text-sm">Review and manage actor applications for this role</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="p-4 sm:p-6">
               {submissions.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Users className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>No submissions for this role yet</p>
+                  <p className="text-sm">No submissions for this role yet</p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   {submissions.map((submission) => (
                     <Card key={submission.id} className="border-border">
-                      <CardContent className="pt-6">
+                      <CardContent className="p-4 sm:pt-6">
                         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
                           <div className="flex-1 min-w-0">
                             <h4 className="font-semibold text-lg flex items-center gap-2 break-words">
@@ -898,7 +901,7 @@ export default function RoleDetailsPage() {
         {/* Submission Detail Dialog */}
         {selectedSubmission && (
           <Dialog open={!!selectedSubmission} onOpenChange={() => setSelectedSubmission(null)}>
-            <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
+            <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{selectedSubmission.actor_name}</DialogTitle>
                 <DialogDescription>
@@ -908,14 +911,14 @@ export default function RoleDetailsPage() {
 
               <div className="space-y-4">
                 <div>
-                  <Label className="text-sm font-semibold">Email</Label>
-                  <p className="text-sm">{selectedSubmission.actor_email}</p>
+                  <Label className="text-xs sm:text-sm font-semibold">Email</Label>
+                  <p className="text-xs sm:text-sm break-all">{selectedSubmission.actor_email}</p>
                 </div>
 
                 {selectedSubmission.actor_phone && (
                   <div>
-                    <Label className="text-sm font-semibold">Phone</Label>
-                    <p className="text-sm">{selectedSubmission.actor_phone}</p>
+                    <Label className="text-xs sm:text-sm font-semibold">Phone</Label>
+                    <p className="text-xs sm:text-sm break-all">{selectedSubmission.actor_phone}</p>
                   </div>
                 )}
 
@@ -938,7 +941,7 @@ export default function RoleDetailsPage() {
                 )}
 
                 <div>
-                  <Label className="text-sm font-semibold">Status</Label>
+                  <Label className="text-xs sm:text-sm font-semibold">Status</Label>
                   <Select
                     value={selectedSubmission.status}
                     onValueChange={(value) => {
@@ -946,7 +949,7 @@ export default function RoleDetailsPage() {
                       setSelectedSubmission({ ...selectedSubmission, status: value as ActorSubmission['status'] })
                     }}
                   >
-                    <SelectTrigger className="w-40 mt-1">
+                    <SelectTrigger className="w-full sm:w-40 mt-1">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -960,7 +963,7 @@ export default function RoleDetailsPage() {
                 </div>
 
                 <div>
-                  <Label className="text-sm font-semibold">Internal Notes</Label>
+                  <Label className="text-xs sm:text-sm font-semibold">Internal Notes</Label>
                   <Textarea
                     value={selectedSubmission.notes || ''}
                     onChange={(e) => setSelectedSubmission({ ...selectedSubmission, notes: e.target.value })}
@@ -970,7 +973,7 @@ export default function RoleDetailsPage() {
                   />
                   <Button
                     size="sm"
-                    className="mt-2"
+                    className="mt-2 w-full sm:w-auto"
                     onClick={async () => {
                       await handleUpdateSubmissionStatus(selectedSubmission.id, selectedSubmission.status, selectedSubmission.notes || undefined)
                       setSelectedSubmission(null)
@@ -981,8 +984,8 @@ export default function RoleDetailsPage() {
                 </div>
               </div>
 
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setSelectedSubmission(null)}>
+              <DialogFooter className="flex-col sm:flex-row gap-2 sm:gap-0">
+                <Button variant="outline" onClick={() => setSelectedSubmission(null)} className="w-full sm:w-auto">
                   Close
                 </Button>
               </DialogFooter>
@@ -992,7 +995,7 @@ export default function RoleDetailsPage() {
 
         {/* Submission Form Dialog */}
         <Dialog open={showSubmissionForm} onOpenChange={setShowSubmissionForm}>
-          <DialogContent className="cinema-card border-border max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Apply for {character.name}</DialogTitle>
               <DialogDescription>
@@ -1128,7 +1131,7 @@ export default function RoleDetailsPage() {
 
         {/* Edit Role Details Dialog */}
         <Dialog open={showEditForm} onOpenChange={setShowEditForm}>
-          <DialogContent className="cinema-card border-border max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Edit Role Details for {character.name}</DialogTitle>
               <DialogDescription>

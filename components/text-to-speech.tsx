@@ -940,90 +940,96 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   return (
     <div className={`w-full space-y-2 ${className}`}>
       {/* Compact Voice Selection and Generate Button */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Volume2 className="h-4 w-4 text-blue-500 flex-shrink-0" />
-        <Select value={selectedVoice} onValueChange={setSelectedVoice}>
-          <SelectTrigger className="bg-card border-blue-500/30 h-8 text-xs flex-1 min-w-[150px]">
-            <SelectValue placeholder="Select Voice" />
-          </SelectTrigger>
-          <SelectContent className="bg-card border-blue-500/30 max-h-60 overflow-y-auto">
-            {isLoadingVoices ? (
-              <div className="flex items-center gap-2 p-2">
-                <Loader2 className="h-3 w-3 animate-spin" />
-                <span className="text-xs">Loading...</span>
-              </div>
-            ) : (
-              voices.map((voice) => (
-                <SelectItem 
-                  key={voice.voice_id} 
-                  value={voice.voice_id}
-                >
-                  <div className="flex items-center justify-between w-full gap-2">
-                    <div className="flex flex-col min-w-0 flex-1">
-                      <span className="font-medium truncate text-xs">{voice.name}</span>
-                      {voice.description && (
-                        <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
-                      )}
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        e.preventDefault()
-                        previewVoiceById(voice.voice_id, e)
-                      }}
-                      disabled={isPreviewingVoice}
-                      className="flex-shrink-0 p-1 rounded hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                      title={`Preview ${voice.name}`}
-                      aria-label={`Preview ${voice.name}`}
-                    >
-                      {isPreviewingVoice && previewingVoiceId === voice.voice_id ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : (
-                        <Headphones className="h-3 w-3" />
-                      )}
-                    </button>
-                  </div>
-                </SelectItem>
-              ))
-            )}
-          </SelectContent>
-        </Select>
-        {selectedVoice && (
-          <>
-            <Button
-              onClick={previewVoice}
-              disabled={isPreviewingVoice}
-              variant="outline"
-              size="sm"
-              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 h-8 text-xs px-2 flex-shrink-0"
-              title="Preview Voice - Listen before generating"
-            >
-              {isPreviewingVoice ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-2">
+        {/* Voice Selection Row - Left aligned */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <Volume2 className="h-4 w-4 text-blue-500 flex-shrink-0" />
+          <Select value={selectedVoice} onValueChange={setSelectedVoice}>
+            <SelectTrigger className="bg-card border-blue-500/30 h-8 text-xs flex-1 min-w-[150px]">
+              <SelectValue placeholder="Select Voice" />
+            </SelectTrigger>
+            <SelectContent className="bg-card border-blue-500/30 max-h-60 overflow-y-auto">
+              {isLoadingVoices ? (
+                <div className="flex items-center gap-2 p-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span className="text-xs">Loading...</span>
+                </div>
               ) : (
-                <Headphones className="h-3 w-3" />
+                voices.map((voice) => (
+                  <SelectItem 
+                    key={voice.voice_id} 
+                    value={voice.voice_id}
+                  >
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <div className="flex flex-col min-w-0 flex-1">
+                        <span className="font-medium truncate text-xs">{voice.name}</span>
+                        {voice.description && (
+                          <span className="text-xs text-muted-foreground truncate">{voice.description}</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          previewVoiceById(voice.voice_id, e)
+                        }}
+                        disabled={isPreviewingVoice}
+                        className="flex-shrink-0 p-1 rounded hover:bg-blue-500/20 text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                        title={`Preview ${voice.name}`}
+                        aria-label={`Preview ${voice.name}`}
+                      >
+                        {isPreviewingVoice && previewingVoiceId === voice.voice_id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Headphones className="h-3 w-3" />
+                        )}
+                      </button>
+                    </div>
+                  </SelectItem>
+                ))
               )}
-            </Button>
-          </>
-        )}
-        <Button
-          onClick={generateSpeech}
-          disabled={isLoading || !selectedVoice || !text.trim()}
-          size="sm"
-          className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 h-8 text-xs px-3"
-        >
-          {isLoading ? (
+            </SelectContent>
+          </Select>
+          {selectedVoice && (
             <>
-              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-              Generating...
-            </>
-          ) : (
-            <>
-              <Volume2 className="h-3 w-3 mr-1" />
-              Generate
+              <Button
+                onClick={previewVoice}
+                disabled={isPreviewingVoice}
+                variant="outline"
+                size="sm"
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 h-8 text-xs px-2 flex-shrink-0"
+                title="Preview Voice - Listen before generating"
+              >
+                {isPreviewingVoice ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Headphones className="h-3 w-3" />
+                )}
+              </Button>
             </>
           )}
-        </Button>
+        </div>
+        {/* Generate Button - Centered on mobile, right-aligned on desktop */}
+        <div className="flex justify-center sm:justify-end">
+          <Button
+            onClick={generateSpeech}
+            disabled={isLoading || !selectedVoice || !text.trim()}
+            size="sm"
+            className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 h-8 text-xs px-3 w-full sm:w-auto"
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="h-3 w-3 sm:mr-1 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Volume2 className="h-3 w-3 sm:mr-1" />
+                Generate
+              </>
+            )}
+          </Button>
+        </div>
       </div>
       
       {/* Hidden audio element for preview */}

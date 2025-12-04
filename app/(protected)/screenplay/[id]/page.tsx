@@ -3588,15 +3588,15 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <Navigation />
-      <div className="container mx-auto max-w-7xl px-6 py-8">
+      <div className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-8 overflow-x-hidden">
         {/* Header */}
-        <div className="mb-6">
+        <div className="mb-4 sm:mb-6">
           {/* Title at the top */}
-          <div className="mb-4">
-            <h1 className="text-3xl font-bold mb-2">{movie.name}</h1>
-            <p className="text-muted-foreground">
+          <div className="mb-3 sm:mb-4">
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2 break-words">{movie?.name || "Loading..."}</h1>
+            <p className="text-sm sm:text-base text-muted-foreground break-words">
               Screenplay
               {fullScript && totalPages > 0 && (
                 <span className="ml-2 text-muted-foreground/70">
@@ -3607,32 +3607,35 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           </div>
           
           {/* Navigation and Actions */}
-          <div className="flex flex-wrap items-center justify-between gap-4 sticky top-4 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-4 border-b border-border/40">
-            <Button variant="ghost" size="sm" asChild>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3 sm:gap-4 sticky top-4 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-3 sm:pb-4 border-b border-border/40">
+            <Button variant="ghost" size="sm" asChild className="w-full sm:w-auto text-xs sm:text-sm">
               <Link href="/movies">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Movies
+                <ArrowLeft className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Back to Movies</span>
+                <span className="sm:hidden">Back</span>
               </Link>
             </Button>
             
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button variant="outline" size="sm" asChild className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <Button variant="outline" size="sm" asChild className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial">
                 <Link href={`/storyboards?movie=${id}`}>
-                  <ImageIcon className="h-4 w-4 mr-2" />
-                  Storyboards
+                  <ImageIcon className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Storyboards</span>
+                  <span className="sm:hidden">Boards</span>
                 </Link>
               </Button>
               <Collapsible open={isFileImportExpanded} onOpenChange={setIsFileImportExpanded} className="relative">
                 <CollapsibleTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-green-500/30 text-green-400 hover:bg-green-500/10">
+                  <Button variant="outline" size="sm" className="border-green-500/30 text-green-400 hover:bg-green-500/10 text-xs sm:text-sm flex-1 sm:flex-initial">
                     {isFileImportExpanded ? (
                       <>
-                        <ChevronUp className="h-4 w-4 mr-2" />
-                        Hide Import
+                        <ChevronUp className="h-4 w-4 sm:mr-2" />
+                        <span className="hidden sm:inline">Hide Import</span>
+                        <span className="sm:hidden">Hide</span>
                       </>
                     ) : (
                       <>
-                        <Upload className="h-4 w-4 mr-2" />
+                        <Upload className="h-4 w-4 sm:mr-2" />
                         Import
                       </>
                     )}
@@ -3671,16 +3674,17 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   }
                 }} 
                 variant="outline" 
-                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
               >
-                <Users className="h-4 w-4 mr-2" />
-                Start
+                <Users className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Start</span>
+                <span className="sm:hidden">Collab</span>
               </Button>
               {fullScript && fullScript.trim().length > 0 && (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10">
-                      <Download className="h-4 w-4 mr-2" />
+                    <Button variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs sm:text-sm flex-1 sm:flex-initial">
+                      <Download className="h-4 w-4 sm:mr-2" />
                       Export
                     </Button>
                   </DropdownMenuTrigger>
@@ -3713,33 +3717,36 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                 <Button 
                   onClick={() => setShowDeletePageConfirm(true)} 
                   variant="outline" 
-                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                   disabled={isDeleting}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete Page
+                  <Trash2 className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Delete Page</span>
+                  <span className="sm:hidden">Del Page</span>
                 </Button>
               )}
               {fullScript && fullScript.trim().length > 0 && (
                 <Button 
                   onClick={() => setShowDeleteEntireConfirm(true)} 
                   variant="outline" 
-                  className="border-red-500/30 text-red-400 hover:bg-red-500/10"
+                  className="border-red-500/30 text-red-400 hover:bg-red-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
                   disabled={isDeleting}
                 >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete All
+                  <Trash2 className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Delete All</span>
+                  <span className="sm:hidden">Delete</span>
                 </Button>
               )}
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={saving} className="text-xs sm:text-sm flex-1 sm:flex-initial">
                 {saving ? (
                   <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
+                    <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                    <span className="hidden sm:inline">Saving...</span>
+                    <span className="sm:hidden">Save...</span>
                   </>
                 ) : (
                   <>
-                    <Save className="h-4 w-4 mr-2" />
+                    <Save className="h-4 w-4 sm:mr-2" />
                     Save
                   </>
                 )}
@@ -3749,16 +3756,16 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         </div>
 
         {/* Script Content */}
-        <Card className="mb-6">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <FileText className="h-5 w-5" />
+        <Card className="mb-4 sm:mb-6">
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <FileText className="h-5 w-5 flex-shrink-0" />
                 Screenplay
               </CardTitle>
               {fullScript && (
-                <div className="flex items-center gap-4">
-                  <Badge variant="outline">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                  <Badge variant="outline" className="text-xs sm:text-sm flex-shrink-0">
                     Page {currentPage} of {totalPages}
                   </Badge>
                   {totalPages > 1 && (
@@ -3768,6 +3775,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         size="sm"
                         onClick={() => goToPage(currentPage - 1)}
                         disabled={currentPage === 1}
+                        className="text-xs sm:text-sm"
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </Button>
@@ -3777,13 +3785,14 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         max={totalPages}
                         value={currentPage}
                         onChange={(e) => goToPage(parseInt(e.target.value) || 1)}
-                        className="w-20 text-center"
+                        className="w-16 sm:w-20 text-center text-xs sm:text-sm"
                       />
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => goToPage(currentPage + 1)}
                         disabled={currentPage === totalPages}
+                        className="text-xs sm:text-sm"
                       >
                         <ChevronRight className="h-4 w-4" />
                       </Button>
@@ -3793,8 +3802,8 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               )}
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="space-y-4" data-script-content>
+          <CardContent className="overflow-x-hidden p-4 sm:p-6">
+            <div className="space-y-4 overflow-x-hidden" data-script-content>
               {!fullScript ? (
                 <div className="text-center py-12">
                   <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
@@ -3806,9 +3815,9 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               ) : (
                 <div className="space-y-4">
                   {/* Page number and action buttons row */}
-                  <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
-                    <div className="flex items-center gap-4">
-                      <Label className="text-sm font-medium text-muted-foreground">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 pb-3 border-b border-purple-500/20">
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+                      <Label className="text-xs sm:text-sm font-medium text-muted-foreground">
                         Page {currentPage} of {totalPages}
                       </Label>
                       {totalPages > 1 && (
@@ -3818,7 +3827,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                             size="sm"
                             onClick={() => goToPage(currentPage - 1)}
                             disabled={currentPage === 1}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm"
                           >
                             <ChevronLeft className="h-4 w-4" />
                           </Button>
@@ -3842,32 +3851,32 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                 }
                               }
                             }}
-                            className="w-20 text-center"
+                            className="w-16 sm:w-20 text-center text-xs sm:text-sm"
                           />
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => goToPage(currentPage + 1)}
                             disabled={currentPage === totalPages}
-                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm"
                           >
                             <ChevronRight className="h-4 w-4" />
                           </Button>
                         </div>
                       )}
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={enhanceCurrentPage}
                         disabled={isEnhancingText}
-                        className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-1 sm:flex-initial"
                       >
                         {isEnhancingText ? (
-                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                          <Loader2 className="h-4 w-4 sm:mr-1 animate-spin" />
                         ) : (
-                          <Sparkles className="h-4 w-4 mr-1" />
+                          <Sparkles className="h-4 w-4 sm:mr-1" />
                         )}
                         Enhance
                       </Button>
@@ -3879,7 +3888,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                     <Button
                       variant="outline"
                       size="sm"
-                      className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10"
+                      className="border-orange-500/30 text-orange-400 hover:bg-orange-500/10 text-xs sm:text-sm w-full sm:w-auto"
                       onClick={async () => {
                         try {
                           const content = getCurrentPageEditContent()
@@ -3934,34 +3943,36 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       }}
                       disabled={loading || !isEditing}
                     >
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Fix Formatting
+                      <RefreshCw className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Fix Formatting</span>
+                      <span className="sm:hidden">Fix Format</span>
                     </Button>
                   </div>
                   
                   {/* Toolbar for inserting screenplay elements */}
-                  <div className="flex items-center gap-2 pb-2 border-b border-purple-500/20 flex-wrap">
+                  <div className="flex items-center gap-1 sm:gap-2 pb-2 border-b border-purple-500/20 flex-wrap">
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={insertActionLine}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                     >
-                      <FileText className="h-3 w-3 mr-1" />
-                      Action
+                      <FileText className="h-3 w-3 sm:mr-1" />
+                      <span className="hidden sm:inline">Action</span>
                     </Button>
                     {loadingCharacters || characters.length === 0 ? (
                       <Button
                         size="sm"
                         variant="outline"
                         disabled
-                        className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                        className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400/50 w-[100px] sm:w-[140px]"
                       >
-                        {loadingCharacters ? "Loading..." : "No characters"}
+                        <span className="hidden sm:inline">{loadingCharacters ? "Loading..." : "No characters"}</span>
+                        <span className="sm:hidden">{loadingCharacters ? "..." : "No chars"}</span>
                       </Button>
                     ) : (
                       <Select onValueChange={insertCharacter}>
-                        <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                        <SelectTrigger className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[100px] sm:w-[140px]">
                           <SelectValue placeholder="Character" />
                         </SelectTrigger>
                         <SelectContent>
@@ -3978,16 +3989,17 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         size="sm"
                         variant="outline"
                         disabled
-                        className="h-8 px-3 text-sm border-purple-500/30 text-purple-400/50 w-[140px]"
+                        className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400/50 w-[100px] sm:w-[140px]"
                       >
-                        {loadingLocations ? "Loading..." : "No locations"}
+                        <span className="hidden sm:inline">{loadingLocations ? "Loading..." : "No locations"}</span>
+                        <span className="sm:hidden">{loadingLocations ? "..." : "No loc"}</span>
                       </Button>
                     ) : (
                       <Select onValueChange={(locationName) => {
                         const location = locations.find(l => l.name === locationName)
                         insertLocation(locationName, location?.type)
                       }}>
-                        <SelectTrigger className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[140px]">
+                        <SelectTrigger className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10 w-[100px] sm:w-[140px]">
                           <SelectValue placeholder="Location" />
                         </SelectTrigger>
                         <SelectContent>
@@ -4003,35 +4015,35 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       size="sm"
                       variant="outline"
                       onClick={insertSceneHeading}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                     >
-                      <MapPin className="h-3 w-3 mr-1" />
-                      INT/EXT
+                      <MapPin className="h-3 w-3 sm:mr-1" />
+                      <span className="hidden sm:inline">INT/EXT</span>
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={insertDialogue}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                     >
-                      <MessageSquare className="h-3 w-3 mr-1" />
-                      Dialogue
+                      <MessageSquare className="h-3 w-3 sm:mr-1" />
+                      <span className="hidden sm:inline">Dialogue</span>
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={insertTitlePage}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                     >
-                      <FileText className="h-3 w-3 mr-1" />
-                      Title Page
+                      <FileText className="h-3 w-3 sm:mr-1" />
+                      <span className="hidden sm:inline">Title Page</span>
                     </Button>
-                    <div className="h-6 w-px bg-border mx-1" />
+                    <div className="h-6 w-px bg-border mx-1 hidden sm:block" />
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => alignText('left')}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                       title="Align Left"
                     >
                       <AlignLeft className="h-3 w-3" />
@@ -4040,7 +4052,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       size="sm"
                       variant="outline"
                       onClick={() => alignText('center')}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                       title="Align Center"
                     >
                       <AlignCenter className="h-3 w-3" />
@@ -4049,18 +4061,18 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                       size="sm"
                       variant="outline"
                       onClick={() => alignText('right')}
-                      className="h-8 px-3 text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                      className="h-8 px-2 sm:px-3 text-xs sm:text-sm border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                       title="Align Right"
                     >
                       <AlignRight className="h-3 w-3" />
                     </Button>
                   </div>
                   
-                  <div className="space-y-2 relative w-full">
-                    <div className="relative w-full">
+                  <div className="space-y-2 relative w-full overflow-x-hidden">
+                    <div className="relative w-full overflow-x-hidden">
                       {/* Visual ruler for 80-character line width with center marker */}
-                      <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
-                        <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                      <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10 overflow-x-hidden">
+                        <div className="flex items-center w-full relative max-w-full sm:max-w-[calc(80ch+24px)] mx-auto px-3 sm:px-[12px]">
                           <span className="absolute left-0 opacity-30">0</span>
                           <span className="absolute left-[20%] opacity-30">16</span>
                           <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
@@ -4084,7 +4096,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                               value={pageContent}
                               onChange={(e) => saveCurrentPageEdit(e.target.value)}
                               onSelect={handleTextSelection}
-                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
                               style={{ 
                                 fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
                                 tabSize: 1,
@@ -4097,13 +4109,9 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                 wordWrap: 'break-word',
                                 fontVariantNumeric: 'normal',
                                 fontFeatureSettings: 'normal',
-                                width: 'calc(80ch + 24px)',
-                                maxWidth: 'calc(80ch + 24px)',
-                                minWidth: 'calc(80ch + 24px)',
-                                margin: '0 auto',
-                                display: 'block',
                                 overflowX: 'hidden',
-                                backgroundColor: 'transparent'
+                                backgroundColor: 'transparent',
+                                boxSizing: 'border-box'
                               }}
                               placeholder="Enter your screenplay here..."
                               onFocus={() => {
@@ -4124,7 +4132,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                               value={pageContent}
                               onChange={(e) => saveCurrentPageEdit(e.target.value)}
                               onSelect={handleTextSelection}
-                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
                               style={{ 
                                 fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
                                 tabSize: 1,
@@ -4137,13 +4145,9 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                 wordWrap: 'break-word',
                                 fontVariantNumeric: 'normal',
                                 fontFeatureSettings: 'normal',
-                                width: 'calc(80ch + 24px)',
-                                maxWidth: 'calc(80ch + 24px)',
-                                minWidth: 'calc(80ch + 24px)',
-                                margin: '0 auto',
-                                display: 'block',
                                 overflowX: 'hidden',
-                                backgroundColor: 'transparent'
+                                backgroundColor: 'transparent',
+                                boxSizing: 'border-box'
                               }}
                               placeholder="Enter your screenplay here..."
                               onFocus={() => {
@@ -4369,7 +4373,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                               const finalContent = textParts.filter(p => p.trim()).join('\n\n')
                               saveCurrentPageEdit(finalContent)
                             }}
-                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 outline-none"
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 outline-none w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
                             style={{ 
                               fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
                               tabSize: 1,
@@ -4380,13 +4384,9 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                               whiteSpace: 'pre-wrap',
                               overflowWrap: 'break-word',
                               wordWrap: 'break-word',
-                              width: 'calc(80ch + 24px)',
-                              maxWidth: 'calc(80ch + 24px)',
-                              minWidth: 'calc(80ch + 24px)',
-                              margin: '0 auto',
-                              display: 'block',
                               overflowX: 'hidden',
-                              backgroundColor: 'transparent'
+                              backgroundColor: 'transparent',
+                              boxSizing: 'border-box'
                             }}
                           >
                             {elements}

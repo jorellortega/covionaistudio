@@ -40,6 +40,7 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Menu,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { CollaborationService, type CollaborationSession } from "@/lib/collaboration-service"
@@ -1506,7 +1507,7 @@ ${centerText('AUTHOR NAME')}
   if (loading) {
     console.log('⏳ [COLLAB] Rendering loading state')
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center overflow-x-hidden">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <span className="text-lg">Loading collaboration session...</span>
@@ -1533,7 +1534,7 @@ ${centerText('AUTHOR NAME')}
   console.log('✅ [COLLAB] Rendering collaboration page')
 
   return (
-    <div className="min-h-screen bg-background flex flex-col md:flex-row">
+    <div className="min-h-screen bg-background flex flex-col md:flex-row overflow-x-hidden">
       {/* Sidebar - Mobile: Full screen overlay, Desktop: Sidebar */}
       {showSidebar && (
         <>
@@ -1543,7 +1544,7 @@ ${centerText('AUTHOR NAME')}
             onClick={() => setShowSidebar(false)}
           />
           {/* Sidebar */}
-          <div className="fixed md:relative inset-y-0 left-0 z-50 md:z-auto w-80 border-r border-border bg-muted/20 p-4 overflow-y-auto md:block">
+          <div className="fixed md:relative inset-y-0 right-0 md:left-0 z-50 md:z-auto w-80 border-l md:border-r border-border bg-muted/20 p-4 overflow-y-auto md:block">
           <div className="space-y-4">
             <div className="flex items-center justify-between mb-4">
               <Link href="/">
@@ -1679,7 +1680,7 @@ ${centerText('AUTHOR NAME')}
                   onClick={() => setShowSidebar(true)}
                   className="flex-shrink-0"
                 >
-                  <ChevronRight className="h-4 w-4" />
+                  <Menu className="h-5 w-5" />
                 </Button>
               )}
               <h1 className="text-lg md:text-2xl font-bold truncate">
@@ -1784,7 +1785,7 @@ ${centerText('AUTHOR NAME')}
                   value={selectedSceneId || ""}
                   onValueChange={handleSceneSelect}
                 >
-                  <SelectTrigger className="flex-1 min-w-0 md:w-[300px]">
+                  <SelectTrigger className="flex-1 min-w-0 md:w-[300px] border-primary/30">
                     <SelectValue>
                       {selectedScene ? (
                         <div className="flex items-center gap-2 min-w-0">
@@ -2216,14 +2217,14 @@ ${centerText('AUTHOR NAME')}
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="overflow-x-hidden p-4 sm:p-6">
                 {isEditing ? (
-                  <div className="space-y-4 relative">
-                    <div className="space-y-2 relative w-full">
-                      <div className="relative w-full">
+                  <div className="space-y-4 relative overflow-x-hidden">
+                    <div className="space-y-2 relative w-full overflow-x-hidden">
+                      <div className="relative w-full overflow-x-hidden">
                         {/* Visual ruler for 80-character line width with center marker */}
-                        <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10">
-                          <div className="flex items-center w-full relative" style={{ maxWidth: 'calc(80ch + 24px)', margin: '0 auto', paddingLeft: '12px', paddingRight: '12px' }}>
+                        <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10 overflow-x-hidden">
+                          <div className="flex items-center w-full relative max-w-full sm:max-w-[calc(80ch+24px)] mx-auto px-3 sm:px-[12px]">
                             <span className="absolute left-0 opacity-30">0</span>
                             <span className="absolute left-[20%] opacity-30">16</span>
                             <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
@@ -2254,7 +2255,7 @@ ${centerText('AUTHOR NAME')}
                             }, 1500)
                           }}
                           onSelect={handleTextSelection}
-                          className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10"
+                          className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
                           style={{ 
                             fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
                             tabSize: 1,
@@ -2267,13 +2268,9 @@ ${centerText('AUTHOR NAME')}
                             wordWrap: 'break-word',
                             fontVariantNumeric: 'normal',
                             fontFeatureSettings: 'normal',
-                            width: 'calc(80ch + 24px)',
-                            maxWidth: 'calc(80ch + 24px)',
-                            minWidth: 'calc(80ch + 24px)',
-                            margin: '0 auto',
-                            display: 'block',
                             overflowX: 'hidden',
-                            backgroundColor: 'transparent'
+                            backgroundColor: 'transparent',
+                            boxSizing: 'border-box'
                           }}
                           placeholder="Enter your screenplay here..."
                         />

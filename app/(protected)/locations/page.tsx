@@ -1127,15 +1127,15 @@ export default function LocationsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
-      <main className="container mx-auto max-w-7xl px-6 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent">
+      <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-8">
+        <div className="flex items-center justify-between mb-4 sm:mb-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent break-words">
               Locations
             </h1>
-            <p className="text-muted-foreground">
+            <p className="text-xs sm:text-sm lg:text-base text-muted-foreground break-words">
               Aggregate locations from scenes and manage location profiles.
             </p>
           </div>
@@ -1151,30 +1151,30 @@ export default function LocationsPage() {
 
         {!projectId ? (
           <Card className="cinema-card">
-            <CardContent className="py-8 text-center text-muted-foreground">
-              Select a movie to view and manage locations.
+            <CardContent className="py-6 sm:py-8 text-center text-muted-foreground px-4">
+              <p className="text-xs sm:text-sm break-words">Select a movie to view and manage locations.</p>
             </CardContent>
           </Card>
         ) : loading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading locations...
+            <span className="text-xs sm:text-sm">Loading locations...</span>
           </div>
         ) : (
           <>
             {/* Location Viewer Card */}
-            <Card className="cinema-card mb-6">
-              <CardHeader>
+            <Card className="cinema-card mb-4 sm:mb-6">
+              <CardHeader className="p-4 sm:p-6">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <MapPin className="h-5 w-5" />
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
+                    <MapPin className="h-5 w-5 flex-shrink-0" />
                     View Location
                   </CardTitle>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 <div className="space-y-2">
-                  <Label htmlFor="location-selector">Select Location</Label>
+                  <Label htmlFor="location-selector" className="text-xs sm:text-sm">Select Location</Label>
                   <Select
                     value={selectedLocationId || ""}
                     onValueChange={(value) => {
@@ -1182,7 +1182,7 @@ export default function LocationsPage() {
                     }}
                     disabled={locations.length === 0}
                   >
-                    <SelectTrigger id="location-selector" className="bg-input border-border">
+                    <SelectTrigger id="location-selector" className="bg-input border-border text-xs sm:text-sm">
                       <SelectValue placeholder={locations.length === 0 ? "No locations available. Create one below." : "Select a location to view details..."} />
                     </SelectTrigger>
                     <SelectContent>
@@ -1205,16 +1205,16 @@ export default function LocationsPage() {
                     if (!selectedLoc) return null
                     
                     return (
-                      <div className="space-y-4 p-4 bg-muted/20 rounded-lg border border-border">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-4 p-3 sm:p-4 bg-muted/20 rounded-lg border border-border overflow-x-hidden">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                           <div>
                             <Label className="text-xs text-muted-foreground">Name</Label>
-                            <p className="font-semibold text-lg">{selectedLoc.name}</p>
+                            <p className="font-semibold text-base sm:text-lg break-words">{selectedLoc.name}</p>
                           </div>
                           {selectedLoc.type && (
                             <div>
                               <Label className="text-xs text-muted-foreground">Type</Label>
-                              <p className="font-medium">{selectedLoc.type}</p>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedLoc.type}</p>
                             </div>
                           )}
                         </div>
@@ -1222,14 +1222,14 @@ export default function LocationsPage() {
                         {selectedLoc.description && (
                           <div>
                             <Label className="text-xs text-muted-foreground">Description</Label>
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedLoc.description}</p>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.description}</p>
                           </div>
                         )}
                         
                         {(selectedLoc.address || selectedLoc.city || selectedLoc.state || selectedLoc.country) && (
                           <div>
                             <Label className="text-xs text-muted-foreground">Address</Label>
-                            <p className="text-sm mt-1">
+                            <p className="text-xs sm:text-sm mt-1 break-words">
                               {[selectedLoc.address, selectedLoc.city, selectedLoc.state, selectedLoc.country].filter(Boolean).join(", ")}
                             </p>
                           </div>
@@ -1238,22 +1238,22 @@ export default function LocationsPage() {
                         {selectedLoc.visual_description && (
                           <div>
                             <Label className="text-xs text-muted-foreground">Visual Description</Label>
-                            <p className="text-sm mt-1 whitespace-pre-wrap">{selectedLoc.visual_description}</p>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.visual_description}</p>
                           </div>
                         )}
                         
                         {(selectedLoc.atmosphere || selectedLoc.mood) && (
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                             {selectedLoc.atmosphere && (
                               <div>
                                 <Label className="text-xs text-muted-foreground">Atmosphere</Label>
-                                <p className="text-sm mt-1">{selectedLoc.atmosphere}</p>
+                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.atmosphere}</p>
                               </div>
                             )}
                             {selectedLoc.mood && (
                               <div>
                                 <Label className="text-xs text-muted-foreground">Mood</Label>
-                                <p className="text-sm mt-1">{selectedLoc.mood}</p>
+                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.mood}</p>
                               </div>
                             )}
                           </div>
@@ -1277,13 +1277,13 @@ export default function LocationsPage() {
                         {/* Location Assets Section */}
                         <div className="space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                            <Label className="text-sm font-medium">Assets</Label>
+                            <Label className="text-xs sm:text-sm font-medium">Assets</Label>
                             <div className="flex items-center gap-2 flex-wrap">
                               <Button
                                 variant="outline"
                                 size="sm"
                                 onClick={() => router.push(`/locations/${selectedLoc.id}`)}
-                                className="gap-2 flex-shrink-0"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
                                 <ExternalLink className="h-4 w-4" />
                                 <span className="hidden sm:inline">View Full Page</span>
@@ -1294,13 +1294,14 @@ export default function LocationsPage() {
                                 size="sm"
                                 onClick={handleQuickGenerateLocationImage}
                                 disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded}
-                                className="gap-2 flex-shrink-0"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                                 title="Quick generate using system locked AI model"
                               >
                                 {isGeneratingQuickImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
                                   </>
                                 ) : (
                                   <>
@@ -1315,12 +1316,13 @@ export default function LocationsPage() {
                                 size="sm"
                                 onClick={() => setIsGenerateImageDialogOpen(true)}
                                 disabled={isGeneratingImage || isGeneratingQuickImage}
-                                className="gap-2 flex-shrink-0"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
                                 {isGeneratingImage ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
                                     <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
                                   </>
                                 ) : (
                                   <>
@@ -1344,17 +1346,19 @@ export default function LocationsPage() {
                                 size="sm"
                                 onClick={() => document.getElementById('location-asset-upload')?.click()}
                                 disabled={isUploadingAsset}
-                                className="gap-2"
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
                                 {isUploadingAsset ? (
                                   <>
                                     <Loader2 className="h-4 w-4 animate-spin" />
-                                    Uploading...
+                                    <span className="hidden sm:inline">Uploading...</span>
+                                    <span className="sm:hidden">Up...</span>
                                   </>
                                 ) : (
                                   <>
                                     <Upload className="h-4 w-4" />
-                                    Upload Assets
+                                    <span className="hidden sm:inline">Upload Assets</span>
+                                    <span className="sm:hidden">Upload</span>
                                   </>
                                 )}
                               </Button>
@@ -1362,12 +1366,12 @@ export default function LocationsPage() {
                           </div>
                           
                           {isLoadingAssets ? (
-                            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                            <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground py-4">
                               <Loader2 className="h-4 w-4 animate-spin" />
                               Loading assets...
                             </div>
                           ) : locationAssets.length === 0 ? (
-                            <div className="text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg">
+                            <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words">
                               No assets uploaded yet. Generate or upload images, videos, or files to help build up this location.
                             </div>
                           ) : (() => {
@@ -1569,32 +1573,32 @@ export default function LocationsPage() {
                   })()}
                   
                   {!selectedLocationId && locations.length > 0 && (
-                    <div className="text-sm text-muted-foreground text-center py-4">
+                    <div className="text-xs sm:text-sm text-muted-foreground text-center py-4 px-2 break-words">
                       Select a location from the dropdown to view their full details
                     </div>
                   )}
                   
                   {locations.length === 0 && (
-                    <div className="text-sm text-muted-foreground text-center py-4">
+                    <div className="text-xs sm:text-sm text-muted-foreground text-center py-4 px-2 break-words">
                       No locations created yet. Create your first location below.
                     </div>
                   )}
                 </CardContent>
               </Card>
             
-            <div className="space-y-6">
+            <div className="space-y-4 sm:space-y-6">
             {/* Locations list and create */}
             <Card id="locations-form-card" className="cinema-card">
-              <CardHeader className="pb-4">
-                <CardTitle>Locations</CardTitle>
-                <p className="text-sm text-muted-foreground">
+              <CardHeader className="pb-4 p-4 sm:p-6">
+                <CardTitle className="text-lg sm:text-xl">Locations</CardTitle>
+                <p className="text-xs sm:text-sm text-muted-foreground break-words">
                   {editingLocationInFormId ? "Edit location details below." : "Create and manage location profiles for this movie."}
                 </p>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 p-4 sm:p-6">
                 <div className="space-y-4">
                   {/* Basic Info */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="loc-name">Name *</Label>
                       <Input id="loc-name" value={newLocName} onChange={(e) => setNewLocName(e.target.value)} className="bg-input border-border" placeholder="e.g., Main Street Coffee Shop" />
@@ -1612,15 +1616,15 @@ export default function LocationsPage() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="space-y-2 md:col-span-2">
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="loc-description">Description</Label>
+                    <div className="space-y-2 sm:col-span-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                        <Label htmlFor="loc-description" className="text-xs sm:text-sm">Description</Label>
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => enhanceField(newLocDescription, setNewLocDescription)}
                           disabled={isEnhancingText || !newLocDescription.trim()}
-                          className="flex items-center gap-2"
+                          className="flex items-center gap-2 text-xs sm:text-sm w-full sm:w-auto"
                         >
                           {isEnhancingText ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1630,14 +1634,14 @@ export default function LocationsPage() {
                           {isEnhancingText ? "Enhancing..." : "Enhance Text"}
                         </Button>
                       </div>
-                      <Textarea id="loc-description" value={newLocDescription} onChange={(e) => setNewLocDescription(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Brief overview of the location..." />
+                      <Textarea id="loc-description" value={newLocDescription} onChange={(e) => setNewLocDescription(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Brief overview of the location..." />
                     </div>
                   </div>
 
                   {/* Address */}
                   <div className="space-y-3">
-                    <Label className="text-sm font-medium">Address</Label>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <Label className="text-xs sm:text-sm font-medium">Address</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-2">
                         <Label htmlFor="loc-address">Street Address</Label>
                         <Input id="loc-address" value={newLocAddress} onChange={(e) => setNewLocAddress(e.target.value)} className="bg-input border-border" />
@@ -1660,7 +1664,7 @@ export default function LocationsPage() {
                   <Separator />
 
                   {/* Visual & Atmosphere */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="loc-time-of-day">Time of Day (comma-separated)</Label>
                       <Input id="loc-time-of-day" value={newLocTimeOfDay} onChange={(e) => setNewLocTimeOfDay(e.target.value)} className="bg-input border-border" placeholder="day, night, dawn, dusk" />
@@ -1698,7 +1702,7 @@ export default function LocationsPage() {
                   <Separator />
 
                   {/* Technical Notes */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="loc-lighting">Lighting Notes</Label>
                       <Textarea id="loc-lighting" value={newLocLightingNotes} onChange={(e) => setNewLocLightingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" />
@@ -1712,7 +1716,7 @@ export default function LocationsPage() {
                   <Separator />
 
                   {/* Features & Props */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="loc-features">Key Features (comma-separated)</Label>
                       <Input id="loc-features" value={newLocKeyFeatures} onChange={(e) => setNewLocKeyFeatures(e.target.value)} className="bg-input border-border" placeholder="large windows, exposed brick, vintage furniture" />
@@ -1726,7 +1730,7 @@ export default function LocationsPage() {
                   <Separator />
 
                   {/* Production Notes */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-2">
                       <Label htmlFor="loc-restrictions">Restrictions</Label>
                       <Textarea id="loc-restrictions" value={newLocRestrictions} onChange={(e) => setNewLocRestrictions(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Time restrictions, noise limits, etc." />
@@ -1741,13 +1745,14 @@ export default function LocationsPage() {
                     <Textarea id="loc-shooting" value={newLocShootingNotes} onChange={(e) => setNewLocShootingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Camera angles, challenges, opportunities" />
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button onClick={() => createLocation()} disabled={isCreatingLocation || !newLocName.trim()} className="gap-2">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <Button onClick={() => createLocation()} disabled={isCreatingLocation || !newLocName.trim()} className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
                     {isCreatingLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : editingLocationInFormId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    {editingLocationInFormId ? "Update Location" : "Create Location"}
+                    <span className="hidden sm:inline">{editingLocationInFormId ? "Update Location" : "Create Location"}</span>
+                    <span className="sm:hidden">{editingLocationInFormId ? "Update" : "Create"}</span>
                   </Button>
                   {editingLocationInFormId && (
-                    <Button variant="outline" onClick={clearForm} disabled={isCreatingLocation} className="gap-2">
+                    <Button variant="outline" onClick={clearForm} disabled={isCreatingLocation} className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
                       <X className="h-4 w-4" />
                       Cancel
                     </Button>
@@ -1804,27 +1809,27 @@ export default function LocationsPage() {
 
             {/* Detected Locations */}
             <Card className="cinema-card">
-              <CardHeader className="pb-4">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <ListFilter className="h-4 w-4" />
+              <CardHeader className="pb-4 p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+                  <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                    <ListFilter className="h-4 w-4 flex-shrink-0" />
                     Detected Locations
                   </CardTitle>
                   <Input
                     placeholder="Filter locations..."
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
-                    className="h-8 bg-input border-border w-48"
+                    className="h-8 bg-input border-border w-full sm:w-48 text-xs sm:text-sm"
                   />
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-xs sm:text-sm text-muted-foreground break-words">
                   {detectedLocations.length} unique location{detectedLocations.length === 1 ? "" : "s"} detected
                   {treatmentId ? " (Treatment + Screenplay)" : " (Screenplay)"}
                 </p>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent className="space-y-3 p-4 sm:p-6">
                 {detectedLocations.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No locations found in scenes.</div>
+                  <div className="text-xs sm:text-sm text-muted-foreground">No locations found in scenes.</div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {detectedLocations.map((l) => {
@@ -1863,10 +1868,10 @@ export default function LocationsPage() {
 
       {/* Generate Image Dialog */}
       <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
-        <DialogContent className="cinema-card border-border max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Generate Location Image</DialogTitle>
-            <DialogDescription>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl p-4 sm:p-6">
+          <DialogHeader className="pb-4 sm:pb-6">
+            <DialogTitle className="text-lg sm:text-xl">Generate Location Image</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm break-words">
               Create an AI-generated image for {selectedLocationId ? locations.find(l => l.id === selectedLocationId)?.name || 'this location' : 'the selected location'}
             </DialogDescription>
           </DialogHeader>
