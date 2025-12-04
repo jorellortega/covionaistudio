@@ -1028,7 +1028,8 @@ export default function TestLeonardoPage() {
           await new Promise(resolve => setTimeout(resolve, 2000))
           
           // Use exact structure from API documentation
-          // For frame-to-frame with endFrameImage, duration might be fixed by the model
+          // For Kling models, duration is required (5 or 10 seconds)
+          // For Veo models, duration is also recommended (4, 6, or 8 seconds)
           requestBody = {
             prompt: videoPrompt.trim() || "Smooth transition between frames",
             imageId: startImageId,
@@ -1041,8 +1042,7 @@ export default function TestLeonardoPage() {
             resolution: "RESOLUTION_1080",
             height: 1080,
             width: 1920,
-            // Note: Duration may be fixed by model when using endFrameImage
-            // Try without duration first, add it only if API requires it
+            duration: duration, // Required for Kling, recommended for Veo
           }
           
           console.log('🎬 [VIDEO GENERATION] Request body before JSON:', requestBody)
@@ -1204,10 +1204,11 @@ export default function TestLeonardoPage() {
         
         const errorMessage = errorData.error || errorData.message || ''
         
-        // If error mentions duration is required, try adding it
+        // If error mentions duration is required, try adding it with correct value for model
         if (errorMessage.includes('duration') && !requestBody.duration) {
-          console.log('🎬 [VIDEO GENERATION] Duration required, adding duration 8...')
-          requestBody.duration = 8
+          const defaultDuration = videoModelType === 'KLING2_1' ? 5 : 8
+          console.log(`🎬 [VIDEO GENERATION] Duration required, adding duration ${defaultDuration} for ${videoModelType}...`)
+          requestBody.duration = defaultDuration
           
           videoResponse = await fetch(endpoint, {
             method: 'POST',
