@@ -3903,6 +3903,9 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
 
                           setLoading(true)
                           
+                          // Use standard 80-character line width for screenplay page
+                          const lineWidth = 80
+                          
                           const response = await fetch('/api/scenes/fix-screenplay-format', {
                             method: 'POST',
                             headers: {
@@ -3910,6 +3913,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                             },
                             body: JSON.stringify({
                               screenplay: content,
+                              lineWidth: lineWidth,
                             }),
                           })
 

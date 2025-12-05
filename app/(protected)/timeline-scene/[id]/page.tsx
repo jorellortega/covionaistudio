@@ -194,43 +194,6 @@ function ScenePageClient({ id }: { id: string }) {
   const [creatingCollaboration, setCreatingCollaboration] = useState(false)
   const [createdCollaborationCode, setCreatedCollaborationCode] = useState<string | null>(null)
   
-  // Ruler margin states (in pixels, 0 = left edge, 612 = right edge)
-  // Default margins: 0.75 inches (72px) on each side - less than 1 inch
-  const [leftMargin, setLeftMargin] = useState(72) // Default: 0.75 inch left margin
-  const [rightMargin, setRightMargin] = useState(540) // Default: 0.75 inch right margin (612 - 72 = 540)
-  const [isDraggingMargin, setIsDraggingMargin] = useState<'left' | 'right' | null>(null)
-  const rulerRef = useRef<HTMLDivElement>(null)
-  
-  // Handle document-level mouse events for dragging margins
-  useEffect(() => {
-    if (!isDraggingMargin) return
-    
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!rulerRef.current) return
-      const rect = rulerRef.current.getBoundingClientRect()
-      const x = e.clientX - rect.left
-      const clampedX = Math.max(0, Math.min(612, x))
-      
-      if (isDraggingMargin === 'left') {
-        setLeftMargin(clampedX)
-      } else if (isDraggingMargin === 'right') {
-        setRightMargin(clampedX)
-      }
-    }
-    
-    const handleMouseUp = () => {
-      setIsDraggingMargin(null)
-    }
-    
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isDraggingMargin])
-  
   // Enhanced text editing states
   const [inlineEditing, setInlineEditing] = useState<{
     assetId: string;
@@ -712,47 +675,10 @@ ${centerText('AUTHOR NAME')}
     insertTextAtCursor(titlePage)
   }
 
-  // Helper function to get line width in characters based on textarea dimensions
-  const getLineWidthInChars = (): number => {
-    const textarea = screenplayTextareaRef.current
-    if (!textarea) return 80 // Fallback
-    
-    // Get computed styles
-    const styles = window.getComputedStyle(textarea)
-    const fontSize = parseFloat(styles.fontSize) || 16
-    const paddingLeft = parseFloat(styles.paddingLeft) || 0
-    const paddingRight = parseFloat(styles.paddingRight) || 0
-    
-    // Measure character width using canvas for accuracy
-    const canvas = document.createElement('canvas')
-    const context = canvas.getContext('2d')
-    if (context) {
-      context.font = `${fontSize}px "Courier New", Courier, "Lucida Console", Monaco, monospace`
-      const charWidth = context.measureText('M').width
-      const availableWidth = textarea.clientWidth - paddingLeft - paddingRight
-      const charsPerLine = Math.floor(availableWidth / charWidth)
-      return charsPerLine
-    }
-    
-    // Fallback: estimate based on font size (monospace ≈ 0.6 * fontSize)
-    const charWidth = fontSize * 0.6
-    const availableWidth = textarea.clientWidth - paddingLeft - paddingRight
-    return Math.floor(availableWidth / charWidth)
-  }
-
-  // Helper function to center text based on actual textarea width
+  // Helper function to center text on an 80-character line
   const centerText = (text: string) => {
-    const textarea = screenplayTextareaRef.current
-    if (!textarea) {
-      // Fallback to 80-character standard
-      const trimmed = text.trim()
-      const leftPadding = Math.max(0, Math.floor((80 - trimmed.length) / 2))
-      return ' '.repeat(leftPadding) + trimmed
-    }
-    
-    // Calculate actual line width in characters based on textarea width
-    const lineWidth = getLineWidthInChars()
-    const centerPosition = lineWidth / 2 // Visual center of the textarea
+    const lineWidth = 80
+    const centerPosition = 40 // Center of 80-character line (0-indexed, between 39 and 40)
     
     // Remove any existing leading/trailing spaces from the text
     const trimmed = text.trim()
@@ -760,20 +686,59 @@ ${centerText('AUTHOR NAME')}
     
     if (textLength > lineWidth) {
       // Text is too long, just return it as-is
+      console.log('🎯 CENTER DEBUG: Text too long, returning as-is', { text, textLength, lineWidth })
       return trimmed
     }
     
-    // Calculate left padding to center the text visually
+    // Calculate where the center of the text should be positioned
+    // The center of the text is at textLength/2
+    // To center it at position 40, we need: leftPadding = 40 - textLength/2
+    // Round to nearest integer for best visual centering
     const textCenter = textLength / 2
-    const leftPadding = Math.floor(centerPosition - textCenter)
+    const leftPadding = Math.round(centerPosition - textCenter)
+    const rightPadding = lineWidth - leftPadding - textLength
     
-    // Ensure padding is non-negative
-    const finalLeftPadding = Math.max(0, leftPadding)
+    // Create spaces using String.repeat for reliability
+    const leftSpaces = ' '.repeat(leftPadding)
+    const rightSpaces = ' '.repeat(rightPadding)
     
-    // Create left padding spaces
-    const leftSpaces = ' '.repeat(finalLeftPadding)
+    const result = leftSpaces + trimmed + rightSpaces
+    const resultLength = result.length
     
-    return leftSpaces + trimmed
+    // Verify the result
+    const leftSpacesCount = result.match(/^ */)?.[0].length || 0
+    const rightSpacesCount = result.match(/ *$/)?.[0].length || 0
+    
+    // Create a visual representation for debugging
+    const visualRep = '·'.repeat(leftSpacesCount) + trimmed + '·'.repeat(rightSpacesCount)
+    
+    // Create a reference line showing where center should be (character 40)
+    const referenceLine = '|'.repeat(39) + '^' + '|'.repeat(40) // ^ marks position 40 (center of 80)
+    
+    // Log in a more readable format
+    const totalPadding = leftPadding + rightPadding
+    const calculatedCenter = leftPadding + textCenter
+    console.log('🎯 CENTER DEBUG:')
+    console.log('  Original text:', `"${text}"`)
+    console.log('  Trimmed text:', `"${trimmed}"`)
+    console.log('  Text length:', textLength)
+    console.log('  Text center (char position):', textCenter)
+    console.log('  Line width:', lineWidth)
+    console.log('  Target center position:', centerPosition)
+    console.log('  Left padding:', leftPadding, 'spaces')
+    console.log('  Right padding:', rightPadding, 'spaces')
+    console.log('  Total padding:', totalPadding)
+    console.log('  Result length:', resultLength, '(expected:', lineWidth, ')')
+    console.log('  Actual left spaces:', leftSpacesCount)
+    console.log('  Actual right spaces:', rightSpacesCount)
+    console.log('  Calculated center position:', calculatedCenter, '(expected: 40)')
+    console.log('  Center offset from target:', Math.abs(calculatedCenter - centerPosition))
+    console.log('  Visual representation:', visualRep)
+    console.log('  Reference line (^ = center):', referenceLine)
+    console.log('  Is properly centered:', Math.abs(calculatedCenter - centerPosition) <= 0.5 && resultLength === lineWidth)
+    console.log('  Full result:', `"${result}"`)
+    
+    return result
   }
 
   // Helper function to right-align text on an 80-character line
@@ -845,48 +810,11 @@ ${centerText('AUTHOR NAME')}
     }
     
     const newContent = lines.join('\n')
-    
-    // Save scroll and cursor position BEFORE updating
-    const scrollTop = textarea.scrollTop
-    const scrollLeft = textarea.scrollLeft
-    const selectionStart = textarea.selectionStart
-    const selectionEnd = textarea.selectionEnd
-    const windowScrollY = window.scrollY
-    const windowScrollX = window.scrollX
-    
-    // Temporarily prevent body scroll
-    const originalOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    
-    // Update content
     saveCurrentPageEdit(newContent)
+    
+    // Update textarea
     textarea.value = newContent
-    
-    // Restore scroll position immediately
-    textarea.scrollTop = scrollTop
-    textarea.scrollLeft = scrollLeft
-    window.scrollTo(windowScrollX, windowScrollY)
-    
-    // Restore cursor position
-    requestAnimationFrame(() => {
-      textarea.setSelectionRange(selectionStart, selectionEnd)
-      textarea.scrollTop = scrollTop
-      textarea.scrollLeft = scrollLeft
-      textarea.focus({ preventScroll: true })
-      
-      requestAnimationFrame(() => {
-        textarea.scrollTop = scrollTop
-        textarea.scrollLeft = scrollLeft
-        window.scrollTo(windowScrollX, windowScrollY)
-        
-        setTimeout(() => {
-          textarea.scrollTop = scrollTop
-          textarea.scrollLeft = scrollLeft
-          window.scrollTo(windowScrollX, windowScrollY)
-          document.body.style.overflow = originalOverflow
-        }, 0)
-      })
-    })
+    textarea.focus()
     
     // Trigger onChange
     const event = new Event('input', { bubbles: true })
@@ -5147,9 +5075,8 @@ ${centerText('AUTHOR NAME')}
                       
                       <div className="space-y-2 relative w-full overflow-x-hidden flex justify-center">
                         <div className="relative overflow-x-hidden" style={{ width: '612px' }}>
-                          {/* Microsoft Word-style interactive ruler with inch measurements, tick marks, and draggable margin markers (612px = 6.375" at 96 DPI) */}
+                          {/* Microsoft Word-style interactive ruler with inch measurements, tick marks (612px = 6.375" at 96 DPI) */}
                           <div 
-                            ref={rulerRef}
                             className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 z-10 overflow-x-hidden cursor-default"
                             style={{ width: '612px' }}
                           >
@@ -5164,11 +5091,15 @@ ${centerText('AUTHOR NAME')}
                                 const isFullInch = i % 8 === 0;
                                 const isHalfInch = i % 4 === 0 && !isFullInch;
                                 const isQuarterInch = i % 2 === 0 && !isHalfInch && !isFullInch;
+                                const isOneQuarter = i % 8 === 2;
+                                const isThreeQuarter = i % 8 === 6;
                                 
                                 // Tick heights - taller for more important marks
                                 let tickHeight = 4; // Smallest (1/8 inch)
-                                if (isQuarterInch) tickHeight = 6;
-                                if (isHalfInch) tickHeight = 10;
+                                if (isQuarterInch && !isOneQuarter && !isThreeQuarter) tickHeight = 6;
+                                if (isOneQuarter) tickHeight = 12; // Make 1/4 lines visible
+                                if (isHalfInch) tickHeight = 14; // Make half-inch lines more visible
+                                if (isThreeQuarter) tickHeight = 12; // Make three-quarter lines visible
                                 if (isFullInch) tickHeight = 18;
                                 
                                 return (
@@ -5179,10 +5110,10 @@ ${centerText('AUTHOR NAME')}
                                       x2={x}
                                       y2="24"
                                       stroke="currentColor"
-                                      strokeWidth={isFullInch ? "1.5" : "0.5"}
+                                      strokeWidth={isFullInch ? "1.5" : (isHalfInch || isThreeQuarter || isOneQuarter) ? "1" : "0.5"}
                                       className="text-muted-foreground"
                                       style={{ 
-                                        opacity: isFullInch ? 0.8 : isHalfInch ? 0.6 : isQuarterInch ? 0.4 : 0.3 
+                                        opacity: isFullInch ? 0.8 : (isHalfInch || isThreeQuarter || isOneQuarter) ? 0.7 : isQuarterInch ? 0.4 : 0.3 
                                       }}
                                     />
                                     {/* Inch number labels */}
@@ -5202,6 +5133,57 @@ ${centerText('AUTHOR NAME')}
                                         {Math.floor(fraction)}
                                       </text>
                                     )}
+                                    {/* Quarter-inch labels (1 1/4, 2 1/4, etc.) */}
+                                    {isOneQuarter && (
+                                      <text
+                                        x={x}
+                                        y="12"
+                                        textAnchor="middle"
+                                        className="text-[8px] fill-current text-muted-foreground"
+                                        style={{ 
+                                          fontSize: '8px', 
+                                          fontFamily: 'system-ui, sans-serif',
+                                          opacity: 0.7,
+                                          fontWeight: '400'
+                                        }}
+                                      >
+                                        {Math.floor(fraction)} 1/4
+                                      </text>
+                                    )}
+                                    {/* Half-inch labels (1 1/2, 2 1/2, etc.) */}
+                                    {isHalfInch && (
+                                      <text
+                                        x={x}
+                                        y="12"
+                                        textAnchor="middle"
+                                        className="text-[8px] fill-current text-muted-foreground"
+                                        style={{ 
+                                          fontSize: '8px', 
+                                          fontFamily: 'system-ui, sans-serif',
+                                          opacity: 0.7,
+                                          fontWeight: '400'
+                                        }}
+                                      >
+                                        {Math.floor(fraction)} 1/2
+                                      </text>
+                                    )}
+                                    {/* Three-quarter inch labels (1 3/4, 2 3/4, etc.) */}
+                                    {isThreeQuarter && (
+                                      <text
+                                        x={x}
+                                        y="12"
+                                        textAnchor="middle"
+                                        className="text-[8px] fill-current text-muted-foreground"
+                                        style={{ 
+                                          fontSize: '8px', 
+                                          fontFamily: 'system-ui, sans-serif',
+                                          opacity: 0.7,
+                                          fontWeight: '400'
+                                        }}
+                                      >
+                                        {Math.floor(fraction)} 3/4
+                                      </text>
+                                    )}
                                   </g>
                                 );
                               })}
@@ -5215,71 +5197,7 @@ ${centerText('AUTHOR NAME')}
                                 strokeWidth="1"
                                 className="opacity-40"
                               />
-                              {/* Left margin marker */}
-                              <g>
-                                <line
-                                  x1={leftMargin}
-                                  y1="0"
-                                  x2={leftMargin}
-                                  y2="24"
-                                  stroke="rgb(59, 130, 246)"
-                                  strokeWidth="2"
-                                  className="opacity-90"
-                                />
-                                <polygon
-                                  points={`${leftMargin},0 ${leftMargin - 4},8 ${leftMargin + 4},8`}
-                                  fill="rgb(59, 130, 246)"
-                                  className="opacity-90"
-                                />
-                              </g>
-                              {/* Right margin marker */}
-                              <g>
-                                <line
-                                  x1={rightMargin}
-                                  y1="0"
-                                  x2={rightMargin}
-                                  y2="24"
-                                  stroke="rgb(59, 130, 246)"
-                                  strokeWidth="2"
-                                  className="opacity-90"
-                                />
-                                <polygon
-                                  points={`${rightMargin},0 ${rightMargin - 4},8 ${rightMargin + 4},8`}
-                                  fill="rgb(59, 130, 246)"
-                                  className="opacity-90"
-                                />
-                              </g>
                             </svg>
-                            {/* Draggable left margin handle */}
-                            <div
-                              className="absolute top-0 cursor-ew-resize z-30 pointer-events-auto"
-                              style={{ 
-                                left: `${Math.max(0, leftMargin - 6)}px`,
-                                width: '12px',
-                                height: '24px',
-                                backgroundColor: 'transparent'
-                              }}
-                              onMouseDown={(e) => {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setIsDraggingMargin('left')
-                              }}
-                            />
-                            {/* Draggable right margin handle */}
-                            <div
-                              className="absolute top-0 cursor-ew-resize z-30 pointer-events-auto"
-                              style={{ 
-                                left: `${Math.max(0, Math.min(612, rightMargin - 6))}px`,
-                                width: '12px',
-                                height: '24px',
-                                backgroundColor: 'transparent'
-                              }}
-                              onMouseDown={(e) => {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setIsDraggingMargin('right')
-                              }}
-                            />
                           </div>
                           <Textarea
                             key={`page-${currentPage}`}
@@ -5300,8 +5218,8 @@ ${centerText('AUTHOR NAME')}
                               maxHeight: '864px',
                               tabSize: 1,
                               letterSpacing: '0px',
-                              paddingLeft: `${leftMargin}px`,
-                              paddingRight: `${612 - rightMargin}px`,
+                              paddingLeft: '12px',
+                              paddingRight: '12px',
                               textAlign: 'left',
                               whiteSpace: 'pre-wrap',
                               overflowWrap: 'break-word',

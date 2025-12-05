@@ -13,21 +13,19 @@ import { createClient } from '@supabase/supabase-js'
  * - Dialogue: Indented 10 spaces from left
  * - Transitions: Right-aligned (around column 65-70)
  */
-function fixScreenplayFormatting(screenplay: string): string {
-  console.log('🎬 FIX FORMAT API - Starting formatting fix')
-  console.log('🎬 FIX FORMAT API - Original length:', screenplay.length)
-  
+function fixScreenplayFormatting(screenplay: string, lineWidth: number = 80): string {
   const lines = screenplay.split('\n')
-  console.log('🎬 FIX FORMAT API - Total lines:', lines.length)
   const formattedLines: string[] = []
   let changesMade = 0
   
-  // Standard screenplay indentation constants (for 80-character line)
-  const LINE_WIDTH = 80                    // Standard screenplay line width
-  const CHARACTER_NAME_CENTER = 40         // Center point for character names
-  const PARENTHETICAL_INDENT = 15          // Parentheticals indented 15 spaces
-  const DIALOGUE_INDENT = 10               // Dialogue indented 10 spaces
-  const TRANSITION_COLUMN = 70             // Transitions right-aligned at column 70
+  // Standard screenplay indentation constants (based on line width)
+  const LINE_WIDTH = lineWidth                    // Dynamic line width (default 80)
+  const CHARACTER_NAME_CENTER = LINE_WIDTH / 2   // Center point for character names
+  const PARENTHETICAL_INDENT = Math.floor(LINE_WIDTH * 0.1875)  // ~15 spaces for 80-char line, scales proportionally
+  const DIALOGUE_LEFT_MARGIN = Math.floor(LINE_WIDTH * 0.125)   // ~10 spaces for 80-char line (left margin)
+  const DIALOGUE_RIGHT_MARGIN = Math.floor(LINE_WIDTH * 0.125)  // ~10 spaces for 80-char line (right margin)
+  const DIALOGUE_MAX_WIDTH = LINE_WIDTH - DIALOGUE_LEFT_MARGIN - DIALOGUE_RIGHT_MARGIN  // ~60 chars for 80-char line
+  const TRANSITION_COLUMN = Math.floor(LINE_WIDTH * 0.875)     // ~70 for 80-char line, scales proportionally
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
@@ -45,9 +43,6 @@ function fixScreenplayFormatting(screenplay: string): string {
       const formatted = trimmed.toUpperCase()
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: SCENE HEADING fixed`)
-        console.log(`  Before: [${line}]`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -66,9 +61,6 @@ function fixScreenplayFormatting(screenplay: string): string {
       const formatted = transition.padStart(TRANSITION_COLUMN)
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: TRANSITION fixed`)
-        console.log(`  Before: [${line}]`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -112,15 +104,13 @@ function fixScreenplayFormatting(screenplay: string): string {
     if (looksLikeCharacterName) {
       const name = trimmed.toUpperCase().trim()
       // PROPERLY CENTER the name on the line
-      // Center point is CHARACTER_NAME_CENTER, so we calculate left padding
+      // Use the same calculation as frontend: centerPosition - textCenter
       const nameLength = name.length
-      const leftPadding = Math.max(0, Math.floor((LINE_WIDTH - nameLength) / 2))
+      const textCenter = nameLength / 2
+      const leftPadding = Math.max(0, Math.floor(CHARACTER_NAME_CENTER - textCenter))
       const formatted = ' '.repeat(leftPadding) + name
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME fixed (centered)`)
-        console.log(`  Before: [${line}]`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -130,14 +120,13 @@ function fixScreenplayFormatting(screenplay: string): string {
     if (/\(CONT['']D\)|\(V\.O\.\)|\(O\.S\.\)|\(O\.C\.\)$/i.test(trimmed)) {
       const name = trimmed.toUpperCase().trim()
       // PROPERLY CENTER the name on the line
+      // Use the same calculation as frontend: centerPosition - textCenter
       const nameLength = name.length
-      const leftPadding = Math.max(0, Math.floor((LINE_WIDTH - nameLength) / 2))
+      const textCenter = nameLength / 2
+      const leftPadding = Math.max(0, Math.floor(CHARACTER_NAME_CENTER - textCenter))
       const formatted = ' '.repeat(leftPadding) + name
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: CHARACTER NAME (with modifier) fixed (centered)`)
-        console.log(`  Before: [${line}]`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -159,9 +148,6 @@ function fixScreenplayFormatting(screenplay: string): string {
       const formatted = ' '.repeat(PARENTHETICAL_INDENT) + content
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: PARENTHETICAL fixed`)
-        console.log(`  Before: [${line}] (${leadingSpaces} leading spaces)`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -186,8 +172,8 @@ function fixScreenplayFormatting(screenplay: string): string {
       const prevTrimmed = prevFormatted.trim()
       const prevLeadingSpaces = prevFormatted.match(/^ */)?.[0].length || 0
       
-      // Dialogue has DIALOGUE_INDENT spaces indentation (allow some flexibility)
-      wasDialogue = prevLeadingSpaces >= DIALOGUE_INDENT - 2 && prevLeadingSpaces <= DIALOGUE_INDENT + 2 && 
+      // Dialogue has DIALOGUE_LEFT_MARGIN spaces indentation (allow some flexibility)
+      wasDialogue = prevLeadingSpaces >= DIALOGUE_LEFT_MARGIN - 2 && prevLeadingSpaces <= DIALOGUE_LEFT_MARGIN + 2 && 
                     prevTrimmed.length > 0 &&
                     !/^\(/.test(prevTrimmed) &&
                     !/^[A-Z][A-Z0-9\s#'-]+$/.test(prevTrimmed) &&
@@ -201,13 +187,13 @@ function fixScreenplayFormatting(screenplay: string): string {
     // 3. Has some indentation (6-15 spaces) and looks like dialogue
     // 4. Starts at hard left (0 spaces) but follows dialogue - this is the key fix
     const isDialogueContinuation = wasDialogue && 
-                                    leadingSpaces < DIALOGUE_INDENT && 
+                                    leadingSpaces < DIALOGUE_LEFT_MARGIN && 
                                     !looksLikeCharacterName && 
                                     !/^\(/.test(trimmed) &&
                                     !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(trimmed) &&
                                     !/^[A-Z][A-Z0-9\s#'-]+$/.test(trimmed)
     
-    // 5. DIALOGUE - Indented 10 spaces, follows character name or parenthetical
+    // 5. DIALOGUE - Has left and right margins (constrained width), follows character name or parenthetical
     const isPotentialDialogueContinuation = leadingSpaces >= 6 && leadingSpaces <= 15 && 
                                             !looksLikeCharacterName && 
                                             !/^\(/.test(trimmed) &&
@@ -218,14 +204,59 @@ function fixScreenplayFormatting(screenplay: string): string {
         !/^(INT\.|EXT\.|FADE|CUT|DISSOLVE)/i.test(trimmed) &&
         !/^[A-Z][A-Z0-9\s#'-]+$/.test(trimmed) &&
         !/^\(/.test(trimmed)) {
-      const formatted = ' '.repeat(DIALOGUE_INDENT) + trimmed
-      if (formatted !== line) {
-        changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: DIALOGUE fixed${isDialogueContinuation ? ' (continuation)' : ''}`)
-        console.log(`  Before: [${line}] (${leadingSpaces} leading spaces)`)
-        console.log(`  After:  [${formatted}]`)
+      // Dialogue formatting: LEFT MARGIN + TEXT (constrained) + RIGHT MARGIN
+      // Dialogue has its own margins: 10 spaces left, text constrained to 60 chars, 10 spaces right
+      // This creates a "dialogue block" with consistent left and right margins
+      let dialogueText = trimmed
+      
+      // If dialogue text exceeds max width, wrap it at word boundaries
+      if (dialogueText.length > DIALOGUE_MAX_WIDTH) {
+        // Wrap long dialogue lines - split at word boundaries
+        const words = dialogueText.split(' ')
+        let currentLine = ''
+        const wrappedLines: string[] = []
+        
+        for (const word of words) {
+          const testLine = currentLine + (currentLine ? ' ' : '') + word
+          if (testLine.length <= DIALOGUE_MAX_WIDTH) {
+            currentLine = testLine
+          } else {
+            if (currentLine) {
+              wrappedLines.push(currentLine)
+            }
+            // If word itself is too long, truncate it
+            currentLine = word.length > DIALOGUE_MAX_WIDTH ? word.substring(0, DIALOGUE_MAX_WIDTH) : word
+          }
+        }
+        if (currentLine) {
+          wrappedLines.push(currentLine)
+        }
+        
+        // Format each wrapped line with LEFT MARGIN + TEXT + RIGHT MARGIN (fill to 80 chars)
+        wrappedLines.forEach((wrappedLine, idx) => {
+          const leftMargin = ' '.repeat(DIALOGUE_LEFT_MARGIN)  // 10 spaces
+          const constrainedText = wrappedLine.substring(0, DIALOGUE_MAX_WIDTH)  // Max 60 chars
+          const usedChars = DIALOGUE_LEFT_MARGIN + constrainedText.length
+          const rightMargin = ' '.repeat(LINE_WIDTH - usedChars)  // Fill to 80 chars total
+          const formatted = leftMargin + constrainedText + rightMargin
+          
+          if (idx === 0 && formatted.trim() !== line.trim()) {
+            changesMade++
+          }
+          formattedLines.push(formatted)
+        })
+      } else {
+        // Short dialogue line - format with LEFT MARGIN + TEXT + RIGHT MARGIN (fill to 80 chars)
+        const leftMargin = ' '.repeat(DIALOGUE_LEFT_MARGIN)  // 10 spaces
+        const usedChars = DIALOGUE_LEFT_MARGIN + dialogueText.length
+        const rightMargin = ' '.repeat(LINE_WIDTH - usedChars)  // Fill to 80 chars total
+        const formatted = leftMargin + dialogueText + rightMargin
+        
+        if (formatted !== line) {
+          changesMade++
+        }
+        formattedLines.push(formatted)
       }
-      formattedLines.push(formatted)
       continue
     }
     
@@ -236,9 +267,6 @@ function fixScreenplayFormatting(screenplay: string): string {
       const formatted = trimmed
       if (formatted !== line) {
         changesMade++
-        console.log(`🎬 FIX FORMAT API - Line ${i + 1}: ACTION LINE fixed (removed ${leadingSpaces} leading spaces)`)
-        console.log(`  Before: [${line}]`)
-        console.log(`  After:  [${formatted}]`)
       }
       formattedLines.push(formatted)
       continue
@@ -250,18 +278,13 @@ function fixScreenplayFormatting(screenplay: string): string {
   }
   
   const formatted = formattedLines.join('\n')
-  console.log('🎬 FIX FORMAT API - Formatting complete')
-  console.log('🎬 FIX FORMAT API - Total changes made:', changesMade)
-  console.log('🎬 FIX FORMAT API - Formatted length:', formatted.length)
-  console.log('🎬 FIX FORMAT API - Content actually changed:', screenplay !== formatted)
-  
   return formatted
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { screenplay, sceneId, userId } = body
+    const { screenplay, sceneId, userId, lineWidth } = body
 
     if (!screenplay) {
       return NextResponse.json(
@@ -270,16 +293,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    console.log('🎬 FIX FORMAT API - Received screenplay length:', screenplay.length)
-    console.log('🎬 FIX FORMAT API - First 500 chars:', screenplay.substring(0, 500))
+    // Use provided lineWidth or default to 80 (industry standard)
+    const actualLineWidth = lineWidth && typeof lineWidth === 'number' && lineWidth > 0 ? lineWidth : 80
     
-    // Fix the formatting
-    const formattedScreenplay = fixScreenplayFormatting(screenplay)
-    
-    console.log('🎬 FIX FORMAT API - Formatted screenplay length:', formattedScreenplay.length)
-    console.log('🎬 FIX FORMAT API - First 500 chars of formatted:', formattedScreenplay.substring(0, 500))
-    console.log('🎬 FIX FORMAT API - Content changed:', screenplay !== formattedScreenplay)
-    console.log('🎬 FIX FORMAT API - Length difference:', formattedScreenplay.length - screenplay.length)
+    // Fix the formatting with the actual line width
+    const formattedScreenplay = fixScreenplayFormatting(screenplay, actualLineWidth)
 
     // If sceneId is provided, save it to the scene
     if (sceneId && userId) {
