@@ -194,6 +194,42 @@ function ScenePageClient({ id }: { id: string }) {
   const [creatingCollaboration, setCreatingCollaboration] = useState(false)
   const [createdCollaborationCode, setCreatedCollaborationCode] = useState<string | null>(null)
   
+  // Ruler margin states (in pixels, 0 = left edge, 612 = right edge)
+  const [leftMargin, setLeftMargin] = useState(0) // Default: no left margin
+  const [rightMargin, setRightMargin] = useState(612) // Default: no right margin
+  const [isDraggingMargin, setIsDraggingMargin] = useState<'left' | 'right' | null>(null)
+  const rulerRef = useRef<HTMLDivElement>(null)
+  
+  // Handle document-level mouse events for dragging margins
+  useEffect(() => {
+    if (!isDraggingMargin) return
+    
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!rulerRef.current) return
+      const rect = rulerRef.current.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const clampedX = Math.max(0, Math.min(612, x))
+      
+      if (isDraggingMargin === 'left') {
+        setLeftMargin(clampedX)
+      } else if (isDraggingMargin === 'right') {
+        setRightMargin(clampedX)
+      }
+    }
+    
+    const handleMouseUp = () => {
+      setIsDraggingMargin(null)
+    }
+    
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+    
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isDraggingMargin])
+  
   // Enhanced text editing states
   const [inlineEditing, setInlineEditing] = useState<{
     assetId: string;
@@ -675,10 +711,47 @@ ${centerText('AUTHOR NAME')}
     insertTextAtCursor(titlePage)
   }
 
-  // Helper function to center text on an 80-character line
+  // Helper function to get line width in characters based on textarea dimensions
+  const getLineWidthInChars = (): number => {
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) return 80 // Fallback
+    
+    // Get computed styles
+    const styles = window.getComputedStyle(textarea)
+    const fontSize = parseFloat(styles.fontSize) || 16
+    const paddingLeft = parseFloat(styles.paddingLeft) || 0
+    const paddingRight = parseFloat(styles.paddingRight) || 0
+    
+    // Measure character width using canvas for accuracy
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (context) {
+      context.font = `${fontSize}px "Courier New", Courier, "Lucida Console", Monaco, monospace`
+      const charWidth = context.measureText('M').width
+      const availableWidth = textarea.clientWidth - paddingLeft - paddingRight
+      const charsPerLine = Math.floor(availableWidth / charWidth)
+      return charsPerLine
+    }
+    
+    // Fallback: estimate based on font size (monospace ≈ 0.6 * fontSize)
+    const charWidth = fontSize * 0.6
+    const availableWidth = textarea.clientWidth - paddingLeft - paddingRight
+    return Math.floor(availableWidth / charWidth)
+  }
+
+  // Helper function to center text based on actual textarea width
   const centerText = (text: string) => {
-    const lineWidth = 80
-    const centerPosition = 40 // Center of 80-character line (0-indexed, between 39 and 40)
+    const textarea = screenplayTextareaRef.current
+    if (!textarea) {
+      // Fallback to 80-character standard
+      const trimmed = text.trim()
+      const leftPadding = Math.max(0, Math.floor((80 - trimmed.length) / 2))
+      return ' '.repeat(leftPadding) + trimmed
+    }
+    
+    // Calculate actual line width in characters based on textarea width
+    const lineWidth = getLineWidthInChars()
+    const centerPosition = lineWidth / 2 // Visual center of the textarea
     
     // Remove any existing leading/trailing spaces from the text
     const trimmed = text.trim()
@@ -686,59 +759,20 @@ ${centerText('AUTHOR NAME')}
     
     if (textLength > lineWidth) {
       // Text is too long, just return it as-is
-      console.log('🎯 CENTER DEBUG: Text too long, returning as-is', { text, textLength, lineWidth })
       return trimmed
     }
     
-    // Calculate where the center of the text should be positioned
-    // The center of the text is at textLength/2
-    // To center it at position 40, we need: leftPadding = 40 - textLength/2
-    // Round to nearest integer for best visual centering
+    // Calculate left padding to center the text visually
     const textCenter = textLength / 2
-    const leftPadding = Math.round(centerPosition - textCenter)
-    const rightPadding = lineWidth - leftPadding - textLength
+    const leftPadding = Math.floor(centerPosition - textCenter)
     
-    // Create spaces using String.repeat for reliability
-    const leftSpaces = ' '.repeat(leftPadding)
-    const rightSpaces = ' '.repeat(rightPadding)
+    // Ensure padding is non-negative
+    const finalLeftPadding = Math.max(0, leftPadding)
     
-    const result = leftSpaces + trimmed + rightSpaces
-    const resultLength = result.length
+    // Create left padding spaces
+    const leftSpaces = ' '.repeat(finalLeftPadding)
     
-    // Verify the result
-    const leftSpacesCount = result.match(/^ */)?.[0].length || 0
-    const rightSpacesCount = result.match(/ *$/)?.[0].length || 0
-    
-    // Create a visual representation for debugging
-    const visualRep = '·'.repeat(leftSpacesCount) + trimmed + '·'.repeat(rightSpacesCount)
-    
-    // Create a reference line showing where center should be (character 40)
-    const referenceLine = '|'.repeat(39) + '^' + '|'.repeat(40) // ^ marks position 40 (center of 80)
-    
-    // Log in a more readable format
-    const totalPadding = leftPadding + rightPadding
-    const calculatedCenter = leftPadding + textCenter
-    console.log('🎯 CENTER DEBUG:')
-    console.log('  Original text:', `"${text}"`)
-    console.log('  Trimmed text:', `"${trimmed}"`)
-    console.log('  Text length:', textLength)
-    console.log('  Text center (char position):', textCenter)
-    console.log('  Line width:', lineWidth)
-    console.log('  Target center position:', centerPosition)
-    console.log('  Left padding:', leftPadding, 'spaces')
-    console.log('  Right padding:', rightPadding, 'spaces')
-    console.log('  Total padding:', totalPadding)
-    console.log('  Result length:', resultLength, '(expected:', lineWidth, ')')
-    console.log('  Actual left spaces:', leftSpacesCount)
-    console.log('  Actual right spaces:', rightSpacesCount)
-    console.log('  Calculated center position:', calculatedCenter, '(expected: 40)')
-    console.log('  Center offset from target:', Math.abs(calculatedCenter - centerPosition))
-    console.log('  Visual representation:', visualRep)
-    console.log('  Reference line (^ = center):', referenceLine)
-    console.log('  Is properly centered:', Math.abs(calculatedCenter - centerPosition) <= 0.5 && resultLength === lineWidth)
-    console.log('  Full result:', `"${result}"`)
-    
-    return result
+    return leftSpaces + trimmed
   }
 
   // Helper function to right-align text on an 80-character line
@@ -810,11 +844,48 @@ ${centerText('AUTHOR NAME')}
     }
     
     const newContent = lines.join('\n')
-    saveCurrentPageEdit(newContent)
     
-    // Update textarea
+    // Save scroll and cursor position BEFORE updating
+    const scrollTop = textarea.scrollTop
+    const scrollLeft = textarea.scrollLeft
+    const selectionStart = textarea.selectionStart
+    const selectionEnd = textarea.selectionEnd
+    const windowScrollY = window.scrollY
+    const windowScrollX = window.scrollX
+    
+    // Temporarily prevent body scroll
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    
+    // Update content
+    saveCurrentPageEdit(newContent)
     textarea.value = newContent
-    textarea.focus()
+    
+    // Restore scroll position immediately
+    textarea.scrollTop = scrollTop
+    textarea.scrollLeft = scrollLeft
+    window.scrollTo(windowScrollX, windowScrollY)
+    
+    // Restore cursor position
+    requestAnimationFrame(() => {
+      textarea.setSelectionRange(selectionStart, selectionEnd)
+      textarea.scrollTop = scrollTop
+      textarea.scrollLeft = scrollLeft
+      textarea.focus({ preventScroll: true })
+      
+      requestAnimationFrame(() => {
+        textarea.scrollTop = scrollTop
+        textarea.scrollLeft = scrollLeft
+        window.scrollTo(windowScrollX, windowScrollY)
+        
+        setTimeout(() => {
+          textarea.scrollTop = scrollTop
+          textarea.scrollLeft = scrollLeft
+          window.scrollTo(windowScrollX, windowScrollY)
+          document.body.style.overflow = originalOverflow
+        }, 0)
+      })
+    })
     
     // Trigger onChange
     const event = new Event('input', { bubbles: true })
@@ -3102,10 +3173,10 @@ ${centerText('AUTHOR NAME')}
           </div>
 
           {/* Second Row: Scene Navigation and Action Buttons */}
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             {/* Scene Navigation */}
             {allScenes.length > 1 && (
-              <div className="flex items-center gap-2 w-full">
+              <div className="flex items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -3116,7 +3187,7 @@ ${centerText('AUTHOR NAME')}
                     }
                   }}
                   disabled={currentSceneIndex <= 0}
-                  className="border-primary/30 text-primary hover:bg-primary/10 text-xs sm:text-sm flex-shrink-0"
+                  className="border-primary/30 text-primary hover:bg-primary/10"
                 >
                   <ChevronLeft className="h-4 w-4" />
                   <span className="hidden sm:inline ml-1">Previous</span>
@@ -3128,13 +3199,13 @@ ${centerText('AUTHOR NAME')}
                     router.push(`/timeline-scene/${value}`)
                   }}
                 >
-                  <SelectTrigger className="flex-1 sm:w-[200px] lg:w-[250px] border-primary/30 text-xs sm:text-sm">
+                  <SelectTrigger className="w-[200px] sm:w-[250px] border-primary/30">
                     <SelectValue>
                       {scene ? (
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-medium truncate">{scene.name}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{scene.name}</span>
                           {scene.metadata?.sceneNumber && (
-                            <Badge variant="outline" className="text-xs flex-shrink-0">
+                            <Badge variant="outline" className="text-xs">
                               {scene.metadata.sceneNumber}
                             </Badge>
                           )}
@@ -3177,7 +3248,7 @@ ${centerText('AUTHOR NAME')}
                     }
                   }}
                   disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
-                  className="border-primary/30 text-primary hover:bg-primary/10 text-xs sm:text-sm flex-shrink-0"
+                  className="border-primary/30 text-primary hover:bg-primary/10"
                 >
                   <span className="hidden sm:inline mr-1">Next</span>
                   <ChevronRight className="h-4 w-4" />
@@ -3187,15 +3258,15 @@ ${centerText('AUTHOR NAME')}
             
             {/* Description Dialog */}
             <Dialog open={showDescriptionDialog} onOpenChange={setShowDescriptionDialog}>
-              <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[80vh] overflow-y-auto p-4 sm:p-6">
-                <DialogHeader className="pb-4 sm:pb-6">
-                  <DialogTitle className="text-lg sm:text-xl">Scene Description</DialogTitle>
-                  <DialogDescription className="text-xs sm:text-sm break-words">
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Scene Description</DialogTitle>
+                  <DialogDescription>
                     {scene?.name && `Description for "${scene.name}"`}
                   </DialogDescription>
                 </DialogHeader>
                 <div className="mt-4">
-                  <p className="text-xs sm:text-sm lg:text-base text-muted-foreground whitespace-pre-wrap break-words">
+                  <p className="text-muted-foreground whitespace-pre-wrap">
                     {scene?.description || "No description available for this scene."}
                   </p>
                 </div>
@@ -3203,7 +3274,7 @@ ${centerText('AUTHOR NAME')}
             </Dialog>
             
             {/* Action Buttons - Grouped together */}
-            <div className="flex flex-wrap items-center gap-2 w-full">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-2">
               {/* Start Collaboration Button */}
               {projectId && (
                 <Button
@@ -3215,11 +3286,11 @@ ${centerText('AUTHOR NAME')}
                     setNewCollaborationExpiresAt('')
                     setShowCreateCollaborationDialog(true)
                   }}
-                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                 >
-                  <Users className="h-4 w-4 sm:mr-2" />
+                  <Users className="h-4 w-4 mr-2" />
                   <span className="hidden sm:inline">Collab</span>
-                  <span className="sm:hidden">Collab</span>
+                  <span className="sm:hidden">Collaborate</span>
                 </Button>
               )}
               
@@ -3228,13 +3299,13 @@ ${centerText('AUTHOR NAME')}
                 <Button
                   variant="outline"
                   size="sm"
-                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
                   asChild
                 >
                   <Link href={`/screenplay/${projectId}`}>
-                    <FileText className="h-4 w-4 sm:mr-2" />
+                    <FileText className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">Screenplay</span>
-                    <span className="sm:hidden">Script</span>
+                    <span className="sm:hidden">Screenplay</span>
                   </Link>
                 </Button>
               )}
@@ -3243,11 +3314,11 @@ ${centerText('AUTHOR NAME')}
               <Button
                 variant="outline"
                 size="sm"
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
                 asChild
               >
                 <Link href="/treatments/e8263848-ee4a-485d-bf55-8519a99609cb">
-                  <Film className="h-4 w-4 sm:mr-2" />
+                  <Film className="h-4 w-4 mr-2" />
                   <span className="hidden sm:inline">Movie</span>
                   <span className="sm:hidden">Movie</span>
                 </Link>
@@ -3257,9 +3328,9 @@ ${centerText('AUTHOR NAME')}
                 variant="outline"
                 size="sm"
                 onClick={() => setActiveTab("import")}
-                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 bg-transparent"
               >
-                <Upload className="h-4 w-4 sm:mr-2" />
+                <Upload className="h-4 w-4 mr-2" />
                 <span className="hidden sm:inline">Import</span>
                 <span className="sm:hidden">Import</span>
               </Button>
@@ -3268,9 +3339,9 @@ ${centerText('AUTHOR NAME')}
                 variant="outline"
                 size="sm"
                 onClick={startEditing}
-                className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                className="border-primary/30 text-primary hover:bg-primary/10 bg-transparent"
               >
-                <Edit3 className="h-4 w-4 sm:mr-2" />
+                <Edit3 className="h-4 w-4 mr-2" />
                 <span className="hidden sm:inline">Edit</span>
                 <span className="sm:hidden">Edit</span>
               </Button>
@@ -3281,9 +3352,9 @@ ${centerText('AUTHOR NAME')}
                   variant="outline"
                   size="sm"
                   onClick={() => setShowAIImageDialog(true)}
-                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                  className="border-green-500/30 text-green-400 hover:bg-green-500/10 bg-transparent"
                 >
-                  <Bot className="h-4 w-4 sm:mr-2" />
+                  <Bot className="h-4 w-4 mr-2" />
                   <span className="hidden sm:inline">Generate AI Image</span>
                   <span className="sm:hidden">AI Image</span>
                 </Button>
@@ -3294,23 +3365,23 @@ ${centerText('AUTHOR NAME')}
                   <Button
                     variant="outline"
                     size="sm"
-                    className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent text-xs sm:text-sm flex-1 sm:flex-initial"
+                    className="border-destructive/30 text-destructive hover:bg-destructive/10 bg-transparent"
                   >
-                    <Trash2 className="h-4 w-4 sm:mr-2" />
+                    <Trash2 className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">Delete</span>
                     <span className="sm:hidden">Delete</span>
                   </Button>
                 </AlertDialogTrigger>
-            <AlertDialogContent className="bg-background border-destructive/20 max-w-[95vw] sm:max-w-md p-4 sm:p-6">
-              <AlertDialogHeader className="pb-4 sm:pb-6">
-                <AlertDialogTitle className="text-lg sm:text-xl text-destructive">Delete Scene</AlertDialogTitle>
-                <AlertDialogDescription className="text-xs sm:text-sm text-muted-foreground break-words">
+            <AlertDialogContent className="bg-background border-destructive/20">
+              <AlertDialogHeader>
+                <AlertDialogTitle className="text-destructive">Delete Scene</AlertDialogTitle>
+                <AlertDialogDescription className="text-muted-foreground">
                   This action cannot be undone. This will permanently delete the scene and all associated media.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <AlertDialogFooter className="flex-col sm:flex-row gap-2 sm:gap-0">
-                <AlertDialogCancel className="border-muted/30 text-xs sm:text-sm w-full sm:w-auto">Cancel</AlertDialogCancel>
-                <AlertDialogAction className="bg-destructive hover:bg-destructive/90 text-xs sm:text-sm w-full sm:w-auto">Delete</AlertDialogAction>
+              <AlertDialogFooter>
+                <AlertDialogCancel className="border-muted/30">Cancel</AlertDialogCancel>
+                <AlertDialogAction className="bg-destructive hover:bg-destructive/90">Delete</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -3319,7 +3390,7 @@ ${centerText('AUTHOR NAME')}
               <Button
                 variant="outline"
                 size="sm"
-                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                 onClick={() => {
                   const params = new URLSearchParams({
                     scope: 'scene',
@@ -3331,9 +3402,9 @@ ${centerText('AUTHOR NAME')}
                   router.push(`/mood-boards?${params.toString()}`)
                 }}
               >
-                <ImageIcon className="h-4 w-4 sm:mr-2" />
+                <ImageIcon className="h-4 w-4 mr-2" />
                 <span className="hidden sm:inline">Mood Board</span>
-                <span className="sm:hidden">Mood</span>
+                <span className="sm:hidden">Mood Board</span>
               </Button>
             </div>
           </div>
@@ -3341,50 +3412,48 @@ ${centerText('AUTHOR NAME')}
 
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 sm:space-y-6">
-          <TabsList className="bg-card border-primary/20 flex-wrap overflow-x-auto">
+          <TabsList className="bg-card border-primary/20 flex-wrap">
             <TabsTrigger
               value="scripts"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Scripts ({assets.filter(a => a.content_type === 'script').length})
             </TabsTrigger>
             <TabsTrigger 
               value="images" 
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Images ({assets.filter(a => a.content_type === 'image').length})
             </TabsTrigger>
             <TabsTrigger 
               value="video" 
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Video ({assets.filter(a => a.content_type === 'video').length})
             </TabsTrigger>
             <TabsTrigger
               value="audio"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Audio ({assets.filter(a => a.content_type === 'audio').length})
             </TabsTrigger>
             <TabsTrigger
               value="import"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
-              <span className="hidden sm:inline">Import Files</span>
-              <span className="sm:hidden">Import</span>
+              Import Files
             </TabsTrigger>
             <TabsTrigger
               value="shot-list"
-              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary text-xs sm:text-sm"
+              className="data-[state=active]:bg-primary/20 data-[state=active]:text-primary"
             >
               Shot List
             </TabsTrigger>
             <TabsTrigger
               value="link-assets"
-              className="data-[state=active]:bg-orange-500/20 data-[state=active]:text-orange-500 text-xs sm:text-sm"
+              className="data-[state=active]:bg-orange-500/20 data-[state=active]:text-orange-500"
             >
-              <span className="hidden sm:inline">Link Assets</span>
-              <span className="sm:hidden">Link</span>
+              Link Assets
             </TabsTrigger>
           </TabsList>
 
@@ -5075,19 +5144,141 @@ ${centerText('AUTHOR NAME')}
                         </Button>
                       </div>
                       
-                      <div className="space-y-2 relative w-full overflow-x-hidden">
-                        <div className="relative w-full overflow-x-hidden">
-                          {/* Visual ruler for 80-character line width with center marker */}
-                          <div className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 flex items-center text-xs text-muted-foreground font-mono pointer-events-none z-10 overflow-x-hidden">
-                            <div className="flex items-center w-full relative max-w-full sm:max-w-[calc(80ch+24px)] mx-auto px-3 sm:px-[12px]">
-                              <span className="absolute left-0 opacity-30">0</span>
-                              <span className="absolute left-[20%] opacity-30">16</span>
-                              <span className="absolute left-[50%] opacity-70 font-bold text-purple-400">40</span>
-                              <span className="absolute left-[80%] opacity-30">64</span>
-                              <span className="absolute right-0 opacity-30">80</span>
-                              {/* Center line indicator */}
-                              <div className="absolute left-[50%] top-0 bottom-0 w-px bg-purple-400/30 opacity-50"></div>
-                            </div>
+                      <div className="space-y-2 relative w-full overflow-x-hidden flex justify-center">
+                        <div className="relative overflow-x-hidden" style={{ width: '612px' }}>
+                          {/* Microsoft Word-style interactive ruler with inch measurements, tick marks, and draggable margin markers (612px = 6.375" at 96 DPI) */}
+                          <div 
+                            ref={rulerRef}
+                            className="absolute top-0 left-0 right-0 h-6 bg-muted/20 border-b border-border/50 z-10 overflow-x-hidden cursor-default"
+                            style={{ width: '612px' }}
+                          >
+                            <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ width: '612px', height: '24px' }}>
+                              {/* Draw tick marks for each inch and subdivisions */}
+                              {Array.from({ length: 7 * 8 + 1 }, (_, i) => {
+                                const pixelsPerInch = 96;
+                                const fraction = i / 8; // 1/8 inch increments
+                                const x = fraction * pixelsPerInch;
+                                if (x > 612) return null;
+                                
+                                const isFullInch = i % 8 === 0;
+                                const isHalfInch = i % 4 === 0 && !isFullInch;
+                                const isQuarterInch = i % 2 === 0 && !isHalfInch && !isFullInch;
+                                
+                                // Tick heights - taller for more important marks
+                                let tickHeight = 4; // Smallest (1/8 inch)
+                                if (isQuarterInch) tickHeight = 6;
+                                if (isHalfInch) tickHeight = 10;
+                                if (isFullInch) tickHeight = 18;
+                                
+                                return (
+                                  <g key={`tick-${i}`}>
+                                    <line
+                                      x1={x}
+                                      y1={24 - tickHeight}
+                                      x2={x}
+                                      y2="24"
+                                      stroke="currentColor"
+                                      strokeWidth={isFullInch ? "1.5" : "0.5"}
+                                      className="text-muted-foreground"
+                                      style={{ 
+                                        opacity: isFullInch ? 0.8 : isHalfInch ? 0.6 : isQuarterInch ? 0.4 : 0.3 
+                                      }}
+                                    />
+                                    {/* Inch number labels */}
+                                    {isFullInch && (
+                                      <text
+                                        x={x}
+                                        y="12"
+                                        textAnchor="middle"
+                                        className="text-[9px] fill-current text-muted-foreground"
+                                        style={{ 
+                                          fontSize: '9px', 
+                                          fontFamily: 'system-ui, sans-serif',
+                                          opacity: 0.85,
+                                          fontWeight: '500'
+                                        }}
+                                      >
+                                        {Math.floor(fraction)}
+                                      </text>
+                                    )}
+                                  </g>
+                                );
+                              })}
+                              {/* Center line indicator (3.1875" = 306px) */}
+                              <line
+                                x1="306"
+                                y1="0"
+                                x2="306"
+                                y2="24"
+                                stroke="rgb(168, 85, 247)"
+                                strokeWidth="1"
+                                className="opacity-40"
+                              />
+                              {/* Left margin marker */}
+                              <g>
+                                <line
+                                  x1={leftMargin}
+                                  y1="0"
+                                  x2={leftMargin}
+                                  y2="24"
+                                  stroke="rgb(59, 130, 246)"
+                                  strokeWidth="2"
+                                  className="opacity-90"
+                                />
+                                <polygon
+                                  points={`${leftMargin},0 ${leftMargin - 4},8 ${leftMargin + 4},8`}
+                                  fill="rgb(59, 130, 246)"
+                                  className="opacity-90"
+                                />
+                              </g>
+                              {/* Right margin marker */}
+                              <g>
+                                <line
+                                  x1={rightMargin}
+                                  y1="0"
+                                  x2={rightMargin}
+                                  y2="24"
+                                  stroke="rgb(59, 130, 246)"
+                                  strokeWidth="2"
+                                  className="opacity-90"
+                                />
+                                <polygon
+                                  points={`${rightMargin},0 ${rightMargin - 4},8 ${rightMargin + 4},8`}
+                                  fill="rgb(59, 130, 246)"
+                                  className="opacity-90"
+                                />
+                              </g>
+                            </svg>
+                            {/* Draggable left margin handle */}
+                            <div
+                              className="absolute top-0 cursor-ew-resize z-30 pointer-events-auto"
+                              style={{ 
+                                left: `${Math.max(0, leftMargin - 6)}px`,
+                                width: '12px',
+                                height: '24px',
+                                backgroundColor: 'transparent'
+                              }}
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                setIsDraggingMargin('left')
+                              }}
+                            />
+                            {/* Draggable right margin handle */}
+                            <div
+                              className="absolute top-0 cursor-ew-resize z-30 pointer-events-auto"
+                              style={{ 
+                                left: `${Math.max(0, Math.min(612, rightMargin - 6))}px`,
+                                width: '12px',
+                                height: '24px',
+                                backgroundColor: 'transparent'
+                              }}
+                              onMouseDown={(e) => {
+                                e.preventDefault()
+                                e.stopPropagation()
+                                setIsDraggingMargin('right')
+                              }}
+                            />
                           </div>
                           <Textarea
                             key={`page-${currentPage}`}
@@ -5097,13 +5288,19 @@ ${centerText('AUTHOR NAME')}
                             onChange={(e) => saveCurrentPageEdit(e.target.value)}
                             onPaste={handlePaste}
                             onSelect={handleScreenplayTextSelection}
-                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
+                            className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 block"
                             style={{ 
                               fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                              fontSize: '12pt',
+                              lineHeight: '1.0',
+                              width: '612px',
+                              height: '864px',
+                              minHeight: '864px',
+                              maxHeight: '864px',
                               tabSize: 1,
                               letterSpacing: '0px',
-                              paddingLeft: '12px',
-                              paddingRight: '12px',
+                              paddingLeft: `${leftMargin}px`,
+                              paddingRight: `${612 - rightMargin}px`,
                               textAlign: 'left',
                               whiteSpace: 'pre-wrap',
                               overflowWrap: 'break-word',
