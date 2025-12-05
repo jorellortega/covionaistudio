@@ -584,6 +584,46 @@ export class KlingService {
 
 // Runway ML Service (Video Generation) - Server-side only
 export class RunwayMLService {
+  /**
+   * Upload a file to Runway ML via server-side API route and get a runwayUri
+   * This avoids CORS issues and sends large files through our server
+   */
+  static async uploadFileToRunway(file: File, apiKey: string): Promise<{ runwayUri: string; fileType: 'image' | 'video' }> {
+    try {
+      console.log('🎬 Uploading file to Runway ML via server - type:', file.type, 'size:', file.size)
+      
+      // Upload file to our server-side API route
+      const formData = new FormData()
+      formData.append('file', file)
+      
+      const response = await fetch('/api/ai/upload-to-runway', {
+        method: 'POST',
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        console.error('🎬 Failed to upload file to Runway:', errorData)
+        throw new Error(errorData.error || `Upload failed: ${response.status}`)
+      }
+
+      const result = await response.json()
+      
+      if (!result.success || !result.runwayUri) {
+        throw new Error(result.error || 'No runwayUri returned from server')
+      }
+
+      console.log('🎬 File uploaded successfully, runwayUri:', result.runwayUri)
+      return {
+        runwayUri: result.runwayUri,
+        fileType: result.fileType
+      }
+    } catch (error: any) {
+      console.error('🎬 Error uploading file to Runway:', error)
+      throw new Error(`File upload failed: ${error.message}`)
+    }
+  }
+
   static async generateVideo(request: GenerateVideoRequest): Promise<AIResponse> {
     try {
       console.log('🎬 Runway ML generateVideo called - forwarding to server-side API')

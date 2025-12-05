@@ -247,6 +247,18 @@ export default function AIStudioPage() {
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
+      // Validate file size: 10MB for images, 50MB for videos
+      const maxSize = file.type.startsWith('video/') ? 50 * 1024 * 1024 : 10 * 1024 * 1024
+      if (file.size > maxSize) {
+        toast({
+          title: "File Too Large",
+          description: file.type.startsWith('video/') 
+            ? "Video files must be smaller than 50MB. Please compress or use a smaller file."
+            : "Image files must be smaller than 10MB. Please compress or use a smaller file.",
+          variant: "destructive",
+        })
+        return
+      }
       setUploadedFile(file)
       const reader = new FileReader()
       reader.onload = (e) => {
@@ -278,7 +290,19 @@ export default function AIStudioPage() {
     const files = event.dataTransfer.files
     if (files && files[0]) {
       const file = files[0]
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
+        // Validate file size: 10MB for images, 50MB for videos
+        const maxSize = file.type.startsWith('video/') ? 50 * 1024 * 1024 : 10 * 1024 * 1024
+        if (file.size > maxSize) {
+          toast({
+            title: "File Too Large",
+            description: file.type.startsWith('video/') 
+              ? "Video files must be smaller than 50MB. Please compress or use a smaller file."
+              : "Image files must be smaller than 10MB. Please compress or use a smaller file.",
+            variant: "destructive",
+          })
+          return
+        }
         setUploadedFile(file)
         const reader = new FileReader()
         reader.onload = (e) => {
@@ -288,7 +312,7 @@ export default function AIStudioPage() {
       } else {
         toast({
           title: "Invalid File Type",
-          description: "Please upload an image file (JPG, PNG, GIF, etc.)",
+          description: "Please upload an image or video file",
           variant: "destructive",
         })
       }
@@ -1167,24 +1191,73 @@ export default function AIStudioPage() {
             [width, height] = selectedResolution.split('x').map(Number)
           }
           
-          // Prepare form data for file upload
-          const formData = new FormData()
-          formData.append('prompt', enhancedPrompt)
-          formData.append('duration', selectedDuration)
-          formData.append('width', width.toString())
-          formData.append('height', height.toString())
-          formData.append('model', actualModel)
-          
-          // Add file if uploaded
+          // Upload file to Runway ML via server-side API first to avoid 413 errors
+          let runwayUri: string | null = null
+          let fileType: 'image' | 'video' | null = null
           if (uploadedFile) {
-            formData.append('file', uploadedFile)
+            try {
+              setIsGenerating(true) // Set generating state while uploading
+              toast({
+                title: "Uploading File...",
+                description: "Your file is being uploaded to Runway ML. This may take a moment.",
+                variant: "default",
+              })
+              console.log('🎬 Uploading file to Runway ML via server...')
+              const { RunwayMLService } = await import('@/lib/ai-services')
+              const uploadResult = await RunwayMLService.uploadFileToRunway(uploadedFile, userApiKeys.runway_api_key!)
+              runwayUri = uploadResult.runwayUri
+              fileType = uploadResult.fileType
+              console.log('🎬 File uploaded successfully, runwayUri:', runwayUri, 'fileType:', fileType)
+              toast({
+                title: "File Uploaded",
+                description: "Your file has been successfully uploaded to Runway ML.",
+                variant: "success",
+              })
+            } catch (uploadError: any) {
+              console.error('🎬 Failed to upload file to Runway:', uploadError)
+              toast({
+                title: "File Upload Failed",
+                description: uploadError.message || "Failed to upload file to Runway ML. Please try again.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
           }
           
-          // Use server-side API route instead of direct Runway ML calls
+          // Prepare JSON request body (no file, just runwayUri)
+          const requestBody: any = {
+            prompt: enhancedPrompt,
+            duration: selectedDuration,
+            width: width.toString(),
+            height: height.toString(),
+            model: actualModel,
+          }
+          
+          if (runwayUri) {
+            requestBody.runwayUri = runwayUri
+            requestBody.fileType = fileType
+          }
+          
+          // Use server-side API route with JSON (no file in body)
           const response = await fetch('/api/ai/generate-video', {
             method: 'POST',
-            body: formData, // Use FormData instead of JSON for file upload
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
           })
+
+          // Handle 413 errors before trying to parse JSON
+          if (response.status === 413) {
+            toast({
+              title: "File Too Large",
+              description: "The uploaded file is too large. Please compress your video/image file to under 50MB (videos) or 10MB (images) and try again.",
+              variant: "destructive",
+            })
+            setIsGenerating(false)
+            return
+          }
 
           const result = await response.json()
 
@@ -1248,6 +1321,17 @@ export default function AIStudioPage() {
             }
           } else {
             console.error('Runway ML video generation failed:', result.error || 'Unknown error')
+            
+            // Check for 413 or Request Entity Too Large errors
+            if (response.status === 413 || result.error?.includes('413') || result.error?.includes('Request Entity Too Large') || result.error?.includes('File too large')) {
+              toast({
+                title: "File Too Large",
+                description: result.error || "The uploaded file is too large. Please compress your video/image file to under 50MB (videos) or 10MB (images) and try again.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
             
             // Provide more specific error messages based on the error type
             let errorTitle = "Video Generation Failed"
@@ -3156,6 +3240,18 @@ export default function AIStudioPage() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0]
                                 if (file) {
+                                  // Validate file size: 10MB for images, 50MB for videos
+                                  const maxSize = file.type.startsWith('video/') ? 50 * 1024 * 1024 : 10 * 1024 * 1024
+                                  if (file.size > maxSize) {
+                                    toast({
+                                      title: "File Too Large",
+                                      description: file.type.startsWith('video/') 
+                                        ? "Video files must be smaller than 50MB. Please compress or use a smaller file."
+                                        : "Image files must be smaller than 10MB. Please compress or use a smaller file.",
+                                      variant: "destructive",
+                                    })
+                                    return
+                                  }
                                   setUploadedFile(file)
                                   const reader = new FileReader()
                                   reader.onload = (e) => {
@@ -3224,6 +3320,16 @@ export default function AIStudioPage() {
                               onChange={(e) => {
                                 const file = e.target.files?.[0]
                                 if (file) {
+                                  // Validate file size: 10MB for images
+                                  const maxSize = 10 * 1024 * 1024
+                                  if (file.size > maxSize) {
+                                    toast({
+                                      title: "File Too Large",
+                                      description: "Image files must be smaller than 10MB. Please compress or use a smaller file.",
+                                      variant: "destructive",
+                                    })
+                                    return
+                                  }
                                   setUploadedFile(file)
                                   const reader = new FileReader()
                                   reader.onload = (e) => {
@@ -3871,9 +3977,6 @@ export default function AIStudioPage() {
                           <div className="flex items-center justify-between mb-3">
                             <Badge variant="outline" className="text-xs">
                               {video.duration}
-                            </Badge>
-                            <Badge variant="outline" className="text-xs">
-                              {video.model}
                             </Badge>
                           </div>
 
