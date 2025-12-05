@@ -195,8 +195,9 @@ function ScenePageClient({ id }: { id: string }) {
   const [createdCollaborationCode, setCreatedCollaborationCode] = useState<string | null>(null)
   
   // Ruler margin states (in pixels, 0 = left edge, 612 = right edge)
-  const [leftMargin, setLeftMargin] = useState(0) // Default: no left margin
-  const [rightMargin, setRightMargin] = useState(612) // Default: no right margin
+  // Default margins: 0.75 inches (72px) on each side - less than 1 inch
+  const [leftMargin, setLeftMargin] = useState(72) // Default: 0.75 inch left margin
+  const [rightMargin, setRightMargin] = useState(540) // Default: 0.75 inch right margin (612 - 72 = 540)
   const [isDraggingMargin, setIsDraggingMargin] = useState<'left' | 'right' | null>(null)
   const rulerRef = useRef<HTMLDivElement>(null)
   
