@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
     let prompt: string, duration: string | number = 5, width = 1024, height = 576, model = 'gen4_turbo', file: File | null = null
     let runwayUri: string | null = null
     let fileType: 'image' | 'video' | null = null
+    let referenceVideoUri: string | null = null
     
     const contentType = request.headers.get('content-type')
     if (contentType?.includes('multipart/form-data')) {
@@ -89,13 +90,16 @@ export async function POST(request: NextRequest) {
       model = body.model || 'gen4_turbo'
       runwayUri = body.runwayUri || null
       fileType = body.fileType || null
+      referenceVideoUri = body.referenceVideoUri || null
       console.log('🎬 Server Debug - Received model from frontend (JSON):', model)
       console.log('🎬 Server Debug - Received duration from frontend (JSON):', durationStr, '->', duration)
       console.log('🎬 Server Debug - Received runwayUri:', runwayUri ? 'present' : 'none')
       console.log('🎬 Server Debug - Received fileType:', fileType)
+      console.log('🎬 Server Debug - Received referenceVideoUri:', referenceVideoUri ? 'present' : 'none')
     }
 
-    if (!prompt) {
+    // Prompt is not required for upscale_v1
+    if (!prompt && model !== 'upscale_v1') {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
     }
 
@@ -282,8 +286,32 @@ export async function POST(request: NextRequest) {
         }, { status: 400 })
       }
       if (fileType && fileType !== 'video') {
+        // Act-Two can accept image or video for character, but still needs reference video
+        if (model === 'act_two') {
+          // Character can be image or video, but we still need reference video
+          if (!referenceVideoUri) {
+            return NextResponse.json({ 
+              error: `${model} requires a reference video file (3-30 seconds). Please upload a reference video.` 
+            }, { status: 400 })
+          }
+        } else {
+          return NextResponse.json({ 
+            error: `${model} requires a video file, but an image file was uploaded. Please upload a video file.` 
+          }, { status: 400 })
+        }
+      }
+    }
+    
+    // Special validation for Act-Two: requires both character and reference video
+    if (model === 'act_two') {
+      if (!promptImage) {
         return NextResponse.json({ 
-          error: `${model} requires a video file, but an image file was uploaded. Please upload a video file.` 
+          error: 'Act-Two requires a character image or video file. Please upload a character file.' 
+        }, { status: 400 })
+      }
+      if (!referenceVideoUri) {
+        return NextResponse.json({ 
+          error: 'Act-Two requires a reference video file (3-30 seconds). Please upload a reference video.' 
         }, { status: 400 })
       }
     }
@@ -304,10 +332,83 @@ export async function POST(request: NextRequest) {
             throw new Error('Act-Two model requires a character image or video file')
           }
           
-          // Act-Two needs both character and reference video
-          // For now, we'll use the uploaded file as character and require reference video
-          // TODO: Add support for reference video upload
-          throw new Error('Act-Two model requires both a character file and a reference video. Reference video upload is not yet supported.')
+          if (!referenceVideoUri) {
+            throw new Error('Act-Two model requires a reference video file (3-30 seconds)')
+          }
+          
+          // Determine character type
+          const characterType = fileType === 'image' ? 'image' : 'video'
+          
+          // Call character_performance API directly
+          const characterPerformanceResponse = await fetch('https://api.dev.runwayml.com/v1/character_performance', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${cleanKey}`,
+              'X-Runway-Version': '2024-11-06'
+            },
+            body: JSON.stringify({
+              model: 'act_two',
+              character: {
+                type: characterType,
+                uri: promptImage
+              },
+              reference: {
+                type: 'video',
+                uri: referenceVideoUri
+              },
+              ratio: baseParams.ratio,
+              promptText: baseParams.promptText || prompt
+            })
+          })
+
+          if (!characterPerformanceResponse.ok) {
+            const errorText = await characterPerformanceResponse.text()
+            throw new Error(`Character performance request failed: ${characterPerformanceResponse.status} ${errorText}`)
+          }
+
+          const taskData = await characterPerformanceResponse.json()
+          const taskId = taskData.id
+          
+          console.log(`🎬 Task created for ${modelToTry}:`, taskId)
+          
+          // Poll for task completion
+          let result = null
+          const maxAttempts = 60 // 5 minutes max (5 second intervals)
+          let attempts = 0
+          
+          while (attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 5000)) // Wait 5 seconds
+            
+            const statusResponse = await fetch(`https://api.dev.runwayml.com/v1/tasks/${taskId}`, {
+              headers: {
+                'Authorization': `Bearer ${cleanKey}`,
+                'X-Runway-Version': '2024-11-06'
+              }
+            })
+            
+            if (!statusResponse.ok) {
+              throw new Error(`Failed to check task status: ${statusResponse.status}`)
+            }
+            
+            result = await statusResponse.json()
+            console.log(`🎬 Task status (${modelToTry}):`, result.status)
+            
+            if (result.status === 'SUCCEEDED') {
+              break
+            } else if (result.status === 'FAILED' || result.status === 'ABORTED') {
+              throw new Error(`Task failed: ${result.failure || result.failureReason || 'Unknown reason'}`)
+            }
+            
+            attempts++
+          }
+          
+          if (!result || result.status !== 'SUCCEEDED') {
+            throw new Error('Task timed out or did not complete')
+          }
+          
+          console.log(`🎬 Task completed for ${modelToTry}:`, result)
+          return result
         } else if (modelToTry === 'gen4_aleph') {
           // gen4_aleph uses video_to_video endpoint and requires a video input
           if (!promptImage) {

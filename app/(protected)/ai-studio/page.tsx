@@ -47,6 +47,7 @@ import {
   Bot,
   Settings,
   Upload,
+  Info,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
@@ -157,6 +158,9 @@ export default function AIStudioPage() {
   const [showMoreOptions, setShowMoreOptions] = useState(false)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [filePreview, setFilePreview] = useState<string | null>(null)
+  // For Act-Two: reference video (second file)
+  const [referenceVideoFile, setReferenceVideoFile] = useState<File | null>(null)
+  const [referenceVideoPreview, setReferenceVideoPreview] = useState<string | null>(null)
   // Kling start/end frame support
   const [startFrame, setStartFrame] = useState<File | null>(null)
   const [endFrame, setEndFrame] = useState<File | null>(null)
@@ -165,6 +169,10 @@ export default function AIStudioPage() {
   const [selectedAudioType, setSelectedAudioType] = useState("music")
   const [selectedAudioDuration, setSelectedAudioDuration] = useState("30s")
   const [selectedVoice, setSelectedVoice] = useState("21m00Tcm4TlvDq8ikWAM")
+  // Sound effects specific state
+  const [soundEffectDuration, setSoundEffectDuration] = useState<number | undefined>(undefined)
+  const [promptInfluence, setPromptInfluence] = useState<number>(0.5)
+  const [soundEffectLooping, setSoundEffectLooping] = useState<boolean>(false)
   const [cloningVoiceName, setCloningVoiceName] = useState("")
   const [cloningVoiceDescription, setCloningVoiceDescription] = useState("")
   const [cloningVoiceFiles, setCloningVoiceFiles] = useState<File[]>([])
@@ -946,10 +954,33 @@ export default function AIStudioPage() {
     setGenerationProgress(0)
 
     try {
-      if (type === "script" && selectedModel === "ChatGPT") {
+      // Check if this is a script generation with an OpenAI model
+      // Get the actual model from settings if locked, otherwise use selectedModel
+      const currentSetting = getCurrentTabSetting()
+      let actualModel: string | null = null
+      
+      // If there's a setting with selected_model, use that (this is the actual API model name)
+      if (currentSetting?.selected_model) {
+        actualModel = currentSetting.selected_model
+      } else if (selectedModel === "ChatGPT" || selectedModel === "GPT-4") {
+        // Fallback to default if no selected_model in settings
+        actualModel = 'gpt-4o-mini'
+      }
+      
+      // Check if it's an OpenAI model (ChatGPT, GPT-4, or any gpt-* model)
+      const isOpenAIModel = (selectedModel === "ChatGPT" || 
+                            selectedModel === "GPT-4" || 
+                            (actualModel && actualModel.startsWith('gpt-'))) &&
+                            actualModel !== null
+      
+      if (type === "script" && isOpenAIModel) {
+        // Use the actual model from settings, or default to gpt-4o-mini
+        const modelToUse = actualModel || 'gpt-4o-mini'
+        
         console.log('Attempting to generate script with:', {
           prompt: scriptPrompt,
           template: selectedTemplate || "Write a creative script based on:",
+          model: modelToUse,
           apiKeyLength: userApiKeys.openai_api_key?.length || 0,
           apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
         })
@@ -965,15 +996,22 @@ export default function AIStudioPage() {
           return
         }
         
-                  const enhancedPrompt = enhancePromptWithScript(scriptPrompt, 'script')
+        const enhancedPrompt = enhancePromptWithScript(scriptPrompt, 'script')
         console.log(`🚀 SCRIPT GENERATION - Final Prompt Sent to OpenAI:`)
         console.log(`🚀 SCRIPT GENERATION - ${enhancedPrompt}`)
         console.log(`🚀 SCRIPT GENERATION - Template: ${selectedTemplate || "Write a creative script based on:"}`)
+        console.log(`🚀 SCRIPT GENERATION - Model: ${modelToUse}`)
+        
+        // Check if this is a GPT-5 model for token calculation
+        const isGPT5Model = modelToUse.startsWith('gpt-5')
+        const maxTokens = isGPT5Model ? 4000 : 2000 // GPT-5 needs more tokens
         
         const response = await OpenAIService.generateScript({
             prompt: enhancedPrompt,
             template: selectedTemplate || "Write a creative script based on:",
             apiKey: userApiKeys.openai_api_key!,
+            model: modelToUse, // Pass the actual model name
+            maxTokens: maxTokens, // Pass maxTokens for GPT-5 support
           })
 
         if (response.success) {
@@ -984,9 +1022,9 @@ export default function AIStudioPage() {
             content: response.data.choices?.[0]?.message?.content || "No content generated",
             prompt: scriptPrompt,
             type: 'script',
-            model: selectedModel,
+            model: actualModel || selectedModel, // Use actual model name for display
             created_at: new Date().toISOString(),
-            project_id: selectedProject,
+            project_id: selectedProject || undefined, // Project is optional for scripts
             scene_id: selectedScene !== "none" ? selectedScene : undefined,
           }
           
@@ -1004,105 +1042,148 @@ export default function AIStudioPage() {
             })
           }
         }
-      } else if (type === "image" && (selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || selectedModel.startsWith("Runway"))) {
-        console.log('Attempting to generate image with:', {
-          prompt: imagePrompt,
-          shot: selectedShot || "",
-          apiKeyLength: userApiKeys.openai_api_key?.length || 0,
-          apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
-        })
+      } else if (type === "image") {
+        // Get actual model from settings to check if it's an OpenAI image model
+        const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+        const actualImageModel = imagesSetting?.selected_model || null
+        const isOpenAIImageFromSettings = actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-'))
         
-        // First validate the API key
-        console.log('Validating API key for image generation...')
-        const isValid = await OpenAIService.validateApiKey(userApiKeys.openai_api_key!)
-        console.log('API key validation result:', isValid)
-        
-        if (!isValid) {
-          alert('Your OpenAI API key appears to be invalid. Please check your setup.')
+        // Check if this is a supported image model
+        if (!(selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || selectedModel.startsWith("Runway") || isOpenAIImageFromSettings)) {
+          alert(`${selectedModel} is not yet implemented. Please use DALL-E 3, GPT Image, or Runway models for images.`)
           setIsGenerating(false)
           return
         }
         
-        const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
-        console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to ${selectedModel}:`)
-        console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
-        console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
+        let response: any = null
         
-        let response
-        if (selectedModel === "DALL-E 3" || selectedModel === "GPT Image") {
+        if (selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || isOpenAIImageFromSettings) {
+          console.log('Attempting to generate image with:', {
+            prompt: imagePrompt,
+            shot: selectedShot || "",
+            apiKeyLength: userApiKeys.openai_api_key?.length || 0,
+            apiKeyPrefix: userApiKeys.openai_api_key?.substring(0, 7) || 'None'
+          })
+          
+          // First validate the API key
+          console.log('Validating API key for image generation...')
+          const isValid = await OpenAIService.validateApiKey(userApiKeys.openai_api_key!)
+          console.log('API key validation result:', isValid)
+          
+          if (!isValid) {
+            alert('Your OpenAI API key appears to be invalid. Please check your setup.')
+            setIsGenerating(false)
+            return
+          }
+          
+          const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
+          console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to ${selectedModel}:`)
+          console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
+          console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
+          
+          // Check if this is an OpenAI image model (GPT Image or DALL-E 3)
+          const isOpenAIImageModel = selectedModel === "DALL-E 3" || 
+                                     selectedModel === "GPT Image" ||
+                                     (actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-')))
+          
+          if (isOpenAIImageModel) {
           console.log(`🚀 IMAGE GENERATION - Calling OpenAIService.generateImage...`)
-          const modelToUse = selectedModel === "GPT Image" ? "gpt-image-1" : "dall-e-3"
-          response = await OpenAIService.generateImage({
-          prompt: enhancedPrompt,
-          style: 'cinematic',
-          model: modelToUse,
-          apiKey: userApiKeys.openai_api_key!,
-        })
-          console.log(`🚀 IMAGE GENERATION - Response received:`, response)
-          console.log(`🚀 IMAGE GENERATION - Response success:`, response?.success)
-          console.log(`🚀 IMAGE GENERATION - Response error:`, response?.error)
-        } else if (selectedModel === "Runway ML") {
-          // Use the selected sub-model
-          const actualModel = selectedRunwayImageModel
           
-          // Parse resolution for gen4_image
-          let width = 1280
-          let height = 720
-          if (selectedRunwayImageModel === "gen4_image") {
-            if (selectedResolution === "720p") {
-              width = 1280
-              height = 720
-            } else if (selectedResolution === "1080p") {
-              width = 1920
-              height = 1080
-            }
+          // Use actual model from settings if available, otherwise use default mapping
+          let modelToUse: string
+          if (actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-'))) {
+            // Use the model from settings (could be gpt-image-1 or gpt-5*)
+            modelToUse = actualImageModel
+            console.log(`🚀 IMAGE GENERATION - Using model from settings: ${modelToUse}`)
+          } else if (selectedModel === "GPT Image") {
+            // Fallback to gpt-image-1 if GPT Image is selected but no model in settings
+            modelToUse = "gpt-image-1"
+            console.log(`🚀 IMAGE GENERATION - Using default GPT Image model: ${modelToUse}`)
+          } else {
+            // DALL-E 3
+            modelToUse = "dall-e-3"
+            console.log(`🚀 IMAGE GENERATION - Using DALL-E 3 model: ${modelToUse}`)
           }
           
-          // Use Runway ML for image generation
-          if (actualModel === 'gen4_image_turbo' && uploadedFile) {
-            // Use FormData for file upload
-            const formData = new FormData()
-            formData.append('prompt', enhancedPrompt)
-            formData.append('model', actualModel)
-            formData.append('service', 'runway')
-            formData.append('width', width.toString())
-            formData.append('height', height.toString())
-            formData.append('apiKey', userApiKeys.runway_api_key)
-            formData.append('userId', userId)
-            formData.append('file', uploadedFile)
+            response = await OpenAIService.generateImage({
+              prompt: enhancedPrompt,
+              style: 'cinematic',
+              model: modelToUse,
+              apiKey: userApiKeys.openai_api_key!,
+            })
+            console.log(`🚀 IMAGE GENERATION - Response received:`, response)
+            console.log(`🚀 IMAGE GENERATION - Response success:`, response?.success)
+            console.log(`🚀 IMAGE GENERATION - Response error:`, response?.error)
+          } else if (selectedModel === "Runway ML") {
+            // Use the selected sub-model
+            const actualModel = selectedRunwayImageModel
             
-            response = await fetch('/api/ai/generate-image', {
-              method: 'POST',
-              body: formData,
-            })
-          } else {
-            // Use JSON for regular models
-            response = await fetch('/api/ai/generate-image', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                prompt: enhancedPrompt,
-                model: actualModel,
-                service: 'runway',
-                width: width,
-                height: height,
-                apiKey: userApiKeys.runway_api_key,
-                userId: userId
-              }),
-            })
-          }
-          
-          const result = await response.json()
-          if (response.ok && result.success) {
-            response = { success: true, data: { imageUrl: result.imageUrl } }
-          } else {
-            response = { success: false, error: result.error || 'Unknown error' }
+            // Parse resolution for gen4_image
+            let width = 1280
+            let height = 720
+            if (selectedRunwayImageModel === "gen4_image") {
+              if (selectedResolution === "720p") {
+                width = 1280
+                height = 720
+              } else if (selectedResolution === "1080p") {
+                width = 1920
+                height = 1080
+              }
+            }
+            
+            // Use Runway ML for image generation
+            if (actualModel === 'gen4_image_turbo' && uploadedFile) {
+              // Use FormData for file upload
+              const formData = new FormData()
+              formData.append('prompt', enhancedPrompt)
+              formData.append('model', actualModel)
+              formData.append('service', 'runway')
+              formData.append('width', width.toString())
+              formData.append('height', height.toString())
+              formData.append('apiKey', userApiKeys.runway_api_key)
+              formData.append('userId', userId)
+              formData.append('file', uploadedFile)
+              
+              const runwayResponse = await fetch('/api/ai/generate-image', {
+                method: 'POST',
+                body: formData,
+              })
+              
+              const result = await runwayResponse.json()
+              if (runwayResponse.ok && result.success) {
+                response = { success: true, data: { imageUrl: result.imageUrl } }
+              } else {
+                response = { success: false, error: result.error || 'Unknown error' }
+              }
+            } else {
+              // Use JSON for regular models
+              const runwayResponse = await fetch('/api/ai/generate-image', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  prompt: enhancedPrompt,
+                  model: actualModel,
+                  service: 'runway',
+                  width: width,
+                  height: height,
+                  apiKey: userApiKeys.runway_api_key,
+                  userId: userId
+                }),
+              })
+              
+              const result = await runwayResponse.json()
+              if (runwayResponse.ok && result.success) {
+                response = { success: true, data: { imageUrl: result.imageUrl } }
+              } else {
+                response = { success: false, error: result.error || 'Unknown error' }
+              }
+            }
           }
         }
 
-        if (response.success) {
+        if (response && response.success) {
           // Create new generated content
           // Handle both URL (DALL-E) and base64 (GPT Image) responses
           const imageUrl = response.data.data?.[0]?.url || response.data.data?.[0]?.b64_json ? 
@@ -1135,7 +1216,7 @@ export default function AIStudioPage() {
             })
           }
         }
-              } else if (type === "video" && (selectedModel.startsWith("Runway") || selectedModel === "Runway ML")) {
+      } else if (type === "video" && (selectedModel.startsWith("Runway") || selectedModel === "Runway ML")) {
           console.log('Attempting to generate video with Runway ML:', {
             prompt: videoPrompt,
             duration: "10s", // Default duration
@@ -1191,10 +1272,71 @@ export default function AIStudioPage() {
             [width, height] = selectedResolution.split('x').map(Number)
           }
           
-          // Upload file to Runway ML via server-side API first to avoid 413 errors
+          // Upload file(s) to Runway ML via server-side API first to avoid 413 errors
           let runwayUri: string | null = null
           let fileType: 'image' | 'video' | null = null
-          if (uploadedFile) {
+          let referenceVideoUri: string | null = null
+          
+          // For Act-Two, we need both character file and reference video
+          if (actualModel === 'act_two') {
+            if (!uploadedFile) {
+              toast({
+                title: "Missing Character File",
+                description: "Act-Two requires a character image or video file.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
+            if (!referenceVideoFile) {
+              toast({
+                title: "Missing Reference Video",
+                description: "Act-Two requires a reference video (3-30 seconds) showing the performance to apply.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
+            
+            try {
+              setIsGenerating(true) // Set generating state while uploading
+              toast({
+                title: "Uploading Files...",
+                description: "Your files are being uploaded to Runway ML. This may take a moment.",
+                variant: "default",
+              })
+              console.log('🎬 Uploading character file to Runway ML via server...')
+              const { RunwayMLService } = await import('@/lib/ai-services')
+              
+              // Upload character file
+              const characterUploadResult = await RunwayMLService.uploadFileToRunway(uploadedFile, userApiKeys.runway_api_key!)
+              runwayUri = characterUploadResult.runwayUri
+              fileType = characterUploadResult.fileType
+              console.log('🎬 Character file uploaded successfully, runwayUri:', runwayUri, 'fileType:', fileType)
+              
+              // Upload reference video
+              console.log('🎬 Uploading reference video to Runway ML via server...')
+              const referenceUploadResult = await RunwayMLService.uploadFileToRunway(referenceVideoFile, userApiKeys.runway_api_key!)
+              referenceVideoUri = referenceUploadResult.runwayUri
+              console.log('🎬 Reference video uploaded successfully, runwayUri:', referenceVideoUri)
+              
+              toast({
+                title: "Files Uploaded",
+                description: "Your files have been successfully uploaded to Runway ML.",
+                variant: "success",
+              })
+            } catch (uploadError: any) {
+              console.error('🎬 Failed to upload files to Runway:', uploadError)
+              toast({
+                title: "File Upload Failed",
+                description: uploadError.message || "Failed to upload files to Runway ML. Please try again.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
+          } else if (uploadedFile) {
+            // For other models, just upload the single file
             try {
               setIsGenerating(true) // Set generating state while uploading
               toast({
@@ -1226,8 +1368,9 @@ export default function AIStudioPage() {
           }
           
           // Prepare JSON request body (no file, just runwayUri)
+          // For upscale, prompt is not needed
           const requestBody: any = {
-            prompt: enhancedPrompt,
+            prompt: actualModel === 'upscale_v1' ? '' : enhancedPrompt, // Empty prompt for upscale
             duration: selectedDuration,
             width: width.toString(),
             height: height.toString(),
@@ -1237,6 +1380,10 @@ export default function AIStudioPage() {
           if (runwayUri) {
             requestBody.runwayUri = runwayUri
             requestBody.fileType = fileType
+          }
+          
+          if (referenceVideoUri) {
+            requestBody.referenceVideoUri = referenceVideoUri
           }
           
           // Use server-side API route with JSON (no file in body)
@@ -1443,160 +1590,283 @@ export default function AIStudioPage() {
             }
           }
         } else if (type === "audio" && selectedModel === "ElevenLabs") {
-          console.log('Attempting to generate audio with ElevenLabs:', {
-            prompt: audioPrompt,
-            type: selectedAudioType,
-            duration: selectedAudioDuration,
-            voice: selectedVoice,
-            apiKeyLength: userApiKeys.elevenlabs_api_key?.length || 0,
-            apiKeyPrefix: userApiKeys.elevenlabs_api_key?.substring(0, 7) || 'None'
-          })
-          
-          // Import the ElevenLabs service
-          const { ElevenLabsService } = await import('@/lib/ai-services')
-          
-          // First validate the API key
-          console.log('Validating ElevenLabs API key...')
-          const isValid = await ElevenLabsService.validateApiKey(userApiKeys.elevenlabs_api_key!)
-          console.log('ElevenLabs API key validation result:', isValid)
-          
-          if (!isValid) {
-            toast({
-              title: "Invalid API Key",
-              description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
-              variant: "destructive",
-            })
-            setIsGenerating(false)
-            return
-          }
-          
-          // Build enhanced prompt based on audio type and selected script
-          let enhancedPrompt = enhancePromptWithScript(audioPrompt, 'audio')
-          
-          // Truncate prompt to stay within ElevenLabs character limits (aim for ~1000 chars)
-          const maxPromptLength = 1000
-          if (enhancedPrompt.length > maxPromptLength) {
-            // Keep the beginning and end, truncate the middle
-            const startLength = Math.floor(maxPromptLength * 0.4) // 40% at start
-            const endLength = Math.floor(maxPromptLength * 0.3)   // 30% at end
-            const middleLength = maxPromptLength - startLength - endLength - 20 // 20% for separator
-            
-            const start = enhancedPrompt.substring(0, startLength)
-            const end = enhancedPrompt.substring(enhancedPrompt.length - endLength)
-            
-            enhancedPrompt = `${start}... [Content truncated for length] ...${end}`
-            
-            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Prompt truncated from ${enhancedPrompt.length + (enhancedPrompt.length - maxPromptLength)} to ${enhancedPrompt.length} characters`)
-          }
-          
-          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Base Enhanced Prompt:`)
-          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
-          
-          if (selectedAudioType === "music") {
-            enhancedPrompt = `Background music: ${enhancedPrompt}`
-          } else if (selectedAudioType === "sfx") {
-            enhancedPrompt = `Sound effect: ${enhancedPrompt}`
-          } else if (selectedAudioType === "ambient") {
-            enhancedPrompt = `Ambient sound: ${enhancedPrompt}`
-          } else if (selectedAudioType === "dialogue") {
-            enhancedPrompt = enhancedPrompt // Keep enhanced for voice generation
-          } else if (selectedAudioType === "score") {
-            enhancedPrompt = `Film score: ${enhancedPrompt}`
-          }
-          
-          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Final Prompt After Audio Type Enhancement:`)
-          console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
-          
-          const response = await ElevenLabsService.generateAudio({
-            prompt: enhancedPrompt,
-            type: selectedAudioType,
-            model: selectedModel,
-            apiKey: userApiKeys.elevenlabs_api_key!,
-            voiceId: selectedVoice,
-          })
-
-          if (response.success) {
-            // Get the audio blob from the response
-            const audioBlob = response.data?.audio_blob || response.data?.blob
-            if (!audioBlob) {
-              throw new Error('No audio blob received from ElevenLabs')
-            }
-
-            // Upload audio to storage bucket
-            const uploadResponse = await fetch('/api/ai/save-audio', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                audioBlob: audioBlob,
-                fileName: `generated_audio_${selectedAudioType}_${Date.now()}`,
-                projectId: selectedProject || '',
-                sceneId: selectedScene !== "none" ? selectedScene : '',
-                userId: userId || ''
-              })
-            })
-
-            if (!uploadResponse.ok) {
-              throw new Error('Failed to upload audio to storage')
-            }
-
-            const uploadResult = await uploadResponse.json()
-            const storageUrl = uploadResult.url
-
-            // Create new generated content with permanent storage URL
-            const newContent: GeneratedContent = {
-              id: Date.now().toString(),
-              title: `Generated Audio - ${selectedAudioType} - ${new Date().toLocaleDateString()}`,
+          // Check if this is sound effects generation
+          if (selectedAudioType === "sfx") {
+            console.log('🔊 Attempting to generate sound effect with ElevenLabs:', {
               prompt: audioPrompt,
-              type: 'audio',
-              model: selectedModel,
-              created_at: new Date().toISOString(),
-              project_id: selectedProject,
-              scene_id: selectedScene !== "none" ? selectedScene : undefined,
-              duration: selectedAudioDuration,
-              url: storageUrl,
-            }
-            
-            setGeneratedContent(prev => [newContent, ...prev])
-            setAudioPrompt("") // Clear the prompt after successful generation
-            
-            // Show success toast
-            toast({
-              title: "Audio Generated!",
-              description: `Your ${selectedAudioType} has been created and saved successfully.`,
-              variant: "default",
+              duration: soundEffectDuration,
+              prompt_influence: promptInfluence,
+              looping: soundEffectLooping,
+              apiKeyLength: userApiKeys.elevenlabs_api_key?.length || 0,
+              apiKeyPrefix: userApiKeys.elevenlabs_api_key?.substring(0, 7) || 'None'
             })
             
-            // Auto-play the generated audio for immediate feedback
-            if (storageUrl) {
-              const audio = new Audio(storageUrl)
-              audio.play().catch(e => console.log('Auto-play prevented:', e))
-            }
-          } else {
-            console.error('ElevenLabs audio generation failed:', response.error)
+            // Import the ElevenLabs service
+            const { ElevenLabsService } = await import('@/lib/ai-services')
             
-            // Check for specific error types
-            if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
-              handleContentViolation('audio', audioPrompt)
-            } else if (response.error?.includes('quota_exceeded') || response.error?.includes('exceeds your quota')) {
-              toast({
-                title: "ElevenLabs Quota Exceeded",
-                description: "You've reached your ElevenLabs usage limit. Please upgrade your plan or try a shorter prompt.",
-                variant: "destructive",
-              })
-            } else if (response.error?.includes('Invalid API key')) {
+            // First validate the API key
+            console.log('🔊 Validating ElevenLabs API key...')
+            const isValid = await ElevenLabsService.validateApiKey(userApiKeys.elevenlabs_api_key!)
+            console.log('🔊 ElevenLabs API key validation result:', isValid)
+            
+            if (!isValid) {
               toast({
                 title: "Invalid API Key",
                 description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
                 variant: "destructive",
               })
-            } else {
+              setIsGenerating(false)
+              return
+            }
+            
+            try {
+              // Use the sound effects API
+              const response = await fetch('/api/ai/sound-effects', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  text: audioPrompt.trim(),
+                  duration: soundEffectDuration,
+                  prompt_influence: promptInfluence,
+                  looping: soundEffectLooping,
+                  apiKey: userApiKeys.elevenlabs_api_key,
+                }),
+              })
+
+              if (!response.ok) {
+                const errorText = await response.text()
+                console.error('🔊 Sound effects API error:', {
+                  status: response.status,
+                  error: errorText,
+                  prompt: audioPrompt.substring(0, 50)
+                })
+                
+                // If 404, provide helpful error message
+                if (response.status === 404) {
+                  throw new Error(`Sound Effects API not available. This feature may require a specific ElevenLabs subscription tier. Please check your ElevenLabs account or use dialogue generation instead.`)
+                }
+                
+                throw new Error(`HTTP ${response.status}: ${errorText}`)
+              }
+
+              const audioBlob = await response.blob()
+              const audioUrl = URL.createObjectURL(audioBlob)
+
+              // Upload audio to storage bucket
+              const uploadResponse = await fetch('/api/ai/save-audio', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  audioBlob: audioBlob,
+                  fileName: `generated_sound_effect_${Date.now()}`,
+                  projectId: selectedProject || '',
+                  sceneId: selectedScene !== "none" ? selectedScene : '',
+                  userId: userId || ''
+                })
+              })
+
+              if (!uploadResponse.ok) {
+                throw new Error('Failed to upload audio to storage')
+              }
+
+              const uploadResult = await uploadResponse.json()
+              const storageUrl = uploadResult.url
+
+              // Create new generated content with permanent storage URL
+              const newContent: GeneratedContent = {
+                id: Date.now().toString(),
+                title: `Generated Sound Effect - ${new Date().toLocaleDateString()}`,
+                prompt: audioPrompt,
+                type: 'audio',
+                model: selectedModel,
+                created_at: new Date().toISOString(),
+                project_id: selectedProject,
+                scene_id: selectedScene !== "none" ? selectedScene : undefined,
+                duration: soundEffectDuration ? `${soundEffectDuration}s` : undefined,
+                url: storageUrl,
+              }
+              
+              setGeneratedContent(prev => [newContent, ...prev])
+              setAudioPrompt("") // Clear the prompt after successful generation
+              
               toast({
-                title: "Audio Generation Failed",
-                description: `Error: ${response.error}. Please try again or contact support.`,
+                title: "Sound Effect Generated",
+                description: "Audio has been generated successfully!",
+                variant: "default",
+              })
+              
+              // Auto-play the generated audio for immediate feedback
+              if (storageUrl) {
+                const audio = new Audio(storageUrl)
+                audio.play().catch(e => console.log('Auto-play prevented:', e))
+              }
+            } catch (error) {
+              console.error('🔊 Error generating sound effect:', error)
+              toast({
+                title: "Generation Failed",
+                description: error instanceof Error ? error.message : "Failed to generate sound effect.",
                 variant: "destructive",
               })
+            }
+          } else {
+            // Regular audio generation (dialogue, music, etc.)
+            console.log('Attempting to generate audio with ElevenLabs:', {
+              prompt: audioPrompt,
+              type: selectedAudioType,
+              duration: selectedAudioDuration,
+              voice: selectedVoice,
+              apiKeyLength: userApiKeys.elevenlabs_api_key?.length || 0,
+              apiKeyPrefix: userApiKeys.elevenlabs_api_key?.substring(0, 7) || 'None'
+            })
+            
+            // Import the ElevenLabs service
+            const { ElevenLabsService } = await import('@/lib/ai-services')
+            
+            // First validate the API key
+            console.log('Validating ElevenLabs API key...')
+            const isValid = await ElevenLabsService.validateApiKey(userApiKeys.elevenlabs_api_key!)
+            console.log('ElevenLabs API key validation result:', isValid)
+            
+            if (!isValid) {
+              toast({
+                title: "Invalid API Key",
+                description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
+                variant: "destructive",
+              })
+              setIsGenerating(false)
+              return
+            }
+            
+            // Build enhanced prompt based on audio type and selected script
+            let enhancedPrompt = enhancePromptWithScript(audioPrompt, 'audio')
+            
+            // Truncate prompt to stay within ElevenLabs character limits (aim for ~1000 chars)
+            const maxPromptLength = 1000
+            if (enhancedPrompt.length > maxPromptLength) {
+              // Keep the beginning and end, truncate the middle
+              const startLength = Math.floor(maxPromptLength * 0.4) // 40% at start
+              const endLength = Math.floor(maxPromptLength * 0.3)   // 30% at end
+              const middleLength = maxPromptLength - startLength - endLength - 20 // 20% for separator
+              
+              const start = enhancedPrompt.substring(0, startLength)
+              const end = enhancedPrompt.substring(enhancedPrompt.length - endLength)
+              
+              enhancedPrompt = `${start}... [Content truncated for length] ...${end}`
+              
+              console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Prompt truncated from ${enhancedPrompt.length + (enhancedPrompt.length - maxPromptLength)} to ${enhancedPrompt.length} characters`)
+            }
+            
+            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Base Enhanced Prompt:`)
+            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
+            
+            if (selectedAudioType === "music") {
+              enhancedPrompt = `Background music: ${enhancedPrompt}`
+            } else if (selectedAudioType === "ambient") {
+              enhancedPrompt = `Ambient sound: ${enhancedPrompt}`
+            } else if (selectedAudioType === "dialogue") {
+              enhancedPrompt = enhancedPrompt // Keep enhanced for voice generation
+            } else if (selectedAudioType === "score") {
+              enhancedPrompt = `Film score: ${enhancedPrompt}`
+            }
+            
+            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - Final Prompt After Audio Type Enhancement:`)
+            console.log(`🚀 AUDIO GENERATION (ElevenLabs) - ${enhancedPrompt}`)
+            
+            const response = await ElevenLabsService.generateAudio({
+              prompt: enhancedPrompt,
+              type: selectedAudioType,
+              model: selectedModel,
+              apiKey: userApiKeys.elevenlabs_api_key!,
+              voiceId: selectedVoice,
+            })
+
+            if (response.success) {
+              // Get the audio blob from the response
+              const audioBlob = response.data?.audio_blob || response.data?.blob
+              if (!audioBlob) {
+                throw new Error('No audio blob received from ElevenLabs')
+              }
+
+              // Upload audio to storage bucket
+              const uploadResponse = await fetch('/api/ai/save-audio', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  audioBlob: audioBlob,
+                  fileName: `generated_audio_${selectedAudioType}_${Date.now()}`,
+                  projectId: selectedProject || '',
+                  sceneId: selectedScene !== "none" ? selectedScene : '',
+                  userId: userId || ''
+                })
+              })
+
+              if (!uploadResponse.ok) {
+                throw new Error('Failed to upload audio to storage')
+              }
+
+              const uploadResult = await uploadResponse.json()
+              const storageUrl = uploadResult.url
+
+              // Create new generated content with permanent storage URL
+              const newContent: GeneratedContent = {
+                id: Date.now().toString(),
+                title: `Generated Audio - ${selectedAudioType} - ${new Date().toLocaleDateString()}`,
+                prompt: audioPrompt,
+                type: 'audio',
+                model: selectedModel,
+                created_at: new Date().toISOString(),
+                project_id: selectedProject,
+                scene_id: selectedScene !== "none" ? selectedScene : undefined,
+                duration: selectedAudioDuration,
+                url: storageUrl,
+              }
+              
+              setGeneratedContent(prev => [newContent, ...prev])
+              setAudioPrompt("") // Clear the prompt after successful generation
+              
+              // Show success toast
+              toast({
+                title: "Audio Generated!",
+                description: `Your ${selectedAudioType} has been created and saved successfully.`,
+                variant: "default",
+              })
+              
+              // Auto-play the generated audio for immediate feedback
+              if (storageUrl) {
+                const audio = new Audio(storageUrl)
+                audio.play().catch(e => console.log('Auto-play prevented:', e))
+              }
+            } else {
+              console.error('ElevenLabs audio generation failed:', response.error)
+              
+              // Check for specific error types
+              if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
+                handleContentViolation('audio', audioPrompt)
+              } else if (response.error?.includes('quota_exceeded') || response.error?.includes('exceeds your quota')) {
+                toast({
+                  title: "ElevenLabs Quota Exceeded",
+                  description: "You've reached your ElevenLabs usage limit. Please upgrade your plan or try a shorter prompt.",
+                  variant: "destructive",
+                })
+              } else if (response.error?.includes('Invalid API key')) {
+                toast({
+                  title: "Invalid API Key",
+                  description: "Your ElevenLabs API key appears to be invalid. Please check your setup.",
+                  variant: "destructive",
+                })
+              } else {
+                toast({
+                  title: "Audio Generation Failed",
+                  description: `Error: ${response.error}. Please try again or contact support.`,
+                  variant: "destructive",
+                })
+              }
             }
           }
         } else if (type === "audio" && selectedModel === "Suno AI") {
@@ -1901,14 +2171,35 @@ export default function AIStudioPage() {
     try {
       console.log('Downloading video...')
       
-      // Create download link
+      // Show loading toast
+      toast({
+        title: "Preparing Download...",
+        description: "Fetching video file...",
+        variant: "default",
+      })
+      
+      // Fetch the video as a blob to handle CORS and ensure proper download
+      const response = await fetch(videoUrl)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch video: ${response.status} ${response.statusText}`)
+      }
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      
+      // Create download link with blob URL
       const link = document.createElement('a')
-      link.href = videoUrl
-      link.download = `${fileName}.mp4`
-      link.target = '_blank'
+      link.href = url
+      link.download = `${fileName || 'generated-video'}.mp4`
+      link.style.display = 'none'
       document.body.appendChild(link)
       link.click()
-      document.body.removeChild(link)
+      
+      // Clean up
+      setTimeout(() => {
+        document.body.removeChild(link)
+        window.URL.revokeObjectURL(url)
+      }, 100)
       
       toast({
         title: "Download Started",
@@ -1920,7 +2211,7 @@ export default function AIStudioPage() {
       console.error('Video download error:', error)
       toast({
         title: "Download Failed",
-        description: "Failed to download video. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to download video. Please try again.",
         variant: "destructive",
       })
     }
@@ -2589,8 +2880,7 @@ export default function AIStudioPage() {
                     disabled={
                       isGenerating || 
                       !scriptPrompt || 
-                      !selectedProject || 
-                      !selectedModel ||
+                      (!selectedModel && !isCurrentTabLocked()) || // Allow if model is locked
                       (selectedModel === "ChatGPT" && false) ||
                       (selectedModel === "Claude" && false)
                     }
@@ -2619,8 +2909,8 @@ export default function AIStudioPage() {
                     </div>
                   )}
                   {!selectedProject && (
-                    <div className="text-xs text-orange-600 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2 mt-2">
-                      ⚠️ Select a project above to save scripts to your library
+                    <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mt-2">
+                      💡 Optional: Select a project above to save scripts to your library
                     </div>
                   )}
                 </CardHeader>
@@ -2632,12 +2922,7 @@ export default function AIStudioPage() {
                         .map((script) => (
                           <Card key={script.id} className="bg-muted/50 border-border">
                             <CardHeader className="pb-3">
-                              <div className="flex items-center justify-between">
-                                <CardTitle className="text-sm">{script.title}</CardTitle>
-                                <Badge variant="outline" className="text-xs">
-                                  {script.model}
-                                </Badge>
-                              </div>
+                              <CardTitle className="text-sm">{script.title}</CardTitle>
                             </CardHeader>
                             <CardContent>
                               <p className="text-sm text-muted-foreground mb-3 line-clamp-3">{script.content}</p>
@@ -3229,14 +3514,16 @@ export default function AIStudioPage() {
                       {getRunwayFileRequirement() && (
                       <div className="grid gap-2">
                           <Label>
-                            {getRunwayFileRequirement() === 'video'
+                            {selectedRunwayModel === "act_two"
+                              ? "Upload Character (Image or Video) (Required)"
+                              : getRunwayFileRequirement() === 'video'
                               ? "Upload Video (Required)" 
                               : "Upload Image (Required)"}
                           </Label>
                           <div className="border-2 border-dashed border-border rounded-lg p-4">
                             <input
                               type="file"
-                              accept={getRunwayFileRequirement() === 'video' ? "video/*" : "image/*"}
+                              accept={selectedRunwayModel === "act_two" ? "image/*,video/*" : (getRunwayFileRequirement() === 'video' ? "video/*" : "image/*")}
                               onChange={(e) => {
                                 const file = e.target.files?.[0]
                                 if (file) {
@@ -3269,7 +3556,7 @@ export default function AIStudioPage() {
                             >
                               {filePreview ? (
                                 <div className="relative">
-                                  {getRunwayFileRequirement() === 'video' ? (
+                                  {getRunwayFileRequirement() === 'video' || (selectedRunwayModel === "act_two" && uploadedFile?.type.startsWith('video/')) ? (
                                     <video
                                       src={filePreview}
                                       className="max-w-full max-h-32 rounded"
@@ -3298,9 +3585,82 @@ export default function AIStudioPage() {
                                 <>
                                   <Upload className="h-8 w-8 text-muted-foreground" />
                                   <span className="text-sm text-muted-foreground">
-                                    {getRunwayFileRequirement() === 'video'
+                                    {selectedRunwayModel === "act_two"
+                                      ? "Click to upload character image or video"
+                                      : getRunwayFileRequirement() === 'video'
                                       ? "Click to upload a video file" 
                                       : "Click to upload an image file"}
+                                  </span>
+                                </>
+                              )}
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reference Video Upload - Only for Act-Two */}
+                      {selectedRunwayModel === "act_two" && (
+                        <div className="grid gap-2">
+                          <Label>Upload Reference Video (Required)</Label>
+                          <div className="text-xs text-muted-foreground mb-1">
+                            A video (3-30 seconds) showing the performance to apply to your character
+                          </div>
+                          <div className="border-2 border-dashed border-border rounded-lg p-4">
+                            <input
+                              type="file"
+                              accept="video/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                  // Validate file size: 50MB for videos
+                                  const maxSize = 50 * 1024 * 1024
+                                  if (file.size > maxSize) {
+                                    toast({
+                                      title: "File Too Large",
+                                      description: "Video files must be smaller than 50MB. Please compress or use a smaller file.",
+                                      variant: "destructive",
+                                    })
+                                    return
+                                  }
+                                  setReferenceVideoFile(file)
+                                  const reader = new FileReader()
+                                  reader.onload = (e) => {
+                                    setReferenceVideoPreview(e.target?.result as string)
+                                  }
+                                  reader.readAsDataURL(file)
+                                }
+                              }}
+                              className="hidden"
+                              id="reference-video-upload"
+                            />
+                            <label
+                              htmlFor="reference-video-upload"
+                              className="cursor-pointer flex flex-col items-center gap-2"
+                            >
+                              {referenceVideoPreview ? (
+                                <div className="relative">
+                                  <video
+                                    src={referenceVideoPreview}
+                                    className="max-w-full max-h-32 rounded"
+                                    controls
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.preventDefault()
+                                      setReferenceVideoFile(null)
+                                      setReferenceVideoPreview(null)
+                                    }}
+                                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs"
+                                  >
+                                    ×
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <Upload className="h-8 w-8 text-muted-foreground" />
+                                  <span className="text-sm text-muted-foreground">
+                                    Click to upload reference video (3-30 seconds)
                                   </span>
                                 </>
                               )}
@@ -3775,7 +4135,8 @@ export default function AIStudioPage() {
                         <p>💡 <strong>Model Requirements:</strong></p>
                         <ul className="list-disc list-inside mt-1 space-y-1">
                           <li>Gen-3A/4 Turbo: Requires image input</li>
-                          <li>Gen-4 Aleph & Act-Two: Requires video input</li>
+                          <li>Gen-4 Aleph: Requires video input</li>
+                          <li>Act-Two: Requires character (image or video) + reference video (3-30s)</li>
                           <li>Upscale: Requires video input</li>
                         </ul>
                       </div>
@@ -3833,16 +4194,28 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  <div className="grid gap-2">
-                    <Label>Prompt</Label>
-                    <Textarea
-                      id="video-prompt"
-                      value={videoPrompt}
-                      onChange={(e) => setVideoPrompt(e.target.value)}
-                      placeholder="Describe the video you want to generate..."
-                      className="bg-input border-border min-h-32"
-                    />
-                  </div>
+                  {/* Prompt - Not required for upscale */}
+                  {selectedRunwayModel !== "upscale_v1" && (
+                    <div className="grid gap-2">
+                      <Label>Prompt</Label>
+                      <Textarea
+                        id="video-prompt"
+                        value={videoPrompt}
+                        onChange={(e) => setVideoPrompt(e.target.value)}
+                        placeholder="Describe the video you want to generate..."
+                        className="bg-input border-border min-h-32"
+                      />
+                    </div>
+                  )}
+                  
+                  {selectedRunwayModel === "upscale_v1" && (
+                    <div className="p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                      <p className="text-sm text-blue-600">
+                        <Info className="h-4 w-4 inline mr-2" />
+                        Upscale automatically enhances your video to 4K resolution. No prompt needed.
+                      </p>
+                    </div>
+                  )}
 
                   {isGenerating && (
                     <div className="space-y-2">
@@ -3869,8 +4242,8 @@ export default function AIStudioPage() {
                         klingKeyPrefix: userApiKeys.kling_api_key?.substring(0, 10) + '...'
                       })
                       
-                      // Validate form before submission
-                      if (!videoPrompt) {
+                      // Validate form before submission (prompt not required for upscale)
+                      if (!videoPrompt && selectedRunwayModel !== "upscale_v1") {
                         toast({
                           title: "Missing Prompt",
                           description: "Please enter a video prompt",
@@ -3910,10 +4283,12 @@ export default function AIStudioPage() {
                     }}
                     disabled={
                       isGenerating || 
-                      !videoPrompt || 
+                      (!videoPrompt && selectedRunwayModel !== "upscale_v1") || 
                       !selectedModel ||
                       ((selectedModel.startsWith("Runway") || selectedModel === "Runway ML") && !userApiKeys.runway_api_key) ||
-                      (selectedModel.startsWith("Kling") && !userApiKeys.kling_api_key)
+                      (selectedModel.startsWith("Kling") && !userApiKeys.kling_api_key) ||
+                      (selectedRunwayModel === "act_two" && (!uploadedFile || !referenceVideoFile)) ||
+                      (selectedRunwayModel !== "act_two" && getRunwayFileRequirement() && !uploadedFile)
                     }
                     className="w-full gradient-button text-white"
                   >
@@ -4235,23 +4610,68 @@ export default function AIStudioPage() {
                     </div>
                   )}
 
-                  <div className="grid gap-2">
-                    <Label>Duration</Label>
-                    <Select value={selectedAudioDuration} onValueChange={setSelectedAudioDuration}>
-                      <SelectTrigger className="bg-input border-border">
-                        <SelectValue placeholder="Select duration" />
-                      </SelectTrigger>
-                      <SelectContent className="cinema-card border-border">
-                        <SelectItem value="15s">15 seconds</SelectItem>
-                        <SelectItem value="30s">30 seconds</SelectItem>
-                        <SelectItem value="1m">1 minute</SelectItem>
-                        <SelectItem value="2m">2 minutes</SelectItem>
-                        <SelectItem value="5m">5 minutes</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  {/* Sound Effects specific controls */}
+                  {selectedAudioType === "sfx" && selectedModel === "ElevenLabs" ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Duration (seconds, optional)</Label>
+                          <Input
+                            type="number"
+                            min="0.1"
+                            max="30"
+                            step="0.1"
+                            value={soundEffectDuration || ''}
+                            onChange={(e) => setSoundEffectDuration(e.target.value ? parseFloat(e.target.value) : undefined)}
+                            placeholder="Auto"
+                            className="bg-input border-border"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Prompt Influence: {promptInfluence}</Label>
+                          <Input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.1"
+                            value={promptInfluence}
+                            onChange={(e) => setPromptInfluence(parseFloat(e.target.value))}
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="sound-effect-looping"
+                          checked={soundEffectLooping}
+                          onChange={(e) => setSoundEffectLooping(e.target.checked)}
+                          className="rounded"
+                        />
+                        <Label htmlFor="sound-effect-looping" className="text-sm cursor-pointer">
+                          Enable looping (for seamless repeating sounds)
+                        </Label>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="grid gap-2">
+                      <Label>Duration</Label>
+                      <Select value={selectedAudioDuration} onValueChange={setSelectedAudioDuration}>
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue placeholder="Select duration" />
+                        </SelectTrigger>
+                        <SelectContent className="cinema-card border-border">
+                          <SelectItem value="15s">15 seconds</SelectItem>
+                          <SelectItem value="30s">30 seconds</SelectItem>
+                          <SelectItem value="1m">1 minute</SelectItem>
+                          <SelectItem value="2m">2 minutes</SelectItem>
+                          <SelectItem value="5m">5 minutes</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
 
-                  {selectedModel === "ElevenLabs" && (
+                  {selectedModel === "ElevenLabs" && selectedAudioType !== "sfx" && (
                     <div className="grid gap-2">
                       <Label>Voice</Label>
                       <Select value={selectedVoice} onValueChange={setSelectedVoice}>
@@ -4386,7 +4806,11 @@ export default function AIStudioPage() {
                       id="audio-prompt"
                       value={audioPrompt}
                       onChange={(e) => setAudioPrompt(e.target.value)}
-                      placeholder="Describe the audio you want to generate..."
+                      placeholder={
+                        selectedAudioType === "sfx" 
+                          ? "Describe the sound effect (e.g., 'Glass shattering on concrete', 'Thunder rumbling in the distance')"
+                          : "Describe the audio you want to generate..."
+                      }
                       className="bg-input border-border min-h-32"
                     />
                   </div>
