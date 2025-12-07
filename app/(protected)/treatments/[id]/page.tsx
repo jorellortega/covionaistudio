@@ -7608,56 +7608,18 @@ Return ONLY the JSON object, no other text:`
                 </Card>
               </Collapsible>
 
-              {/* Logline */}
+              {/* Logline Card */}
               {treatment.logline && (
                 <Card>
                   <CardHeader>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <CardTitle>Logline</CardTitle>
-                        <CardDescription>One-sentence summary</CardDescription>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {/* AI Regenerate Button */}
-                        <Button 
-                          variant="outline" 
-                          size="sm" 
-                          onClick={generateAILogline}
-                          disabled={isGeneratingLogline || !aiSettingsLoaded}
-                          className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                          title="Generate a new logline from treatment content using AI"
-                        >
-                          {isGeneratingLogline ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generating...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              AI Regenerate
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
+                    <CardTitle className="flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-purple-500" />
+                      Logline
+                    </CardTitle>
+                    <CardDescription>One-sentence summary</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="space-y-4">
-                      <p className="text-lg font-medium italic">"{treatment.logline}"</p>
-                      
-                      {/* Text to Speech Component */}
-                      <div data-tts-logline>
-                        <TextToSpeech 
-                          text={treatment.logline}
-                          title={`${treatment.title} - Logline`}
-                          projectId={treatment.project_id}
-                          sceneId={null}
-                          treatmentId={treatment.id}
-                          className="mt-4"
-                        />
-                      </div>
-                    </div>
+                    <p className="text-base italic text-muted-foreground">"{treatment.logline}"</p>
                   </CardContent>
                 </Card>
               )}

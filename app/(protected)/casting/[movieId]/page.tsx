@@ -139,12 +139,11 @@ export default function CastingPage() {
   // Load data
   useEffect(() => {
     if (movieId) {
-      // Load even if not ready (for unauthenticated users)
-      if (ready || !user) {
-        loadData()
-      }
+      // For casting pages, load data immediately without waiting for auth
+      // This allows public users to access the page
+      loadData()
     }
-  }, [ready, movieId, user])
+  }, [movieId])
 
   const loadData = async () => {
     try {
@@ -152,11 +151,21 @@ export default function CastingPage() {
       
       let movieData: Movie | null = null
       
+      // First, check if casting is active - this determines if public access is allowed
+      const { data: settingsData } = await getSupabaseClient()
+        .from('casting_settings')
+        .select('is_active')
+        .eq('movie_id', movieId)
+        .maybeSingle()
+      
+      const castingIsActive = settingsData?.is_active === true
+      
       // Try to load movie - authenticated users get full access check
       if (user && userId) {
         movieData = await MovieService.getMovieById(movieId)
-      } else {
-        // For unauthenticated users, try to load movie directly if casting is active
+      } else if (castingIsActive) {
+        // For unauthenticated users, load movie directly if casting is active
+        // The RLS policy will allow this access
         try {
           const { data, error } = await getSupabaseClient()
             .from('projects')
@@ -174,42 +183,18 @@ export default function CastingPage() {
       }
       
       if (!movieData) {
-        // Check if casting is active - if so, allow public access
-        const { data: settingsData } = await getSupabaseClient()
-          .from('casting_settings')
-          .select('is_active')
-          .eq('movie_id', movieId)
-          .maybeSingle()
-        
-        if (settingsData?.is_active) {
-          // Casting is active, load movie for public view
-          const { data, error } = await getSupabaseClient()
-            .from('projects')
-            .select('*')
-            .eq('id', movieId)
-            .eq('project_type', 'movie')
-            .maybeSingle()
-          
-          if (!error && data) {
-            movieData = data as Movie
-          }
-        }
-      }
-      
-      if (!movieData) {
-        // For public view, don't show error immediately - check if casting is active first
-        if (!isPublicView) {
+        // Only show error to authenticated users who don't have access
+        // Public users will see "Movie Not Found" which is appropriate
+        if (user && userId) {
           toast({
             title: "Access Denied",
             description: "You don't have access to this project.",
             variant: "destructive",
           })
-          if (user) {
-            router.push('/movies')
-          }
+          router.push('/movies')
         }
         // Don't return early - allow the page to render even if movie not found
-        // The page will show appropriate message
+        // The page will show appropriate message for public users
         setLoading(false)
         return
       }
@@ -289,25 +274,30 @@ export default function CastingPage() {
         // Don't fail the whole page if characters fail to load
       }
       
+      // Always load treatment to get logline (even if script is not shown)
+      try {
+        // Get treatment for this project to fetch logline
+        const { data: treatmentData } = await getSupabaseClient()
+          .from('treatments')
+          .select('*')
+          .eq('project_id', movieId)
+          .maybeSingle()
+
+        if (treatmentData) {
+          setTreatment(treatmentData)
+        }
+      } catch (error) {
+        console.error('Error loading treatment:', error)
+      }
+
       // Load additional data based on settings
       if (settings) {
         if (settings.show_script) {
           try {
-            // Get treatment for this project
-            const { data: treatmentData } = await getSupabaseClient()
-              .from('treatments')
-              .select('*')
-              .eq('project_id', movieId)
-              .maybeSingle()
-
-            if (treatmentData) {
-              setTreatment(treatmentData)
-            }
-            
             // Fetch screenplay from scenes
             await fetchScreenplayFromScenes(movieId)
           } catch (error) {
-            console.error('Error loading treatment:', error)
+            console.error('Error loading screenplay:', error)
           }
         }
 
@@ -969,6 +959,11 @@ export default function CastingPage() {
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-4">
                   <div className="flex-1 min-w-0">
                     <CardTitle className="text-2xl sm:text-3xl mb-2 break-words">{movie.name}</CardTitle>
+                    {treatment?.logline && (
+                      <p className="text-sm sm:text-base text-muted-foreground mb-3 break-words italic">
+                        {treatment.logline}
+                      </p>
+                    )}
                     <div className="flex flex-wrap gap-2 mb-3">
                       {movie.genre && <Badge variant="outline" className="text-xs">{movie.genre}</Badge>}
                       <Badge variant="outline" className="text-xs">{movie.movie_status}</Badge>

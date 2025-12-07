@@ -11,7 +11,6 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
 
   // Allow public access to casting pages (the page component will handle access control)
   const isCastingPage = pathname?.startsWith('/casting/');
-  const isPublicViewParam = searchParams?.get('view') === 'public';
 
   useEffect(() => {
     // Don't redirect if it's a casting page (let the page handle access control)
@@ -20,13 +19,17 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
     }
   }, [loading, session, router, isCastingPage]);
 
+  // For casting pages, allow rendering immediately without waiting for auth
+  if (isCastingPage) {
+    return <>{children}</>;
+  }
+
   if (loading) {
     return <div className="grid min-h-screen place-items-center"><p>Checking session…</p></div>;
   }
   
-  // Allow rendering if user has session OR it's a casting page
-  // The casting page component will handle showing appropriate content based on access
-  if (!session && !isCastingPage) {
+  // Allow rendering if user has session
+  if (!session) {
     return null; // waiting for redirect
   }
   
