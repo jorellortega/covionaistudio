@@ -1924,7 +1924,7 @@ export default function CastingPage() {
                                 setCurrentScreenplayPage(1)
                               }}
                             >
-                              <SelectTrigger className="w-full sm:w-[300px] min-h-[44px]">
+                              <SelectTrigger className="w-full sm:w-[300px] min-h-[44px] border-green-500/30 focus:border-green-400">
                                 <SelectValue placeholder="Select a scene" />
                               </SelectTrigger>
                               <SelectContent>
