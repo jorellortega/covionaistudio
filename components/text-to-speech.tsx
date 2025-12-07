@@ -426,17 +426,43 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
               const pageNumber = parseInt(pageMatch[1])
               // Get page number from metadata if available, otherwise use current page from metadata prop
               const currentPageNumber = metadata?.pageNumber || pageNumber
+              console.log('🎵 Filtering audio for Scene Page:', {
+                title,
+                extractedPageNumber: pageNumber,
+                metadataPageNumber: metadata?.pageNumber,
+                currentPageNumber,
+                totalFiles: result.data.audioFiles.length,
+                filesWithPageNumbers: result.data.audioFiles.filter((f: any) => f.metadata?.pageNumber !== undefined).length
+              })
               // Only show audio files that match this specific page number
               filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
                 // First check metadata.pageNumber if available (most reliable)
-                if (file.metadata?.pageNumber !== undefined) {
-                  return parseInt(file.metadata.pageNumber) === currentPageNumber
+                if (file.metadata?.pageNumber !== undefined && file.metadata?.pageNumber !== null) {
+                  const matches = parseInt(file.metadata.pageNumber) === currentPageNumber
+                  console.log('🎵 Checking file:', {
+                    fileId: file.id,
+                    fileName: file.name,
+                    filePageNumber: file.metadata.pageNumber,
+                    currentPageNumber,
+                    matches
+                  })
+                  return matches
                 }
                 // Fallback to title pattern matching
                 const fileName = file.name.toLowerCase()
                 const filePageMatch = fileName.match(/scene[\s_]+page[\s_]+(\d+)/i)
-                return filePageMatch && parseInt(filePageMatch[1]) === currentPageNumber
+                const matches = filePageMatch && parseInt(filePageMatch[1]) === currentPageNumber
+                if (matches) {
+                  console.log('🎵 File matched by title pattern:', {
+                    fileId: file.id,
+                    fileName: file.name,
+                    extractedPage: filePageMatch?.[1],
+                    currentPageNumber
+                  })
+                }
+                return matches
               })
+              console.log('🎵 Filtered audio files for page', currentPageNumber, ':', filteredAudioFiles.length)
             }
           } else if (titleLower.includes('page')) {
             // Handle legacy "Page X Audio" format (without "Scene" prefix)
@@ -598,6 +624,13 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       }
       console.log('💾 Saving audio with filename:', fileName)
       console.log('💾 Audio title for database:', audioTitle)
+      console.log('💾 Saving audio with metadata:', {
+        pageNumber: metadata?.pageNumber,
+        sceneId: sceneId || metadata?.sceneId,
+        audioType: metadata?.audioType,
+        totalPages: metadata?.totalPages,
+        fullMetadata: metadata
+      })
 
       const saveResponse = await fetch('/api/ai/save-audio', {
         method: 'POST',
@@ -1163,7 +1196,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             <RefreshCw 
               className="h-3 w-3 hover:text-blue-400 cursor-pointer" 
               onClick={() => fetchSavedAudio()}
-              title="Refresh saved audio list"
+              aria-label="Refresh saved audio list"
             />
           </div>
           <div className="space-y-2">

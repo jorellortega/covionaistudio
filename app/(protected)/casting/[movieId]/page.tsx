@@ -251,10 +251,13 @@ export default function CastingPage() {
         })
       }
       
-      // If owner, load submissions
-      if (owner) {
+      // If owner, load submissions (never load in public view)
+      if (owner && !isPublicView) {
         const submissionsData = await CastingService.getSubmissionsForMovie(movieId)
         setSubmissions(submissionsData)
+      } else {
+        // Clear submissions if not owner or in public view
+        setSubmissions([])
       }
       
       // Load characters for this project (works for both authenticated and unauthenticated)
@@ -1100,7 +1103,7 @@ export default function CastingPage() {
                           </Link>
                         )}
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3 sm:gap-4">
                         {filteredCharacters.map((character) => {
                           return (
                             <Link 
@@ -1109,8 +1112,8 @@ export default function CastingPage() {
                               className="block"
                             >
                               <Card className="border-border hover:border-primary/50 transition-colors cursor-pointer h-full">
-                                <CardContent className="p-3">
-                                <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-muted mb-2">
+                                <CardContent className="p-2 sm:p-3">
+                                <div className="relative aspect-[2/3] rounded-lg overflow-hidden bg-muted mb-1.5 sm:mb-2">
                                   {character.image_url ? (
                                     <img
                                       src={character.image_url}
@@ -1119,26 +1122,26 @@ export default function CastingPage() {
                                     />
                                   ) : (
                                     <div className="w-full h-full flex items-center justify-center">
-                                      <User className="h-8 w-8 text-muted-foreground" />
+                                      <User className="h-6 w-6 sm:h-8 sm:w-8 text-muted-foreground" />
                                     </div>
                                   )}
                                   {/* Character Type Badge */}
                                   {character.character_type && (
                                     <Badge 
-                                      className={`absolute top-2 right-2 ${getTypeBadgeColor(character.character_type)} text-xs font-semibold px-2 py-0.5`}
+                                      className={`absolute top-1 right-1 sm:top-2 sm:right-2 ${getTypeBadgeColor(character.character_type)} text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 sm:px-2`}
                                     >
                                       {getTypeLabel(character.character_type)}
                                     </Badge>
                                   )}
                                 </div>
-                                <div className="flex items-start justify-between gap-2">
+                                <div className="flex items-start justify-between gap-1.5 sm:gap-2">
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-semibold break-words">{character.name}</p>
+                                    <p className="text-xs sm:text-sm font-semibold break-words">{character.name}</p>
                                     {character.archetype && (
-                                      <p className="text-xs text-muted-foreground break-words">{character.archetype}</p>
+                                      <p className="text-[10px] sm:text-xs text-muted-foreground break-words">{character.archetype}</p>
                                     )}
                                     {character.description && (
-                                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2 break-words">
+                                      <p className="text-[10px] sm:text-xs text-muted-foreground mt-0.5 sm:mt-1 line-clamp-1 sm:line-clamp-2 break-words">
                                         {character.description}
                                       </p>
                                     )}
@@ -1204,8 +1207,8 @@ export default function CastingPage() {
           </CardHeader>
         </Card>
 
-        {/* Owner View - Submissions */}
-        {isOwner && (
+        {/* Owner View - Submissions (Never visible in public view) */}
+        {isOwner && !isPublicView && (
           <Card className="cinema-card mb-6">
             <CardHeader className="p-4 sm:p-6">
               <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
@@ -1221,61 +1224,61 @@ export default function CastingPage() {
                   <p className="text-sm">No submissions yet</p>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-2 sm:space-y-4">
                   {submissions.map((submission) => (
                     <Card key={submission.id} className="border-border">
-                      <CardContent className="p-4 sm:pt-6">
-                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+                      <CardContent className="p-3 sm:p-4 sm:pt-6">
+                        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-3 mb-2 sm:mb-4">
                           <div className="flex-1 min-w-0">
-                            <h4 className="font-semibold text-base sm:text-lg flex items-center gap-2 break-words">
-                              <User className="h-4 w-4 flex-shrink-0" />
+                            <h4 className="font-semibold text-sm sm:text-base sm:text-lg flex items-center gap-1.5 sm:gap-2 break-words">
+                              <User className="h-3.5 w-3.5 sm:h-4 sm:w-4 flex-shrink-0" />
                               {submission.actor_name}
                             </h4>
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 text-xs sm:text-sm text-muted-foreground mt-1">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2 sm:gap-3 text-[10px] sm:text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
                               <span className="flex items-center gap-1 break-all">
-                                <Mail className="h-3 w-3 flex-shrink-0" />
+                                <Mail className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
                                 {submission.actor_email}
                               </span>
                               {submission.actor_phone && (
                                 <span className="flex items-center gap-1 break-all">
-                                  <Phone className="h-3 w-3 flex-shrink-0" />
+                                  <Phone className="h-2.5 w-2.5 sm:h-3 sm:w-3 flex-shrink-0" />
                                   {submission.actor_phone}
                                 </span>
                               )}
                             </div>
                           </div>
                           
-                          <Badge className={`${statusColors[submission.status]} text-xs sm:text-sm flex-shrink-0 self-start`}>
+                          <Badge className={`${statusColors[submission.status]} text-[10px] sm:text-xs sm:text-sm flex-shrink-0 self-start`}>
                             {submission.status}
                           </Badge>
                         </div>
 
                         {submission.role_applying_for && (
-                          <div className="mb-3">
-                            <span className="text-xs sm:text-sm font-semibold">Applying for: </span>
-                            <Badge variant="outline" className="text-xs">{submission.role_applying_for}</Badge>
+                          <div className="mb-2 sm:mb-3">
+                            <span className="text-[10px] sm:text-xs sm:text-sm font-semibold">Applying for: </span>
+                            <Badge variant="outline" className="text-[10px] sm:text-xs">{submission.role_applying_for}</Badge>
                           </div>
                         )}
 
                         {submission.cover_letter && (
-                          <div className="mb-3">
-                            <p className="text-xs sm:text-sm text-muted-foreground line-clamp-3 break-words">
+                          <div className="mb-2 sm:mb-3">
+                            <p className="text-[10px] sm:text-xs sm:text-sm text-muted-foreground line-clamp-2 sm:line-clamp-3 break-words">
                               {submission.cover_letter}
                             </p>
                           </div>
                         )}
 
                         {/* Media Files */}
-                        <div className="flex flex-wrap gap-2 mb-4">
+                        <div className="flex flex-wrap gap-1.5 sm:gap-2 mb-2 sm:mb-4">
                           {submission.headshot_url && (
                             <a
                               href={submission.headshot_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-xs"
+                              className="text-[10px] sm:text-xs"
                             >
-                              <Button variant="outline" size="sm" className="text-xs">
-                                <ImageIcon className="h-3 w-3 mr-1" />
+                              <Button variant="outline" size="sm" className="text-[10px] sm:text-xs h-7 sm:h-8 px-2 sm:px-3">
+                                <ImageIcon className="h-2.5 w-2.5 sm:h-3 sm:w-3 mr-0.5 sm:mr-1" />
                                 Headshot
                               </Button>
                             </a>
@@ -1285,10 +1288,10 @@ export default function CastingPage() {
                               href={submission.video_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-xs"
+                              className="text-[10px] sm:text-xs"
                             >
-                              <Button variant="outline" size="sm" className="text-xs">
-                                <Video className="h-3 w-3 mr-1" />
+                              <Button variant="outline" size="sm" className="text-[10px] sm:text-xs h-7 sm:h-8 px-2 sm:px-3">
+                                <Video className="h-2.5 w-2.5 sm:h-3 sm:w-3 mr-0.5 sm:mr-1" />
                                 Reel
                               </Button>
                             </a>
@@ -1298,10 +1301,10 @@ export default function CastingPage() {
                               href={submission.resume_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-xs"
+                              className="text-[10px] sm:text-xs"
                             >
-                              <Button variant="outline" size="sm" className="text-xs">
-                                <FileText className="h-3 w-3 mr-1" />
+                              <Button variant="outline" size="sm" className="text-[10px] sm:text-xs h-7 sm:h-8 px-2 sm:px-3">
+                                <FileText className="h-2.5 w-2.5 sm:h-3 sm:w-3 mr-0.5 sm:mr-1" />
                                 Resume
                               </Button>
                             </a>
@@ -1309,12 +1312,12 @@ export default function CastingPage() {
                         </div>
 
                         {/* Actions */}
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                           <Select
                             value={submission.status}
                             onValueChange={(value) => handleUpdateSubmissionStatus(submission.id, value as ActorSubmission['status'])}
                           >
-                            <SelectTrigger className="w-full sm:w-40 text-xs sm:text-sm">
+                            <SelectTrigger className="w-full sm:w-40 text-[10px] sm:text-xs sm:text-sm h-7 sm:h-9">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -1330,24 +1333,24 @@ export default function CastingPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedSubmission(submission)}
-                            className="flex-1 sm:flex-initial"
+                            className="flex-1 sm:flex-initial h-7 sm:h-9 w-7 sm:w-auto px-2 sm:px-3"
                           >
-                            <Eye className="h-4 w-4" />
+                            <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
                           </Button>
                           
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleDeleteSubmission(submission.id)}
-                            className="flex-1 sm:flex-initial"
+                            className="flex-1 sm:flex-initial h-7 sm:h-9 w-7 sm:w-auto px-2 sm:px-3"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
                           </Button>
                         </div>
 
                         {submission.notes && (
-                          <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-                            <p className="text-xs sm:text-sm break-words"><strong>Notes:</strong> {submission.notes}</p>
+                          <div className="mt-2 sm:mt-4 p-2 sm:p-3 bg-muted/50 rounded-lg">
+                            <p className="text-[10px] sm:text-xs sm:text-sm break-words"><strong>Notes:</strong> {submission.notes}</p>
                           </div>
                         )}
                       </CardContent>
@@ -2245,10 +2248,15 @@ export default function CastingPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Submission Details Dialog */}
-      <Dialog open={!!selectedSubmission} onOpenChange={() => setSelectedSubmission(null)}>
+      {/* Submission Details Dialog (Owner Only) */}
+      <Dialog open={!!selectedSubmission && isOwner && !isPublicView} onOpenChange={() => {
+        // Only allow closing, not opening if not owner or in public view
+        if (isOwner && !isPublicView) {
+          setSelectedSubmission(null)
+        }
+      }}>
         <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
-          {selectedSubmission && (
+          {selectedSubmission && isOwner && !isPublicView && (
             <>
               <DialogHeader>
                 <DialogTitle>{selectedSubmission.actor_name}</DialogTitle>
