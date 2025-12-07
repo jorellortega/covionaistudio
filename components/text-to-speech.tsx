@@ -423,27 +423,39 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
             // Extract page number from title (e.g., "Scene Page 1 Audio" -> "1")
             const pageMatch = title.match(/scene\s+page\s+(\d+)/i)
             if (pageMatch) {
-              const pageNumber = pageMatch[1]
+              const pageNumber = parseInt(pageMatch[1])
+              // Get page number from metadata if available, otherwise use current page from metadata prop
+              const currentPageNumber = metadata?.pageNumber || pageNumber
               // Only show audio files that match this specific page number
               filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+                // First check metadata.pageNumber if available (most reliable)
+                if (file.metadata?.pageNumber !== undefined) {
+                  return parseInt(file.metadata.pageNumber) === currentPageNumber
+                }
+                // Fallback to title pattern matching
                 const fileName = file.name.toLowerCase()
-                // Match "scene page X" or "scene_page_X" patterns
                 const filePageMatch = fileName.match(/scene[\s_]+page[\s_]+(\d+)/i)
-                return filePageMatch && filePageMatch[1] === pageNumber
+                return filePageMatch && parseInt(filePageMatch[1]) === currentPageNumber
               })
             }
           } else if (titleLower.includes('page')) {
             // Handle legacy "Page X Audio" format (without "Scene" prefix)
             const pageMatch = title.match(/page\s+(\d+)/i)
             if (pageMatch) {
-              const pageNumber = pageMatch[1]
+              const pageNumber = parseInt(pageMatch[1])
+              // Get page number from metadata if available
+              const currentPageNumber = metadata?.pageNumber || pageNumber
               // Only show audio files that match this specific page number
               filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+                // First check metadata.pageNumber if available (most reliable)
+                if (file.metadata?.pageNumber !== undefined) {
+                  return parseInt(file.metadata.pageNumber) === currentPageNumber
+                }
+                // Fallback to title pattern matching
                 const fileName = file.name.toLowerCase()
-                // Match "page X" or "page_X" patterns (but not "scene page X")
                 const filePageMatch = fileName.match(/page[\s_]+(\d+)/i)
                 const hasScenePrefix = fileName.includes('scene')
-                return filePageMatch && filePageMatch[1] === pageNumber && !hasScenePrefix
+                return filePageMatch && parseInt(filePageMatch[1]) === currentPageNumber && !hasScenePrefix
               })
             }
           }
@@ -554,11 +566,14 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         const pageMatch = title.match(/scene\s+page\s+(\d+)/i)
         if (pageMatch) {
           const pageNumber = pageMatch[1]
-          fileName = `scene_page_${pageNumber}_audio`
+          // Include scene ID in filename for uniqueness if available
+          const sceneIdPart = sceneId ? `scene_${sceneId}_` : ''
+          fileName = `${sceneIdPart}page_${pageNumber}_audio`
           audioTitle = title // Use the full title as-is (e.g., "Scene Page 1 Audio")
         } else {
           // Fallback if page number not found
-          fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+          const sceneIdPart = sceneId ? `scene_${sceneId}_` : ''
+          fileName = `${sceneIdPart}${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
           audioTitle = `${title} audio`
         }
       } else if (titleLower.includes('page')) {
@@ -566,11 +581,14 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         const pageMatch = title.match(/page\s+(\d+)/i)
         if (pageMatch) {
           const pageNumber = pageMatch[1]
-          fileName = `page_${pageNumber}_audio`
+          // Include scene ID in filename for uniqueness if available
+          const sceneIdPart = sceneId ? `scene_${sceneId}_` : ''
+          fileName = `${sceneIdPart}page_${pageNumber}_audio`
           audioTitle = title // Use the full title as-is (e.g., "Page 1 Audio")
         } else {
           // Fallback if page number not found
-          fileName = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
+          const sceneIdPart = sceneId ? `scene_${sceneId}_` : ''
+          fileName = `${sceneIdPart}${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_speech`
           audioTitle = `${title} audio`
         }
       } else {

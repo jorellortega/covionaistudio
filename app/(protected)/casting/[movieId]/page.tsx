@@ -47,7 +47,10 @@ import {
   User,
   Save,
   Edit,
-  Share2
+  Share2,
+  Volume2,
+  ChevronLeft,
+  ChevronRight
 } from "lucide-react"
 import { CastingService, type CastingSetting, type ActorSubmission } from "@/lib/casting-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
@@ -83,6 +86,16 @@ export default function CastingPage() {
   const [timeline, setTimeline] = useState<any>(null)
   const [treatment, setTreatment] = useState<any>(null)
   const [characters, setCharacters] = useState<Character[]>([])
+  const [screenplayScenes, setScreenplayScenes] = useState<Array<{
+    sceneId: string
+    sceneName: string
+    sceneNumber: number
+    pages: Array<{ pageNumber: number; content: string }>
+  }>>([])
+  const [screenplayAudio, setScreenplayAudio] = useState<Map<string, Map<number, Array<{ id: string; url: string; title: string }>>>>(new Map())
+  const [loadingScreenplay, setLoadingScreenplay] = useState(false)
+  const [selectedSceneId, setSelectedSceneId] = useState<string | null>(null)
+  const [currentScreenplayPage, setCurrentScreenplayPage] = useState(1)
   
   const [loading, setLoading] = useState(true)
   const [isOwner, setIsOwner] = useState(false)
@@ -280,6 +293,9 @@ export default function CastingPage() {
             if (treatmentData) {
               setTreatment(treatmentData)
             }
+            
+            // Fetch screenplay from scenes
+            await fetchScreenplayFromScenes(movieId)
           } catch (error) {
             console.error('Error loading treatment:', error)
           }
@@ -331,6 +347,255 @@ export default function CastingPage() {
       setLoading(false)
     }
   }
+
+  // Fetch screenplay content from all scenes, organized by scene
+  const fetchScreenplayFromScenes = async (projectId: string) => {
+    setLoadingScreenplay(true)
+    try {
+      // Get timeline for this project
+      const { data: timelineData, error: timelineError } = await getSupabaseClient()
+        .from('timelines')
+        .select('id')
+        .eq('project_id', projectId)
+        .maybeSingle()
+
+      if (timelineError || !timelineData) {
+        console.log('No timeline found for project')
+        setScreenplayScenes([])
+        return
+      }
+
+      // Get all scenes for this timeline with screenplay_content
+      const { data: scenes, error: scenesError } = await getSupabaseClient()
+        .from('scenes')
+        .select('id, name, metadata, order_index, screenplay_content')
+        .eq('timeline_id', timelineData.id)
+        .not('screenplay_content', 'is', null)
+        .order('order_index', { ascending: true })
+
+      if (scenesError) {
+        console.error('Error fetching scenes:', scenesError)
+        setScreenplayScenes([])
+        return
+      }
+
+      if (!scenes || scenes.length === 0) {
+        console.log('No scenes with screenplay content found')
+        setScreenplayScenes([])
+        return
+      }
+
+      // Sort scenes by scene number (from metadata) or order_index
+      const sortedScenes = [...scenes].sort((a, b) => {
+        const sceneNumA = a.metadata?.sceneNumber || a.order_index || 0
+        const sceneNumB = b.metadata?.sceneNumber || b.order_index || 0
+        return sceneNumA - sceneNumB
+      })
+
+      // Split each scene's screenplay into pages (55 lines per page)
+      const LINES_PER_PAGE = 55
+      const scenesWithPages: Array<{
+        sceneId: string
+        sceneName: string
+        sceneNumber: number
+        pages: Array<{ pageNumber: number; content: string }>
+      }> = []
+
+      for (const scene of sortedScenes) {
+        if (!scene.screenplay_content || !scene.screenplay_content.trim()) continue
+
+        const lines = scene.screenplay_content.split('\n')
+        const pageCount = Math.ceil(lines.length / LINES_PER_PAGE)
+        const pages: Array<{ pageNumber: number; content: string }> = []
+
+        for (let i = 0; i < pageCount; i++) {
+          const startLine = i * LINES_PER_PAGE
+          const endLine = Math.min(startLine + LINES_PER_PAGE, lines.length)
+          const pageContent = lines.slice(startLine, endLine).join('\n')
+          pages.push({
+            pageNumber: i + 1,
+            content: pageContent
+          })
+        }
+
+        scenesWithPages.push({
+          sceneId: scene.id,
+          sceneName: scene.name || `Scene ${scene.metadata?.sceneNumber || scene.order_index || ''}`,
+          sceneNumber: scene.metadata?.sceneNumber || scene.order_index || 0,
+          pages
+        })
+      }
+
+      setScreenplayScenes(scenesWithPages)
+
+      // Set first scene as selected if available
+      if (scenesWithPages.length > 0) {
+        setSelectedSceneId(scenesWithPages[0].sceneId)
+        setCurrentScreenplayPage(1)
+      }
+
+      // Fetch audio for all scenes
+      if (scenesWithPages.length > 0) {
+        await fetchScreenplayAudio(scenesWithPages)
+      }
+    } catch (error) {
+      console.error('Error fetching screenplay:', error)
+      setScreenplayScenes([])
+    } finally {
+      setLoadingScreenplay(false)
+    }
+  }
+
+  // Fetch audio assets for screenplay pages, organized by scene
+  const fetchScreenplayAudio = async (scenesWithPages: Array<{
+    sceneId: string
+    sceneName: string
+    sceneNumber: number
+    pages: Array<{ pageNumber: number; content: string }>
+  }>) => {
+    try {
+      // Group audio by scene ID, then by page number
+      const audioMap = new Map<string, Map<number, Array<{ id: string; url: string; title: string }>>>()
+      
+      // For public views, we need to fetch audio directly from database
+      // For authenticated users, use the API
+      if (!userId && !user?.id) {
+        // Public view - fetch directly from database
+        const sceneIds = scenesWithPages.map(s => s.sceneId)
+        const supabase = getSupabaseClient()
+        
+        const { data: audioAssets, error } = await supabase
+          .from('assets')
+          .select('id, title, content_url, scene_id, metadata')
+          .in('scene_id', sceneIds)
+          .eq('content_type', 'audio')
+          .not('content_url', 'is', null)
+
+        if (!error && audioAssets) {
+          for (const asset of audioAssets) {
+            const sceneId = asset.scene_id
+            // First try to get page number from metadata
+            let pageNumber = asset.metadata?.pageNumber
+            
+            // If not in metadata, try to extract from title (e.g., "Scene Page 1 Audio")
+            if (pageNumber === undefined || pageNumber === null) {
+              const titleMatch = asset.title?.match(/scene\s+page\s+(\d+)/i) || asset.title?.match(/page\s+(\d+)/i)
+              if (titleMatch) {
+                pageNumber = parseInt(titleMatch[1])
+              }
+            }
+            
+            if (sceneId && pageNumber !== undefined && pageNumber !== null) {
+              if (!audioMap.has(sceneId)) {
+                audioMap.set(sceneId, new Map())
+              }
+              
+              const sceneAudioMap = audioMap.get(sceneId)!
+              const pageNum = parseInt(pageNumber.toString())
+              
+              // Only include audio that matches a page in this scene
+              const scene = scenesWithPages.find(s => s.sceneId === sceneId)
+              if (scene && scene.pages.some(p => p.pageNumber === pageNum)) {
+                if (!sceneAudioMap.has(pageNum)) {
+                  sceneAudioMap.set(pageNum, [])
+                }
+                
+                sceneAudioMap.get(pageNum)!.push({
+                  id: asset.id,
+                  url: asset.content_url,
+                  title: asset.title || `Page ${pageNumber} Audio`
+                })
+              }
+            }
+          }
+        }
+      } else {
+        // Authenticated users - use the API
+        for (const scene of scenesWithPages) {
+          try {
+            const response = await fetch('/api/ai/get-scene-audio', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                projectId: movieId, 
+                sceneId: scene.sceneId,
+                userId: userId || user?.id
+              })
+            })
+
+            if (!response.ok) {
+              console.error(`Error fetching audio for scene ${scene.sceneId}:`, response.statusText)
+              continue
+            }
+
+            const result = await response.json()
+            console.log(`🎵 Audio fetch result for scene ${scene.sceneId}:`, result)
+            
+            if (result.success && result.data.audioFiles) {
+              const sceneAudioMap = new Map<number, Array<{ id: string; url: string; title: string }>>()
+              
+              // Filter audio by page number from metadata or title
+              for (const file of result.data.audioFiles) {
+                // First try to get page number from metadata
+                let pageNumber = file.metadata?.pageNumber
+                
+                // If not in metadata, try to extract from title (e.g., "Scene Page 1 Audio")
+                if (pageNumber === undefined || pageNumber === null) {
+                  const titleMatch = file.name?.match(/scene\s+page\s+(\d+)/i) || file.name?.match(/page\s+(\d+)/i)
+                  if (titleMatch) {
+                    pageNumber = parseInt(titleMatch[1])
+                  }
+                }
+                
+                console.log(`🎵 Audio file:`, { name: file.name, pageNumber, metadata: file.metadata })
+                
+                if (pageNumber !== undefined && pageNumber !== null) {
+                  const pageNum = parseInt(pageNumber.toString())
+                  
+                  // Only include audio that matches a page in this scene
+                  if (scene.pages.some(p => p.pageNumber === pageNum)) {
+                    if (!sceneAudioMap.has(pageNum)) {
+                      sceneAudioMap.set(pageNum, [])
+                    }
+                    
+                    sceneAudioMap.get(pageNum)!.push({
+                      id: file.id,
+                      url: file.public_url,
+                      title: file.name || `Page ${pageNumber} Audio`
+                    })
+                  }
+                }
+              }
+              
+              console.log(`🎵 Scene audio map for ${scene.sceneId}:`, Array.from(sceneAudioMap.entries()))
+              
+              if (sceneAudioMap.size > 0) {
+                audioMap.set(scene.sceneId, sceneAudioMap)
+              }
+            }
+          } catch (error) {
+            console.error(`Error fetching audio for scene ${scene.sceneId}:`, error)
+          }
+        }
+      }
+
+      console.log('🎵 Final audio map:', Array.from(audioMap.entries()).map(([sceneId, pages]) => ({
+        sceneId,
+        pages: Array.from(pages.entries())
+      })))
+      
+      setScreenplayAudio(audioMap)
+    } catch (error) {
+      console.error('Error fetching screenplay audio:', error)
+    }
+  }
+
+  // Reset to page 1 when scene changes
+  useEffect(() => {
+    if (selectedSceneId) {
+      setCurrentScreenplayPage(1)
+    }
+  }, [selectedSceneId])
 
   const handleSaveSettings = async () => {
     // Only owners can save settings
@@ -1043,7 +1308,8 @@ export default function CastingPage() {
 
                 {castingSettings.show_script && (
                   <TabsContent value="script" className="space-y-4">
-                    {treatment ? (
+                    {/* Treatment Section */}
+                    {treatment && (
                       <div className="space-y-4">
                         <div className="border rounded-lg p-4 sm:p-6 bg-background">
                           <div className="flex items-start justify-between mb-4">
@@ -1103,9 +1369,178 @@ export default function CastingPage() {
                           </div>
                         </div>
                       </div>
-                    ) : (
+                    )}
+
+                    {/* Screenplay Pages Section */}
+                    {loadingScreenplay ? (
+                      <div className="p-4 sm:p-6 bg-muted/30 rounded-lg text-center">
+                        <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
+                        <p className="text-sm text-muted-foreground">Loading screenplay...</p>
+                      </div>
+                    ) : screenplayScenes.length > 0 ? (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-lg sm:text-xl font-bold">Screenplay</h3>
+                          <Badge variant="outline" className="text-xs">
+                            {screenplayScenes.length} scene{screenplayScenes.length !== 1 ? 's' : ''}
+                          </Badge>
+                        </div>
+                        
+                        {/* Scene Selector */}
+                        {screenplayScenes.length > 1 && (
+                          <div className="flex items-center gap-2">
+                            <Label className="text-sm">Scene:</Label>
+                            <Select
+                              value={selectedSceneId || ''}
+                              onValueChange={(value) => {
+                                setSelectedSceneId(value)
+                                setCurrentScreenplayPage(1)
+                              }}
+                            >
+                              <SelectTrigger className="w-full sm:w-[300px]">
+                                <SelectValue placeholder="Select a scene" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {screenplayScenes.map((scene) => (
+                                  <SelectItem key={scene.sceneId} value={scene.sceneId}>
+                                    {scene.sceneName} ({scene.pages.length} page{scene.pages.length !== 1 ? 's' : ''})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                        
+                        {/* Current Scene's Pages Display */}
+                        {selectedSceneId && (() => {
+                          const selectedScene = screenplayScenes.find(s => s.sceneId === selectedSceneId)
+                          if (!selectedScene) return null
+                          
+                          const currentPage = selectedScene.pages[currentScreenplayPage - 1]
+                          if (!currentPage) return null
+                          
+                          const sceneAudioMap = screenplayAudio.get(selectedSceneId)
+                          const pageAudio = sceneAudioMap?.get(currentPage.pageNumber) || []
+                          
+                          return (
+                            <>
+                              <Card className="border-border">
+                                <CardHeader className="pb-3">
+                                  <div className="flex items-center justify-between">
+                                    <CardTitle className="text-base sm:text-lg">
+                                      {selectedScene.sceneName} - Page {currentPage.pageNumber}
+                                    </CardTitle>
+                                    <Badge variant="outline" className="text-xs">
+                                      Scene {selectedScene.sceneNumber}
+                                    </Badge>
+                                  </div>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  {/* Screenplay Content - Formatted like timeline-scene page */}
+                                  <div className="border rounded-lg p-4 bg-muted/20 overflow-x-auto">
+                                    <div className="relative overflow-x-hidden" style={{ width: '100%', maxWidth: '612px', margin: '0 auto' }}>
+                                      <pre className="text-xs sm:text-sm font-mono whitespace-pre-wrap break-words text-foreground"
+                                        style={{ 
+                                          fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                                          fontSize: '12pt',
+                                          lineHeight: '1.0',
+                                          paddingLeft: '12px',
+                                          paddingRight: '12px',
+                                          textAlign: 'left',
+                                          whiteSpace: 'pre-wrap',
+                                          overflowWrap: 'break-word',
+                                          wordWrap: 'break-word',
+                                        }}
+                                      >
+                                        {currentPage.content}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                  
+                                  {/* Audio for Current Page */}
+                                  <div className="space-y-2">
+                                    <h4 className="text-sm font-semibold flex items-center gap-2">
+                                      <Volume2 className="h-4 w-4" />
+                                      Audio for Page {currentPage.pageNumber}
+                                    </h4>
+                                    {pageAudio.length > 0 ? (
+                                      pageAudio.map((audio) => (
+                                        <div key={audio.id} className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg">
+                                          <audio controls src={audio.url} className="flex-1 h-8" />
+                                          <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                                            {audio.title}
+                                          </span>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <div className="p-3 bg-muted/20 rounded-lg text-center">
+                                        <p className="text-xs text-muted-foreground">
+                                          No audio available for this page
+                                        </p>
+                                        <p className="text-xs text-muted-foreground mt-1">
+                                          Debug: Scene {selectedSceneId}, Page {currentPage.pageNumber}, Audio Map: {screenplayAudio.has(selectedSceneId) ? 'exists' : 'missing'}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </CardContent>
+                              </Card>
+                              
+                              {/* Pagination Controls for Current Scene */}
+                              {selectedScene.pages.length > 1 && (
+                                <div className="flex items-center justify-center gap-4 py-4 border-t border-border">
+                                  <Badge variant="outline" className="px-4 py-2">
+                                    Page {currentScreenplayPage} of {selectedScene.pages.length}
+                                  </Badge>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setCurrentScreenplayPage(prev => Math.max(1, prev - 1))}
+                                    disabled={currentScreenplayPage === 1}
+                                    className="border-primary/30 text-primary hover:bg-primary/10"
+                                  >
+                                    <ChevronLeft className="h-4 w-4" />
+                                  </Button>
+                                  <Input
+                                    type="number"
+                                    min={1}
+                                    max={selectedScene.pages.length}
+                                    value={currentScreenplayPage}
+                                    onChange={(e) => {
+                                      const page = parseInt(e.target.value)
+                                      if (page && page >= 1 && page <= selectedScene.pages.length) {
+                                        setCurrentScreenplayPage(page)
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault()
+                                        const page = parseInt((e.target as HTMLInputElement).value)
+                                        if (page && page >= 1 && page <= selectedScene.pages.length) {
+                                          setCurrentScreenplayPage(page)
+                                        }
+                                      }
+                                    }}
+                                    className="w-20 text-center"
+                                  />
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setCurrentScreenplayPage(prev => Math.min(selectedScene.pages.length, prev + 1))}
+                                    disabled={currentScreenplayPage === selectedScene.pages.length}
+                                    className="border-primary/30 text-primary hover:bg-primary/10"
+                                  >
+                                    <ChevronRight className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    ) : !treatment ? (
                       <div className="p-4 sm:p-6 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground">No treatment available for this movie</p>
+                        <p className="text-sm text-muted-foreground">No screenplay or treatment available for this movie</p>
                         <Link href={`/treatments`}>
                           <Button variant="outline" size="sm" className="mt-4 text-xs sm:text-sm">
                             <FileText className="h-4 w-4 mr-2" />
@@ -1113,7 +1548,7 @@ export default function CastingPage() {
                           </Button>
                         </Link>
                       </div>
-                    )}
+                    ) : null}
                   </TabsContent>
                 )}
 

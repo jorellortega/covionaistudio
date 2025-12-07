@@ -159,6 +159,10 @@ export async function POST(request: NextRequest) {
           file_size: audioBuffer.byteLength, // Store file size in bytes
           size: audioBuffer.byteLength, // Also store as 'size' for backward compatibility
           has_project: !!projectId, // Track if this asset has a project
+          // Include page number and scene ID from metadata for screenplay page audio tracking
+          pageNumber: metadata?.pageNumber || null,
+          sceneId: sceneId || metadata?.sceneId || null,
+          totalPages: metadata?.totalPages || null,
           ...(metadata || {}) // Merge any additional metadata (e.g., audioType: 'scene_description')
         }
       })

@@ -82,7 +82,8 @@ export async function POST(request: NextRequest) {
         size: fileSize,
         created_at: asset.created_at,
         public_url: asset.content_url || '',
-        storage_path: asset.metadata?.storage_path || ''
+        storage_path: asset.metadata?.storage_path || '',
+        metadata: asset.metadata || {} // Include full metadata for filtering by page number
       }
     })
 

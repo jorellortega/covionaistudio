@@ -5314,6 +5314,13 @@ ${centerText('AUTHOR NAME')}
                             className="w-full"
                             projectId={projectId}
                             sceneId={id}
+                            metadata={{ 
+                              pageNumber: currentPage,
+                              sceneId: id,
+                              audioType: 'screenplay_page',
+                              totalPages: totalPages
+                            }}
+                            key={`tts-page-${currentPage}`}
                           />
                         </div>
                       )}
