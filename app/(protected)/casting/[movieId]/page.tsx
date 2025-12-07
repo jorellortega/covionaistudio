@@ -57,7 +57,9 @@ import { CastingService, type CastingSetting, type ActorSubmission } from "@/lib
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { TreatmentsService } from "@/lib/treatments-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import TextToSpeech from "@/components/text-to-speech"
 import Link from "next/link"
 
 const statusColors = {
@@ -103,6 +105,8 @@ export default function CastingPage() {
   const [showSettings, setShowSettings] = useState(false)
   const [showSubmissionForm, setShowSubmissionForm] = useState(false)
   const [selectedSubmission, setSelectedSubmission] = useState<ActorSubmission | null>(null)
+  const [showBadgeEdit, setShowBadgeEdit] = useState(false)
+  const [isSavingBadge, setIsSavingBadge] = useState(false)
   
   // Settings form state
   const [settingsForm, setSettingsForm] = useState({
@@ -115,6 +119,9 @@ export default function CastingPage() {
     submission_deadline: '',
     casting_notes: '',
     is_active: true,
+    status_badge_text: '',
+    status_badge_color: 'green',
+    status_badge_enabled: false,
   })
   
   const [roleInput, setRoleInput] = useState('')
@@ -144,6 +151,14 @@ export default function CastingPage() {
       loadData()
     }
   }, [movieId])
+
+  // Re-check owner status when auth becomes ready
+  useEffect(() => {
+    if (ready && movie && user && userId) {
+      const owner = movie.user_id === userId
+      setIsOwner(owner)
+    }
+  }, [ready, movie, user, userId])
 
   const loadData = async () => {
     try {
@@ -204,6 +219,13 @@ export default function CastingPage() {
       // Check if user is owner (only if authenticated)
       const owner = user && userId && movieData?.user_id === userId
       setIsOwner(owner || false)
+      console.log('Owner check:', { 
+        hasUser: !!user, 
+        hasUserId: !!userId, 
+        movieUserId: movieData?.user_id, 
+        currentUserId: userId,
+        isOwner: owner 
+      })
       
       // Load casting settings (works for both authenticated and unauthenticated)
       let settings: CastingSetting | null = null
@@ -239,15 +261,18 @@ export default function CastingPage() {
           submission_deadline: deadlineValue,
           casting_notes: settings.casting_notes || '',
           is_active: settings.is_active,
+          status_badge_text: settings.status_badge_text || '',
+          status_badge_color: settings.status_badge_color || 'green',
+          status_badge_enabled: settings.status_badge_enabled || false,
         })
       }
       
-      // If owner, load submissions (never load in public view)
-      if (owner && !isPublicView) {
+      // If owner, load submissions (always load for owners, regardless of view parameter)
+      if (owner) {
         const submissionsData = await CastingService.getSubmissionsForMovie(movieId)
         setSubmissions(submissionsData)
       } else {
-        // Clear submissions if not owner or in public view
+        // Clear submissions if not owner
         setSubmissions([])
       }
       
@@ -275,16 +300,51 @@ export default function CastingPage() {
       }
       
       // Always load treatment to get logline (even if script is not shown)
+      // Try loading treatment for both authenticated and unauthenticated users
       try {
-        // Get treatment for this project to fetch logline
-        const { data: treatmentData } = await getSupabaseClient()
-          .from('treatments')
-          .select('*')
-          .eq('project_id', movieId)
-          .maybeSingle()
+        let treatmentData: any = null
+        
+        if (user && userId) {
+          // For authenticated users, try using the service first
+          try {
+            const treatments = await TreatmentsService.getTreatments()
+            treatmentData = treatments.find(t => t.project_id === movieId) || null
+          } catch (serviceError) {
+            console.log('Service method failed, trying direct query:', serviceError)
+          }
+        }
+        
+        // If not found via service, try direct query (works for both authenticated and public)
+        // Use limit(1) and take first result to handle multiple treatments
+        if (!treatmentData) {
+          const { data, error: treatmentError } = await getSupabaseClient()
+            .from('treatments')
+            .select('*')
+            .eq('project_id', movieId)
+            .order('updated_at', { ascending: false })
+            .limit(1)
 
+          if (treatmentError) {
+            console.error('Error loading treatment:', treatmentError)
+            // If RLS is blocking, log it but don't fail
+            if (treatmentError.code === '42501' || treatmentError.message?.includes('permission')) {
+              console.warn('Treatment query blocked by RLS - migration may not be applied yet')
+            }
+          } else if (data && data.length > 0) {
+            // Take the first (most recently updated) treatment
+            treatmentData = data[0]
+          }
+        }
+        
         if (treatmentData) {
+          console.log('Loaded treatment for logline:', {
+            id: treatmentData.id,
+            hasLogline: !!treatmentData.logline,
+            logline: treatmentData.logline?.substring(0, 50) + '...'
+          })
           setTreatment(treatmentData)
+        } else {
+          console.log('No treatment found for project:', movieId)
         }
       } catch (error) {
         console.error('Error loading treatment:', error)
@@ -945,12 +1005,50 @@ export default function CastingPage() {
             <div className="flex flex-col md:flex-row gap-4 md:gap-6">
               {/* Movie Poster */}
               <div className="w-full md:w-48 flex-shrink-0 mx-auto md:mx-0">
-                <div className="aspect-[2/3] rounded-lg overflow-hidden bg-muted max-w-[200px] md:max-w-none">
+                <div className="aspect-[2/3] rounded-lg overflow-hidden bg-muted max-w-[200px] md:max-w-none relative">
                   <img
                     src={movie.thumbnail || "/placeholder.svg?height=300&width=200"}
                     alt={movie.name}
                     className="w-full h-full object-cover"
                   />
+                  {/* Status Badge Overlay */}
+                  <div className="absolute top-2 right-2 z-10 flex items-center gap-1.5">
+                    {castingSettings?.status_badge_enabled && castingSettings?.status_badge_text ? (
+                      <div className={`px-2 py-1 rounded-md text-xs font-semibold shadow-lg ${
+                        castingSettings.status_badge_color === 'green' ? 'bg-green-500/90 text-white' :
+                        castingSettings.status_badge_color === 'red' ? 'bg-red-500/90 text-white' :
+                        castingSettings.status_badge_color === 'yellow' ? 'bg-yellow-500/90 text-black' :
+                        castingSettings.status_badge_color === 'blue' ? 'bg-blue-500/90 text-white' :
+                        castingSettings.status_badge_color === 'purple' ? 'bg-purple-500/90 text-white' :
+                        castingSettings.status_badge_color === 'orange' ? 'bg-orange-500/90 text-white' :
+                        'bg-green-500/90 text-white'
+                      }`}>
+                        {castingSettings.status_badge_text}
+                      </div>
+                    ) : null}
+                    {isOwner && (
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7 bg-background/95 backdrop-blur-sm border-2 border-primary/30 hover:bg-primary/10 hover:border-primary/50 shadow-md"
+                        onClick={() => {
+                          // Initialize form with current badge settings
+                          if (castingSettings) {
+                            setSettingsForm(prev => ({
+                              ...prev,
+                              status_badge_text: castingSettings.status_badge_text || '',
+                              status_badge_color: castingSettings.status_badge_color || 'green',
+                              status_badge_enabled: castingSettings.status_badge_enabled || false,
+                            }))
+                          }
+                          setShowBadgeEdit(true)
+                        }}
+                        title="Edit status badge"
+                      >
+                        <Edit className="h-4 w-4 text-primary" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -958,12 +1056,33 @@ export default function CastingPage() {
               <div className="flex-1 min-w-0">
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-4">
                   <div className="flex-1 min-w-0">
-                    <CardTitle className="text-2xl sm:text-3xl mb-2 break-words">{movie.name}</CardTitle>
-                    {treatment?.logline && (
-                      <p className="text-sm sm:text-base text-muted-foreground mb-3 break-words italic">
-                        {treatment.logline}
-                      </p>
-                    )}
+                    <CardTitle className="text-2xl sm:text-3xl mb-3 break-words">{movie.name}</CardTitle>
+                    {treatment?.logline ? (
+                      <div className="mb-4 pb-4 border-b border-border/50">
+                        <p className="text-base sm:text-lg text-foreground/90 break-words italic leading-relaxed mb-3">
+                          "{treatment.logline}"
+                        </p>
+                        {/* Text to Speech for Logline */}
+                        {treatment.id && (
+                          <div className="mt-3">
+                            <TextToSpeech
+                              text={treatment.logline}
+                              title={`${movie.name} - Logline`}
+                              projectId={movieId}
+                              treatmentId={treatment.id}
+                              metadata={{ audioType: 'logline' }}
+                              className="mt-2"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : treatment && !treatment.logline ? (
+                      <div className="mb-4 pb-4 border-b border-border/50">
+                        <p className="text-sm text-muted-foreground italic">
+                          No logline available for this project
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap gap-2 mb-3">
                       {movie.genre && <Badge variant="outline" className="text-xs">{movie.genre}</Badge>}
                       <Badge variant="outline" className="text-xs">{movie.movie_status}</Badge>
@@ -1093,6 +1212,53 @@ export default function CastingPage() {
                     }
                   }
                   
+                  const getCastingStatusColor = (status: string | null | undefined) => {
+                    switch (status) {
+                      case 'open': return 'bg-green-500/90 text-white'
+                      case 'filled': return 'bg-gray-500/90 text-white'
+                      case 'pending': return 'bg-yellow-500/90 text-black'
+                      case 'on_hold': return 'bg-blue-500/90 text-white'
+                      case 'cancelled': return 'bg-red-500/90 text-white'
+                      default: return 'bg-gray-500/90 text-white'
+                    }
+                  }
+                  
+                  const getCastingStatusLabel = (status: string | null | undefined) => {
+                    switch (status) {
+                      case 'open': return 'Open'
+                      case 'filled': return 'Filled'
+                      case 'pending': return 'Pending'
+                      case 'on_hold': return 'On Hold'
+                      case 'cancelled': return 'Cancelled'
+                      default: return 'Open'
+                    }
+                  }
+                  
+                  const handleStatusChange = async (characterId: string, newStatus: 'open' | 'filled' | 'pending' | 'on_hold' | 'cancelled', characterName: string) => {
+                    if (!isOwner) {
+                      toast({
+                        title: "Access Denied",
+                        description: "Only the project owner can modify casting status",
+                        variant: "destructive",
+                      })
+                      return
+                    }
+                    
+                    try {
+                      const updated = await CharactersService.updateCharacter(characterId, {
+                        casting_status: newStatus
+                      })
+                      setCharacters(prev => prev.map(c => c.id === characterId ? updated : c))
+                      toast({ 
+                        title: "Status Updated", 
+                        description: `"${characterName}" status updated to ${getCastingStatusLabel(newStatus)}.` 
+                      })
+                    } catch (e) {
+                      console.error('Update casting status failed:', e)
+                      toast({ title: "Error", description: "Failed to update status.", variant: "destructive" })
+                    }
+                  }
+                  
                   return (
                     <div className="mb-4">
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
@@ -1138,6 +1304,34 @@ export default function CastingPage() {
                                     >
                                       {getTypeLabel(character.character_type)}
                                     </Badge>
+                                  )}
+                                  {/* Casting Status Badge */}
+                                  {isOwner ? (
+                                    <div onClick={(e) => e.stopPropagation()} className="absolute bottom-1 left-1 sm:bottom-2 sm:left-2 z-10">
+                                      <Select
+                                        value={character.casting_status || 'open'}
+                                        onValueChange={(value) => handleStatusChange(character.id, value as any, character.name)}
+                                      >
+                                        <SelectTrigger className={`${getCastingStatusColor(character.casting_status || 'open')} text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 sm:px-2 h-auto border-0 cursor-pointer hover:opacity-80 transition-opacity`}>
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="open">Open</SelectItem>
+                                          <SelectItem value="pending">Pending</SelectItem>
+                                          <SelectItem value="on_hold">On Hold</SelectItem>
+                                          <SelectItem value="filled">Filled</SelectItem>
+                                          <SelectItem value="cancelled">Cancelled</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                  ) : (
+                                    character.casting_status && character.casting_status !== 'open' && (
+                                      <Badge 
+                                        className={`absolute bottom-1 left-1 sm:bottom-2 sm:left-2 ${getCastingStatusColor(character.casting_status)} text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 sm:px-2`}
+                                      >
+                                        {getCastingStatusLabel(character.casting_status)}
+                                      </Badge>
+                                    )
                                   )}
                                 </div>
                                 <div className="flex items-start justify-between gap-1.5 sm:gap-2">
@@ -1214,7 +1408,7 @@ export default function CastingPage() {
         </Card>
 
         {/* Owner View - Submissions (Never visible in public view) */}
-        {isOwner && !isPublicView && (
+        {isOwner && (
           <Card className="cinema-card mb-6">
             <CardHeader className="p-4 sm:p-6">
               <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
@@ -1403,7 +1597,18 @@ export default function CastingPage() {
                           {treatment.logline && (
                             <div className="mb-4 p-3 sm:p-4 bg-muted/50 rounded-lg">
                               <h4 className="font-semibold mb-2 text-sm sm:text-base">Logline</h4>
-                              <p className="text-xs sm:text-sm break-words">{treatment.logline}</p>
+                              <p className="text-xs sm:text-sm break-words mb-3">{treatment.logline}</p>
+                              {/* Text to Speech for Logline */}
+                              {treatment.id && (
+                                <TextToSpeech
+                                  text={treatment.logline}
+                                  title={`${movie.name} - Logline`}
+                                  projectId={movieId}
+                                  treatmentId={treatment.id}
+                                  metadata={{ audioType: 'logline' }}
+                                  className="mt-2"
+                                />
+                              )}
                             </div>
                           )}
                           
@@ -1803,6 +2008,92 @@ export default function CastingPage() {
                   className="mt-2"
                   rows={4}
                 />
+              </div>
+
+              <Separator />
+
+              {/* Status Badge */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label htmlFor="status-badge-enabled">Show Status Badge</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Display a badge overlay on the casting page
+                    </p>
+                  </div>
+                  <Switch
+                    id="status-badge-enabled"
+                    checked={settingsForm.status_badge_enabled}
+                    onCheckedChange={(checked) =>
+                      setSettingsForm({ ...settingsForm, status_badge_enabled: checked })
+                    }
+                  />
+                </div>
+
+                {settingsForm.status_badge_enabled && (
+                  <div className="space-y-3 pl-4 border-l-2 border-border">
+                    <div>
+                      <Label htmlFor="status-badge-text">Badge Text</Label>
+                      <Input
+                        id="status-badge-text"
+                        placeholder="e.g., Open, Filled, Pending, Closed"
+                        value={settingsForm.status_badge_text}
+                        onChange={(e) =>
+                          setSettingsForm({ ...settingsForm, status_badge_text: e.target.value })
+                        }
+                        className="mt-2"
+                        maxLength={20}
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Short text to display on the badge (max 20 characters)
+                      </p>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="status-badge-color">Badge Color</Label>
+                      <Select
+                        value={settingsForm.status_badge_color}
+                        onValueChange={(value) =>
+                          setSettingsForm({ ...settingsForm, status_badge_color: value })
+                        }
+                      >
+                        <SelectTrigger className="mt-2">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="green">Green</SelectItem>
+                          <SelectItem value="red">Red</SelectItem>
+                          <SelectItem value="yellow">Yellow</SelectItem>
+                          <SelectItem value="blue">Blue</SelectItem>
+                          <SelectItem value="purple">Purple</SelectItem>
+                          <SelectItem value="orange">Orange</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Preview */}
+                    {settingsForm.status_badge_text && (
+                      <div className="p-3 bg-muted/50 rounded-lg">
+                        <p className="text-xs text-muted-foreground mb-2">Preview:</p>
+                        <div className="relative inline-block">
+                          <div className={`aspect-[2/3] w-32 rounded-lg overflow-hidden bg-muted relative`}>
+                            <div className={`absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-semibold ${
+                              settingsForm.status_badge_color === 'green' ? 'bg-green-500/90 text-white' :
+                              settingsForm.status_badge_color === 'red' ? 'bg-red-500/90 text-white' :
+                              settingsForm.status_badge_color === 'yellow' ? 'bg-yellow-500/90 text-black' :
+                              settingsForm.status_badge_color === 'blue' ? 'bg-blue-500/90 text-white' :
+                              settingsForm.status_badge_color === 'purple' ? 'bg-purple-500/90 text-white' :
+                              settingsForm.status_badge_color === 'orange' ? 'bg-orange-500/90 text-white' :
+                              'bg-green-500/90 text-white'
+                            }`}>
+                              {settingsForm.status_badge_text}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </TabsContent>
 
@@ -2255,14 +2546,14 @@ export default function CastingPage() {
       </Dialog>
 
       {/* Submission Details Dialog (Owner Only) */}
-      <Dialog open={!!selectedSubmission && isOwner && !isPublicView} onOpenChange={() => {
-        // Only allow closing, not opening if not owner or in public view
-        if (isOwner && !isPublicView) {
+      <Dialog open={!!selectedSubmission && isOwner} onOpenChange={() => {
+        // Only allow closing, not opening if not owner
+        if (isOwner) {
           setSelectedSubmission(null)
         }
       }}>
         <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
-          {selectedSubmission && isOwner && !isPublicView && (
+          {selectedSubmission && isOwner && (
             <>
               <DialogHeader>
                 <DialogTitle>{selectedSubmission.actor_name}</DialogTitle>
@@ -2365,6 +2656,160 @@ export default function CastingPage() {
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Status Badge Quick Edit Dialog (Owner Only) */}
+      <Dialog open={showBadgeEdit && isOwner} onOpenChange={setShowBadgeEdit}>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Status Badge</DialogTitle>
+            <DialogDescription>
+              Customize the status badge displayed on the casting page
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Enable/Disable Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <Label htmlFor="badge-enabled">Show Badge</Label>
+                <p className="text-sm text-muted-foreground">
+                  Display the status badge on the casting page
+                </p>
+              </div>
+              <Switch
+                id="badge-enabled"
+                checked={settingsForm.status_badge_enabled}
+                onCheckedChange={(checked) =>
+                  setSettingsForm({ ...settingsForm, status_badge_enabled: checked })
+                }
+              />
+            </div>
+
+            {settingsForm.status_badge_enabled && (
+              <>
+                <Separator />
+
+                {/* Badge Text */}
+                <div>
+                  <Label htmlFor="badge-text">Badge Text</Label>
+                  <Input
+                    id="badge-text"
+                    placeholder="e.g., Open, Filled, Pending, Closed"
+                    value={settingsForm.status_badge_text}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, status_badge_text: e.target.value })
+                    }
+                    className="mt-2"
+                    maxLength={20}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Max 20 characters
+                  </p>
+                </div>
+
+                {/* Badge Color */}
+                <div>
+                  <Label htmlFor="badge-color">Badge Color</Label>
+                  <Select
+                    value={settingsForm.status_badge_color}
+                    onValueChange={(value) =>
+                      setSettingsForm({ ...settingsForm, status_badge_color: value })
+                    }
+                  >
+                    <SelectTrigger className="mt-2">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="green">Green</SelectItem>
+                      <SelectItem value="red">Red</SelectItem>
+                      <SelectItem value="yellow">Yellow</SelectItem>
+                      <SelectItem value="blue">Blue</SelectItem>
+                      <SelectItem value="purple">Purple</SelectItem>
+                      <SelectItem value="orange">Orange</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Preview */}
+                {settingsForm.status_badge_text && (
+                  <div className="p-3 bg-muted/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground mb-2">Preview:</p>
+                    <div className="relative inline-block">
+                      <div className={`aspect-[2/3] w-32 rounded-lg overflow-hidden bg-muted relative`}>
+                        <div className={`absolute top-2 right-2 px-2 py-1 rounded-md text-xs font-semibold ${
+                          settingsForm.status_badge_color === 'green' ? 'bg-green-500/90 text-white' :
+                          settingsForm.status_badge_color === 'red' ? 'bg-red-500/90 text-white' :
+                          settingsForm.status_badge_color === 'yellow' ? 'bg-yellow-500/90 text-black' :
+                          settingsForm.status_badge_color === 'blue' ? 'bg-blue-500/90 text-white' :
+                          settingsForm.status_badge_color === 'purple' ? 'bg-purple-500/90 text-white' :
+                          settingsForm.status_badge_color === 'orange' ? 'bg-orange-500/90 text-white' :
+                          'bg-green-500/90 text-white'
+                        }`}>
+                          {settingsForm.status_badge_text}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBadgeEdit(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={async () => {
+                if (!isOwner) return
+                try {
+                  setIsSavingBadge(true)
+                  
+                  // Update only badge-related settings
+                  const settingsToSave = {
+                    ...settingsForm,
+                    submission_deadline: settingsForm.submission_deadline 
+                      ? new Date(settingsForm.submission_deadline).toISOString()
+                      : null
+                  }
+                  
+                  await CastingService.upsertCastingSettings(movieId, settingsToSave)
+                  
+                  toast({
+                    title: "Badge Updated",
+                    description: "Status badge updated successfully",
+                  })
+                  
+                  setShowBadgeEdit(false)
+                  await loadData()
+                } catch (error) {
+                  console.error('Error saving badge:', error)
+                  toast({
+                    title: "Error",
+                    description: "Failed to update badge",
+                    variant: "destructive",
+                  })
+                } finally {
+                  setIsSavingBadge(false)
+                }
+              }} 
+              disabled={isSavingBadge}
+            >
+              {isSavingBadge ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save
+                </>
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -73,6 +73,9 @@ export default function TreatmentDetailPage() {
   const [isGeneratingSynopsis, setIsGeneratingSynopsis] = useState(false)
   const [isGeneratingLogline, setIsGeneratingLogline] = useState(false)
   const [isGeneratingTreatment, setIsGeneratingTreatment] = useState(false)
+  const [isEditingLogline, setIsEditingLogline] = useState(false)
+  const [editingLogline, setEditingLogline] = useState('')
+  const [isSavingLogline, setIsSavingLogline] = useState(false)
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [selectedScriptAIService, setSelectedScriptAIService] = useState<string>('')
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
@@ -814,8 +817,10 @@ Treatment:`
           project_id: data.project_id,
           synopsis: data.synopsis?.substring(0, 100),
           prompt: data.prompt?.substring(0, 100),
+          logline: data.logline,
           hasPrompt: !!data.prompt,
-          hasSynopsis: !!data.synopsis
+          hasSynopsis: !!data.synopsis,
+          hasLogline: !!data.logline
         })
         setTreatment(data)
         
@@ -7609,20 +7614,126 @@ Return ONLY the JSON object, no other text:`
               </Collapsible>
 
               {/* Logline Card */}
-              {treatment.logline && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <FileText className="h-5 w-5 text-purple-500" />
-                      Logline
-                    </CardTitle>
-                    <CardDescription>One-sentence summary</CardDescription>
-                  </CardHeader>
-                  <CardContent>
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <FileText className="h-5 w-5 text-purple-500" />
+                        Logline
+                      </CardTitle>
+                      <CardDescription>One-sentence summary</CardDescription>
+                    </div>
+                    {!isEditingLogline && (
+                      <div className="flex gap-2">
+                        {!treatment.logline && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={generateAILogline}
+                            disabled={isGeneratingLogline || !aiSettingsLoaded}
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            title="Generate logline using AI"
+                          >
+                            {isGeneratingLogline ? (
+                              <>
+                                <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                                <span className="hidden sm:inline">Generating...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-4 w-4 sm:mr-2" />
+                                <span className="hidden sm:inline">Generate</span>
+                                <span className="sm:hidden">AI</span>
+                              </>
+                            )}
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setIsEditingLogline(true)
+                            setEditingLogline(treatment.logline || '')
+                          }}
+                          className="flex-shrink-0"
+                        >
+                          <Edit className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">{treatment.logline ? 'Edit' : 'Add'}</span>
+                          <span className="sm:hidden">Edit</span>
+                        </Button>
+                      </div>
+                    )}
+                    {isEditingLogline && (
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setIsEditingLogline(false)
+                            setEditingLogline('')
+                          }}
+                          className="flex-shrink-0"
+                        >
+                          <X className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">Cancel</span>
+                          <span className="sm:hidden">Cancel</span>
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={async () => {
+                            if (!treatment) return
+                            try {
+                              setIsSavingLogline(true)
+                              const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+                                logline: editingLogline.trim() || null,
+                              })
+                              setTreatment(updatedTreatment)
+                              setIsEditingLogline(false)
+                              setEditingLogline('')
+                              toast({
+                                title: "Success",
+                                description: "Logline saved successfully",
+                              })
+                            } catch (error) {
+                              console.error('Error saving logline:', error)
+                              toast({
+                                title: "Error",
+                                description: "Failed to save logline",
+                                variant: "destructive",
+                              })
+                            } finally {
+                              setIsSavingLogline(false)
+                            }
+                          }}
+                          disabled={isSavingLogline}
+                          className="flex-shrink-0"
+                        >
+                          <Save className="h-4 w-4 sm:mr-2" />
+                          <span className="hidden sm:inline">{isSavingLogline ? 'Saving...' : 'Save'}</span>
+                          <span className="sm:hidden">{isSavingLogline ? '...' : 'Save'}</span>
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {isEditingLogline ? (
+                    <Textarea
+                      value={editingLogline}
+                      onChange={(e) => setEditingLogline(e.target.value)}
+                      placeholder="Enter a one-sentence logline..."
+                      className="min-h-[80px]"
+                      rows={3}
+                    />
+                  ) : treatment.logline ? (
                     <p className="text-base italic text-muted-foreground">"{treatment.logline}"</p>
-                  </CardContent>
-                </Card>
-              )}
+                  ) : (
+                    <p className="text-sm text-muted-foreground italic">No logline yet. Click "Generate" to create one with AI or "Add" to write your own.</p>
+                  )}
+                </CardContent>
+              </Card>
 
               {/* Actions */}
               <Card>

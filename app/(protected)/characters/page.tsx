@@ -693,16 +693,27 @@ export default function CharactersPage() {
         .split(",")
         .map(t => t.trim())
         .filter(Boolean)
-      const updated = await CharactersService.updateCharacter(id, {
+      
+      // Build update object - keep empty strings as null to explicitly clear fields if needed
+      const updateData: any = {
         name: editName.trim() || undefined,
         archetype: editArchetype || undefined,
         description: editDescription || undefined,
-        backstory: editBackstory || undefined,
-        goals: editGoals || undefined,
-        conflicts: editConflicts || undefined,
+        backstory: editBackstory.trim() || null, // Use null instead of undefined for empty strings
+        goals: editGoals.trim() || null,
+        conflicts: editConflicts.trim() || null,
         personality: traits.length ? { traits } : { traits: [] },
         show_on_casting: editShowOnCasting,
+      }
+      
+      // Remove undefined values but keep null values (for explicitly clearing fields)
+      Object.keys(updateData).forEach(key => {
+        if (updateData[key] === undefined) {
+          delete updateData[key]
+        }
       })
+      
+      const updated = await CharactersService.updateCharacter(id, updateData)
       setCharacters(prev => prev.map(c => c.id === id ? updated : c))
       setEditingCharacterId(null)
       toast({ title: "Character updated", description: `"${updated.name}" saved.` })
@@ -975,7 +986,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         treatment.themes && `Themes: ${treatment.themes}`,
       ].filter(Boolean).join('\n')
 
-      // Get existing character data for context
+      // Get existing character data for context - include all relevant details
       const existingData = {
         name: selectedChar.name,
         archetype: selectedChar.archetype,
@@ -983,6 +994,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         backstory: selectedChar.backstory,
         goals: selectedChar.goals,
         conflicts: selectedChar.conflicts,
+        // Include Core Identity fields that might be relevant
+        ethnicity: selectedChar.ethnicity,
+        nationality: selectedChar.nationality,
+        occupation: selectedChar.occupation,
+        age: selectedChar.age,
+        gender: selectedChar.gender,
+        // Include Visual Bible fields for visual sections
+        height: selectedChar.height,
+        build: selectedChar.build,
+        skin_tone: selectedChar.skin_tone,
+        eye_color: selectedChar.eye_color,
+        hair_color_current: selectedChar.hair_color_current,
       }
 
       // Section-specific templates and prompts
@@ -1135,7 +1158,30 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         return
       }
 
-      const fullPrompt = `${config.prompt}\n\nCharacter context:\nName: ${existingData.name}\n${existingData.archetype ? `Archetype: ${existingData.archetype}\n` : ''}${existingData.description ? `Description: ${existingData.description}\n` : ''}${existingData.backstory ? `Backstory: ${existingData.backstory}\n` : ''}\nTreatment context:\n${treatmentContext}`
+      // Build comprehensive character context string
+      const characterContextLines: string[] = []
+      characterContextLines.push(`Name: ${existingData.name}`)
+      if (existingData.archetype) characterContextLines.push(`Archetype: ${existingData.archetype}`)
+      if (existingData.description) characterContextLines.push(`Description: ${existingData.description}`)
+      if (existingData.ethnicity) characterContextLines.push(`Ethnicity: ${existingData.ethnicity}`)
+      if (existingData.nationality) characterContextLines.push(`Nationality: ${existingData.nationality}`)
+      if (existingData.age) characterContextLines.push(`Age: ${existingData.age}`)
+      if (existingData.gender) characterContextLines.push(`Gender: ${existingData.gender}`)
+      if (existingData.occupation) characterContextLines.push(`Occupation: ${existingData.occupation}`)
+      if (existingData.backstory) characterContextLines.push(`Backstory: ${existingData.backstory}`)
+      if (existingData.goals) characterContextLines.push(`Goals: ${existingData.goals}`)
+      if (existingData.conflicts) characterContextLines.push(`Conflicts: ${existingData.conflicts}`)
+      // Add visual details for visual-bible section
+      if (section === 'visual-bible') {
+        if (existingData.height) characterContextLines.push(`Height: ${existingData.height}`)
+        if (existingData.build) characterContextLines.push(`Build: ${existingData.build}`)
+        if (existingData.skin_tone) characterContextLines.push(`Skin tone: ${existingData.skin_tone}`)
+        if (existingData.eye_color) characterContextLines.push(`Eye color: ${existingData.eye_color}`)
+        if (existingData.hair_color_current) characterContextLines.push(`Hair color: ${existingData.hair_color_current}`)
+      }
+      
+      const characterContext = characterContextLines.join('\n')
+      const fullPrompt = `${config.prompt}\n\nCharacter context:\n${characterContext}\n\nTreatment context:\n${treatmentContext}`
 
       // Check if this is a GPT-5 model and increase maxTokens accordingly
       const isGPT5Model = model.startsWith('gpt-5')
@@ -1529,9 +1575,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           character_type: newCharCharacterType || 'main',
           show_on_casting: true, // Default to showing on casting page
           description: newCharDescription || undefined,
-          backstory: newCharBackstory || undefined,
-          goals: newCharGoals || undefined,
-          conflicts: newCharConflicts || undefined,
+          backstory: newCharBackstory.trim() || null, // Use null instead of undefined for empty strings
+          goals: newCharGoals.trim() || null,
+          conflicts: newCharConflicts.trim() || null,
           personality: traits.length ? { traits } : { traits: [] },
         
         // Core Identity
@@ -2007,8 +2053,29 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       // Get AI settings for image generation
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
-      const service = imagesSetting?.selected_service?.toLowerCase() || 'dalle'
-      const model = imagesSetting?.selected_model || 'dall-e-3'
+      
+      // Determine service from model - use locked model if available, otherwise selected model
+      const modelToUse = (imagesSetting?.is_locked && imagesSetting.locked_model) 
+        ? imagesSetting.locked_model 
+        : imagesSetting?.selected_model || 'dall-e-3'
+      
+      // Map model to service
+      const mapModelToService = (modelName: string): string => {
+        const modelLower = modelName.toLowerCase()
+        if (modelLower.includes('dall') || modelLower.includes('dalle') || modelLower.includes('gpt-image')) {
+          return 'dalle'
+        } else if (modelLower.includes('leonardo')) {
+          return 'leonardo'
+        } else if (modelLower.includes('openart')) {
+          return 'openart'
+        } else if (modelLower.includes('runway')) {
+          return 'runway'
+        }
+        return 'dalle' // Default
+      }
+      
+      const service = mapModelToService(modelToUse)
+      const model = modelToUse
 
       // Get API key
       const supabase = getSupabaseClient()
@@ -2107,7 +2174,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           project_id: projectId,
           character_id: selectedCharacterId,
           title: `${selectedChar.name} - ${detailLabel}${subcategory ? ` (${subcategory})` : ''}`,
-          content_type: 'image',
+          content_type: 'image' as const,
           content: '',
           content_url: finalImageUrl,
           prompt: fullPrompt,
@@ -2451,6 +2518,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       if (selectedChar.height) visualTraits.push(selectedChar.height)
       if (selectedChar.build) visualTraits.push(selectedChar.build)
       if (selectedChar.skin_tone) visualTraits.push(selectedChar.skin_tone)
+      // Include ethnicity in visual traits for better representation
+      if (selectedChar.ethnicity) visualTraits.push(selectedChar.ethnicity)
       if (selectedChar.eye_color) visualTraits.push(`${selectedChar.eye_color} eyes`)
       if (selectedChar.hair_color_current) visualTraits.push(`${selectedChar.hair_color_current} hair`)
       if (selectedChar.hair_length) visualTraits.push(selectedChar.hair_length)
@@ -2478,6 +2547,47 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       // Add occupation/role context if available
       if (selectedChar.occupation) {
         autoPrompt += `. ${selectedChar.occupation}`
+      }
+      
+      // Include nationality if ethnicity isn't already in visual traits
+      if (selectedChar.nationality && !selectedChar.ethnicity) {
+        autoPrompt += `. ${selectedChar.nationality}`
+      }
+      
+      // Add comprehensive character details as context (if not already included)
+      // This ensures all character information influences the generation
+      if (characterDetails.length > 0) {
+        // Filter out details already explicitly mentioned in the prompt
+        const alreadyMentioned = new Set([
+          selectedChar.name?.toLowerCase(),
+          selectedChar.age?.toString(),
+          selectedChar.gender?.toLowerCase(),
+          selectedChar.species?.toLowerCase(),
+          selectedChar.height?.toLowerCase(),
+          selectedChar.build?.toLowerCase(),
+          selectedChar.skin_tone?.toLowerCase(),
+          selectedChar.eye_color?.toLowerCase(),
+          selectedChar.hair_color_current?.toLowerCase(),
+          selectedChar.archetype?.toLowerCase(),
+          selectedChar.description?.toLowerCase(),
+          selectedChar.occupation?.toLowerCase(),
+          selectedChar.ethnicity?.toLowerCase(),
+          selectedChar.nationality?.toLowerCase(),
+        ])
+        
+        const additionalDetails = characterDetails
+          .filter(detail => {
+            // Check if this detail is already mentioned
+            const detailLower = detail.toLowerCase()
+            return !Array.from(alreadyMentioned).some(mentioned => 
+              mentioned && detailLower.includes(mentioned)
+            )
+          })
+          .slice(0, 3) // Limit to top 3 additional details to avoid prompt bloat
+        
+        if (additionalDetails.length > 0) {
+          autoPrompt += `. Additional context: ${additionalDetails.join(', ')}`
+        }
       }
       
       autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
@@ -4644,14 +4754,13 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                       placeholder="e.g., Protagonist, Detective Jane"
                       value={newCharacter}
                       onChange={(e) => setNewCharacter(e.target.value)}
-                      className="text-xs sm:text-sm"
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault()
                           addNewCharacterAsRole()
                         }
                       }}
-                      className="bg-input border-border"
+                      className="bg-input border-border text-xs sm:text-sm"
                     />
                   </div>
                   <Button onClick={addNewCharacterAsRole} className="gap-2" disabled={!newCharacter.trim() || syncing}>

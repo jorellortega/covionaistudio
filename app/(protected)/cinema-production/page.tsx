@@ -318,6 +318,10 @@ export default function CinemaProductionPage() {
     } else {
       setScenes([])
       setSelectedSceneId("")
+      // Clear storyboards when project changes
+      setStoryboards([])
+      setSelectedStoryboardId("")
+      setSelectedStoryboard(null)
     }
   }, [selectedProjectId, ready])
 
@@ -637,54 +641,57 @@ export default function CinemaProductionPage() {
       setStoryboards(sceneStoryboards)
       
       // Check for saved videos in the bucket for each storyboard
-      try {
-        const supabase = getSupabaseClient()
-        
-        // Check bucket directly for saved videos
-        const videoPath = `${userId}/videos/`
-        const { data: videoFiles, error: bucketError } = await supabase.storage
-          .from('cinema_files')
-          .list(videoPath, {
-            limit: 100,
-            sortBy: { column: 'created_at', order: 'desc' }
-          })
-        
-        if (!bucketError && videoFiles && videoFiles.length > 0) {
-          console.log('🎬 Found', videoFiles.length, 'saved videos in bucket')
+      // Only check bucket if we have a selected project to filter by
+      if (selectedProjectId) {
+        try {
+          const supabase = getSupabaseClient()
           
-          // Try to match videos to storyboards by filename pattern
-          // Filename format: {timestamp}-{storyboard-title}-shot-{shot_number}.mp4
-          videoFiles.forEach(file => {
-            const fileName = file.name
-            // Try to extract storyboard info from filename
-            // Look for storyboards that might match this video
-            sceneStoryboards.forEach(storyboard => {
-              const titleMatch = fileName.toLowerCase().includes(storyboard.title?.toLowerCase().replace(/[^a-z0-9]/g, '-') || '')
-              const shotMatch = fileName.includes(`shot-${storyboard.shot_number}`) || fileName.includes(`shot${storyboard.shot_number}`)
-              
-              if (titleMatch || shotMatch) {
-                const videoUrl = supabase.storage
-                  .from('cinema_files')
-                  .getPublicUrl(`${videoPath}${fileName}`).data.publicUrl
-                
-                const currentGen = storyboardGenerations.get(storyboard.id)
-                if (!currentGen?.generatedVideoUrl || !currentGen.generatedVideoUrl.includes('cinema_files')) {
-                  // Only update if we don't already have a bucket URL
-                  updateStoryboardGeneration(storyboard.id, {
-                    generatedVideoUrl: videoUrl,
-                    generationStatus: "Saved"
-                  })
-                  console.log(`✅ Loaded saved video for storyboard ${storyboard.id} from bucket:`, videoUrl?.substring(0, 50) + '...')
-                }
-              }
+          // Check bucket directly for saved videos - filter by project ID
+          const videoPath = `${selectedProjectId}/videos/`
+          const { data: videoFiles, error: bucketError } = await supabase.storage
+            .from('cinema_files')
+            .list(videoPath, {
+              limit: 100,
+              sortBy: { column: 'created_at', order: 'desc' }
             })
-          })
-        } else if (bucketError) {
-          console.log('⚠️ Could not check bucket for saved videos (non-critical):', bucketError.message)
+          
+          if (!bucketError && videoFiles && videoFiles.length > 0) {
+            console.log('🎬 Found', videoFiles.length, 'saved videos in bucket for project:', selectedProjectId)
+            
+            // Try to match videos to storyboards by filename pattern
+            // Filename format: {timestamp}-{storyboard-title}-shot-{shot_number}.mp4
+            videoFiles.forEach(file => {
+              const fileName = file.name
+              // Try to extract storyboard info from filename
+              // Look for storyboards that might match this video
+              sceneStoryboards.forEach(storyboard => {
+                const titleMatch = fileName.toLowerCase().includes(storyboard.title?.toLowerCase().replace(/[^a-z0-9]/g, '-') || '')
+                const shotMatch = fileName.includes(`shot-${storyboard.shot_number}`) || fileName.includes(`shot${storyboard.shot_number}`)
+                
+                if (titleMatch || shotMatch) {
+                  const videoUrl = supabase.storage
+                    .from('cinema_files')
+                    .getPublicUrl(`${videoPath}${fileName}`).data.publicUrl
+                  
+                  const currentGen = storyboardGenerations.get(storyboard.id)
+                  if (!currentGen?.generatedVideoUrl || !currentGen.generatedVideoUrl.includes('cinema_files')) {
+                    // Only update if we don't already have a bucket URL
+                    updateStoryboardGeneration(storyboard.id, {
+                      generatedVideoUrl: videoUrl,
+                      generationStatus: "Saved"
+                    })
+                    console.log(`✅ Loaded saved video for storyboard ${storyboard.id} from bucket:`, videoUrl?.substring(0, 50) + '...')
+                  }
+                }
+              })
+            })
+          } else if (bucketError) {
+            console.log('⚠️ Could not check bucket for saved videos (non-critical):', bucketError.message)
+          }
+        } catch (error) {
+          console.error('Error loading saved videos from bucket:', error)
+          // Don't fail the whole load if bucket check fails
         }
-      } catch (error) {
-        console.error('Error loading saved videos from bucket:', error)
-        // Don't fail the whole load if bucket check fails
       }
       
       // Clear storyboard selection when scene changes
@@ -710,7 +717,12 @@ export default function CinemaProductionPage() {
       return storyboard ? [storyboard] : []
     }
     // Otherwise show all storyboards for the scene
-    return storyboards
+    // Filter by selected project to ensure we only show storyboards from the current project
+    let filtered = storyboards
+    if (selectedProjectId) {
+      filtered = storyboards.filter(sb => sb.project_id === selectedProjectId)
+    }
+    return filtered
   }
 
   const getModelFileRequirement = (model: VideoModel): 'none' | 'image' | 'video' | 'start-end-frames' => {

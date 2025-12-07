@@ -162,6 +162,7 @@ export interface Character {
   role_audition_info?: string | null
   role_contact_email?: string | null
   role_contact_phone?: string | null
+  casting_status?: 'open' | 'filled' | 'pending' | 'on_hold' | 'cancelled' | null
 }
 
 export interface CreateCharacterData extends Partial<Omit<Character, 'id' | 'user_id' | 'created_at' | 'updated_at'>> {

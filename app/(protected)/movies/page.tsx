@@ -97,6 +97,8 @@ export default function MoviesPage() {
   const [selectedAIService, setSelectedAIService] = useState("dalle")
   const [isGeneratingCover, setIsGeneratingCover] = useState(false)
   const [generatedCoverUrl, setGeneratedCoverUrl] = useState("")
+  const [promptSource, setPromptSource] = useState<"custom" | "treatment" | "synopsis" | "logline">("custom")
+  const [isLoadingTreatment, setIsLoadingTreatment] = useState(false)
   
   // AI Settings state
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
@@ -544,7 +546,7 @@ export default function MoviesPage() {
     setSelectedProjectStatus("active")
   }
 
-  const handleEditMovie = (movie: Movie) => {
+  const handleEditMovie = async (movie: Movie) => {
     setEditingMovie(movie)
     setNewMovie({
       name: movie.name,
@@ -558,7 +560,79 @@ export default function MoviesPage() {
       cowriters: movie.cowriters || []
     })
     setGeneratedCoverUrl(movie.thumbnail || "")
+    setPromptSource("custom")
+    setAiPrompt("")
     setIsEditDialogOpen(true)
+  }
+
+  // Load treatment content based on selected prompt source
+  const loadPromptFromSource = async (source: "treatment" | "synopsis" | "logline") => {
+    if (!editingMovie?.treatment_id) {
+      toast({
+        title: "No Treatment",
+        description: "This movie doesn't have a treatment yet. Create one first.",
+        variant: "destructive"
+      })
+      return
+    }
+    
+    setIsLoadingTreatment(true)
+    try {
+      const treatment = await TreatmentsService.getTreatment(editingMovie.treatment_id)
+      if (!treatment) {
+        toast({
+          title: "Treatment Not Found",
+          description: "Could not load treatment data.",
+          variant: "destructive"
+        })
+        return
+      }
+      
+      let promptText = ""
+      switch (source) {
+        case "treatment":
+          // Use the full treatment prompt/content
+          promptText = treatment.prompt || treatment.synopsis || ""
+          break
+        case "synopsis":
+          promptText = treatment.synopsis || ""
+          break
+        case "logline":
+          promptText = treatment.logline || ""
+          break
+      }
+      
+      if (!promptText.trim()) {
+        toast({
+          title: "No Content",
+          description: `The treatment doesn't have ${source === "treatment" ? "content" : source} available.`,
+          variant: "destructive"
+        })
+        return
+      }
+      
+      // Truncate if too long (DALL-E 3 has 1000 char limit, we need room for "Movie Art Cover: " prefix)
+      const maxLength = 900
+      if (promptText.length > maxLength) {
+        promptText = promptText.substring(0, maxLength) + "..."
+        toast({
+          title: "Content Truncated",
+          description: `The ${source} was too long and has been truncated for the prompt.`,
+        })
+      }
+      
+      setAiPrompt(promptText)
+      setPromptSource(source)
+    } catch (error) {
+      console.error('Error loading treatment:', error)
+      toast({
+        title: "Error",
+        description: "Failed to load treatment data.",
+        variant: "destructive"
+      })
+    } finally {
+      setIsLoadingTreatment(false)
+    }
   }
 
   const handleUpdateMovie = async () => {
@@ -1501,15 +1575,62 @@ export default function MoviesPage() {
                     </div>
                   )}
                   
+                  {/* Prompt Source Selection - Only show if movie has a treatment */}
+                  {editingMovie?.treatment_id && (
+                    <div>
+                      <Label htmlFor="prompt-source">Generate Cover From</Label>
+                      <Select 
+                        value={promptSource} 
+                        onValueChange={(value) => {
+                          const source = value as "custom" | "treatment" | "synopsis" | "logline"
+                          setPromptSource(source)
+                          if (source !== "custom") {
+                            loadPromptFromSource(source)
+                          } else {
+                            setAiPrompt("")
+                          }
+                        }}
+                        disabled={isLoadingTreatment}
+                      >
+                        <SelectTrigger className="bg-input border-border">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">Custom Prompt</SelectItem>
+                          <SelectItem value="logline">Logline</SelectItem>
+                          <SelectItem value="synopsis">Synopsis</SelectItem>
+                          <SelectItem value="treatment">Full Treatment</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {isLoadingTreatment && (
+                        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Loading from treatment...
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  
                   {/* AI Prompt */}
                   <div>
                     <Label htmlFor="edit-ai-prompt">AI Prompt</Label>
                     <Textarea
                       id="edit-ai-prompt"
                       value={aiPrompt}
-                      onChange={(e) => setAiPrompt(e.target.value)}
-                      placeholder="Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                      onChange={(e) => {
+                        setAiPrompt(e.target.value)
+                        // If user manually edits, switch to custom
+                        if (promptSource !== "custom") {
+                          setPromptSource("custom")
+                        }
+                      }}
+                      placeholder={
+                        editingMovie?.treatment_id 
+                          ? "Describe your movie cover or select a source above"
+                          : "Describe your movie cover (e.g., 'Sci-fi spaceship over alien planet')"
+                      }
                       className="bg-input border-border min-h-[80px]"
+                      disabled={isLoadingTreatment}
                     />
                     <div className="flex gap-2 mt-2">
                       <Button

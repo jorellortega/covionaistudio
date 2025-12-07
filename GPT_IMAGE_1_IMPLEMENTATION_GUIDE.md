@@ -654,3 +654,6 @@ async function generateGPTImage(prompt: string, apiKey: string, style: string = 
 - Always save generated images to permanent storage (bucket) rather than relying on temporary URLs
 
 
+
+
+

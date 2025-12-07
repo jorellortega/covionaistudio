@@ -409,16 +409,35 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
         if (title) {
           // Extract the type from title (e.g., "Movie Title - Synopsis" -> "Synopsis")
           const titleLower = title.toLowerCase()
-          if (titleLower.includes('synopsis')) {
+          if (titleLower.includes('logline')) {
+            // Only show audio files that contain "logline" in their name or have logline audioType in metadata
+            filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+              const fileName = file.name.toLowerCase()
+              // Check metadata for audioType if available
+              let fileMetadata = file.metadata
+              if (typeof fileMetadata === 'string') {
+                try {
+                  fileMetadata = JSON.parse(fileMetadata)
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
+              return fileName.includes('logline') || 
+                     (fileMetadata && typeof fileMetadata === 'object' && fileMetadata.audioType === 'logline')
+            })
+          } else if (titleLower.includes('synopsis')) {
             // Only show audio files that contain "synopsis" in their name
             filteredAudioFiles = result.data.audioFiles.filter((file: any) => 
               file.name.toLowerCase().includes('synopsis')
             )
           } else if (titleLower.includes('treatment')) {
-            // Only show audio files that contain "treatment" in their name (but not "synopsis")
-            filteredAudioFiles = result.data.audioFiles.filter((file: any) => 
-              file.name.toLowerCase().includes('treatment') && !file.name.toLowerCase().includes('synopsis')
-            )
+            // Only show audio files that contain "treatment" in their name (but not "synopsis" or "logline")
+            filteredAudioFiles = result.data.audioFiles.filter((file: any) => {
+              const fileName = file.name.toLowerCase()
+              return fileName.includes('treatment') && 
+                     !fileName.includes('synopsis') && 
+                     !fileName.includes('logline')
+            })
           } else if (titleLower.includes('scene page')) {
             // Extract page number from title (e.g., "Scene Page 1 Audio" -> "1")
             const pageMatch = title.match(/scene\s+page\s+(\d+)/i)

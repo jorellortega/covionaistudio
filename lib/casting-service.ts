@@ -14,6 +14,9 @@ export interface CastingSetting {
   submission_deadline: string | null
   casting_notes: string | null
   is_active: boolean
+  status_badge_text?: string | null
+  status_badge_color?: string | null
+  status_badge_enabled?: boolean
   created_at: string
   updated_at: string
 }
@@ -49,6 +52,9 @@ export interface CreateCastingSettingData {
   submission_deadline?: string | null
   casting_notes?: string | null
   is_active?: boolean
+  status_badge_text?: string | null
+  status_badge_color?: string | null
+  status_badge_enabled?: boolean
 }
 
 export interface CreateActorSubmissionData {
