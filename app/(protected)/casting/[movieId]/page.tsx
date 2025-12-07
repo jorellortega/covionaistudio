@@ -59,7 +59,6 @@ import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { TreatmentsService } from "@/lib/treatments-service"
 import { getSupabaseClient } from "@/lib/supabase"
-import TextToSpeech from "@/components/text-to-speech"
 import Link from "next/link"
 
 const statusColors = {
@@ -107,6 +106,12 @@ export default function CastingPage() {
   const [selectedSubmission, setSelectedSubmission] = useState<ActorSubmission | null>(null)
   const [showBadgeEdit, setShowBadgeEdit] = useState(false)
   const [isSavingBadge, setIsSavingBadge] = useState(false)
+  const [loglineAudioUrl, setLoglineAudioUrl] = useState<string | null>(null)
+  const [loadingLoglineAudio, setLoadingLoglineAudio] = useState(false)
+  const [treatmentAudioUrl, setTreatmentAudioUrl] = useState<string | null>(null)
+  const [loadingTreatmentAudio, setLoadingTreatmentAudio] = useState(false)
+  const [synopsisAudioUrl, setSynopsisAudioUrl] = useState<string | null>(null)
+  const [loadingSynopsisAudio, setLoadingSynopsisAudio] = useState(false)
   
   // Settings form state
   const [settingsForm, setSettingsForm] = useState({
@@ -506,6 +511,185 @@ export default function CastingPage() {
     }
   }
 
+  // Fetch logline audio
+  const fetchLoglineAudio = async (treatmentId: string, projectId: string) => {
+    if (!treatmentId || !projectId) return
+    
+    setLoadingLoglineAudio(true)
+    try {
+      const response = await fetch('/api/ai/get-scene-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          projectId: projectId,
+          treatmentId: treatmentId,
+          userId: userId || user?.id
+        })
+      })
+
+      if (!response.ok) {
+        console.log('No logline audio found or error fetching:', response.statusText)
+        setLoglineAudioUrl(null)
+        return
+      }
+
+      const result = await response.json()
+      if (result.success && result.data?.audioFiles) {
+        // Filter for logline audio
+        const loglineAudio = result.data.audioFiles.find((file: any) => {
+          const fileName = file.name?.toLowerCase() || ''
+          let fileMetadata = file.metadata
+          if (typeof fileMetadata === 'string') {
+            try {
+              fileMetadata = JSON.parse(fileMetadata)
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+          return fileName.includes('logline') || 
+                 (fileMetadata && typeof fileMetadata === 'object' && fileMetadata.audioType === 'logline')
+        })
+        
+        if (loglineAudio) {
+          setLoglineAudioUrl(loglineAudio.public_url || loglineAudio.url)
+          console.log('✅ Found logline audio:', loglineAudio.public_url || loglineAudio.url)
+        } else {
+          setLoglineAudioUrl(null)
+          console.log('No logline audio found in results')
+        }
+      } else {
+        setLoglineAudioUrl(null)
+      }
+    } catch (error) {
+      console.error('Error fetching logline audio:', error)
+      setLoglineAudioUrl(null)
+    } finally {
+      setLoadingLoglineAudio(false)
+    }
+  }
+
+  // Fetch treatment audio
+  const fetchTreatmentAudio = async (treatmentId: string, projectId: string) => {
+    if (!treatmentId || !projectId) return
+    
+    setLoadingTreatmentAudio(true)
+    try {
+      const response = await fetch('/api/ai/get-scene-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          projectId: projectId,
+          treatmentId: treatmentId,
+          userId: userId || user?.id
+        })
+      })
+
+      if (!response.ok) {
+        console.log('No treatment audio found or error fetching:', response.statusText)
+        setTreatmentAudioUrl(null)
+        return
+      }
+
+      const result = await response.json()
+      if (result.success && result.data?.audioFiles) {
+        // Filter for treatment audio
+        // Note: The API returns 'name' which is actually the asset title
+        const treatmentAudio = result.data.audioFiles.find((file: any) => {
+          const fileName = file.name?.toLowerCase() || ''
+          let fileMetadata = file.metadata
+          if (typeof fileMetadata === 'string') {
+            try {
+              fileMetadata = JSON.parse(fileMetadata)
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+          // Check name (which is the title) or metadata for treatment audio
+          // Treatment audio typically doesn't have "synopsis" or "logline" in the name
+          // and is the full treatment document audio (not synopsis or logline)
+          const isTreatment = (fileName.includes('treatment') && !fileName.includes('synopsis') && !fileName.includes('logline')) ||
+                              (fileMetadata && typeof fileMetadata === 'object' && fileMetadata.audioType === 'treatment')
+          return isTreatment
+        })
+        
+        if (treatmentAudio) {
+          setTreatmentAudioUrl(treatmentAudio.public_url || treatmentAudio.url)
+          console.log('✅ Found treatment audio:', treatmentAudio.public_url || treatmentAudio.url)
+        } else {
+          setTreatmentAudioUrl(null)
+          console.log('No treatment audio found in results')
+        }
+      } else {
+        setTreatmentAudioUrl(null)
+      }
+    } catch (error) {
+      console.error('Error fetching treatment audio:', error)
+      setTreatmentAudioUrl(null)
+    } finally {
+      setLoadingTreatmentAudio(false)
+    }
+  }
+
+  // Fetch synopsis audio
+  const fetchSynopsisAudio = async (treatmentId: string, projectId: string) => {
+    if (!treatmentId || !projectId) return
+    
+    setLoadingSynopsisAudio(true)
+    try {
+      const response = await fetch('/api/ai/get-scene-audio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          projectId: projectId,
+          treatmentId: treatmentId,
+          userId: userId || user?.id
+        })
+      })
+
+      if (!response.ok) {
+        console.log('No synopsis audio found or error fetching:', response.statusText)
+        setSynopsisAudioUrl(null)
+        return
+      }
+
+      const result = await response.json()
+      if (result.success && result.data?.audioFiles) {
+        // Filter for synopsis audio
+        // Note: The API returns 'name' which is actually the asset title
+        const synopsisAudio = result.data.audioFiles.find((file: any) => {
+          const fileName = file.name?.toLowerCase() || ''
+          let fileMetadata = file.metadata
+          if (typeof fileMetadata === 'string') {
+            try {
+              fileMetadata = JSON.parse(fileMetadata)
+            } catch (e) {
+              // Ignore parse errors
+            }
+          }
+          // Check name (which is the title) or metadata for synopsis audio
+          // Synopsis audio typically has "synopsis" in the name (e.g., "Movie Title - Synopsis")
+          return fileName.includes('synopsis') || 
+                 (fileMetadata && typeof fileMetadata === 'object' && fileMetadata.audioType === 'synopsis')
+        })
+        
+        if (synopsisAudio) {
+          setSynopsisAudioUrl(synopsisAudio.public_url || synopsisAudio.url)
+          console.log('✅ Found synopsis audio:', synopsisAudio.public_url || synopsisAudio.url)
+        } else {
+          setSynopsisAudioUrl(null)
+          console.log('No synopsis audio found in results')
+        }
+      } else {
+        setSynopsisAudioUrl(null)
+      }
+    } catch (error) {
+      console.error('Error fetching synopsis audio:', error)
+      setSynopsisAudioUrl(null)
+    } finally {
+      setLoadingSynopsisAudio(false)
+    }
+  }
+
   // Fetch audio assets for screenplay pages, organized by scene
   const fetchScreenplayAudio = async (scenesWithPages: Array<{
     sceneId: string
@@ -724,6 +908,17 @@ export default function CastingPage() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSceneId, screenplayScenes.length])
+
+  // Fetch logline, treatment, and synopsis audio when treatment is loaded
+  useEffect(() => {
+    if (treatment?.id && movieId && ready) {
+      if (treatment.logline) {
+        fetchLoglineAudio(treatment.id, movieId)
+      }
+      fetchTreatmentAudio(treatment.id, movieId)
+      fetchSynopsisAudio(treatment.id, movieId)
+    }
+  }, [treatment?.id, treatment?.logline, movieId, ready])
 
   const handleSaveSettings = async () => {
     // Only owners can save settings
@@ -1062,25 +1257,146 @@ export default function CastingPage() {
                         <p className="text-base sm:text-lg text-foreground/90 break-words italic leading-relaxed mb-3">
                           "{treatment.logline}"
                         </p>
-                        {/* Text to Speech for Logline */}
-                        {treatment.id && (
+                        {/* Logline Audio Player */}
+                        {loadingLoglineAudio ? (
+                          <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Loading audio...</span>
+                          </div>
+                        ) : loglineAudioUrl ? (
                           <div className="mt-3">
-                            <TextToSpeech
-                              text={treatment.logline}
-                              title={`${movie.name} - Logline`}
-                              projectId={movieId}
-                              treatmentId={treatment.id}
-                              metadata={{ audioType: 'logline' }}
-                              className="mt-2"
+                            <audio 
+                              src={loglineAudioUrl} 
+                              controls 
+                              className="w-full h-10 sm:h-10 min-h-[44px]"
+                              preload="metadata"
                             />
                           </div>
-                        )}
+                        ) : null}
+                        
+                        {/* Treatment and Synopsis Audio Players */}
+                        <div className="mt-4 space-y-3">
+                          {/* Treatment Audio */}
+                          {loadingTreatmentAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading treatment audio...</span>
+                            </div>
+                          ) : treatmentAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Treatment Audio</label>
+                              <audio 
+                                src={treatmentAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                          
+                          {/* Synopsis Audio */}
+                          {loadingSynopsisAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading synopsis audio...</span>
+                            </div>
+                          ) : synopsisAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Synopsis Audio</label>
+                              <audio 
+                                src={synopsisAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     ) : treatment && !treatment.logline ? (
                       <div className="mb-4 pb-4 border-b border-border/50">
                         <p className="text-sm text-muted-foreground italic">
                           No logline available for this project
                         </p>
+                        {/* Treatment and Synopsis Audio Players (even without logline) */}
+                        <div className="mt-4 space-y-3">
+                          {/* Treatment Audio */}
+                          {loadingTreatmentAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading treatment audio...</span>
+                            </div>
+                          ) : treatmentAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Treatment Audio</label>
+                              <audio 
+                                src={treatmentAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                          
+                          {/* Synopsis Audio */}
+                          {loadingSynopsisAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading synopsis audio...</span>
+                            </div>
+                          ) : synopsisAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Synopsis Audio</label>
+                              <audio 
+                                src={synopsisAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : treatment ? (
+                      /* Treatment and Synopsis Audio Players (when treatment exists but no logline section) */
+                      <div className="mb-4 pb-4 border-b border-border/50">
+                        <div className="space-y-3">
+                          {/* Treatment Audio */}
+                          {loadingTreatmentAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading treatment audio...</span>
+                            </div>
+                          ) : treatmentAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Treatment Audio</label>
+                              <audio 
+                                src={treatmentAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                          
+                          {/* Synopsis Audio */}
+                          {loadingSynopsisAudio ? (
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Loading synopsis audio...</span>
+                            </div>
+                          ) : synopsisAudioUrl ? (
+                            <div className="space-y-1">
+                              <label className="text-xs sm:text-sm font-medium text-muted-foreground">Synopsis Audio</label>
+                              <audio 
+                                src={synopsisAudioUrl} 
+                                controls 
+                                className="w-full h-10 sm:h-10 min-h-[44px]"
+                                preload="metadata"
+                              />
+                            </div>
+                          ) : null}
+                        </div>
                       </div>
                     ) : null}
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -1312,7 +1628,7 @@ export default function CastingPage() {
                                         value={character.casting_status || 'open'}
                                         onValueChange={(value) => handleStatusChange(character.id, value as any, character.name)}
                                       >
-                                        <SelectTrigger className={`${getCastingStatusColor(character.casting_status || 'open')} text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 sm:px-2 h-auto border-0 cursor-pointer hover:opacity-80 transition-opacity`}>
+                                        <SelectTrigger className={`${getCastingStatusColor(character.casting_status || 'open')} text-[10px] sm:text-xs font-semibold px-1.5 py-0.5 sm:px-2 min-h-[32px] sm:min-h-[28px] border-0 cursor-pointer hover:opacity-80 transition-opacity`}>
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -1517,7 +1833,7 @@ export default function CastingPage() {
                             value={submission.status}
                             onValueChange={(value) => handleUpdateSubmissionStatus(submission.id, value as ActorSubmission['status'])}
                           >
-                            <SelectTrigger className="w-full sm:w-40 text-[10px] sm:text-xs sm:text-sm h-7 sm:h-9">
+                            <SelectTrigger className="w-full sm:w-40 text-[10px] sm:text-xs sm:text-sm min-h-[44px] sm:min-h-[36px]">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -1533,18 +1849,20 @@ export default function CastingPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => setSelectedSubmission(submission)}
-                            className="flex-1 sm:flex-initial h-7 sm:h-9 w-7 sm:w-auto px-2 sm:px-3"
+                            className="flex-1 sm:flex-initial min-h-[44px] sm:min-h-[36px] min-w-[44px] sm:min-w-0 px-2 sm:px-3"
                           >
-                            <Eye className="h-3 w-3 sm:h-4 sm:w-4" />
+                            <Eye className="h-4 w-4" />
+                            <span className="ml-1 sm:hidden">View</span>
                           </Button>
                           
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleDeleteSubmission(submission.id)}
-                            className="flex-1 sm:flex-initial h-7 sm:h-9 w-7 sm:w-auto px-2 sm:px-3"
+                            className="flex-1 sm:flex-initial min-h-[44px] sm:min-h-[36px] min-w-[44px] sm:min-w-0 px-2 sm:px-3"
                           >
-                            <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
+                            <Trash2 className="h-4 w-4" />
+                            <span className="ml-1 sm:hidden">Delete</span>
                           </Button>
                         </div>
 
@@ -1571,89 +1889,15 @@ export default function CastingPage() {
             </CardHeader>
             <CardContent className="p-4 sm:p-6">
               <Tabs defaultValue="script" className="w-full">
-                <TabsList className="w-full overflow-x-auto flex-nowrap sm:flex-wrap">
-                  {castingSettings.show_script && <TabsTrigger value="script" className="text-xs sm:text-sm">Script</TabsTrigger>}
-                  {castingSettings.show_scenes && <TabsTrigger value="scenes" className="text-xs sm:text-sm">Scenes</TabsTrigger>}
-                  {castingSettings.show_timeline && <TabsTrigger value="timeline" className="text-xs sm:text-sm">Timeline</TabsTrigger>}
-                  {castingSettings.show_storyboard && <TabsTrigger value="storyboard" className="text-xs sm:text-sm">Storyboard</TabsTrigger>}
+                <TabsList className="w-full overflow-x-auto flex-nowrap sm:flex-wrap pb-1 sm:pb-0">
+                  {castingSettings.show_script && <TabsTrigger value="script" className="text-xs sm:text-sm min-w-[80px] sm:min-w-0">Script</TabsTrigger>}
+                  {castingSettings.show_scenes && <TabsTrigger value="scenes" className="text-xs sm:text-sm min-w-[80px] sm:min-w-0">Scenes</TabsTrigger>}
+                  {castingSettings.show_timeline && <TabsTrigger value="timeline" className="text-xs sm:text-sm min-w-[80px] sm:min-w-0">Timeline</TabsTrigger>}
+                  {castingSettings.show_storyboard && <TabsTrigger value="storyboard" className="text-xs sm:text-sm min-w-[100px] sm:min-w-0">Storyboard</TabsTrigger>}
                 </TabsList>
 
                 {castingSettings.show_script && (
                   <TabsContent value="script" className="space-y-4">
-                    {/* Treatment Section */}
-                    {treatment && (
-                      <div className="space-y-4">
-                        <div className="border rounded-lg p-4 sm:p-6 bg-background">
-                          <div className="flex items-start justify-between mb-4">
-                            <div className="flex-1 min-w-0">
-                              <h3 className="text-lg sm:text-xl font-bold break-words">{treatment.title}</h3>
-                              <div className="flex flex-wrap gap-2 mt-2">
-                                <Badge variant="outline" className="text-xs">{treatment.genre}</Badge>
-                                <Badge variant="outline" className="text-xs">{treatment.status}</Badge>
-                              </div>
-                            </div>
-                          </div>
-                          
-                          {treatment.logline && (
-                            <div className="mb-4 p-3 sm:p-4 bg-muted/50 rounded-lg">
-                              <h4 className="font-semibold mb-2 text-sm sm:text-base">Logline</h4>
-                              <p className="text-xs sm:text-sm break-words mb-3">{treatment.logline}</p>
-                              {/* Text to Speech for Logline */}
-                              {treatment.id && (
-                                <TextToSpeech
-                                  text={treatment.logline}
-                                  title={`${movie.name} - Logline`}
-                                  projectId={movieId}
-                                  treatmentId={treatment.id}
-                                  metadata={{ audioType: 'logline' }}
-                                  className="mt-2"
-                                />
-                              )}
-                            </div>
-                          )}
-                          
-                          {treatment.synopsis && (
-                            <div className="mb-4">
-                              <h4 className="font-semibold mb-2 text-sm sm:text-base">Synopsis</h4>
-                              <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">{treatment.synopsis}</p>
-                            </div>
-                          )}
-                          
-                          {treatment.characters && (
-                            <div className="mb-4">
-                              <h4 className="font-semibold mb-2 text-sm sm:text-base">Characters</h4>
-                              <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">{treatment.characters}</p>
-                            </div>
-                          )}
-                          
-                          {treatment.themes && (
-                            <div className="mb-4">
-                              <h4 className="font-semibold mb-2 text-sm sm:text-base">Themes</h4>
-                              <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">{treatment.themes}</p>
-                            </div>
-                          )}
-                          
-                          <div className="flex flex-wrap gap-2">
-                            {treatment.id ? (
-                              <Link href={`/treatments/${treatment.id}`}>
-                              <Button variant="outline" size="sm" className="text-xs sm:text-sm">
-                                <FileText className="h-4 w-4 mr-2" />
-                                View Full Treatment
-                              </Button>
-                            </Link>
-                            ) : (
-                              <Link href={`/screenplay/${movieId}`}>
-                                <Button variant="outline" size="sm" className="text-xs sm:text-sm">
-                                  <FileText className="h-4 w-4 mr-2" />
-                                  View Screenplay
-                                </Button>
-                              </Link>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
                     {/* Screenplay Pages Section */}
                     {loadingScreenplay ? (
                       <div className="p-4 sm:p-6 bg-muted/30 rounded-lg text-center">
@@ -1671,8 +1915,8 @@ export default function CastingPage() {
                         
                         {/* Scene Selector */}
                         {screenplayScenes.length > 1 && (
-                          <div className="flex items-center gap-2">
-                            <Label className="text-sm">Scene:</Label>
+                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                            <Label className="text-sm sm:flex-shrink-0">Scene:</Label>
                             <Select
                               value={selectedSceneId || ''}
                               onValueChange={(value) => {
@@ -1680,7 +1924,7 @@ export default function CastingPage() {
                                 setCurrentScreenplayPage(1)
                               }}
                             >
-                              <SelectTrigger className="w-full sm:w-[300px]">
+                              <SelectTrigger className="w-full sm:w-[300px] min-h-[44px]">
                                 <SelectValue placeholder="Select a scene" />
                               </SelectTrigger>
                               <SelectContent>
@@ -1728,15 +1972,15 @@ export default function CastingPage() {
                                 </CardHeader>
                                 <CardContent className="space-y-3">
                                   {/* Screenplay Content - Formatted like timeline-scene page */}
-                                  <div className="border rounded-lg p-4 bg-muted/20 overflow-x-auto">
+                                  <div className="border rounded-lg p-2 sm:p-4 bg-muted/20 overflow-x-auto">
                                     <div className="relative overflow-x-hidden" style={{ width: '100%', maxWidth: '612px', margin: '0 auto' }}>
-                                      <pre className="text-xs sm:text-sm font-mono whitespace-pre-wrap break-words text-foreground"
+                                      <pre className="text-[10px] sm:text-xs md:text-sm font-mono whitespace-pre-wrap break-words text-foreground"
                                         style={{ 
                                           fontFamily: '"Courier New", Courier, "Lucida Console", Monaco, monospace',
-                                          fontSize: '12pt',
+                                          fontSize: 'clamp(10px, 2.5vw, 12pt)',
                                           lineHeight: '1.0',
-                                          paddingLeft: '12px',
-                                          paddingRight: '12px',
+                                          paddingLeft: '8px',
+                                          paddingRight: '8px',
                                           textAlign: 'left',
                                           whiteSpace: 'pre-wrap',
                                           overflowWrap: 'break-word',
@@ -1768,17 +2012,17 @@ export default function CastingPage() {
                                             })
                                           }
                                         }}
-                                        className="h-7 px-2 text-xs"
+                                        className="min-h-[44px] sm:min-h-[28px] px-2 sm:px-2 text-xs"
                                       >
-                                        <RefreshCw className="h-3 w-3 mr-1" />
-                                        Refresh
+                                        <RefreshCw className="h-3 w-3 sm:mr-1" />
+                                        <span className="hidden sm:inline">Refresh</span>
                                       </Button>
                                     </div>
                                     {pageAudio.length > 0 ? (
                                       pageAudio.map((audio) => (
-                                        <div key={audio.id} className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg">
-                                          <audio controls src={audio.url} className="flex-1 h-8" />
-                                          <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                                        <div key={audio.id} className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2 bg-muted/30 rounded-lg">
+                                          <audio controls src={audio.url} className="flex-1 h-10 sm:h-8 min-h-[44px]" />
+                                          <span className="text-xs text-muted-foreground truncate max-w-full sm:max-w-[200px]">
                                             {audio.title}
                                           </span>
                                         </div>
@@ -1808,19 +2052,20 @@ export default function CastingPage() {
                               
                               {/* Pagination Controls for Current Scene */}
                               {selectedScene.pages.length > 1 && (
-                                <div className="flex items-center justify-center gap-4 py-4 border-t border-border">
-                                  <Badge variant="outline" className="px-4 py-2">
+                                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 py-4 border-t border-border">
+                                  <Badge variant="outline" className="px-4 py-2 text-xs sm:text-sm">
                                     Page {currentScreenplayPage} of {selectedScene.pages.length}
                                   </Badge>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentScreenplayPage(prev => Math.max(1, prev - 1))}
-                                    disabled={currentScreenplayPage === 1}
-                                    className="border-primary/30 text-primary hover:bg-primary/10"
-                                  >
-                                    <ChevronLeft className="h-4 w-4" />
-                                  </Button>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setCurrentScreenplayPage(prev => Math.max(1, prev - 1))}
+                                      disabled={currentScreenplayPage === 1}
+                                      className="border-primary/30 text-primary hover:bg-primary/10 min-h-[44px] min-w-[44px]"
+                                    >
+                                      <ChevronLeft className="h-4 w-4" />
+                                    </Button>
                                   <Input
                                     type="number"
                                     min={1}
@@ -1841,17 +2086,18 @@ export default function CastingPage() {
                                         }
                                       }
                                     }}
-                                    className="w-20 text-center"
+                                    className="w-20 text-center min-h-[44px]"
                                   />
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setCurrentScreenplayPage(prev => Math.min(selectedScene.pages.length, prev + 1))}
-                                    disabled={currentScreenplayPage === selectedScene.pages.length}
-                                    className="border-primary/30 text-primary hover:bg-primary/10"
-                                  >
-                                    <ChevronRight className="h-4 w-4" />
-                                  </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setCurrentScreenplayPage(prev => Math.min(selectedScene.pages.length, prev + 1))}
+                                      disabled={currentScreenplayPage === selectedScene.pages.length}
+                                      className="border-primary/30 text-primary hover:bg-primary/10 min-h-[44px] min-w-[44px]"
+                                    >
+                                      <ChevronRight className="h-4 w-4" />
+                                    </Button>
+                                  </div>
                                 </div>
                               )}
                             </>
