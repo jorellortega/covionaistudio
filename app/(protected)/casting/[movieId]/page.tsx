@@ -197,14 +197,20 @@ export default function CastingPage() {
       }
       
       if (!movieData) {
-        toast({
-          title: "Access Denied",
-          description: "You don't have access to this project.",
-          variant: "destructive",
-        })
-        if (user) {
-          router.push('/movies')
+        // For public view, don't show error immediately - check if casting is active first
+        if (!isPublicView) {
+          toast({
+            title: "Access Denied",
+            description: "You don't have access to this project.",
+            variant: "destructive",
+          })
+          if (user) {
+            router.push('/movies')
+          }
         }
+        // Don't return early - allow the page to render even if movie not found
+        // The page will show appropriate message
+        setLoading(false)
         return
       }
       
@@ -897,11 +903,16 @@ export default function CastingPage() {
   }
 
   const handleShareLink = () => {
-    const url = typeof window !== 'undefined' ? window.location.href : ''
-    navigator.clipboard.writeText(url)
+    if (typeof window === 'undefined') return
+    
+    // Generate public share URL with view=public parameter
+    const baseUrl = window.location.origin
+    const publicUrl = `${baseUrl}/casting/${movieId}?view=public`
+    
+    navigator.clipboard.writeText(publicUrl)
     toast({
       title: "Link Copied!",
-      description: "Casting page link copied to clipboard",
+      description: "Public casting page link copied to clipboard",
     })
   }
 
