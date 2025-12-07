@@ -50,7 +50,8 @@ import {
   Share2,
   Volume2,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  RefreshCw
 } from "lucide-react"
 import { CastingService, type CastingSetting, type ActorSubmission } from "@/lib/casting-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
@@ -452,10 +453,11 @@ export default function CastingPage() {
     sceneName: string
     sceneNumber: number
     pages: Array<{ pageNumber: number; content: string }>
-  }>) => {
+  }>, mergeWithExisting: boolean = false) => {
     try {
       // Group audio by scene ID, then by page number
-      const audioMap = new Map<string, Map<number, Array<{ id: string; url: string; title: string }>>>()
+      // If merging, start with existing audio map, otherwise create new one
+      const audioMap = mergeWithExisting ? new Map(screenplayAudio) : new Map<string, Map<number, Array<{ id: string; url: string; title: string }>>>()
       
       // For public views, we need to fetch audio directly from database
       // For authenticated users, use the API
@@ -530,9 +532,21 @@ export default function CastingPage() {
 
             const result = await response.json()
             console.log(`🎵 Audio fetch result for scene ${scene.sceneId}:`, result)
+            console.log(`🎵 Total audio files returned: ${result.data?.audioFiles?.length || 0}`)
+            console.log(`🎵 Scene ${scene.sceneId} has ${scene.pages.length} pages:`, scene.pages.map(p => `Page ${p.pageNumber}`))
             
             if (result.success && result.data.audioFiles) {
               const sceneAudioMap = new Map<number, Array<{ id: string; url: string; title: string }>>()
+              
+              // Log all audio files before filtering
+              console.log(`🎵 All audio files for scene ${scene.sceneId}:`, result.data.audioFiles.map((f: any) => ({
+                name: f.name,
+                pageNumber: f.metadata?.pageNumber,
+                pageNumberType: typeof f.metadata?.pageNumber,
+                sceneId: f.metadata?.sceneId,
+                hasMetadata: !!f.metadata,
+                fullMetadata: f.metadata
+              })))
               
               // Filter audio by page number from metadata or title
               for (const file of result.data.audioFiles) {
@@ -547,29 +561,54 @@ export default function CastingPage() {
                   }
                 }
                 
-                console.log(`🎵 Audio file:`, { name: file.name, pageNumber, metadata: file.metadata })
-                
+                // Normalize pageNumber to a number (handle string "2" vs number 2)
                 if (pageNumber !== undefined && pageNumber !== null) {
-                  const pageNum = parseInt(pageNumber.toString())
+                  pageNumber = typeof pageNumber === 'string' ? parseInt(pageNumber) : Number(pageNumber)
+                }
+                
+                console.log(`🎵 Audio file:`, { 
+                  name: file.name, 
+                  pageNumber, 
+                  pageNumberType: typeof pageNumber,
+                  metadata: file.metadata,
+                  sceneIdInMetadata: file.metadata?.sceneId,
+                  expectedSceneId: scene.sceneId
+                })
+                
+                if (pageNumber !== undefined && pageNumber !== null && !isNaN(pageNumber)) {
+                  const pageNum = Number(pageNumber)
                   
-                  // Only include audio that matches a page in this scene
-                  if (scene.pages.some(p => p.pageNumber === pageNum)) {
-                    if (!sceneAudioMap.has(pageNum)) {
-                      sceneAudioMap.set(pageNum, [])
-                    }
-                    
-                    sceneAudioMap.get(pageNum)!.push({
-                      id: file.id,
-                      url: file.public_url,
-                      title: file.name || `Page ${pageNumber} Audio`
-                    })
+                // Only include audio that matches a page in this scene
+                const matchingPage = scene.pages.find(p => Number(p.pageNumber) === pageNum)
+                if (matchingPage) {
+                  if (!sceneAudioMap.has(pageNum)) {
+                    sceneAudioMap.set(pageNum, [])
                   }
+                  
+                  sceneAudioMap.get(pageNum)!.push({
+                    id: file.id,
+                    url: file.public_url,
+                    title: file.name || `Page ${pageNumber} Audio`
+                  })
+                  
+                  console.log(`🎵 ✅ Matched audio for scene ${scene.sceneId}, page ${pageNum}:`, file.name)
+                } else {
+                  console.log(`🎵 ❌ Audio page ${pageNum} (type: ${typeof pageNum}) doesn't match any page in scene ${scene.sceneId}. Scene pages:`, scene.pages.map(p => ({ pageNumber: p.pageNumber, type: typeof p.pageNumber })))
+                }
                 }
               }
               
               console.log(`🎵 Scene audio map for ${scene.sceneId}:`, Array.from(sceneAudioMap.entries()))
               
-              if (sceneAudioMap.size > 0) {
+              // Merge with existing audio for this scene if merging
+              if (mergeWithExisting && audioMap.has(scene.sceneId)) {
+                const existingMap = audioMap.get(scene.sceneId)!
+                // Merge pages - new audio takes precedence
+                for (const [pageNum, audioFiles] of sceneAudioMap.entries()) {
+                  existingMap.set(pageNum, audioFiles)
+                }
+                audioMap.set(scene.sceneId, existingMap)
+              } else if (sceneAudioMap.size > 0) {
                 audioMap.set(scene.sceneId, sceneAudioMap)
               }
             }
@@ -596,6 +635,36 @@ export default function CastingPage() {
       setCurrentScreenplayPage(1)
     }
   }, [selectedSceneId])
+
+  // Refetch audio when scene or page changes (in case new audio was generated)
+  useEffect(() => {
+    if (selectedSceneId && screenplayScenes.length > 0) {
+      const selectedScene = screenplayScenes.find(s => s.sceneId === selectedSceneId)
+      if (selectedScene) {
+        // Refetch audio for the current scene and merge with existing
+        console.log('🔄 Refetching audio for scene:', selectedSceneId, 'page:', currentScreenplayPage)
+        fetchScreenplayAudio([selectedScene], true)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSceneId, currentScreenplayPage])
+
+  // Refetch audio when page becomes visible (in case audio was generated in another tab)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && selectedSceneId && screenplayScenes.length > 0) {
+        const selectedScene = screenplayScenes.find(s => s.sceneId === selectedSceneId)
+        if (selectedScene) {
+          console.log('🔄 Page visible - refetching audio for scene:', selectedSceneId)
+          fetchScreenplayAudio([selectedScene], true)
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSceneId, screenplayScenes.length])
 
   const handleSaveSettings = async () => {
     // Only owners can save settings
@@ -1422,6 +1491,14 @@ export default function CastingPage() {
                           const sceneAudioMap = screenplayAudio.get(selectedSceneId)
                           const pageAudio = sceneAudioMap?.get(currentPage.pageNumber) || []
                           
+                          // Debug logging
+                          console.log(`🎵 Displaying audio for scene ${selectedSceneId}, page ${currentPage.pageNumber}:`, {
+                            hasSceneAudioMap: !!sceneAudioMap,
+                            sceneAudioMapKeys: sceneAudioMap ? Array.from(sceneAudioMap.keys()) : [],
+                            pageAudioCount: pageAudio.length,
+                            pageAudio: pageAudio
+                          })
+                          
                           return (
                             <>
                               <Card className="border-border">
@@ -1459,10 +1536,30 @@ export default function CastingPage() {
                                   
                                   {/* Audio for Current Page */}
                                   <div className="space-y-2">
-                                    <h4 className="text-sm font-semibold flex items-center gap-2">
-                                      <Volume2 className="h-4 w-4" />
-                                      Audio for Page {currentPage.pageNumber}
-                                    </h4>
+                                    <div className="flex items-center justify-between">
+                                      <h4 className="text-sm font-semibold flex items-center gap-2">
+                                        <Volume2 className="h-4 w-4" />
+                                        Audio for Page {currentPage.pageNumber}
+                                      </h4>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={async () => {
+                                          if (selectedScene) {
+                                            console.log('🔄 Manually refreshing audio for scene:', selectedScene.sceneId)
+                                            await fetchScreenplayAudio([selectedScene], true)
+                                            toast({
+                                              title: "Audio Refreshed",
+                                              description: "Audio list has been updated.",
+                                            })
+                                          }
+                                        }}
+                                        className="h-7 px-2 text-xs"
+                                      >
+                                        <RefreshCw className="h-3 w-3 mr-1" />
+                                        Refresh
+                                      </Button>
+                                    </div>
                                     {pageAudio.length > 0 ? (
                                       pageAudio.map((audio) => (
                                         <div key={audio.id} className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg">
@@ -1478,8 +1575,17 @@ export default function CastingPage() {
                                           No audio available for this page
                                         </p>
                                         <p className="text-xs text-muted-foreground mt-1">
-                                          Debug: Scene {selectedSceneId}, Page {currentPage.pageNumber}, Audio Map: {screenplayAudio.has(selectedSceneId) ? 'exists' : 'missing'}
+                                          Debug: Scene {selectedSceneId}, Page {currentPage.pageNumber}
                                         </p>
+                                        {screenplayAudio.has(selectedSceneId) && (() => {
+                                          const map = screenplayAudio.get(selectedSceneId)
+                                          const availablePages = map ? Array.from(map.keys()) : []
+                                          return (
+                                            <p className="text-xs text-muted-foreground mt-1">
+                                              Audio Map exists. Available pages: {availablePages.length > 0 ? availablePages.join(', ') : 'none'}
+                                            </p>
+                                          )
+                                        })()}
                                       </div>
                                     )}
                                   </div>

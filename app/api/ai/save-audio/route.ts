@@ -4,6 +4,19 @@ import { createClient } from '@supabase/supabase-js'
 export async function POST(request: NextRequest) {
   try {
     const { audioBlob, fileName, audioTitle, projectId, sceneId, treatmentId, userId, metadata } = await request.json()
+    
+    // Debug logging for page number audio
+    if (metadata?.pageNumber) {
+      console.log('💾 Saving audio with pageNumber:', {
+        pageNumber: metadata.pageNumber,
+        sceneId: sceneId || metadata?.sceneId,
+        projectId,
+        userId,
+        fileName,
+        audioTitle,
+        fullMetadata: metadata
+      })
+    }
 
     if (!audioBlob || !fileName || !userId) {
       return NextResponse.json(
@@ -169,8 +182,26 @@ export async function POST(request: NextRequest) {
       .select()
       .single()
 
+    // Log successful save with page number
+    if (!assetError && assetData && metadata?.pageNumber) {
+      console.log('💾 ✅ Successfully saved audio asset:', {
+        assetId: assetData.id,
+        sceneId: assetData.scene_id,
+        pageNumber: assetData.metadata?.pageNumber,
+        title: assetData.title,
+        metadata: assetData.metadata
+      })
+    }
+
     if (assetError) {
-      console.error('Asset creation error:', assetError)
+      console.error('💾 Asset creation error:', assetError)
+      console.error('💾 Failed to save asset with:', {
+        sceneId,
+        projectId,
+        pageNumber: metadata?.pageNumber,
+        fileName,
+        audioTitle
+      })
       // Try to clean up the uploaded file if asset creation fails
       await supabase.storage
         .from('cinema_files')

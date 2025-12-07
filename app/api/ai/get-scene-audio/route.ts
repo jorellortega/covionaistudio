@@ -71,6 +71,25 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Debug logging for scene audio queries
+    if (sceneId) {
+      console.log(`🎵 Querying audio for scene ${sceneId}:`, {
+        projectId,
+        userId,
+        assetsFound: assets?.length || 0,
+        assetsWithPageNumbers: assets?.filter(a => a.metadata?.pageNumber !== undefined && a.metadata?.pageNumber !== null).length || 0
+      })
+      if (assets && assets.length > 0) {
+        console.log(`🎵 Audio assets found:`, assets.map(a => ({
+          id: a.id,
+          title: a.title,
+          pageNumber: a.metadata?.pageNumber,
+          sceneId: a.metadata?.sceneId,
+          metadata: a.metadata
+        })))
+      }
+    }
+
     // Map assets to audio files format
     const audioFiles = (assets || []).map(asset => {
       // Extract file size from metadata if available
