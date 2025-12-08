@@ -15,6 +15,7 @@ import { Loader2, Sparkles, Plus, Edit, Save, X, Trash2, Tag, Copy, Search, Uplo
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { CharactersService, type Character } from "@/lib/characters-service"
 import { useAuthReady } from "@/components/auth-hooks"
 
 export default function PromptsListPage() {
@@ -28,6 +29,8 @@ export default function PromptsListPage() {
   const [loading, setLoading] = useState(false)
   const [prompts, setPrompts] = useState<SavedPrompt[]>([])
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
   const [isCreatingPrompt, setIsCreatingPrompt] = useState(false)
   const [editingPromptId, setEditingPromptId] = useState<string | null>(null)
   const [filterType, setFilterType] = useState<string>("")
@@ -54,10 +57,20 @@ export default function PromptsListPage() {
       setLoading(true)
       try {
         setIsLoadingPrompts(true)
+        setIsLoadingCharacters(true)
+        
         // Load prompts - if projectId is set, show project-specific and universal prompts
         // If no projectId, show only universal prompts
         const loadedPrompts = await SavedPromptsService.getSavedPrompts(userId, projectId || null)
         setPrompts(loadedPrompts)
+        
+        // Load characters with master prompts if project is selected
+        if (projectId) {
+          const loadedCharacters = await CharactersService.getCharacters(projectId)
+          setCharacters(loadedCharacters.filter(c => c.master_prompt && c.master_prompt.trim().length > 0))
+        } else {
+          setCharacters([])
+        }
       } catch (err) {
         console.error("Failed to load prompts:", err)
         toast({
@@ -67,6 +80,7 @@ export default function PromptsListPage() {
         })
       } finally {
         setIsLoadingPrompts(false)
+        setIsLoadingCharacters(false)
         setLoading(false)
       }
     }
@@ -75,9 +89,36 @@ export default function PromptsListPage() {
     }
   }, [projectId, ready, userId, toast])
 
+  // Convert characters with master prompts to SavedPrompt format
+  const characterPrompts = useMemo(() => {
+    return characters.map(char => ({
+      id: `character-${char.id}`,
+      user_id: char.user_id,
+      project_id: char.project_id || null,
+      scene_id: null,
+      title: `${char.name} - Master Prompt`,
+      prompt: char.master_prompt || '',
+      type: 'character' as const,
+      style: undefined,
+      model: undefined,
+      tags: [],
+      use_count: 0,
+      created_at: char.created_at,
+      updated_at: char.updated_at,
+      // Store character reference for editing (extended properties)
+      characterId: char.id,
+      characterName: char.name
+    } as SavedPrompt & { characterId?: string; characterName?: string }))
+  }, [characters])
+
+  // Combine saved prompts and character prompts
+  const allPrompts = useMemo(() => {
+    return [...prompts, ...characterPrompts]
+  }, [prompts, characterPrompts])
+
   // Filter prompts
   const filteredPrompts = useMemo(() => {
-    let filtered = prompts
+    let filtered = allPrompts
 
     // Filter by type
     if (filterType) {
@@ -90,12 +131,12 @@ export default function PromptsListPage() {
       filtered = filtered.filter(p => 
         p.title.toLowerCase().includes(query) ||
         p.prompt.toLowerCase().includes(query) ||
-        p.tags.some(tag => tag.toLowerCase().includes(query))
+        (p.tags && p.tags.some(tag => tag.toLowerCase().includes(query)))
       )
     }
 
     return filtered
-  }, [prompts, filterType, searchQuery])
+  }, [allPrompts, filterType, searchQuery])
 
   // Group by type
   const promptsByType = useMemo(() => {
@@ -134,7 +175,7 @@ export default function PromptsListPage() {
     setImagePreview(null)
   }
 
-  const loadPromptIntoForm = (promptItem: SavedPrompt) => {
+  const loadPromptIntoForm = (promptItem: any) => {
     setEditingPromptId(promptItem.id)
     setTitle(promptItem.title || "")
     setPrompt(promptItem.prompt || "")
@@ -142,6 +183,10 @@ export default function PromptsListPage() {
     setStyle(promptItem.style || "")
     setModel(promptItem.model || "")
     setTags((promptItem.tags || []).join(", "))
+    // Store character reference if it's a character prompt
+    if (promptItem.characterId) {
+      setEditingPromptId(`character-${promptItem.characterId}`)
+    }
   }
 
   const createOrUpdatePrompt = async () => {
@@ -163,33 +208,78 @@ export default function PromptsListPage() {
     try {
       setIsCreatingPrompt(true)
 
-      const parseTags = (str: string) => str.split(",").map(s => s.trim()).filter(Boolean)
-
-      const promptData: any = {
-        project_id: projectId || null,
-        title: titleValue,
-        prompt: prompt.trim(),
-        type: type as SavedPrompt['type'],
-        style: style || undefined,
-        model: model || undefined,
-        tags: tags ? parseTags(tags) : [],
-      }
-
-      // Remove undefined values
-      Object.keys(promptData).forEach(key => {
-        if (promptData[key] === undefined) {
-          delete promptData[key]
+      // Check if this is a character prompt (editing existing character)
+      const isCharacterPrompt = editingPromptId && editingPromptId.startsWith('character-')
+      
+      if (isCharacterPrompt && type === 'character') {
+        // Update character's master_prompt
+        const characterId = editingPromptId.replace('character-', '')
+        await CharactersService.updateCharacter(characterId, {
+          master_prompt: prompt.trim()
+        })
+        
+        // Reload characters to update the list
+        if (projectId) {
+          const loadedCharacters = await CharactersService.getCharacters(projectId)
+          setCharacters(loadedCharacters.filter(c => c.master_prompt && c.master_prompt.trim().length > 0))
         }
-      })
+        
+        toast({ title: "Character prompt updated", description: "Master prompt saved to character." })
+      } else if (type === 'character' && projectId && !editingPromptId) {
+        // Creating a new character prompt - this would create a character
+        // For now, just create a regular saved prompt
+        const parseTags = (str: string) => str.split(",").map(s => s.trim()).filter(Boolean)
 
-      if (editingPromptId) {
-        const updated = await SavedPromptsService.updateSavedPrompt(editingPromptId, promptData)
-        setPrompts(prev => prev.map(p => p.id === editingPromptId ? updated : p))
-        toast({ title: "Prompt updated", description: `"${updated.title}" saved.` })
-      } else {
+        const promptData: any = {
+          project_id: projectId || null,
+          title: titleValue,
+          prompt: prompt.trim(),
+          type: type as SavedPrompt['type'],
+          style: style || undefined,
+          model: model || undefined,
+          tags: tags ? parseTags(tags) : [],
+        }
+
+        // Remove undefined values
+        Object.keys(promptData).forEach(key => {
+          if (promptData[key] === undefined) {
+            delete promptData[key]
+          }
+        })
+
         const created = await SavedPromptsService.createSavedPrompt(userId, promptData)
         setPrompts([created, ...prompts])
         toast({ title: "Prompt created", description: `"${created.title}" added.` })
+      } else {
+        // Regular saved prompt create/update
+        const parseTags = (str: string) => str.split(",").map(s => s.trim()).filter(Boolean)
+
+        const promptData: any = {
+          project_id: projectId || null,
+          title: titleValue,
+          prompt: prompt.trim(),
+          type: type as SavedPrompt['type'],
+          style: style || undefined,
+          model: model || undefined,
+          tags: tags ? parseTags(tags) : [],
+        }
+
+        // Remove undefined values
+        Object.keys(promptData).forEach(key => {
+          if (promptData[key] === undefined) {
+            delete promptData[key]
+          }
+        })
+
+        if (editingPromptId && !isCharacterPrompt) {
+          const updated = await SavedPromptsService.updateSavedPrompt(editingPromptId, promptData)
+          setPrompts(prev => prev.map(p => p.id === editingPromptId ? updated : p))
+          toast({ title: "Prompt updated", description: `"${updated.title}" saved.` })
+        } else {
+          const created = await SavedPromptsService.createSavedPrompt(userId, promptData)
+          setPrompts([created, ...prompts])
+          toast({ title: "Prompt created", description: `"${created.title}" added.` })
+        }
       }
 
       clearForm()
@@ -208,12 +298,32 @@ export default function PromptsListPage() {
   const deletePrompt = async (id: string) => {
     if (!confirm("Delete this prompt? This cannot be undone.")) return
     try {
-      await SavedPromptsService.deleteSavedPrompt(id)
-      setPrompts(prev => prev.filter(p => p.id !== id))
-      if (editingPromptId === id) {
-        clearForm()
+      // Check if this is a character prompt
+      if (id.startsWith('character-')) {
+        const characterId = id.replace('character-', '')
+        // Clear the master_prompt instead of deleting the character
+        await CharactersService.updateCharacter(characterId, {
+          master_prompt: null
+        })
+        
+        // Reload characters
+        if (projectId) {
+          const loadedCharacters = await CharactersService.getCharacters(projectId)
+          setCharacters(loadedCharacters.filter(c => c.master_prompt && c.master_prompt.trim().length > 0))
+        }
+        
+        if (editingPromptId === id) {
+          clearForm()
+        }
+        toast({ title: "Deleted", description: "Character master prompt cleared." })
+      } else {
+        await SavedPromptsService.deleteSavedPrompt(id)
+        setPrompts(prev => prev.filter(p => p.id !== id))
+        if (editingPromptId === id) {
+          clearForm()
+        }
+        toast({ title: "Deleted", description: "Prompt removed." })
       }
-      toast({ title: "Deleted", description: "Prompt removed." })
     } catch (e) {
       console.error('Delete prompt failed:', e)
       toast({ title: "Error", description: "Failed to delete prompt.", variant: "destructive" })
@@ -622,7 +732,12 @@ export default function PromptsListPage() {
                                           Used {promptItem.use_count} time{promptItem.use_count === 1 ? "" : "s"}
                                         </Badge>
                                       )}
-                                      {!promptItem.project_id && (
+                                      {promptItem.characterId && (
+                                        <Badge variant="outline" className="text-xs bg-blue-500/20 text-blue-400 border-blue-500/30">
+                                          Character: {promptItem.characterName}
+                                        </Badge>
+                                      )}
+                                      {!promptItem.project_id && !promptItem.characterId && (
                                         <Badge variant="outline" className="text-xs">
                                           Universal
                                         </Badge>

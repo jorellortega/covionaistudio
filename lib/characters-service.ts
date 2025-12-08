@@ -17,6 +17,7 @@ export interface Character {
   name: string
   description?: string | null
   ai_image_analysis?: string | null
+  master_prompt?: string | null
   archetype?: string | null
   backstory?: string | null
   goals?: string | null

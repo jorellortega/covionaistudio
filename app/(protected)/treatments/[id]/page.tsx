@@ -5309,9 +5309,56 @@ Return ONLY the JSON object, no other text:`
   }
 
   // Delete cover image
+  const handleDownloadCover = async (imageUrl: string, fileName: string) => {
+    try {
+      const response = await fetch(imageUrl)
+      if (!response.ok) {
+        throw new Error(`Failed to download image: ${response.status}`)
+      }
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      
+      // Determine file extension from blob type or URL
+      let fileExtension = 'png'
+      if (blob.type) {
+        const typeParts = blob.type.split('/')
+        if (typeParts[1]) {
+          fileExtension = typeParts[1].split(';')[0] // Handle cases like "image/png;charset=utf-8"
+        }
+      } else {
+        // Fallback: try to extract from URL
+        const urlExt = imageUrl.split('.').pop()?.split('?')[0]?.toLowerCase()
+        if (urlExt && ['png', 'jpg', 'jpeg', 'webp', 'gif'].includes(urlExt)) {
+          fileExtension = urlExt
+        }
+      }
+      
+      link.download = `${sanitizeFilename(fileName)}.${fileExtension}`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      toast({
+        title: "Download Started",
+        description: "Cover image download has begun.",
+      })
+    } catch (error) {
+      console.error('Error downloading cover:', error)
+      toast({
+        title: "Download Failed",
+        description: error instanceof Error ? error.message : "Failed to download cover image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
   const handleDeleteCover = async (assetId: string) => {
     if (!treatment) return
-    
+
     const assetToDelete = coverImageAssets.find(a => a.id === assetId)
     if (!assetToDelete) return
 
@@ -5422,6 +5469,29 @@ Return ONLY the JSON object, no other text:`
   const handleThumbnailClick = (index: number) => {
     setIsSlideshowPaused(true) // Pause auto-play when user clicks thumbnail
     setCurrentCoverIndex(index)
+  }
+
+  // Download current cover image from dialog
+  const handleDownloadCurrentCover = () => {
+    const currentCover = coverImageAssets.length > 0 && coverImageAssets[currentCoverIndex]
+      ? coverImageAssets[currentCoverIndex]
+      : null
+    
+    const imageUrl = currentCover?.content_url || treatment?.cover_image_url
+    if (!imageUrl) {
+      toast({
+        title: "Download Failed",
+        description: "No cover image available to download.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const treatmentTitle = treatment?.title ? sanitizeFilename(treatment.title) : 'cover'
+    const coverNumber = coverImageAssets.length > 0 ? `-cover-${currentCoverIndex + 1}` : ''
+    const fileName = `${treatmentTitle}${coverNumber}`
+    
+    handleDownloadCover(imageUrl, fileName)
   }
 
   const getStatusColor = (status: string) => {
@@ -8026,6 +8096,14 @@ Return ONLY the JSON object, no other text:`
             )}
           </div>
           <DialogFooter className="px-6 pb-6">
+            <Button
+              variant="outline"
+              onClick={handleDownloadCurrentCover}
+              disabled={!coverImageAssets.length && !treatment?.cover_image_url}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download
+            </Button>
             <Button
               variant="outline"
               onClick={() => setShowCoverImageDialog(false)}

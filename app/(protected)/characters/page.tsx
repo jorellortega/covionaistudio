@@ -23,6 +23,7 @@ import { TreatmentScenesService, type TreatmentScene } from "@/lib/treatment-sce
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 import { CastingService, type CastingSetting } from "@/lib/casting-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { OpenAIService } from "@/lib/ai-services"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
@@ -56,8 +57,10 @@ export default function CharactersPage() {
   const [newCharArchetype, setNewCharArchetype] = useState("")
   const [newCharGender, setNewCharGender] = useState("")
   const [newCharSpecies, setNewCharSpecies] = useState("")
+  const [newCharAge, setNewCharAge] = useState("")
   const [newCharCharacterType, setNewCharCharacterType] = useState<string>("main")
   const [newCharDescription, setNewCharDescription] = useState("")
+  const [newCharMasterPrompt, setNewCharMasterPrompt] = useState("")
   const [newCharBackstory, setNewCharBackstory] = useState("")
   const [newCharGoals, setNewCharGoals] = useState("")
   const [newCharConflicts, setNewCharConflicts] = useState("")
@@ -196,6 +199,9 @@ export default function CharactersPage() {
   const [characterAssets, setCharacterAssets] = useState<Asset[]>([])
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
+  const [characterPrompts, setCharacterPrompts] = useState<SavedPrompt[]>([])
+  const [isLoadingCharacterPrompts, setIsLoadingCharacterPrompts] = useState(false)
+  const [selectedCharacterPromptId, setSelectedCharacterPromptId] = useState<string>("")
   const [analyzingImageAssetId, setAnalyzingImageAssetId] = useState<string | null>(null)
   const [showAnalysisReview, setShowAnalysisReview] = useState(false)
   const [analysisExtractedData, setAnalysisExtractedData] = useState<any>(null)
@@ -211,6 +217,7 @@ export default function CharactersPage() {
   const [imagePrompt, setImagePrompt] = useState("")
   const [selectedImageService, setSelectedImageService] = useState("dalle")
   const [includeCharacterDetails, setIncludeCharacterDetails] = useState(true)
+  const [selectedMasterPromptForImage, setSelectedMasterPromptForImage] = useState<string>("")
   const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
@@ -246,6 +253,21 @@ export default function CharactersPage() {
         setIsLoadingCharacters(true)
         const chars = await CharactersService.getCharacters(projectId)
         setCharacters(chars)
+        
+        // Load character prompts from saved prompts
+        if (userId && ready) {
+          setIsLoadingCharacterPrompts(true)
+          try {
+            const savedPrompts = await SavedPromptsService.getSavedPrompts(userId, projectId)
+            // Filter to only character type prompts
+            const charPrompts = savedPrompts.filter(p => p.type === 'character')
+            setCharacterPrompts(charPrompts)
+          } catch (err) {
+            console.error("Failed to load character prompts:", err)
+          } finally {
+            setIsLoadingCharacterPrompts(false)
+          }
+        }
       } catch (err) {
         console.error("Failed to load characters data:", err)
         toast({
@@ -259,7 +281,7 @@ export default function CharactersPage() {
       }
     }
     load()
-  }, [projectId, toast])
+  }, [projectId, toast, userId, ready])
 
   // Auto-select character from URL or first character when characters are loaded
   useEffect(() => {
@@ -426,7 +448,10 @@ export default function CharactersPage() {
     setNewCharArchetype(ch.archetype || "")
     setNewCharGender(ch.gender || "")
     setNewCharSpecies(ch.species || "")
+    setNewCharAge(ch.age?.toString() || "")
     setNewCharDescription(ch.description || "")
+    setNewCharMasterPrompt(ch.master_prompt || "")
+    setSelectedCharacterPromptId("") // Clear prompt selector when loading character
     setNewCharBackstory(ch.backstory || "")
     setNewCharGoals(ch.goals || "")
     setNewCharConflicts(ch.conflicts || "")
@@ -564,7 +589,10 @@ export default function CharactersPage() {
     setNewCharArchetype("")
     setNewCharGender("")
     setNewCharSpecies("")
+    setNewCharAge("")
     setNewCharDescription("")
+    setNewCharMasterPrompt("")
+    setSelectedCharacterPromptId("")
     setNewCharBackstory("")
     setNewCharGoals("")
     setNewCharConflicts("")
@@ -1572,9 +1600,11 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           archetype: newCharArchetype || undefined,
           gender: newCharGender || undefined,
           species: newCharSpecies || undefined,
+          age: newCharAge ? parseInt(newCharAge, 10) : undefined,
           character_type: newCharCharacterType || 'main',
           show_on_casting: true, // Default to showing on casting page
           description: newCharDescription || undefined,
+          master_prompt: newCharMasterPrompt.trim() || null,
           backstory: newCharBackstory.trim() || null, // Use null instead of undefined for empty strings
           goals: newCharGoals.trim() || null,
           conflicts: newCharConflicts.trim() || null,
@@ -1928,19 +1958,136 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       const { extractedData, rawAnalysis } = result
 
-      // Store extracted data and show review dialog
-      setAnalysisExtractedData(extractedData)
-      setAnalysisImageUrl(asset.content_url)
-      setShowAnalysisReview(true)
+      console.log('📊 Analysis result:', { extractedData, rawAnalysis })
 
-      toast({
-        title: "Analysis Complete",
-        description: "Review the extracted character details below and choose what to save.",
-      })
+      // Populate form fields with extracted data (like when editing)
+      if (extractedData && Object.keys(extractedData).length > 0) {
+        const selectedChar = characters.find(c => c.id === selectedCharacterId)
+        if (!selectedChar) {
+          throw new Error('Character not found')
+        }
+
+        // Load character into form first (to preserve existing data)
+        loadCharacterIntoForm(selectedChar)
+
+        // Wait a bit for state to update, then populate with extracted data
+        setTimeout(() => {
+          // Visual Bible fields
+          if (extractedData.height) {
+            console.log('Setting height:', extractedData.height)
+            setNewCharHeight(String(extractedData.height))
+          }
+          if (extractedData.build) setNewCharBuild(extractedData.build)
+          if (extractedData.skin_tone) setNewCharSkinTone(extractedData.skin_tone)
+          if (extractedData.eye_color) setNewCharEyeColor(extractedData.eye_color)
+          if (extractedData.eye_shape) setNewCharEyeShape(extractedData.eye_shape)
+          if (extractedData.eye_expression) setNewCharEyeExpression(extractedData.eye_expression)
+          if (extractedData.hair_color_natural) setNewCharHairColorNatural(extractedData.hair_color_natural)
+          if (extractedData.hair_color_current) setNewCharHairColorCurrent(extractedData.hair_color_current)
+          if (extractedData.hair_length) setNewCharHairLength(extractedData.hair_length)
+          if (extractedData.hair_texture) setNewCharHairTexture(extractedData.hair_texture)
+          if (extractedData.usual_hairstyle) setNewCharUsualHairstyle(extractedData.usual_hairstyle)
+          if (extractedData.face_shape) setNewCharFaceShape(extractedData.face_shape)
+          if (extractedData.distinguishing_marks) setNewCharDistinguishingMarks(extractedData.distinguishing_marks)
+          if (extractedData.age) setNewCharAge(extractedData.age.toString())
+          if (extractedData.gender) setNewCharGender(extractedData.gender)
+
+          // Clothing & style
+          if (extractedData.usual_clothing_style) setNewCharUsualClothingStyle(extractedData.usual_clothing_style)
+          if (extractedData.typical_color_palette) {
+            const colorPalette = Array.isArray(extractedData.typical_color_palette) 
+              ? extractedData.typical_color_palette.join(", ")
+              : extractedData.typical_color_palette
+            setNewCharTypicalColorPalette(colorPalette)
+          }
+          if (extractedData.accessories) setNewCharAccessories(extractedData.accessories)
+
+          // Body language
+          if (extractedData.posture) setNewCharPosture(extractedData.posture)
+          if (extractedData.body_language) setNewCharBodyLanguage(extractedData.body_language)
+
+          // Voice (inferred from appearance)
+          if (extractedData.voice_pitch) setNewCharVoicePitch(extractedData.voice_pitch)
+          if (extractedData.voice_tone) setNewCharVoiceTone(extractedData.voice_tone)
+
+          // Personality traits (inferred from appearance/expression)
+          if (extractedData.baseline_personality) setNewCharBaselinePersonality(extractedData.baseline_personality)
+          if (extractedData.personality_traits && Array.isArray(extractedData.personality_traits)) {
+            setNewCharPersonalityTraits(extractedData.personality_traits.join(", "))
+          }
+
+          // Core Identity (inferred from appearance)
+          if (extractedData.ethnicity) setNewCharEthnicity(extractedData.ethnicity)
+          if (extractedData.nationality) setNewCharNationality(extractedData.nationality)
+          if (extractedData.place_of_birth) setNewCharPlaceOfBirth(extractedData.place_of_birth)
+          if (extractedData.current_residence) setNewCharCurrentResidence(extractedData.current_residence)
+          if (extractedData.occupation) setNewCharOccupation(extractedData.occupation)
+          if (extractedData.education_level) setNewCharEducationLevel(extractedData.education_level)
+          if (extractedData.socio_economic_status_past) setNewCharSocioEconomicPast(extractedData.socio_economic_status_past)
+          if (extractedData.socio_economic_status_present) setNewCharSocioEconomicPresent(extractedData.socio_economic_status_present)
+
+          // Description (only if it's not an error message)
+          if (extractedData.description) {
+            const desc = extractedData.description.trim()
+            // Filter out common error messages
+            const errorMessages = [
+              "i'm sorry",
+              "i cannot",
+              "i can't",
+              "i am not able",
+              "i'm not able",
+              "unable to",
+              "cannot assist",
+              "can't assist"
+            ]
+            const isErrorMessage = errorMessages.some(msg => desc.toLowerCase().includes(msg))
+            
+            if (!isErrorMessage && desc.length > 10) {
+              setNewCharDescription(desc)
+            }
+            // Don't save to ai_image_analysis - user doesn't want this field
+          }
+
+          // Add image to reference images
+          if (asset.content_url) {
+            const currentRefImages = selectedChar.reference_images || []
+            if (!currentRefImages.includes(asset.content_url)) {
+              const updatedRefImages = [...currentRefImages, asset.content_url]
+              setNewCharReferenceImages(updatedRefImages.join(", "))
+            }
+          }
+
+          // Scroll to form
+          setTimeout(() => {
+            const charactersCard = document.getElementById("characters-form-card")
+            if (charactersCard) {
+              charactersCard.scrollIntoView({ behavior: "smooth", block: "nearest" })
+            }
+          }, 100)
+        }, 200)
+
+        const fieldCount = Object.keys(extractedData).filter(key => extractedData[key] !== null && extractedData[key] !== undefined).length
+        toast({
+          title: "Analysis Complete",
+          description: `Extracted ${fieldCount} detail(s) from image. Review and edit the character card below, then click "Update Character" to save.`,
+        })
+      } else {
+        console.warn('No extracted data found:', { extractedData, result })
+        toast({
+          title: "Analysis Complete",
+          description: "Image analyzed but no extractable details were found.",
+        })
+      }
 
     } catch (err) {
-      console.error('Analyze image error:', err)
+      console.error('❌ Analyze image error:', err)
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Error details:', {
+        message: errorMessage,
+        stack: err instanceof Error ? err.stack : undefined,
+        selectedCharacterId,
+        assetUrl: asset.content_url
+      })
       toast({
         title: "Error",
         description: `Failed to analyze image: ${errorMessage}`,
@@ -1958,10 +2105,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     if (!selectedChar) return
 
     try {
-      // Prepare update data from extracted data
+      // Prepare update data from extracted data - fill in ALL fields that can be extracted
       const updateData: any = {}
 
-      // Physical appearance
+      // Physical appearance - Visual Bible fields
       if (analysisExtractedData.height) updateData.height = analysisExtractedData.height
       if (analysisExtractedData.build) updateData.build = analysisExtractedData.build
       if (analysisExtractedData.skin_tone) updateData.skin_tone = analysisExtractedData.skin_tone
@@ -1987,9 +2134,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       if (analysisExtractedData.posture) updateData.posture = analysisExtractedData.posture
       if (analysisExtractedData.body_language) updateData.body_language = analysisExtractedData.body_language
 
-      // AI Image Analysis (save to separate column)
+      // Voice (inferred from appearance)
+      if (analysisExtractedData.voice_pitch) updateData.voice_pitch = analysisExtractedData.voice_pitch
+      if (analysisExtractedData.voice_tone) updateData.voice_tone = analysisExtractedData.voice_tone
+
+      // Personality traits (inferred from appearance/expression)
+      if (analysisExtractedData.baseline_personality) updateData.baseline_personality = analysisExtractedData.baseline_personality
+      if (analysisExtractedData.personality_traits && Array.isArray(analysisExtractedData.personality_traits)) {
+        // Update personality JSONB field
+        const currentPersonality = selectedChar.personality || {}
+        updateData.personality = {
+          ...currentPersonality,
+          traits: analysisExtractedData.personality_traits
+        }
+      }
+
+      // Description - update main description field
       if (analysisExtractedData.description) {
-        updateData.ai_image_analysis = analysisExtractedData.description
+        updateData.description = analysisExtractedData.description
+        // Don't save to ai_image_analysis - user doesn't want this field
       }
 
       // Add image to reference_images array
@@ -2000,7 +2163,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         }
       }
 
-      // Update character
+      // Update character with ALL extracted fields
       if (Object.keys(updateData).length > 0) {
         const updatedCharacter = await CharactersService.updateCharacter(selectedCharacterId, updateData)
         
@@ -2009,9 +2172,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           c.id === selectedCharacterId ? updatedCharacter : c
         ))
 
+        const fieldCount = Object.keys(updateData).length
         toast({
           title: "Character Updated",
-          description: `Successfully saved ${Object.keys(updateData).length} field(s) from image analysis.`,
+          description: `Successfully filled in ${fieldCount} field(s) from image analysis. All character details have been updated.`,
         })
 
         // Close dialog and reset
@@ -2260,10 +2424,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       setIsGeneratingImage(true)
 
-      // Build character description for prompt enhancement (only if checkbox is checked)
+      // Build character description for prompt enhancement
       let enhancedPrompt = imagePrompt
       
-      if (includeCharacterDetails) {
+      // Check if master prompt is selected
+      if (selectedMasterPromptForImage && selectedMasterPromptForImage !== "__none__") {
+        // Use master prompt as prefix
+        const selectedPrompt = characterPrompts.find(p => p.id === selectedMasterPromptForImage)
+        if (selectedPrompt && selectedPrompt.prompt) {
+          enhancedPrompt = `${selectedPrompt.prompt} ${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+        } else {
+          // Fallback to character's master prompt if available
+          if (selectedChar.master_prompt && selectedChar.master_prompt.trim()) {
+            enhancedPrompt = `${selectedChar.master_prompt} ${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+          } else {
+            enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+          }
+        }
+      } else if (includeCharacterDetails) {
+        // Use character details as before
         const details: string[] = []
         
         // Basic info
@@ -2867,7 +3046,11 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => setIsGenerateImageDialogOpen(true)}
+                                onClick={() => {
+                                  setIsGenerateImageDialogOpen(true)
+                                  setSelectedMasterPromptForImage("") // Reset selection when opening dialog
+                                  setIncludeCharacterDetails(true) // Reset to default
+                                }}
                                 disabled={isGeneratingImage || isGeneratingQuickImage}
                                 className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
                               >
@@ -3150,6 +3333,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               <p className="font-medium text-sm sm:text-base break-words">{selectedChar.species}</p>
                             </div>
                           )}
+                          {selectedChar.age && (
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Age</Label>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedChar.age}</p>
+                            </div>
+                          )}
                         </div>
                         
                         <div>
@@ -3226,13 +3415,6 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             <p className="text-xs sm:text-sm mt-1 text-muted-foreground italic break-words">No description yet. Click the edit icon to add one.</p>
                           )}
                         </div>
-                        
-                        {selectedChar.ai_image_analysis && (
-                          <div>
-                            <Label className="text-xs text-muted-foreground">AI Analysis from Image</Label>
-                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedChar.ai_image_analysis}</p>
-                          </div>
-                        )}
                         
                         {selectedChar.backstory && (
                           <div>
@@ -3390,6 +3572,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     </Select>
                   </div>
                   <div className="space-y-2">
+                    <Label htmlFor="char-age">Age</Label>
+                    <Input 
+                      id="char-age" 
+                      type="number" 
+                      min="0" 
+                      value={newCharAge} 
+                      onChange={(e) => setNewCharAge(e.target.value)} 
+                      className="bg-input border-border" 
+                      placeholder="Enter age..." 
+                    />
+                  </div>
+                  <div className="space-y-2">
                     <Label htmlFor="char-character-type">Character Type</Label>
                     <Select 
                       value={newCharCharacterType} 
@@ -3411,6 +3605,72 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   <div className="space-y-2 sm:col-span-2">
                     <Label htmlFor="char-description" className="text-xs sm:text-sm">Description</Label>
                     <Textarea id="char-description" value={newCharDescription} onChange={(e) => setNewCharDescription(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Brief overview of the character..." />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    {characterPrompts.length > 0 && (
+                      <div className="space-y-2">
+                        <Label htmlFor="char-prompt-selector" className="text-xs sm:text-sm">Load Saved Character Prompt</Label>
+                        <div className="flex gap-2">
+                          <Select
+                            value={selectedCharacterPromptId || "__none__"}
+                            onValueChange={(value) => {
+                              if (value === "__none__") {
+                                setSelectedCharacterPromptId("")
+                                setNewCharMasterPrompt("")
+                              } else {
+                                setSelectedCharacterPromptId(value)
+                                const selectedPrompt = characterPrompts.find(p => p.id === value)
+                                if (selectedPrompt) {
+                                  setNewCharMasterPrompt(selectedPrompt.prompt)
+                                  toast({
+                                    title: "Prompt Loaded",
+                                    description: `"${selectedPrompt.title}" loaded into master prompt field.`,
+                                  })
+                                }
+                              }
+                            }}
+                          >
+                            <SelectTrigger id="char-prompt-selector" className="bg-input border-border text-xs sm:text-sm">
+                              <SelectValue placeholder="Select a saved character prompt..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">None (use custom prompt)</SelectItem>
+                              {characterPrompts.map((prompt) => (
+                                <SelectItem key={prompt.id} value={prompt.id}>
+                                  {prompt.title}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {selectedCharacterPromptId && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSelectedCharacterPromptId("")
+                                setNewCharMasterPrompt("")
+                              }}
+                              className="text-xs sm:text-sm"
+                            >
+                              <X className="h-3 w-3 sm:mr-1" />
+                              <span className="hidden sm:inline">Clear</span>
+                            </Button>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">Select a saved character prompt to load it into the master prompt field</p>
+                      </div>
+                    )}
+                    <div className="space-y-2">
+                      <Label htmlFor="char-master-prompt" className="text-xs sm:text-sm">Master Prompt</Label>
+                      <Textarea id="char-master-prompt" value={newCharMasterPrompt} onChange={(e) => {
+                        setNewCharMasterPrompt(e.target.value)
+                        // Clear selection if user manually edits
+                        if (selectedCharacterPromptId) {
+                          setSelectedCharacterPromptId("")
+                        }
+                      }} className="bg-input border-border min-h-[100px] text-xs sm:text-sm font-mono" placeholder="Paste your master prompt here for character generation and AI operations..." />
+                      <p className="text-xs text-muted-foreground">Master prompt used for AI character generation and operations</p>
+                    </div>
                   </div>
                   <div className="space-y-2 sm:col-span-2">
                     <Label htmlFor="char-backstory" className="text-xs sm:text-sm">Backstory</Label>
@@ -4812,6 +5072,40 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            {characterPrompts.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="master-prompt-selector-image">Use Character Master Prompt (Optional)</Label>
+                <Select
+                  value={selectedMasterPromptForImage || "__none__"}
+                  onValueChange={(value) => {
+                    if (value === "__none__") {
+                      setSelectedMasterPromptForImage("")
+                      setIncludeCharacterDetails(true) // Re-enable character details when master prompt is cleared
+                    } else {
+                      setSelectedMasterPromptForImage(value)
+                      setIncludeCharacterDetails(false) // Disable character details when master prompt is selected
+                    }
+                  }}
+                >
+                  <SelectTrigger id="master-prompt-selector-image" className="bg-input border-border">
+                    <SelectValue placeholder="Select a master prompt..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None (use character details instead)</SelectItem>
+                    {characterPrompts.map((prompt) => (
+                      <SelectItem key={prompt.id} value={prompt.id}>
+                        {prompt.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {selectedMasterPromptForImage && selectedMasterPromptForImage !== "__none__"
+                    ? "Master prompt will be used as prefix instead of character details."
+                    : "Select a master prompt to use it as prefix, or leave as 'None' to use character details."}
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="image-prompt">Image Prompt</Label>
               <Textarea
@@ -4825,7 +5119,14 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                 <Checkbox
                   id="include-details"
                   checked={includeCharacterDetails}
-                  onCheckedChange={(checked) => setIncludeCharacterDetails(checked === true)}
+                  onCheckedChange={(checked) => {
+                    setIncludeCharacterDetails(checked === true)
+                    // Clear master prompt selection if character details is enabled
+                    if (checked === true) {
+                      setSelectedMasterPromptForImage("")
+                    }
+                  }}
+                  disabled={selectedMasterPromptForImage ? selectedMasterPromptForImage !== "__none__" : false}
                 />
                 <Label
                   htmlFor="include-details"
@@ -4835,9 +5136,11 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                 </Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                {includeCharacterDetails 
-                  ? "Character details will be automatically added to your prompt."
-                  : "Only your prompt will be used for image generation."}
+                {selectedMasterPromptForImage && selectedMasterPromptForImage !== "__none__"
+                  ? "Master prompt is selected and will be used as prefix. Character details are disabled."
+                  : includeCharacterDetails 
+                    ? "Character details will be automatically added to your prompt."
+                    : "Only your prompt will be used for image generation."}
               </p>
             </div>
             <div className="space-y-2">
@@ -4903,16 +5206,58 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           <DialogHeader className="px-6 pt-6 pb-4">
             <DialogTitle>{(viewingImage?.title || 'Character Image').replace(/ - AI Generated Image.*$/, '')}</DialogTitle>
           </DialogHeader>
-          <div className="px-6 pb-6">
-            {viewingImage?.content_url && (
-              <div className="relative w-full rounded-lg overflow-hidden border border-border bg-muted/30">
-                <img
-                  src={viewingImage.content_url}
-                  alt={viewingImage.title}
-                  className="w-full h-auto max-h-[70vh] object-contain mx-auto"
-                />
-              </div>
-            )}
+          <div className="px-6 pb-6 relative">
+            {viewingImage?.content_url && (() => {
+              // Get image assets only
+              const imageAssets = characterAssets.filter(a => a.content_type === 'image' && a.content_url)
+              const currentIndex = imageAssets.findIndex(a => a.id === viewingImage.id)
+              const hasPrevious = currentIndex > 0
+              const hasNext = currentIndex < imageAssets.length - 1
+              
+              return (
+                <div className="relative w-full rounded-lg overflow-hidden border border-border bg-muted/30">
+                  <img
+                    src={viewingImage.content_url}
+                    alt={viewingImage.title}
+                    className="w-full h-auto max-h-[70vh] object-contain mx-auto"
+                  />
+                  
+                  {/* Navigation arrows */}
+                  {imageAssets.length > 1 && (
+                    <>
+                      {hasPrevious && (
+                        <button
+                          onClick={() => {
+                            const prevAsset = imageAssets[currentIndex - 1]
+                            setViewingImage(prevAsset)
+                          }}
+                          className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 backdrop-blur-sm transition-colors"
+                          aria-label="Previous image"
+                        >
+                          <ChevronLeft className="h-6 w-6" />
+                        </button>
+                      )}
+                      {hasNext && (
+                        <button
+                          onClick={() => {
+                            const nextAsset = imageAssets[currentIndex + 1]
+                            setViewingImage(nextAsset)
+                          }}
+                          className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/60 hover:bg-black/80 text-white rounded-full p-3 backdrop-blur-sm transition-colors"
+                          aria-label="Next image"
+                        >
+                          <ChevronRight className="h-6 w-6" />
+                        </button>
+                      )}
+                      {/* Image counter */}
+                      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/60 text-white px-3 py-1 rounded-full text-xs backdrop-blur-sm">
+                        {currentIndex + 1} / {imageAssets.length}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )
+            })()}
           </div>
           <DialogFooter className="px-4 sm:px-6 pb-4 sm:pb-6 flex flex-col sm:flex-row gap-2 sm:gap-0">
             <Button
@@ -4928,6 +5273,59 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               <span className="hidden sm:inline">Open in New Tab</span>
               <span className="sm:hidden">Open</span>
             </Button>
+            {viewingImage && (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  if (!confirm("Delete this image? This cannot be undone.")) return
+                  
+                  try {
+                    const imageAssets = characterAssets.filter(a => a.content_type === 'image' && a.content_url)
+                    const currentIndex = imageAssets.findIndex(a => a.id === viewingImage.id)
+                    
+                    await AssetService.deleteAsset(viewingImage.id)
+                    
+                    // Update assets state
+                    setCharacterAssets(prev => {
+                      const updated = prev.filter(a => a.id !== viewingImage.id)
+                      
+                      // Navigate to next/previous image or close dialog
+                      const remainingImages = updated.filter(a => a.content_type === 'image' && a.content_url)
+                      if (remainingImages.length > 0) {
+                        if (currentIndex < remainingImages.length) {
+                          setViewingImage(remainingImages[currentIndex])
+                        } else if (currentIndex > 0) {
+                          setViewingImage(remainingImages[currentIndex - 1])
+                        } else {
+                          setViewingImage(remainingImages[0])
+                        }
+                      } else {
+                        setViewImageDialogOpen(false)
+                      }
+                      
+                      return updated
+                    })
+                    
+                    toast({
+                      title: "Deleted",
+                      description: "Image deleted successfully.",
+                    })
+                  } catch (err) {
+                    console.error('Delete asset error:', err)
+                    toast({
+                      title: "Error",
+                      description: "Failed to delete image.",
+                      variant: "destructive",
+                    })
+                  }
+                }}
+                className="w-full sm:w-auto text-xs sm:text-sm text-red-600 hover:text-red-700 border-red-600 hover:border-red-700"
+              >
+                <Trash2 className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Delete</span>
+                <span className="sm:hidden">Delete</span>
+              </Button>
+            )}
             <Button
               variant="outline"
               onClick={() => setViewImageDialogOpen(false)}

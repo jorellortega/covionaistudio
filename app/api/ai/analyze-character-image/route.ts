@@ -185,66 +185,102 @@ export async function POST(request: NextRequest) {
     }
 
     // Use GPT-4 Vision (gpt-4o or gpt-4-turbo) for image analysis
-    const visionPrompt = `Analyze this character image in detail. Extract all visible character attributes and details. Focus on:
+    const visionPrompt = `Analyze this character image in EXTREME detail. Extract ALL visible character attributes and details that can be used to recreate this person. Be comprehensive and thorough.
 
-1. **Physical Appearance**:
-   - Height/build/body type
-   - Skin tone
-   - Eye color, shape, and expression
-   - Hair color (natural and current), length, texture, and style
-   - Face shape
-   - Distinguishing marks (tattoos, scars, birthmarks, etc.)
-   - Age estimate
+1. **Physical Appearance** (Extract EVERY detail):
+   - Height/build/body type (be specific: "5'10\"", "athletic build", etc.)
+   - Skin tone (specific shade)
+   - Eye color (exact shade), shape (almond, round, etc.), and expression (intense, soft, etc.)
+   - Hair color natural and current (if different), length (specific: "shoulder-length", etc.), texture (straight, wavy, curly, coily), and exact hairstyle
+   - Face shape (oval, round, square, etc.)
+   - Distinguishing marks (tattoos, scars, birthmarks, piercings, etc. - be specific about location and appearance)
+   - Age estimate (specific number)
    - Gender presentation
+   - Any other physical characteristics
 
-2. **Clothing & Style**:
-   - Clothing style
-   - Color palette
-   - Accessories (jewelry, glasses, etc.)
-   - Overall fashion aesthetic
+2. **Clothing & Style** (Detailed):
+   - Exact clothing style (e.g., "casual streetwear", "formal business", "military uniform", etc.)
+   - Specific color palette (list all visible colors: ["navy blue", "charcoal gray", "white"])
+   - All accessories (jewelry, glasses, watches, hats, bags, etc. - describe each)
+   - Overall fashion aesthetic and era/style
 
-3. **Body Language & Presence**:
-   - Posture
-   - Body language
-   - Expression/mood
+3. **Body Language & Presence** (Detailed):
+   - Posture (specific: "upright and confident", "slouched", "leaning forward", etc.)
+   - Body language (arms crossed, hands in pockets, etc.)
+   - Facial expression and mood
+   - Overall presence/energy
 
-4. **Character Details**:
-   - Any visible characteristics that could inform personality
-   - Setting/environment if visible
-   - Any props or objects
+4. **Voice & Speech** (Infer from appearance if possible):
+   - Voice pitch (infer from physical characteristics if possible)
+   - Voice tone (infer from expression/posture)
+   - Speaking style (infer from appearance/expression)
 
-Return the analysis as a detailed JSON object with the following structure (use null for unknown values):
+5. **Personality Traits** (Infer from appearance, expression, posture, clothing):
+   - Infer personality traits from visible cues (e.g., confident, reserved, approachable, intimidating, etc.)
+   - Baseline personality (introvert/extravert, calm/energetic, etc.)
+
+6. **Core Identity** (Infer what you can from appearance):
+   - Ethnicity (infer from visible physical characteristics)
+   - Nationality (infer from clothing style, cultural markers, setting if visible)
+   - Place of birth (infer from cultural markers, clothing, setting)
+   - Current residence (infer from clothing style, setting, environment visible in image)
+   - Occupation (infer from clothing, props, setting, uniform if visible)
+   - Education level (infer from clothing style, posture, overall presentation)
+   - Socio-economic status (infer from clothing quality, accessories, setting)
+
+7. **Character Description**:
+   - Comprehensive written description of the character's entire appearance, presence, and any visible characteristics
+
+Return the analysis as a detailed JSON object with the following structure (use null for unknown values, but try to infer as much as possible):
 {
   "physical_appearance": {
-    "height": "string or null",
-    "build": "string or null (e.g., thin, athletic, average, stocky)",
-    "skin_tone": "string or null",
-    "eye_color": "string or null",
-    "eye_shape": "string or null",
-    "eye_expression": "string or null",
+    "height": "string or null (be specific)",
+    "build": "string or null (e.g., thin, athletic, average, stocky, muscular)",
+    "skin_tone": "string or null (specific shade)",
+    "eye_color": "string or null (exact color)",
+    "eye_shape": "string or null (almond, round, etc.)",
+    "eye_expression": "string or null (intense, soft, piercing, etc.)",
     "hair_color_natural": "string or null",
     "hair_color_current": "string or null",
-    "hair_length": "string or null (e.g., short, medium, long)",
-    "hair_texture": "string or null (e.g., straight, wavy, curly)",
-    "usual_hairstyle": "string or null",
-    "face_shape": "string or null",
-    "distinguishing_marks": "string or null",
+    "hair_length": "string or null (be specific: short, medium, long, shoulder-length, etc.)",
+    "hair_texture": "string or null (straight, wavy, curly, coily)",
+    "usual_hairstyle": "string or null (exact style description)",
+    "face_shape": "string or null (oval, round, square, heart, etc.)",
+    "distinguishing_marks": "string or null (detailed description of tattoos, scars, etc.)",
     "age_estimate": "number or null",
     "gender": "string or null"
   },
   "clothing_style": {
-    "usual_clothing_style": "string or null",
-    "typical_color_palette": ["array of color strings"],
-    "accessories": "string or null"
+    "usual_clothing_style": "string or null (detailed description)",
+    "typical_color_palette": ["array of specific color strings"],
+    "accessories": "string or null (detailed list of all accessories)"
   },
   "body_language": {
-    "posture": "string or null",
-    "body_language": "string or null"
+    "posture": "string or null (detailed description)",
+    "body_language": "string or null (detailed description)"
   },
-  "description": "Overall detailed description of the character's appearance and presence"
+  "voice": {
+    "voice_pitch": "string or null (infer from appearance if possible)",
+    "voice_tone": "string or null (infer from expression/posture)"
+  },
+  "personality_traits": {
+    "baseline_personality": "string or null (infer from appearance/expression)",
+    "personality_traits": ["array of inferred traits from visible cues"]
+  },
+  "core_identity": {
+    "ethnicity": "string or null (infer from visible physical characteristics)",
+    "nationality": "string or null (infer from cultural markers, clothing, setting)",
+    "place_of_birth": "string or null (infer from cultural markers, clothing style)",
+    "current_residence": "string or null (infer from clothing, setting, environment)",
+    "occupation": "string or null (infer from clothing, props, uniform, setting)",
+    "education_level": "string or null (infer from clothing style, presentation)",
+    "socio_economic_status_past": "string or null (infer from overall presentation)",
+    "socio_economic_status_present": "string or null (infer from clothing quality, accessories, setting)"
+  },
+  "description": "Comprehensive detailed description of the character's entire appearance, presence, and visible characteristics that can be used to recreate this person"
 }
 
-Be thorough and extract every visible detail. ${characterName ? `The character's name is "${characterName}".` : ''}`
+Be EXTREMELY thorough and extract every possible detail. ${characterName ? `The character's name is "${characterName}".` : ''}`
 
     let analysisResult: any
     let lastError: Error | null = null
@@ -342,20 +378,65 @@ Be thorough and extract every visible detail. ${characterName ? `The character's
     // Try to extract JSON from the response
     let characterData: any = {}
     try {
+      // Check if the response contains an error message
+      const errorMessages = [
+        "i'm sorry",
+        "i cannot",
+        "i can't",
+        "i am not able",
+        "i'm not able",
+        "unable to",
+        "cannot assist",
+        "can't assist"
+      ]
+      const isErrorResponse = errorMessages.some(msg => analysisResult.toLowerCase().includes(msg))
+      
+      if (isErrorResponse) {
+        console.warn('⚠️ AI returned error message in response, attempting to extract JSON anyway')
+        // Try to extract JSON even if there's an error message
+      }
+      
       // Try to find JSON in the response
       const jsonMatch = analysisResult.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         characterData = JSON.parse(jsonMatch[0])
+        
+        // If description contains error message, remove it
+        if (characterData.description) {
+          const desc = String(characterData.description).trim()
+          const hasError = errorMessages.some(msg => desc.toLowerCase().includes(msg))
+          if (hasError) {
+            console.warn('⚠️ Description field contains error message, removing it')
+            delete characterData.description
+          }
+        }
       } else {
-        // If no JSON found, create a structured object from the text
-        characterData = {
-          description: analysisResult
+        // If no JSON found and it's not an error, create a structured object from the text
+        if (!isErrorResponse) {
+          characterData = {
+            description: analysisResult
+          }
         }
       }
     } catch (parseError) {
-      // If parsing fails, just use the description
-      characterData = {
-        description: analysisResult
+      console.error('❌ Error parsing JSON:', parseError)
+      // If parsing fails, check if it's an error message
+      const errorMessages = [
+        "i'm sorry",
+        "i cannot",
+        "i can't",
+        "i am not able",
+        "i'm not able",
+        "unable to",
+        "cannot assist",
+        "can't assist"
+      ]
+      const isErrorResponse = errorMessages.some(msg => analysisResult.toLowerCase().includes(msg))
+      
+      if (!isErrorResponse) {
+        characterData = {
+          description: analysisResult
+        }
       }
     }
 
@@ -396,9 +477,51 @@ Be thorough and extract every visible detail. ${characterName ? `The character's
       if (bl.body_language) extractedData.body_language = bl.body_language
     }
 
-    // Add or update description
+    if (characterData.voice) {
+      const v = characterData.voice
+      if (v.voice_pitch) extractedData.voice_pitch = v.voice_pitch
+      if (v.voice_tone) extractedData.voice_tone = v.voice_tone
+    }
+
+    if (characterData.personality_traits) {
+      const pt = characterData.personality_traits
+      if (pt.baseline_personality) extractedData.baseline_personality = pt.baseline_personality
+      if (pt.personality_traits && Array.isArray(pt.personality_traits)) {
+        extractedData.personality_traits = pt.personality_traits
+      }
+    }
+
+    if (characterData.core_identity) {
+      const ci = characterData.core_identity
+      if (ci.ethnicity) extractedData.ethnicity = ci.ethnicity
+      if (ci.nationality) extractedData.nationality = ci.nationality
+      if (ci.place_of_birth) extractedData.place_of_birth = ci.place_of_birth
+      if (ci.current_residence) extractedData.current_residence = ci.current_residence
+      if (ci.occupation) extractedData.occupation = ci.occupation
+      if (ci.education_level) extractedData.education_level = ci.education_level
+      if (ci.socio_economic_status_past) extractedData.socio_economic_status_past = ci.socio_economic_status_past
+      if (ci.socio_economic_status_present) extractedData.socio_economic_status_present = ci.socio_economic_status_present
+    }
+
+    // Add or update description (filter out error messages)
     if (characterData.description) {
-      extractedData.description = characterData.description
+      const desc = characterData.description.trim()
+      // Filter out common error messages from OpenAI
+      const errorMessages = [
+        "i'm sorry",
+        "i cannot",
+        "i can't",
+        "i am not able",
+        "i'm not able",
+        "unable to",
+        "cannot assist",
+        "can't assist"
+      ]
+      const isErrorMessage = errorMessages.some(msg => desc.toLowerCase().includes(msg))
+      
+      if (!isErrorMessage && desc.length > 10) {
+        extractedData.description = desc
+      }
     }
 
     return NextResponse.json({
