@@ -28,6 +28,7 @@ import { OpenAIService } from "@/lib/ai-services"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
+import { MovieService, type Movie } from "@/lib/movie-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuthReady } from "@/components/auth-hooks"
@@ -42,6 +43,7 @@ export default function CharactersPage() {
 
   const [projectId, setProjectId] = useState<string>(initialProject)
   const [loading, setLoading] = useState(false)
+  const [movie, setMovie] = useState<Movie | null>(null)
   const [treatmentId, setTreatmentId] = useState<string | null>(null)
   const [treatmentScenes, setTreatmentScenes] = useState<TreatmentScene[]>([])
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
@@ -230,9 +232,16 @@ export default function CharactersPage() {
   // Load data for selected project
   useEffect(() => {
     const load = async () => {
-      if (!projectId) return
+      if (!projectId) {
+        setMovie(null)
+        return
+      }
       setLoading(true)
       try {
+        // Load movie data
+        const movieData = await MovieService.getMovieById(projectId)
+        setMovie(movieData)
+
         // Find treatment for project (if any)
         const treatment = await TreatmentsService.getTreatmentByProjectId(projectId)
         setTreatmentId(treatment?.id || null)
@@ -2944,6 +2953,46 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             placeholder="Select a movie to manage characters"
           />
         </div>
+
+        {/* Movie Cover Image Preview */}
+        {projectId && movie && movie.thumbnail && (
+          <Card className="cinema-card mb-6">
+            <CardContent className="p-4 sm:p-6">
+              <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
+                <div className="w-full sm:w-auto flex-shrink-0 mx-auto sm:mx-0">
+                  <div className="bg-muted/20 rounded-xl p-2 sm:p-4 border border-border/30 shadow-lg">
+                    <div className="flex justify-center">
+                      <img
+                        src={movie.thumbnail}
+                        alt={movie.name || "Movie cover"}
+                        className="max-w-full max-h-[50vh] sm:max-h-96 object-contain rounded-lg"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement
+                          if (target.src !== "/placeholder.svg?height=300&width=200") {
+                            target.src = "/placeholder.svg?height=300&width=200"
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-xl sm:text-2xl font-bold mb-2 break-words">{movie.name}</h2>
+                  {movie.description && (
+                    <p className="text-sm sm:text-base text-muted-foreground mb-3 line-clamp-3 break-words">
+                      {movie.description}
+                    </p>
+                  )}
+                  {movie.status && (
+                    <Badge variant="outline" className="text-xs sm:text-sm">
+                      {movie.status}
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {!projectId ? (
           <Card className="cinema-card">

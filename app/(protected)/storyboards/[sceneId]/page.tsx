@@ -249,6 +249,8 @@ export default function SceneStoryboardsPage() {
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
   const [userProfile, setUserProfile] = useState<any>(null)
   const [useExactPrompt, setUseExactPrompt] = useState(true)
+  const [includeCharacterDetails, setIncludeCharacterDetails] = useState(false)
+  const [includeMasterPrompt, setIncludeMasterPrompt] = useState(false)
   const [savedPrompts, setSavedPrompts] = useState<any[]>([])
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false)
   const [hidePromptText, setHidePromptText] = useState(false)
@@ -1594,6 +1596,11 @@ export default function SceneStoryboardsPage() {
     setAiPrompt("")
     setSelectedAIService("dalle")
     setEditingStoryboard(null)
+    setAiImagePrompt("")
+    setAiImagePromptFull("")
+    setIncludeCharacterDetails(false)
+    setIncludeMasterPrompt(false)
+    setUseExactPrompt(true)
   }
 
 
@@ -1846,10 +1853,11 @@ export default function SceneStoryboardsPage() {
         return
       }
 
-      // Get the selected character details if a character is selected for this shot
+      // Get the selected character details if a character is selected for this shot and option is enabled
       let characterDetailsText = ""
+      let masterPromptText = ""
       const storyboard = storyboards.find(sb => sb.id === storyboardId)
-      if (storyboard?.character_id) {
+      if (includeCharacterDetails && storyboard?.character_id) {
         const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
         if (selectedCharacter) {
           const characterDetails = [
@@ -1872,6 +1880,14 @@ export default function SceneStoryboardsPage() {
           if (characterDetails) {
             characterDetailsText = ` Character details: ${characterDetails}.`
           }
+        }
+      }
+      
+      // Get master prompt if option is enabled and character has one
+      if (includeMasterPrompt && storyboard?.character_id) {
+        const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
+        if (selectedCharacter?.master_prompt) {
+          masterPromptText = ` Master prompt: ${selectedCharacter.master_prompt}.`
         }
       }
       
@@ -1905,7 +1921,12 @@ export default function SceneStoryboardsPage() {
       // Prepare the enhanced prompt for storyboard shots - keep it minimal
       let enhancedPrompt = prompt.trim()
       
-      // Add character details if available
+      // Add master prompt if enabled and available
+      if (masterPromptText) {
+        enhancedPrompt = `${enhancedPrompt}${masterPromptText}`
+      }
+      
+      // Add character details if enabled and available
       if (characterDetailsText) {
         enhancedPrompt = `${enhancedPrompt}${characterDetailsText}`
       }
@@ -3483,6 +3504,40 @@ export default function SceneStoryboardsPage() {
                         />
                       </div>
                     </div>
+                    
+                    {/* Optional Character Details and Master Prompt Options */}
+                    {editingStoryboard?.character_id && (
+                      <div className="flex flex-col gap-2 pt-2 border-t border-border/30">
+                        <div className="text-xs text-muted-foreground mb-1">Optional Enhancements:</div>
+                        <div className="flex flex-wrap gap-4">
+                          <div className="flex items-center gap-2">
+                            <input
+                              id="include-character-details"
+                              type="checkbox"
+                              checked={includeCharacterDetails}
+                              onChange={(e) => setIncludeCharacterDetails(e.target.checked)}
+                              className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <Label htmlFor="include-character-details" className="text-xs text-muted-foreground cursor-pointer">
+                              Include Character Details
+                            </Label>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              id="include-master-prompt"
+                              type="checkbox"
+                              checked={includeMasterPrompt}
+                              onChange={(e) => setIncludeMasterPrompt(e.target.checked)}
+                              className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <Label htmlFor="include-master-prompt" className="text-xs text-muted-foreground cursor-pointer">
+                              Include Master Prompt
+                            </Label>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    
                     {hidePromptText && aiImagePromptFull ? (
                       <div className="space-y-2">
                         <div className="text-sm text-blue-500 font-medium">

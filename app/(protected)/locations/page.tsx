@@ -1206,74 +1206,6 @@ export default function LocationsPage() {
                     
                     return (
                       <div className="space-y-4 p-3 sm:p-4 bg-muted/20 rounded-lg border border-border overflow-x-hidden">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                          <div>
-                            <Label className="text-xs text-muted-foreground">Name</Label>
-                            <p className="font-semibold text-base sm:text-lg break-words">{selectedLoc.name}</p>
-                          </div>
-                          {selectedLoc.type && (
-                            <div>
-                              <Label className="text-xs text-muted-foreground">Type</Label>
-                              <p className="font-medium text-sm sm:text-base break-words">{selectedLoc.type}</p>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {selectedLoc.description && (
-                          <div>
-                            <Label className="text-xs text-muted-foreground">Description</Label>
-                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.description}</p>
-                          </div>
-                        )}
-                        
-                        {(selectedLoc.address || selectedLoc.city || selectedLoc.state || selectedLoc.country) && (
-                          <div>
-                            <Label className="text-xs text-muted-foreground">Address</Label>
-                            <p className="text-xs sm:text-sm mt-1 break-words">
-                              {[selectedLoc.address, selectedLoc.city, selectedLoc.state, selectedLoc.country].filter(Boolean).join(", ")}
-                            </p>
-                          </div>
-                        )}
-                        
-                        {selectedLoc.visual_description && (
-                          <div>
-                            <Label className="text-xs text-muted-foreground">Visual Description</Label>
-                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.visual_description}</p>
-                          </div>
-                        )}
-                        
-                        {(selectedLoc.atmosphere || selectedLoc.mood) && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                            {selectedLoc.atmosphere && (
-                              <div>
-                                <Label className="text-xs text-muted-foreground">Atmosphere</Label>
-                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.atmosphere}</p>
-                              </div>
-                            )}
-                            {selectedLoc.mood && (
-                              <div>
-                                <Label className="text-xs text-muted-foreground">Mood</Label>
-                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.mood}</p>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {selectedLoc.time_of_day && selectedLoc.time_of_day.length > 0 && (
-                          <div>
-                            <Label className="text-xs text-muted-foreground">Time of Day</Label>
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              {selectedLoc.time_of_day.map((tod, i) => (
-                                <Badge key={`${selectedLoc.id}-tod-${i}`} variant="outline">
-                                  {tod}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        
-                        <Separator />
-                        
                         {/* Location Assets Section */}
                         <div className="space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -1552,6 +1484,75 @@ export default function LocationsPage() {
                             )
                           })()}
                         </div>
+                        
+                        <Separator />
+                        
+                        {/* Location Details Section */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Name</Label>
+                            <p className="font-semibold text-base sm:text-lg break-words">{selectedLoc.name}</p>
+                          </div>
+                          {selectedLoc.type && (
+                            <div>
+                              <Label className="text-xs text-muted-foreground">Type</Label>
+                              <p className="font-medium text-sm sm:text-base break-words">{selectedLoc.type}</p>
+                            </div>
+                          )}
+                        </div>
+                        
+                        {selectedLoc.description && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Description</Label>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.description}</p>
+                          </div>
+                        )}
+                        
+                        {(selectedLoc.address || selectedLoc.city || selectedLoc.state || selectedLoc.country) && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Address</Label>
+                            <p className="text-xs sm:text-sm mt-1 break-words">
+                              {[selectedLoc.address, selectedLoc.city, selectedLoc.state, selectedLoc.country].filter(Boolean).join(", ")}
+                            </p>
+                          </div>
+                        )}
+                        
+                        {selectedLoc.visual_description && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Visual Description</Label>
+                            <p className="text-xs sm:text-sm mt-1 whitespace-pre-wrap break-words">{selectedLoc.visual_description}</p>
+                          </div>
+                        )}
+                        
+                        {(selectedLoc.atmosphere || selectedLoc.mood) && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                            {selectedLoc.atmosphere && (
+                              <div>
+                                <Label className="text-xs text-muted-foreground">Atmosphere</Label>
+                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.atmosphere}</p>
+                              </div>
+                            )}
+                            {selectedLoc.mood && (
+                              <div>
+                                <Label className="text-xs text-muted-foreground">Mood</Label>
+                                <p className="text-xs sm:text-sm mt-1 break-words">{selectedLoc.mood}</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        
+                        {selectedLoc.time_of_day && selectedLoc.time_of_day.length > 0 && (
+                          <div>
+                            <Label className="text-xs text-muted-foreground">Time of Day</Label>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              {selectedLoc.time_of_day.map((tod, i) => (
+                                <Badge key={`${selectedLoc.id}-tod-${i}`} variant="outline">
+                                  {tod}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         
                         <Separator />
                         

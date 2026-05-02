@@ -361,7 +361,7 @@ export default function IdeaDetailPage() {
 
   const extractPDFText = async (file: File): Promise<string> => {
     try {
-      const pdfjsLib = await import('pdfjs-dist')
+      const pdfjsLib = (await import('pdfjs-dist/build/pdf.min.mjs')) as typeof import('pdfjs-dist')
       
       // Set worker path - try multiple CDN options
       // For pdfjs-dist 5.x, the worker is in build/pdf.worker.min.mjs
@@ -390,7 +390,7 @@ export default function IdeaDetailPage() {
       console.error('PDF extraction error:', error)
       // Try fallback CDNs
       try {
-        const pdfjsLib = await import('pdfjs-dist')
+        const pdfjsLib = (await import('pdfjs-dist/build/pdf.min.mjs')) as typeof import('pdfjs-dist')
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.54/build/pdf.worker.min.mjs`
         
         const arrayBuffer = await file.arrayBuffer()

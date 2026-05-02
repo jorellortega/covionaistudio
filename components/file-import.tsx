@@ -89,12 +89,15 @@ const extractPDFText = async (file: File): Promise<string> => {
   console.log('📄 PDF EXTRACT - Starting PDF extraction for file:', file.name, file.size, 'bytes')
   
   try {
-    // Dynamic import of PDF.js
-    const pdfjsLib = await import('pdfjs-dist')
-    console.log('📄 PDF EXTRACT - PDF.js library loaded, version:', pdfjsLib.version)
-    
-    // Set worker path
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`
+    // Use pdf.min.mjs (not package "main" pdf.mjs). The non-min build is a nested webpack bundle;
+    // bundling it again in Next.js breaks __webpack_require__.d → "Properties can only be defined on Objects".
+    const pdfjsLib = (await import('pdfjs-dist/build/pdf.min.mjs')) as typeof import('pdfjs-dist')
+    const pdfVersion = pdfjsLib.version
+    console.log('📄 PDF EXTRACT - PDF.js library loaded, version:', pdfVersion)
+
+    // Must use pdfjs-dist's own worker (.mjs). cdnjs "pdf.js" + .min.js does not match npm pdfjs-dist 5.x and causes
+    // getDocument to throw: "TypeError: Properties can only be defined on Objects."
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfVersion}/build/pdf.worker.min.mjs`
     
     const arrayBuffer = await file.arrayBuffer()
     console.log('📄 PDF EXTRACT - File converted to ArrayBuffer, size:', arrayBuffer.byteLength)
