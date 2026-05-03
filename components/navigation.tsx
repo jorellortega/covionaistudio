@@ -72,7 +72,7 @@ const navigationCategories: NavCategory[] = [
     icon: Palette,
     items: [
       { name: "Treatments", href: "/treatments", icon: FileText },
-      { name: "Ideas", href: "/ideas", icon: Lightbulb },
+      { name: "Projects", href: "/ideas", icon: Lightbulb },
       { name: "Visual Dev", href: "/visdev", icon: Palette },
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
       { name: "Writers", href: "/writers-page", icon: PenTool },

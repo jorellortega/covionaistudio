@@ -203,7 +203,7 @@ export default function IdeaDetailPage() {
       if (!ideaData) {
         toast({
           title: "Not Found",
-          description: "Idea not found",
+          description: "Project not found",
           variant: "destructive"
         })
         router.push("/ideas")
@@ -214,7 +214,7 @@ export default function IdeaDetailPage() {
       if (ideaData.user_id !== userId) {
         toast({
           title: "Access Denied",
-          description: "You don't have permission to view this idea",
+          description: "You don't have permission to view this project",
           variant: "destructive"
         })
         router.push("/ideas")
@@ -297,7 +297,7 @@ export default function IdeaDetailPage() {
       console.error('Error loading idea:', error)
       toast({
         title: "Error",
-        description: "Failed to load idea",
+        description: "Failed to load project",
         variant: "destructive"
       })
     } finally {
@@ -1049,14 +1049,14 @@ export default function IdeaDetailPage() {
       await MovieIdeasService.deleteIdea(idea.id)
       toast({
         title: "Success",
-        description: "Idea deleted successfully"
+        description: "Project deleted successfully"
       })
       router.push("/ideas")
     } catch (error) {
       console.error('Error deleting idea:', error)
       toast({
         title: "Error",
-        description: "Failed to delete idea",
+        description: "Failed to delete project",
         variant: "destructive"
       })
     }
@@ -1090,13 +1090,13 @@ export default function IdeaDetailPage() {
       setShowEditDialog(false)
       toast({
         title: "Success",
-        description: "Idea updated successfully",
+        description: "Project updated successfully",
       })
     } catch (error) {
       console.error('Error updating idea:', error)
       toast({
         title: "Error",
-        description: "Failed to update idea",
+        description: "Failed to update project",
         variant: "destructive",
       })
     } finally {
@@ -1148,7 +1148,7 @@ export default function IdeaDetailPage() {
             className="mb-3 sm:mb-4 text-xs sm:text-sm w-full sm:w-auto"
           >
             <ArrowLeft className="h-4 w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Back to Ideas</span>
+            <span className="hidden sm:inline">Back to projects</span>
             <span className="sm:hidden">Back</span>
           </Button>
           
@@ -1815,7 +1815,7 @@ export default function IdeaDetailPage() {
                   <div key={index} className="aspect-square overflow-hidden rounded-lg border">
                     <img 
                       src={imageUrl} 
-                      alt={`Idea image ${index + 1}`}
+                      alt={`Project image ${index + 1}`}
                       className="h-full w-full object-cover hover:scale-105 transition-transform cursor-pointer"
                       onClick={() => window.open(imageUrl, '_blank')}
                       title="Click to view full size"
@@ -2430,9 +2430,9 @@ export default function IdeaDetailPage() {
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
         <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader className="pb-4 sm:pb-6">
-            <DialogTitle className="text-lg sm:text-xl">Edit Movie Idea</DialogTitle>
+            <DialogTitle className="text-lg sm:text-xl">Edit project</DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
-              Update your movie idea details
+              Update your project details
             </DialogDescription>
           </DialogHeader>
           

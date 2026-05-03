@@ -85,7 +85,7 @@ export default function SceneListPage() {
         console.error('Error loading idea:', ideaError)
         toast({
           title: "Error",
-          description: "Failed to load idea data",
+          description: "Failed to load project data",
           variant: "destructive"
         })
         return
@@ -302,10 +302,10 @@ export default function SceneListPage() {
         <Navigation />
         <div className="container mx-auto px-4 py-8">
           <div className="text-center">
-            <h1 className="text-2xl font-bold mb-4">Idea not found</h1>
+            <h1 className="text-2xl font-bold mb-4">Project not found</h1>
             <Button onClick={() => router.push('/ideas')}>
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Ideas
+              Back to projects
             </Button>
           </div>
         </div>
@@ -322,7 +322,7 @@ export default function SceneListPage() {
           <div className="flex items-center gap-4">
             <Button variant="outline" onClick={() => router.push('/ideas')}>
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Ideas
+              Back to projects
             </Button>
             <div>
               <h1 className="text-3xl font-bold">{idea.title}</h1>
@@ -529,7 +529,7 @@ export default function SceneListPage() {
                     id="notes"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Additional notes, ideas, or reminders for this scene"
+                    placeholder="Additional notes or reminders for this scene"
                     rows={3}
                   />
                 </div>

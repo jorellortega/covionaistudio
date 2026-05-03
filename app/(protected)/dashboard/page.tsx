@@ -175,16 +175,16 @@ export default function DashboardPage() {
                   </div>
                   <div>
                     <CardTitle className="text-3xl font-bold bg-gradient-to-r from-yellow-500 to-yellow-600 bg-clip-text text-transparent group-hover:from-yellow-400 group-hover:to-yellow-500 transition-all">
-                      Create Your Idea
+                      Create new project
                     </CardTitle>
                     <CardDescription className="text-base mt-2 text-muted-foreground">
-                      Capture creative sparks and turn them into movie concepts
+                      Capture creative sparks and turn them into movie projects
                     </CardDescription>
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <span className="text-4xl font-bold text-yellow-500">{ideasCount}</span>
-                  <span className="text-sm text-muted-foreground">Ideas</span>
+                  <span className="text-sm text-muted-foreground">Projects</span>
                   <ArrowRight className="h-6 w-6 text-yellow-500 group-hover:translate-x-1 transition-transform" />
                 </div>
               </div>
@@ -192,7 +192,7 @@ export default function DashboardPage() {
             <CardContent>
               <div className="flex items-center gap-2 text-yellow-600 font-medium">
                 <Plus className="h-5 w-5" />
-                <span>Start creating your next big idea</span>
+                <span>Start your next project</span>
               </div>
             </CardContent>
           </Card>
@@ -370,7 +370,7 @@ export default function DashboardPage() {
                 Create Project
               </Button>
             </div>
-          )}}
+          )}
         </div>
       </div>
 

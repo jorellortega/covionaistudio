@@ -197,7 +197,7 @@ export default function IdeasPage() {
       console.error('Error fetching ideas:', error)
       toast({
         title: "Error",
-        description: "Failed to fetch ideas",
+        description: "Failed to fetch projects",
         variant: "destructive",
       })
     } finally {
@@ -213,7 +213,7 @@ export default function IdeasPage() {
       if (!sourceText) {
         toast({
           title: "No Content",
-          description: "This idea has no description or AI content to summarize.",
+          description: "This project has no description or AI content to summarize.",
           variant: "destructive",
         })
         return
@@ -234,7 +234,7 @@ export default function IdeasPage() {
       console.error('Error regenerating synopsis:', error)
       toast({
         title: "Error",
-        description: "Failed to generate synopsis for this idea.",
+        description: "Failed to generate synopsis for this project.",
         variant: "destructive",
       })
     } finally {
@@ -302,7 +302,7 @@ export default function IdeasPage() {
         ? cleanedText.substring(0, 2000) + '...'
         : cleanedText
 
-      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie idea.
+      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie project.
 
 REQUIREMENTS:
 - Summarize the MAIN STORY in 2-3 paragraphs only
@@ -317,7 +317,7 @@ REQUIREMENTS:
 
 CRITICAL: This is a SYNOPSIS (brief summary), NOT a full treatment. Keep it short and focused.
 
-Movie idea content:
+Movie project content:
 ${contentForPrompt}
 
 Synopsis (2-3 paragraphs only):`
@@ -396,7 +396,7 @@ Synopsis (2-3 paragraphs only):`
       const contentForPrompt = cleanedText.length > 2000 
         ? cleanedText.substring(0, 2000) + '...'
         : cleanedText
-      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie idea.\n\nREQUIREMENTS:\n- Summarize the MAIN STORY in 2-3 paragraphs only\n- Focus on: who is the protagonist, what is their goal, what is the central conflict\n- Write in third person, present tense\n- Engaging and cinematic tone\n- NO markdown formatting\n- NO scene breakdowns\n- NO character backstories\n- NO production details\n- NO plot expansion - just summarize what's already there\n\nCRITICAL: This is a SYNOPSIS (brief summary), NOT a full treatment. Keep it short and focused.\n\nMovie idea content:\n${contentForPrompt}\n\nSynopsis (2-3 paragraphs only):`
+      const aiPrompt = `Write a brief movie synopsis (2-3 paragraphs, 150-300 words) for the following movie project.\n\nREQUIREMENTS:\n- Summarize the MAIN STORY in 2-3 paragraphs only\n- Focus on: who is the protagonist, what is their goal, what is the central conflict\n- Write in third person, present tense\n- Engaging and cinematic tone\n- NO markdown formatting\n- NO scene breakdowns\n- NO character backstories\n- NO production details\n- NO plot expansion - just summarize what's already there\n\nCRITICAL: This is a SYNOPSIS (brief summary), NOT a full treatment. Keep it short and focused.\n\nMovie project content:\n${contentForPrompt}\n\nSynopsis (2-3 paragraphs only):`
       const response = await fetch('/api/ai/generate-text', {
         method: 'POST',
         headers: {
@@ -480,7 +480,7 @@ Synopsis (2-3 paragraphs only):`
       const treatment = await TreatmentsService.createTreatment(treatmentData)
       toast({
         title: "Success!",
-        description: `Idea "${treatmentData.title}" converted to treatment successfully!`,
+        description: `Project "${treatmentData.title}" converted to treatment successfully!`,
       })
       setShowTreatmentDialog(false)
       setConvertingIdeaForTreatment(null)
@@ -538,7 +538,7 @@ Synopsis (2-3 paragraphs only):`
         console.log('🎬 DEBUG - Updated idea result:', updatedIdea)
         toast({
           title: "Success",
-          description: "Idea updated successfully",
+          description: "Project updated successfully",
         })
       } else {
         // Create new idea
@@ -558,20 +558,20 @@ Synopsis (2-3 paragraphs only):`
             
             toast({
               title: "Saved to library",
-              description: "Idea saved with image!",
+              description: "Project saved with image!",
             })
           } catch (imageError) {
             console.error('Error saving image:', imageError)
             toast({
               title: "Saved to library",
-              description: "Idea saved but image failed to save",
+              description: "Project saved but image failed to save",
               variant: "destructive",
             })
           }
         } else {
           toast({
             title: "Saved to library",
-            description: "Your idea has been saved successfully",
+            description: "Your project has been saved successfully",
           })
         }
         
@@ -589,7 +589,7 @@ Synopsis (2-3 paragraphs only):`
       console.error('Error saving idea:', error)
       toast({
         title: "Error",
-        description: "Failed to save idea",
+        description: "Failed to save project",
         variant: "destructive",
       })
     }
@@ -600,14 +600,14 @@ Synopsis (2-3 paragraphs only):`
       await MovieIdeasService.deleteIdea(id)
       toast({
         title: "Success",
-        description: "Idea deleted successfully",
+        description: "Project deleted successfully",
       })
       fetchIdeas()
     } catch (error) {
       console.error('Error deleting idea:', error)
       toast({
         title: "Error",
-        description: "Failed to delete idea",
+        description: "Failed to delete project",
         variant: "destructive",
       })
     }
@@ -707,7 +707,7 @@ Synopsis (2-3 paragraphs only):`
       if (!freshIdea) {
         toast({
           title: "Error",
-          description: "Idea not found",
+          description: "Project not found",
           variant: "destructive",
         })
         return
@@ -866,7 +866,7 @@ Synopsis (2-3 paragraphs only):`
 
       toast({
         title: "Success!",
-        description: `Idea "${freshIdea.title}" converted to treatment successfully!`,
+        description: `Project "${freshIdea.title}" converted to treatment successfully!`,
       })
 
       // Navigate to treatments page
@@ -875,7 +875,7 @@ Synopsis (2-3 paragraphs only):`
       console.error('Error converting idea to treatment:', error)
       toast({
         title: "Error",
-        description: "Failed to convert idea to treatment",
+        description: "Failed to convert project to treatment",
         variant: "destructive",
       })
     }
@@ -890,7 +890,7 @@ Synopsis (2-3 paragraphs only):`
       
       toast({
         title: "Success!",
-        description: `Idea "${movieData.name}" converted to movie successfully!`,
+        description: `Project "${movieData.name}" converted to movie successfully!`,
       })
 
       // Close dialog and reset
@@ -914,7 +914,7 @@ Synopsis (2-3 paragraphs only):`
       console.error('Error converting idea to movie:', error)
       toast({
         title: "Error",
-        description: "Failed to convert idea to movie",
+        description: "Failed to convert project to movie",
         variant: "destructive",
       })
     } finally {
@@ -1019,7 +1019,7 @@ Synopsis (2-3 paragraphs only):`
       if (!importIdeaTitle.trim()) {
         toast({
           title: "Error",
-          description: "Please provide a name for your new idea",
+          description: "Please provide a name for your new project",
           variant: "destructive",
         })
         return
@@ -1029,7 +1029,7 @@ Synopsis (2-3 paragraphs only):`
       try {
         const ideaData = {
           title: importIdeaTitle,
-          description: importIdeaDescription || `Imported idea: ${importIdeaTitle}`,
+          description: importIdeaDescription || `Imported project: ${importIdeaTitle}`,
           genre: importIdeaGenre || "Unspecified", // Legacy field for backward compatibility
           genres: importIdeaGenre ? [importIdeaGenre] : [], // New genres array
           main_creator: importIdeaMainCreator.trim() || "Unknown",
@@ -1058,7 +1058,7 @@ Synopsis (2-3 paragraphs only):`
         console.error('Error creating idea:', error)
         toast({
           title: "Error",
-          description: "Failed to create new idea",
+          description: "Failed to create new project",
           variant: "destructive",
         })
         setIsImporting(false)
@@ -2109,7 +2109,7 @@ Synopsis (2-3 paragraphs only):`
       console.error('Error generating image for idea:', error)
       toast({
         title: "Error",
-        description: "Failed to generate image for this idea",
+        description: "Failed to generate image for this project",
         variant: "destructive",
       })
     } finally {
@@ -2344,7 +2344,7 @@ Synopsis (2-3 paragraphs only):`
         const data = await response.json()
         toast({
           title: "Success",
-          description: `Image imported successfully! Idea: ${data.ideaTitle || 'N/A'}`,
+          description: `Image imported successfully! Project: ${data.ideaTitle || 'N/A'}`,
         })
         fetchIdeas()
         loadSavedImages()
@@ -2380,7 +2380,7 @@ Synopsis (2-3 paragraphs only):`
         const data = await response.json()
         toast({
           title: "Success",
-          description: `Script imported successfully! Idea: ${data.ideaTitle || 'N/A'}`,
+          description: `Script imported successfully! Project: ${data.ideaTitle || 'N/A'}`,
         })
         fetchIdeas()
         loadSavedImages()
@@ -2390,7 +2390,7 @@ Synopsis (2-3 paragraphs only):`
         if (!importIdeaTitle.trim() || !importIdeaDescription.trim() || !importIdeaMainCreator.trim()) {
           toast({
             title: "Error",
-            description: "Idea title, description, and main creator are required for idea import.",
+            description: "Project title, description, and main creator are required for this import.",
             variant: "destructive",
           })
           return
@@ -2426,7 +2426,7 @@ Synopsis (2-3 paragraphs only):`
         const data = await response.json()
         toast({
           title: "Success",
-          description: `Idea imported successfully! Idea: ${data.ideaTitle || 'N/A'}`,
+          description: `Project imported successfully! ${data.ideaTitle || 'N/A'}`,
         })
         fetchIdeas()
         loadSavedImages()
@@ -2565,7 +2565,7 @@ ${pastedContent}`
     if (!pasteIdeaTitle.trim() || !pasteIdeaMainCreator.trim()) {
       toast({
         title: "Missing Required Fields",
-        description: "Please fill in Idea Name and Main Creator.",
+        description: "Please fill in project name and main creator.",
         variant: "destructive",
       })
       return
@@ -2603,7 +2603,7 @@ ${pastedContent}`
       const data = await response.json()
       toast({
         title: "Success",
-        description: `Idea "${data.ideaTitle || pasteIdeaTitle}" saved successfully!`,
+        description: `Project "${data.ideaTitle || pasteIdeaTitle}" saved successfully!`,
       })
 
       // Reset form
@@ -2623,7 +2623,7 @@ ${pastedContent}`
       console.error('Error saving paste idea:', error)
       toast({
         title: "Error",
-        description: error instanceof Error ? error.message : 'Failed to save idea',
+        description: error instanceof Error ? error.message : 'Failed to save project',
         variant: "destructive",
       })
     } finally {
@@ -2660,7 +2660,7 @@ ${pastedContent}`
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Please log in to access your movie ideas</h1>
+          <h1 className="text-2xl font-bold mb-4">Please log in to access your projects</h1>
         </div>
       </div>
     )
@@ -2674,10 +2674,10 @@ ${pastedContent}`
         <div className="min-w-0">
           <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 break-words">
             <Lightbulb className="h-6 w-6 sm:h-8 sm:w-8 text-yellow-500 flex-shrink-0" />
-            Movie Ideas
+            Projects
           </h1>
           <p className="text-xs sm:text-sm lg:text-base text-muted-foreground mt-2 break-words">
-            Capture your creative sparks and develop them into full concepts
+            Capture your creative sparks and develop them into full film projects
           </p>
         </div>
         
@@ -2686,17 +2686,17 @@ ${pastedContent}`
             <DialogTrigger asChild>
               <Button onClick={() => resetForm()} className="flex items-center gap-2 w-full sm:w-auto text-xs sm:text-sm">
                 <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">Add New Idea</span>
-                <span className="sm:hidden">Add Idea</span>
+                <span className="hidden sm:inline">Add new project</span>
+                <span className="sm:hidden">Add project</span>
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
               <DialogHeader className="flex-shrink-0">
                 <DialogTitle>
-                  {editingIdea ? "Edit Movie Idea" : "Add New Movie Idea"}
+                  {editingIdea ? "Edit project" : "Add new project"}
                 </DialogTitle>
                 <DialogDescription>
-                  {editingIdea ? "Update your movie idea details" : "Capture your creative vision"}
+                  {editingIdea ? "Update your project details" : "Capture your creative vision"}
                 </DialogDescription>
               </DialogHeader>
               
@@ -2857,7 +2857,7 @@ ${pastedContent}`
                 </div>
                 
                 <div>
-                  <Label htmlFor="original-prompt" className="mr-2">Original Prompt/Idea</Label>
+                  <Label htmlFor="original-prompt" className="mr-2">Original prompt</Label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button type="button" variant="outline" size="sm" className="h-8">
@@ -2866,7 +2866,7 @@ ${pastedContent}`
                     </PopoverTrigger>
                     <PopoverContent className="w-[520px] p-3">
                       <div className="space-y-2">
-                        <p className="text-xs text-muted-foreground">Read-only original idea</p>
+                        <p className="text-xs text-muted-foreground">Read-only original prompt</p>
                         <Textarea
                           value={originalPrompt}
                           readOnly
@@ -2906,7 +2906,7 @@ ${pastedContent}`
                   ) : (
                     <>
                       <Save className="h-4 w-4" />
-                      {editingIdea ? "Update" : "Save"} Idea
+                      {editingIdea ? "Update" : "Save"} project
                     </>
                   )}
                 </Button>
@@ -2939,11 +2939,11 @@ ${pastedContent}`
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="ai-prompt" className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
-            Ai Idea Studio
+            AI Project Studio
           </TabsTrigger>
           <TabsTrigger value="library" className="flex items-center gap-2">
             <Lightbulb className="h-4 w-4" />
-            Idea Library
+            Project library
           </TabsTrigger>
         </TabsList>
 
@@ -2955,7 +2955,7 @@ ${pastedContent}`
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder="Search ideas by title, description, prompt, or creators..."
+                    placeholder="Search projects by title, description, prompt, or creators..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10"
@@ -2994,21 +2994,21 @@ ${pastedContent}`
             {loading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-                <p className="mt-2 text-muted-foreground">Loading your ideas...</p>
+                <p className="mt-2 text-muted-foreground">Loading your projects...</p>
               </div>
             ) : filteredIdeas.length === 0 ? (
               <div className="text-center py-12">
                 <Lightbulb className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No ideas yet</h3>
+                <h3 className="text-lg font-semibold mb-2">No projects yet</h3>
                 <p className="text-muted-foreground mb-4">
                   {searchTerm || filterGenre !== "all" || filterStatus !== "all" 
-                    ? "No ideas match your current filters" 
-                    : "Start capturing your creative ideas"}
+                    ? "No projects match your current filters" 
+                    : "Start capturing your next film project"}
                 </p>
                 {!searchTerm && filterGenre === "all" && filterStatus === "all" && (
                   <Button onClick={() => setShowAddDialog(true)}>
                     <Plus className="h-4 w-4 mr-2" />
-                    Add Your First Idea
+                    Add your first project
                   </Button>
                 )}
               </div>
@@ -3052,7 +3052,7 @@ ${pastedContent}`
                             router.push(`/ideas/${idea.id}`)
                           }}
                           className="h-7 px-2 text-xs flex-shrink-0 bg-green-600 hover:bg-green-700 text-white"
-                          title="View Idea Details"
+                          title="View project details"
                         >
                           <Eye className="h-3 w-3 mr-1" />
                           View
@@ -3145,7 +3145,7 @@ ${pastedContent}`
                           size="sm"
                           onClick={() => editIdea(idea)}
                           className="h-7 w-7 p-0 flex-shrink-0"
-                          title="Edit Idea"
+                          title="Edit project"
                         >
                           <Edit className="h-3.5 w-3.5" />
                         </Button>
@@ -3154,7 +3154,7 @@ ${pastedContent}`
                           size="sm"
                           onClick={() => deleteIdea(idea.id)}
                           className="h-7 w-7 p-0 text-destructive hover:text-destructive flex-shrink-0"
-                          title="Delete Idea"
+                          title="Delete project"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -3228,7 +3228,7 @@ ${pastedContent}`
                         <TabsContent value="content" className="space-y-3">
                           {idea.original_prompt && (
                             <div className="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-md">
-                              <p className="text-sm font-medium mb-1 text-blue-800 dark:text-blue-200">Original Idea:</p>
+                              <p className="text-sm font-medium mb-1 text-blue-800 dark:text-blue-200">Original prompt:</p>
                               <p className="text-sm text-blue-700 dark:text-blue-300 line-clamp-2">
                                 {idea.original_prompt}
                               </p>
@@ -3311,16 +3311,16 @@ ${pastedContent}`
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5 text-purple-500" />
-                  Ai Idea Studio
+                  AI Project Studio
                 </CardTitle>
                 <CardDescription>
-                  Generate creative content to develop your movie ideas further
+                  Generate creative content to develop your movie projects further
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <Label htmlFor="ai-prompt-input">Describe your idea or ask for help</Label>
+                    <Label htmlFor="ai-prompt-input">Describe your project or ask for help</Label>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -3340,7 +3340,7 @@ ${pastedContent}`
                     id="ai-prompt-input"
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="e.g., 'I have an idea about a time-traveling detective in 1920s Paris. Help me develop the plot and characters.'"
+                    placeholder="e.g., 'A time-traveling detective in 1920s Paris — help me develop the plot and characters.'"
                     rows={6}
                     className="font-mono"
                   />
@@ -3395,7 +3395,7 @@ ${pastedContent}`
                       if (aiResponse) {
                         // Extract title from generated content (use raw response for better extraction)
                         const extractedTitle = extractTitle(aiResponseRaw || aiResponse)
-                        setTitle(extractedTitle || "Generated Script Idea")
+                        setTitle(extractedTitle || "Generated script project")
                         // Store first 500 characters as description (increased from 200 to preserve more content)
                         // The full content is stored in prompt field
                         setDescription(aiResponse.substring(0, 500) + (aiResponse.length > 500 ? "..." : ""))
@@ -3408,7 +3408,7 @@ ${pastedContent}`
                         setSelectedGenres(extractedGenres)
                         setGenre(extractedGenres.length > 0 ? extractedGenres[0] : "") // Set legacy genre for backward compatibility
                       } else if (generatedImage) {
-                        setTitle("Generated Image Idea")
+                        setTitle("Generated image project")
                         setDescription("AI-generated image concept: " + prompt)
                         setOriginalPrompt(prompt) // Save your original prompt
                         setPrompt("AI-generated image: " + prompt) // Save AI image reference
@@ -3429,7 +3429,7 @@ ${pastedContent}`
                     className="flex-1"
                   >
                     <Save className="h-4 w-4 mr-2" />
-                    Save as New Idea
+                    Save as new project
                   </Button>
                 </div>
                 
@@ -3500,7 +3500,7 @@ ${pastedContent}`
                         onClick={async () => {
                           // Extract title from generated content (use raw response for better extraction)
                           const extractedTitle = extractTitle(aiResponseRaw || aiResponse)
-                          setTitle(extractedTitle || "Generated Script Idea")
+                          setTitle(extractedTitle || "Generated script project")
                           // Store first 500 characters as description (increased from 200 to preserve more content)
                           // The full content is stored in prompt field
                           setDescription(aiResponse.substring(0, 500) + (aiResponse.length > 500 ? "..." : ""))
@@ -3518,7 +3518,7 @@ ${pastedContent}`
                         className="flex items-center gap-2"
                       >
                         <Save className="h-4 w-4" />
-                        Save as Idea
+                        Save as project
                       </Button>
                       <Button 
                         variant="outline" 
@@ -3560,7 +3560,7 @@ ${pastedContent}`
                             try {
                               // First save the idea
                               const newIdeaData = {
-                                title: "Generated Image Idea",
+                                title: "Generated image project",
                                 description: "AI-generated image concept: " + prompt,
                                 original_prompt: prompt,
                                 prompt: "AI-generated image: " + prompt,
@@ -3587,7 +3587,7 @@ ${pastedContent}`
                                   
                                   toast({
                                     title: "Success",
-                                    description: "New idea created with image saved!",
+                                    description: "New project created with image saved!",
                                   })
                                 }
                               }
@@ -3605,7 +3605,7 @@ ${pastedContent}`
                               console.error('Error saving idea with image:', error)
                               toast({
                                 title: "Error",
-                                description: "Failed to save idea with image",
+                                description: "Failed to save project with image",
                                 variant: "destructive",
                               })
                             }
@@ -3631,7 +3631,7 @@ ${pastedContent}`
                             }
                             
                             // Just open the form with pre-filled data - NO automatic saving
-                            setTitle("Generated Image Idea")
+                            setTitle("Generated image project")
                             setDescription("AI-generated image concept: " + prompt)
                             setOriginalPrompt(prompt)
                             setPrompt("AI-generated image: " + prompt)
@@ -3698,7 +3698,7 @@ ${pastedContent}`
               Generate Images for: {selectedIdeaForImage?.title}
             </DialogTitle>
             <DialogDescription>
-              Create cinematic images for your movie idea using AI
+              Create cinematic images for your movie project using AI
             </DialogDescription>
           </DialogHeader>
           
@@ -3777,7 +3777,7 @@ ${pastedContent}`
                           
                           toast({
                             title: "Success",
-                            description: "Image saved to your idea!",
+                            description: "Image saved to your project!",
                           })
                           
                           // Clear the generated image and close dialog
@@ -3788,7 +3788,7 @@ ${pastedContent}`
                           console.error('Error saving image:', error)
                           toast({
                             title: "Error",
-                            description: "Failed to save image to idea",
+                            description: "Failed to save image to project",
                             variant: "destructive",
                           })
                         })
@@ -3866,7 +3866,7 @@ ${pastedContent}`
       <Dialog open={showTreatmentDialog} onOpenChange={setShowTreatmentDialog}>
         <DialogContent className="cinema-card border-border max-h-[90vh] max-w-2xl flex flex-col">
           <DialogHeader className="flex-shrink-0">
-            <DialogTitle className="text-foreground">Convert Idea to Treatment</DialogTitle>
+            <DialogTitle className="text-foreground">Convert project to treatment</DialogTitle>
             <DialogDescription>
               Edit the fields below. You can generate a synopsis with AI before saving.
             </DialogDescription>
@@ -3976,7 +3976,7 @@ ${pastedContent}`
               Import Content
             </DialogTitle>
             <DialogDescription>
-              Import images, scripts, or ideas from external sources into your idea library
+              Import images, scripts, or project details from external sources into your project library
             </DialogDescription>
           </DialogHeader>
           
@@ -4079,11 +4079,11 @@ ${pastedContent}`
                   <div className="space-y-3">
                     <div>
                       <Label htmlFor="import-idea-title" className="text-sm font-medium">
-                        New Idea Name <span className="text-red-500">*</span>
+                        New project name <span className="text-red-500">*</span>
                       </Label>
                       <Input
                         id="import-idea-title"
-                        placeholder="Enter a name for your new idea"
+                        placeholder="Enter a name for your new project"
                         value={importIdeaTitle}
                         onChange={(e) => setImportIdeaTitle(e.target.value)}
                         className="mt-1"
@@ -4097,7 +4097,7 @@ ${pastedContent}`
                       </Label>
                       <Textarea
                         id="import-idea-description"
-                        placeholder="Describe your idea (optional)"
+                        placeholder="Describe your project (optional)"
                         value={importIdeaDescription}
                         onChange={(e) => setImportIdeaDescription(e.target.value)}
                         className="mt-1"
@@ -4146,15 +4146,15 @@ ${pastedContent}`
               <TabsContent value="advanced" className="space-y-3">
                 {/* Idea Association */}
                 <div>
-                  <Label className="text-sm font-medium">Associate with Idea</Label>
+                  <Label className="text-sm font-medium">Associate with project</Label>
                   <Select value={importImageIdeaId} onValueChange={setImportImageIdeaId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select an idea to associate with (optional)" />
+                      <SelectValue placeholder="Select a project to associate with (optional)" />
                     </SelectTrigger>
                     <SelectContent>
                       <div className="p-2">
                         <Input
-                          placeholder="Search ideas..."
+                          placeholder="Search projects..."
                           value={importIdeaSearch}
                           onChange={(e) => setImportIdeaSearch(e.target.value)}
                           className="mb-2"
@@ -4342,16 +4342,16 @@ ${pastedContent}`
 
             {/* Idea Details */}
             <div className="border-t pt-4 space-y-4">
-              <h3 className="text-sm font-semibold">Save as Idea</h3>
+              <h3 className="text-sm font-semibold">Save as project</h3>
               
               <div>
                 <Label className="text-sm font-medium">
-                  Idea Name <span className="text-red-500">*</span>
+                  Project name <span className="text-red-500">*</span>
                 </Label>
                 <Input
                   value={pasteIdeaTitle}
                   onChange={(e) => setPasteIdeaTitle(e.target.value)}
-                  placeholder="Enter idea name"
+                  placeholder="Enter project name"
                   className="mt-1"
                 />
               </div>
@@ -4456,7 +4456,7 @@ ${pastedContent}`
               ) : (
                 <>
                   <Save className="h-4 w-4" />
-                  Save Idea
+                  Save project
                 </>
               )}
             </Button>
@@ -4468,9 +4468,9 @@ ${pastedContent}`
       <Dialog open={showMovieDialog} onOpenChange={setShowMovieDialog}>
         <DialogContent className="cinema-card border-border max-h-[90vh] flex flex-col">
           <DialogHeader className="flex-shrink-0">
-            <DialogTitle className="text-foreground">Convert Idea to Movie</DialogTitle>
+            <DialogTitle className="text-foreground">Convert project to movie</DialogTitle>
             <DialogDescription>
-              Convert your idea "{convertingIdea?.title}" into a full movie project with all the details pre-filled.
+              {`Convert "${convertingIdea?.title ?? ""}" into a full movie project with all the details pre-filled.`}
             </DialogDescription>
           </DialogHeader>
           
