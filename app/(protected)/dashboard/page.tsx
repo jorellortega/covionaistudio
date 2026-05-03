@@ -201,17 +201,34 @@ export default function DashboardPage() {
 
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/movies">
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group flex h-full cursor-pointer flex-col">
+          <Link href="/ideas" className="flex flex-1 flex-col">
+            <CardHeader className="pb-4">
+              <div className="w-fit rounded-lg bg-yellow-500/10 p-3 transition-colors group-hover:bg-yellow-500/20">
+                <Lightbulb className="h-6 w-6 text-yellow-500" />
+              </div>
+              <CardTitle className="text-lg transition-colors group-hover:text-yellow-500">Projects</CardTitle>
+            </CardHeader>
+            <CardContent className="mt-auto flex flex-1 flex-col justify-end pt-0">
+              <div className="flex items-center justify-between">
+                <span className="text-2xl font-bold text-yellow-500">{ideasCount}</span>
+                <ArrowRight className="h-5 w-5 text-muted-foreground transition-colors group-hover:text-yellow-500" />
+              </div>
+            </CardContent>
+          </Link>
+        </Card>
+
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group flex h-full cursor-pointer flex-col">
+          <Link href="/movies" className="flex flex-1 flex-col">
             <CardHeader className="pb-4">
               <div className="p-3 rounded-lg bg-blue-500/10 w-fit group-hover:bg-blue-500/20 transition-colors">
                 <Film className="h-6 w-6 text-blue-500" />
               </div>
               <CardTitle className="text-lg group-hover:text-blue-500 transition-colors">Movies</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto flex flex-1 flex-col">
               <CardDescription className="mb-4">Manage your film projects</CardDescription>
-              <div className="flex items-center justify-between">
+              <div className="mt-auto flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-500">3</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-500 transition-colors" />
               </div>
@@ -219,17 +236,17 @@ export default function DashboardPage() {
           </Link>
         </Card>
 
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/treatments">
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group flex h-full cursor-pointer flex-col">
+          <Link href="/treatments" className="flex flex-1 flex-col">
             <CardHeader className="pb-4">
               <div className="p-3 rounded-lg bg-purple-500/10 w-fit group-hover:bg-purple-500/20 transition-colors">
                 <FileText className="h-6 w-6 text-purple-500" />
               </div>
               <CardTitle className="text-lg group-hover:text-purple-500 transition-colors">Treatments</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto flex flex-1 flex-col">
               <CardDescription className="mb-4">Manage story concepts</CardDescription>
-              <div className="flex items-center justify-between">
+              <div className="mt-auto flex items-center justify-between">
                 <span className="text-2xl font-bold text-purple-500">{treatmentsCount}</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-purple-500 transition-colors" />
               </div>
@@ -239,17 +256,17 @@ export default function DashboardPage() {
 
 
 
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/ai-studio">
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group flex h-full cursor-pointer flex-col">
+          <Link href="/ai-studio" className="flex flex-1 flex-col">
             <CardHeader className="pb-4">
               <div className="p-3 rounded-lg bg-blue-600/10 w-fit group-hover:bg-blue-600/20 transition-colors">
                 <TrendingUp className="h-6 w-6 text-blue-600" />
               </div>
               <CardTitle className="text-lg group-hover:text-blue-600 transition-colors">AI Studio</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto flex flex-1 flex-col">
               <CardDescription className="mb-4">Generate content with AI</CardDescription>
-              <div className="flex items-center justify-between">
+              <div className="mt-auto flex items-center justify-between">
                 <span className="text-2xl font-bold text-blue-600">8</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-blue-600 transition-colors" />
               </div>
@@ -257,17 +274,17 @@ export default function DashboardPage() {
           </Link>
         </Card>
 
-        <Card className="cinema-card hover:neon-glow transition-all duration-300 group cursor-pointer">
-          <Link href="/visdev">
+        <Card className="cinema-card hover:neon-glow transition-all duration-300 group flex h-full cursor-pointer flex-col">
+          <Link href="/visdev" className="flex flex-1 flex-col">
             <CardHeader className="pb-4">
               <div className="p-3 rounded-lg bg-green-500/10 w-fit group-hover:bg-green-500/20 transition-colors">
                 <Palette className="h-6 w-6 text-green-500" />
               </div>
               <CardTitle className="text-lg group-hover:text-green-500 transition-colors">Visual Development</CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="mt-auto flex flex-1 flex-col">
               <CardDescription className="mb-4">Design characters, environments & style guides</CardDescription>
-              <div className="flex items-center justify-between">
+              <div className="mt-auto flex items-center justify-between">
                 <span className="text-2xl font-bold text-green-500">New</span>
                 <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-green-500 transition-colors" />
               </div>

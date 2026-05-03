@@ -1883,7 +1883,7 @@ export default function MoviesPage() {
                         </Badge>
                         </div>
                         {movie.treatment_id && (
-                          <Link href={`/treatments/${movie.treatment_id}`} className="block mb-3">
+                          <Link href={`/viewmovie/${movie.treatment_id}`} className="block mb-3">
                             <Button 
                               variant="outline" 
                               size="sm" 
@@ -2047,7 +2047,7 @@ export default function MoviesPage() {
               <CardHeader className="pb-2">
                 {movie.treatment_id ? (
                   <Link 
-                    href={`/treatments/${movie.treatment_id}`}
+                    href={`/viewmovie/${movie.treatment_id}`}
                     className="block"
                   >
                     <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
@@ -2142,7 +2142,7 @@ export default function MoviesPage() {
               <CardContent>
                 <CardDescription className="mb-3 line-clamp-2 text-sm">{movie.description}</CardDescription>
                 {movie.treatment_id && (
-                  <Link href={`/treatments/${movie.treatment_id}`} className="block mb-3">
+                  <Link href={`/viewmovie/${movie.treatment_id}`} className="block mb-3">
                     <Button 
                       variant="outline" 
                       size="sm" 

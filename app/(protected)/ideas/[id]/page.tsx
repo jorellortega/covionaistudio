@@ -1550,7 +1550,7 @@ export default function IdeaDetailPage() {
                         variant="outline"
                         onClick={() => router.push(`/treatments/${treatment.id}`)}
                       >
-                        View Full Treatment
+                        Open treatment page
                       </Button>
                     </div>
                   </div>
