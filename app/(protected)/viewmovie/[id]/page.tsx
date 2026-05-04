@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
 import { ArrowLeft, Edit, Trash2, FileText, Clock, Calendar, User, Users, Target, DollarSign, Film, Eye, Volume2, Save, X, Sparkles, Loader2, ImageIcon, Upload, Download, Zap, ChevronDown, ChevronUp, Plus, RefreshCw, ListFilter, ChevronLeft, ChevronRight, Star, MapPin, Wand2, ArrowUp, ArrowDown, ExternalLink } from 'lucide-react'
-import { TreatmentsService, Treatment } from '@/lib/treatments-service'
+import { TreatmentsService, type Treatment } from '@/lib/treatments-service'
 import { MovieService, type CreateMovieData } from '@/lib/movie-service'
 import Header from '@/components/header'
 import TextToSpeech from '@/components/text-to-speech'
@@ -31,10 +31,97 @@ import { TimelineService, type CreateSceneData } from '@/lib/timeline-service'
 import { OpenAIService } from '@/lib/ai-services'
 import { CharactersService, type Character } from '@/lib/characters-service'
 import { LocationsService, type Location } from '@/lib/locations-service'
+import { ScreenplayScenesService } from '@/lib/screenplay-scenes-service'
 
 // Treatment pagination constant (standard: ~4000 characters per page)
 // Standard page: ~80 chars per line × 50 lines = ~4000 characters
 const CHARS_PER_PAGE = 4000
+
+/** Scene sort key — same logic as Screenplay page / TimelineService */
+function parseSceneNumber(sceneNumber: string): number {
+  if (!sceneNumber || !sceneNumber.trim()) return 0
+  const trimmed = sceneNumber.trim()
+  const numericMatch = trimmed.match(/^(\d+)/)
+  if (!numericMatch) return 0
+  const numericPart = parseInt(numericMatch[1], 10)
+  const letterMatch = trimmed.match(/^(\d+)([A-Za-z])/)
+  if (letterMatch) {
+    const letter = letterMatch[2].toUpperCase()
+    const letterValue = letter.charCodeAt(0) - 64
+    return numericPart + letterValue / 10
+  }
+  return numericPart
+}
+
+/** Full script in one treatment request stays under typical model input limits. */
+const SCREENPLAY_SINGLE_PASS_MAX_CHARS = 38_000
+
+/** Per-request excerpt size when doing coverage passes (map step). */
+const SCREENPLAY_CHUNK_FOR_NOTES = 30_000
+
+/** Safety cap on coverage API calls per generation. */
+const MAX_SCREENPLAY_COVERAGE_PARTS = 28
+
+/**
+ * Split a long screenplay into ordered chunks, preferring `\\n\\n===` scene boundaries.
+ */
+function splitScreenplayIntoChunks(full: string, maxChars: number): string[] {
+  const text = full.trim()
+  if (!text) return []
+  if (text.length <= maxChars) return [text]
+
+  const rawParts = text.split(/(?=\n\n===)/g)
+  const chunks: string[] = []
+  let buf = ''
+
+  const pushBuf = () => {
+    const b = buf.trim()
+    if (b) chunks.push(b)
+    buf = ''
+  }
+
+  const pushHardSlices = (piece: string) => {
+    for (let i = 0; i < piece.length; i += maxChars) {
+      chunks.push(piece.slice(i, i + maxChars))
+    }
+  }
+
+  for (const part of rawParts) {
+    if (!part) continue
+    if (part.length > maxChars) {
+      pushBuf()
+      pushHardSlices(part)
+      continue
+    }
+    if (buf.length + part.length <= maxChars) {
+      buf += part
+    } else {
+      pushBuf()
+      buf = part
+    }
+  }
+  pushBuf()
+
+  return chunks.length > 0 ? chunks : [text.slice(0, maxChars)]
+}
+
+/** Enough text to drive AI cover art (treatment fields, linked movie, or loaded screenplay). */
+function hasTreatmentCoverSources(
+  treatment: Treatment,
+  movieName?: string | null,
+  scriptContent?: string | null,
+): boolean {
+  return (
+    !!treatment.synopsis?.trim() ||
+    !!treatment.prompt?.trim() ||
+    !!treatment.logline?.trim() ||
+    !!treatment.title?.trim() ||
+    !!treatment.characters?.trim() ||
+    !!treatment.themes?.trim() ||
+    !!movieName?.trim() ||
+    !!scriptContent?.trim()
+  )
+}
 
 export default function TreatmentDetailPage() {
   const { id } = useParams()
@@ -159,12 +246,11 @@ export default function TreatmentDetailPage() {
   const [viewingLocation, setViewingLocation] = useState<{id: string; name: string; image_url?: string | null; fullDetails?: Location | null} | null>(null)
 
   useEffect(() => {
-    if (id) {
-      loadTreatment(id as string)
-      fetchUserApiKeys()
-      fetchTextEnhancerSettings()
-    }
-  }, [id])
+    if (!id || !ready || !userId) return
+    loadTreatment(id as string)
+    fetchUserApiKeys()
+    fetchTextEnhancerSettings()
+  }, [id, ready, userId])
 
   // Reload saved characters when project_id is available
   useEffect(() => {
@@ -806,10 +892,31 @@ Treatment:`
     return setting?.locked_model || ""
   }
 
-  const loadTreatment = async (treatmentId: string) => {
+  const loadTreatment = async (idParam: string) => {
     try {
       setIsLoading(true)
-      const data = await TreatmentsService.getTreatment(treatmentId)
+      let data = await TreatmentsService.getTreatment(idParam)
+      if (!data) {
+        data = await TreatmentsService.getTreatmentByProjectId(idParam)
+      }
+      if (!data) {
+        const movieData = await MovieService.getMovieById(idParam)
+        if (movieData && userId && movieData.user_id === userId) {
+          try {
+            data = await TreatmentsService.createTreatment({
+              project_id: movieData.id,
+              title: movieData.name || 'Untitled',
+              genre: movieData.genre?.trim() || 'General',
+            })
+            toast({
+              title: 'Treatment hub created',
+              description: 'We linked a treatment to this project so View Movie works. You can add a full treatment anytime.',
+            })
+          } catch (createErr) {
+            console.error('Failed to auto-create treatment for project:', createErr)
+          }
+        }
+      }
       if (data) {
         console.log('Loaded treatment data:', {
           id: data.id,
@@ -872,11 +979,12 @@ Treatment:`
         }
       } else {
         toast({
-          title: "Error",
-          description: "Treatment not found",
-          variant: "destructive",
+          title: 'Not available',
+          description:
+            'No treatment is linked to this project yet. If this is a shared project, ask the owner to open View Movie once from their account (or create a treatment in Ideas).',
+          variant: 'destructive',
         })
-        router.push('/treatments')
+        router.push('/movies')
       }
     } catch (error) {
       console.error('Error loading treatment:', error)
@@ -885,7 +993,7 @@ Treatment:`
         description: "Failed to load treatment",
         variant: "destructive",
       })
-      router.push('/treatments')
+      router.push('/movies')
     } finally {
       setIsLoading(false)
     }
@@ -922,8 +1030,10 @@ Treatment:`
           setScriptContent(combinedScript)
         }
       } else {
-        // Try fetching scripts from scenes
-        await fetchScriptsFromScenes(projectId)
+        const fromTimeline = await fetchScriptsFromScenes(projectId)
+        if (!fromTimeline.trim()) {
+          await fetchScreenplayTableScript(projectId)
+        }
       }
     } catch (error) {
       console.error('Error fetching script assets:', error)
@@ -933,73 +1043,148 @@ Treatment:`
     }
   }
 
-  // Fetch scripts from scenes if no project-level scripts exist
-  const fetchScriptsFromScenes = async (projectId: string) => {
-    if (!ready || !userId) return
-    
+  /** Last-resort: screenplay rows in `screenplay_scenes` (some imports only write here). */
+  const fetchScreenplayTableScript = async (projectId: string): Promise<string> => {
+    if (!ready || !userId) return ''
     try {
-      // Get timeline for this project
+      const rows = await ScreenplayScenesService.getScreenplayScenes(projectId)
+      const withContent = rows.filter((r) => r.content && r.content.trim().length > 0)
+      if (withContent.length === 0) return ''
+
+      const combined = withContent
+        .map((s) => {
+          const label = s.scene_number || s.name || 'Scene'
+          return `\n\n=== ${label}: ${s.name || ''} ===\n\n${s.content!.trim()}`
+        })
+        .join('\n\n')
+
+      setScriptContent(combined)
+      setScriptAssets([])
+      return combined
+    } catch (e) {
+      console.error('Error loading screenplay_scenes:', e)
+      return ''
+    }
+  }
+
+  /**
+   * Timeline scenes: prefer `screenplay_content` on each scene (import path), then script assets.
+   * Uses project owner's timeline (matches Screenplay page / shared access).
+   */
+  const fetchScriptsFromScenes = async (projectId: string): Promise<string> => {
+    if (!ready || !userId) return ''
+
+    try {
+      const { data: project, error: projectError } = await getSupabaseClient()
+        .from('projects')
+        .select('user_id')
+        .eq('id', projectId)
+        .maybeSingle()
+
+      if (projectError || !project) {
+        console.log('viewmovie fetchScriptsFromScenes: project not found')
+        return ''
+      }
+
+      const isOwner = project.user_id === userId
+      let hasAccess = isOwner
+      if (!isOwner) {
+        const { data: share, error: shareError } = await getSupabaseClient()
+          .from('project_shares')
+          .select('*')
+          .eq('project_id', projectId)
+          .or(`shared_with_user_id.eq.${userId},shared_with_email.eq.${user?.email || ''}`)
+          .eq('is_revoked', false)
+          .maybeSingle()
+
+        hasAccess =
+          !shareError &&
+          !!share &&
+          (!share.deadline || new Date(share.deadline) > new Date())
+      }
+
+      if (!hasAccess) return ''
+
       const { data: timeline, error: timelineError } = await getSupabaseClient()
         .from('timelines')
         .select('id')
         .eq('project_id', projectId)
-        .eq('user_id', userId)
-        .single()
+        .eq('user_id', project.user_id)
+        .maybeSingle()
 
       if (timelineError || !timeline) {
-        console.log('No timeline found for project')
-        return
+        console.log('viewmovie fetchScriptsFromScenes: no timeline')
+        return ''
       }
 
-      // Get all scenes for this timeline
       const { data: scenes, error: scenesError } = await getSupabaseClient()
         .from('scenes')
-        .select('id, name, metadata, order_index')
+        .select('id, name, metadata, order_index, screenplay_content, created_at, updated_at')
         .eq('timeline_id', timeline.id)
-        .eq('user_id', userId)
-        .order('order_index', { ascending: true })
 
-      if (scenesError || !scenes || scenes.length === 0) {
-        console.log('No scenes found for timeline')
-        return
+      if (scenesError || !scenes?.length) {
+        console.log('viewmovie fetchScriptsFromScenes: no scenes')
+        return ''
       }
 
-      // Get scripts for each scene using a batch query
-      const sceneIds = scenes.map(s => s.id)
+      const sortedScenes = [...scenes].sort((a, b) => {
+        const aNumber = parseSceneNumber((a.metadata as { sceneNumber?: string })?.sceneNumber || '')
+        const bNumber = parseSceneNumber((b.metadata as { sceneNumber?: string })?.sceneNumber || '')
+        if (aNumber !== bNumber) return aNumber - bNumber
+        const aOrder = a.order_index || 0
+        const bOrder = b.order_index || 0
+        if (aOrder !== bOrder) return aOrder - bOrder
+        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+      })
+
+      const sceneIds = sortedScenes.map((s) => s.id)
       const { data: sceneScripts, error: scriptsError } = await getSupabaseClient()
         .from('assets')
         .select('*')
         .in('scene_id', sceneIds)
         .eq('content_type', 'script')
-        .eq('user_id', userId)
         .eq('is_latest_version', true)
         .order('created_at', { ascending: false })
 
       if (scriptsError) {
-        console.error('Error fetching scene scripts:', scriptsError)
-        return
+        console.error('viewmovie fetchScriptsFromScenes: script assets query', scriptsError)
       }
 
-      if (sceneScripts && sceneScripts.length > 0) {
-        setScriptAssets(sceneScripts as Asset[])
-        
-        // Combine scripts in scene order
-        const combinedScript = scenes
-          .map(scene => {
-            const sceneScript = sceneScripts.find((s: any) => s.scene_id === scene.id)
-            if (!sceneScript) return null
-            
-            const sceneNumber = scene.metadata?.sceneNumber || scene.name
-            const content = sceneScript.content || ""
-            return `\n\n=== SCENE ${sceneNumber}: ${scene.name} ===\n\n${content}`
-          })
-          .filter(Boolean)
-          .join("\n\n")
-        
+      const scenesWithContent = sortedScenes.filter((scene) => {
+        const sp = (scene as { screenplay_content?: string }).screenplay_content?.trim()
+        const hasAsset = sceneScripts?.some((s) => s.scene_id === scene.id)
+        return !!sp || hasAsset
+      })
+
+      if (scenesWithContent.length === 0) return ''
+
+      const combinedScript = scenesWithContent
+        .map((scene) => {
+          const sp = (scene as { screenplay_content?: string }).screenplay_content?.trim()
+          let content = ''
+          if (sp) {
+            content = sp
+          } else if (sceneScripts) {
+            const asset = sceneScripts.find((s) => s.scene_id === scene.id)
+            content = asset?.content || ''
+          }
+          if (!content.trim()) return null
+          const sceneNumber =
+            (scene.metadata as { sceneNumber?: string })?.sceneNumber || scene.name
+          return `\n\n=== SCENE ${sceneNumber}: ${scene.name} ===\n\n${content}`
+        })
+        .filter(Boolean)
+        .join('\n\n')
+
+      if (combinedScript.trim()) {
+        setScriptAssets((sceneScripts as Asset[]) || [])
         setScriptContent(combinedScript)
+        return combinedScript
       }
+      return ''
     } catch (error) {
       console.error('Error fetching scripts from scenes:', error)
+      return ''
     }
   }
 
@@ -1065,17 +1250,36 @@ Treatment:`
     const modelToUse = scriptsSetting?.selected_model || 
                       (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
 
-    try {
-      setIsGeneratingTreatmentFromScript(true)
+    const runGenerateText = async (promptText: string, maxTok: number): Promise<string> => {
+      const response = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: promptText,
+          field: 'treatment',
+          service: normalizedService,
+          model: modelToUse,
+          apiKey: 'configured',
+          userId: userId,
+          maxTokens: maxTok,
+        }),
+      })
 
-      // Limit script content to avoid token limits (use first 8000 characters for better context)
-      const scriptForPrompt = scriptContent.length > 8000 
-        ? scriptContent.substring(0, 8000) + '\n\n[... script continues ...]'
-        : scriptContent
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || 'Failed to generate text')
+      }
 
-      const aiPrompt = `Write a comprehensive movie treatment based on the following screenplay script.
+      const result = await response.json()
+      if (!result.success || !result.text) {
+        throw new Error('No text received from AI service')
+      }
+      return String(result.text).trim()
+    }
 
-REQUIREMENTS:
+    const treatmentRequirementsBlock = `REQUIREMENTS:
 - Create a full treatment document (similar to a professional pitch document)
 - Structure should include:
   * Title (use the movie title if available)
@@ -1090,51 +1294,117 @@ REQUIREMENTS:
 - Focus on story structure, character arcs, and narrative flow
 - Include genre and tone descriptions
 - NO markdown formatting (no #, *, **, etc.)
-- Write as a professional treatment document that could be used for pitching
+- Write as a professional treatment document that could be used for pitching`
 
-Script to analyze:
-${scriptForPrompt}
+    try {
+      setIsGeneratingTreatmentFromScript(true)
+
+      let treatmentBody = ''
+
+      if (scriptContent.length <= SCREENPLAY_SINGLE_PASS_MAX_CHARS) {
+        const aiPrompt = `Write a comprehensive movie treatment based on the following screenplay script.
+
+${treatmentRequirementsBlock}
+
+Script to analyze (complete):
+${scriptContent}
 
 Treatment:`
 
-      const response = await fetch('/api/ai/generate-text', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          field: 'treatment',
-          service: normalizedService,
-          model: modelToUse, // Pass the model from AI settings
-          apiKey: 'configured',
-          userId: userId,
-          maxTokens: 4000, // Increased for longer treatments
-        }),
+        treatmentBody = await runGenerateText(aiPrompt, 8192)
+      } else {
+        let chunks = splitScreenplayIntoChunks(scriptContent, SCREENPLAY_CHUNK_FOR_NOTES)
+        if (chunks.length > MAX_SCREENPLAY_COVERAGE_PARTS) {
+          toast({
+            title: 'Very long screenplay',
+            description: `Processing the first ${MAX_SCREENPLAY_COVERAGE_PARTS} sequential parts (~${((MAX_SCREENPLAY_COVERAGE_PARTS * SCREENPLAY_CHUNK_FOR_NOTES) / 1_000_000).toFixed(1)}M characters). If the ending is missing, run again after trimming or split the import.`,
+          })
+          chunks = chunks.slice(0, MAX_SCREENPLAY_COVERAGE_PARTS)
+        } else {
+          toast({
+            title: 'Long screenplay',
+            description: `Reading ${chunks.length} parts in order, then writing the full treatment (this can take a few minutes).`,
+          })
+        }
+
+        const notesParts: string[] = []
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i]
+          toast({
+            title: 'Screenplay coverage',
+            description: `Part ${i + 1} of ${chunks.length}…`,
+          })
+
+          const digestPrompt = `You are a story analyst. This is PART ${i + 1} of ${chunks.length} of ONE screenplay — parts are sequential; read as continuation of the story.
+
+Extract dense coverage notes ONLY (bullets and short phrases; NOT a treatment, NOT screenplay layout):
+- Plot beats, reversals, and escalation in this section
+- Character introductions, relationships, key decisions, deaths or transformations
+- Reveals, twists, cliffhangers, and factual reveals from dialogue or action
+- Locations, time jumps, and structural markers if present
+- Anything needed so a later pass can infer the ending and payoffs
+
+Preserve names and facts. If this excerpt starts mid-scene, say "continues mid-scene" once.
+
+SCREENPLAY EXCERPT:
+---
+${chunk}
+---
+
+COVERAGE NOTES:`
+
+          const part = await runGenerateText(digestPrompt, 4096)
+          notesParts.push(`### Section ${i + 1} of ${chunks.length}\n${part}`)
+        }
+
+        let mergedNotes = notesParts.join('\n\n')
+
+        const NOTES_COMPRESS_THRESHOLD = 90_000
+        if (mergedNotes.length > NOTES_COMPRESS_THRESHOLD) {
+          toast({
+            title: 'Condensing coverage',
+            description: 'Merging notes so the final treatment can use the full arc.',
+          })
+          mergedNotes = await runGenerateText(
+            `You are a head writer. Merge the screenplay analyst notes below into one document (target under 25,000 characters). Keep every major plot turn, the ending, character arcs, and twist payoffs. Remove duplication between sections. Plain text with short headings (e.g. ACT STRUCTURE, CHARACTERS, ENDING, THEME).
+
+NOTES:
+---
+${mergedNotes}
+---
+
+CONDENSED MASTER NOTES:`,
+            8192
+          )
+        }
+
+        const finalPrompt = `You are a professional screenwriter. Write a comprehensive movie treatment using the analyst notes below. The notes were produced by reading the ENTIRE screenplay in sequential parts — treat them as one complete story (not a partial script).
+
+${treatmentRequirementsBlock}
+
+FULL COVERAGE NOTES (story order):
+---
+${mergedNotes}
+---
+
+Treatment:`
+
+        treatmentBody = await runGenerateText(finalPrompt, 8192)
+      }
+
+      const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
+        prompt: treatmentBody,
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate treatment')
-      }
+      setTreatment(updatedTreatment)
 
-      const result = await response.json()
-
-      if (result.success && result.text) {
-        // Update the treatment prompt field with the generated treatment
-        const updatedTreatment = await TreatmentsService.updateTreatment(treatment.id, {
-          prompt: result.text.trim(),
-        })
-
-        setTreatment(updatedTreatment)
-        
-        toast({
-          title: "Treatment Generated!",
-          description: "AI has generated a treatment from the script.",
-        })
-      } else {
-        throw new Error('No treatment text received from AI service')
-      }
+      toast({
+        title: 'Treatment generated',
+        description:
+          scriptContent.length <= SCREENPLAY_SINGLE_PASS_MAX_CHARS
+            ? 'AI wrote a treatment from your full screenplay.'
+            : 'AI read the screenplay in parts, then wrote the full treatment.',
+      })
     } catch (error) {
       console.error('Failed to generate treatment from script:', error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -1155,6 +1425,11 @@ Treatment:`
     } finally {
       setIsGeneratingTreatmentFromScript(false)
     }
+  }
+
+  const reloadScriptFromProject = async () => {
+    if (!treatment?.project_id) return
+    await fetchScriptAssets(treatment.project_id)
   }
 
   const handleDelete = async () => {
@@ -2017,12 +2292,19 @@ Treatment:`
       return
     }
 
-    // Check if treatment has content to generate from
-    const hasContent = treatment.synopsis || treatment.prompt || treatment.logline || treatment.title
-    if (!hasContent) {
+    if (!aiSettingsLoaded) {
       toast({
-        title: "Missing Content",
-        description: "Treatment needs content (title, synopsis, prompt, or logline) to generate a cover.",
+        title: "AI settings loading",
+        description: "Wait a moment for AI settings to finish loading, then try again.",
+      })
+      return
+    }
+
+    if (!hasTreatmentCoverSources(treatment, movie?.name, scriptContent)) {
+      toast({
+        title: "Missing content",
+        description:
+          "Add a logline, synopsis, treatment, or import a screenplay so we can describe the cover. You can also set the movie title on the project.",
         variant: "destructive",
       })
       return
@@ -2155,13 +2437,11 @@ Treatment:`
         return response
       }
 
-      // Get a brief summary from synopsis, logline, or prompt (prioritize logline)
+      // Brief visual brief: logline → synopsis → treatment → screenplay excerpt → movie title
       let contentSummary = ''
-      if (treatment.logline) {
-        // Logline is perfect for a movie cover - it's already concise
-        contentSummary = treatment.logline
-      } else if (treatment.synopsis) {
-        // Use first sentence or first 100 characters of synopsis
+      if (treatment.logline?.trim()) {
+        contentSummary = treatment.logline.trim()
+      } else if (treatment.synopsis?.trim()) {
         const cleaned = treatment.synopsis
           .replace(/\*\*/g, '')
           .replace(/\*/g, '')
@@ -2169,18 +2449,42 @@ Treatment:`
           .replace(/\s+/g, ' ')
           .trim()
         const firstSentence = cleaned.split(/[.!?]/)[0]
-        contentSummary = (firstSentence && firstSentence.length > 0 && firstSentence.length < 150) 
-          ? firstSentence 
-          : cleaned.substring(0, 150)
-      } else if (treatment.prompt) {
-        // Use first 150 characters of prompt
+        contentSummary =
+          firstSentence && firstSentence.length > 0 && firstSentence.length < 180
+            ? firstSentence
+            : cleaned.substring(0, 180)
+      } else if (treatment.prompt?.trim()) {
         contentSummary = treatment.prompt
           .replace(/\*\*/g, '')
           .replace(/\*/g, '')
           .replace(/\n/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
-          .substring(0, 150)
+          .substring(0, 220)
+      } else if (scriptContent?.trim()) {
+        contentSummary = scriptContent
+          .replace(/\*\*/g, '')
+          .replace(/\*/g, '')
+          .replace(/\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, 220)
+      } else if (treatment.characters?.trim()) {
+        contentSummary = treatment.characters
+          .replace(/\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, 180)
+      } else if (treatment.themes?.trim()) {
+        contentSummary = treatment.themes
+          .replace(/\n/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .substring(0, 160)
+      } else if (movie?.name?.trim()) {
+        contentSummary = `${movie.name.trim()}${treatment.genre ? `, ${treatment.genre}` : ''}. Cinematic key art, moody atmosphere.`
+      } else if (treatment.title?.trim()) {
+        contentSummary = `${treatment.title.trim()}${treatment.genre ? `, ${treatment.genre}` : ''}.`
       }
 
       // Build initial prompt
@@ -5597,11 +5901,11 @@ Return ONLY the JSON object, no other text:`
               <div className="absolute inset-0 bg-gradient-to-t from-background/95 via-background/70 to-background/30 z-0 pointer-events-none" />
               
               {/* Cover Management Buttons - Top right */}
-              <div className="absolute top-4 right-4 flex gap-2 z-50 pointer-events-auto">
+              <div className="absolute top-4 right-4 z-[60] flex flex-wrap justify-end gap-2 pointer-events-auto">
                 {!isEditingCover ? (
                   <>
                     {/* Quick Generate AI Button */}
-                    {(treatment.synopsis || treatment.prompt || treatment.logline || treatment.title) && (
+                    {hasTreatmentCoverSources(treatment, movie?.name, scriptContent) && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -5609,10 +5913,10 @@ Return ONLY the JSON object, no other text:`
                           e.preventDefault()
                           e.stopPropagation()
                           console.log('🎬 Quick Generate button clicked')
-                          generateQuickAICover()
+                          void generateQuickAICover()
                         }}
-                        disabled={isGeneratingCover || !aiSettingsLoaded}
-                        className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto"
+                        disabled={isGeneratingCover}
+                        className={`backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 pointer-events-auto ${!aiSettingsLoaded ? 'opacity-60' : ''}`}
                       >
                         {isGeneratingCover ? (
                           <>
@@ -5774,53 +6078,60 @@ Return ONLY the JSON object, no other text:`
             </div>
           </div>
         ) : (
-          <div className="h-[300px] md:h-[400px] w-full bg-gradient-to-br from-muted/50 to-muted/30 border-b group relative">
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center">
-                <ImageIcon className="h-20 w-20 mx-auto mb-4 text-muted-foreground/50" />
-                <p className="text-muted-foreground mb-4">No cover image</p>
-                {/* Cover Management Buttons - Always visible on placeholder */}
-                <div className="flex gap-2 justify-center">
-                  {(treatment.synopsis || treatment.prompt || treatment.logline || treatment.title) && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={generateQuickAICover}
-                      disabled={isGeneratingCover || !aiSettingsLoaded}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      {isGeneratingCover ? (
-                        <>
-                          <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
-                          <span className="hidden sm:inline">Generating...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="h-4 w-4 sm:mr-2" />
-                          <span className="hidden sm:inline">Quick Generate</span>
-                        </>
-                      )}
-                    </Button>
+          <div className="relative h-[300px] md:h-[400px] w-full bg-gradient-to-br from-muted/50 to-muted/30 border-b group">
+            <div className="absolute top-4 right-4 z-[60] flex flex-wrap justify-end gap-2 pointer-events-auto">
+              {hasTreatmentCoverSources(treatment, movie?.name, scriptContent) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    void generateQuickAICover()
+                  }}
+                  disabled={isGeneratingCover}
+                  className={`backdrop-blur-sm bg-background/80 text-foreground border-border hover:bg-muted/90 ${!aiSettingsLoaded ? 'opacity-60' : ''}`}
+                >
+                  {isGeneratingCover ? (
+                    <>
+                      <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                      <span className="hidden sm:inline">Generating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Quick Generate</span>
+                    </>
                   )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setIsEditingCover(true)}
-                  >
-                    <Edit className="h-4 w-4 sm:mr-2" />
-                    <span className="hidden sm:inline">Add Cover</span>
-                  </Button>
-                </div>
-              </div>
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setIsEditingCover(true)
+                }}
+                className="backdrop-blur-sm bg-background/80 text-foreground border-border hover:bg-muted/90"
+              >
+                <Edit className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Add Cover</span>
+              </Button>
+            </div>
+            <div className="h-full flex flex-col items-center justify-center px-4 pt-16 pb-28 text-center pointer-events-none">
+              <ImageIcon className="h-16 w-16 md:h-20 md:w-20 mx-auto mb-3 text-muted-foreground/50" />
+              <p className="text-muted-foreground text-sm md:text-base">No cover image</p>
             </div>
           </div>
         )}
         
-        {/* Hero Content Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12 z-10">
+        {/* Hero overlay: default none so clicks reach cover/top buttons; only explicit controls re-enable hits */}
+        <div className="absolute bottom-0 left-0 right-0 p-6 md:p-12 z-10 pointer-events-none">
           <div className="container mx-auto max-w-7xl">
-            {/* Back Button */}
-            <div className="mb-4">
+            <div className="mb-4 pointer-events-auto w-fit max-w-full">
               <Button variant="ghost" asChild className="text-white/90 hover:text-white hover:bg-white/20 backdrop-blur-sm">
                 <Link href="/treatments" className="flex items-center gap-2">
                   <ArrowLeft className="h-4 w-4" />
@@ -5828,11 +6139,10 @@ Return ONLY the JSON object, no other text:`
                 </Link>
               </Button>
             </div>
-            
-            {/* Title and Meta */}
+
             <div className="flex items-end justify-between gap-4 flex-wrap">
-              <div className="flex-1 min-w-0">
-                <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 drop-shadow-lg">
+              <div className="flex-1 min-w-0 max-w-full pointer-events-none">
+                <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 drop-shadow-lg break-words pr-2">
                   {treatment.project_id && movie ? movie.name : treatment.title}
                 </h1>
                 <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -5842,15 +6152,16 @@ Return ONLY the JSON object, no other text:`
                   <Badge className={`text-base px-3 py-1 backdrop-blur-sm ${getStatusColor(treatment.status)}`}>
                     {treatment.status.replace('-', ' ')}
                   </Badge>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
                     onClick={(e) => {
                       e.preventDefault()
                       e.stopPropagation()
                       handleStartEditTitleStatus()
                     }}
-                    className="backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 text-xs sm:text-sm"
+                    className="pointer-events-auto backdrop-blur-sm bg-white/20 text-white border-white/30 hover:bg-white/30 text-xs sm:text-sm"
                   >
                     <Edit className="h-4 w-4 mr-2" />
                     Edit
@@ -6272,6 +6583,56 @@ Return ONLY the JSON object, no other text:`
                 <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
                   {!isEditingPrompt ? (
                     <>
+                      {treatment.project_id && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void generateTreatmentFromScript()}
+                            disabled={
+                              isGeneratingTreatmentFromScript ||
+                              !aiSettingsLoaded ||
+                              isLoadingScript ||
+                              !scriptContent.trim()
+                            }
+                            className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0 text-xs sm:text-sm"
+                            title={
+                              scriptContent.trim()
+                                ? treatment.prompt?.trim()
+                                  ? 'Replace the treatment document using the current screenplay text from this project'
+                                  : 'Generate full treatment from screenplay on this project'
+                                : 'No screenplay text loaded — open Screenplay to import, then tap reload (↻)'
+                            }
+                          >
+                            {isGeneratingTreatmentFromScript ? (
+                              <>
+                                <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                                <span className="hidden sm:inline">Generating...</span>
+                                <span className="sm:hidden">…</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="h-4 w-4 sm:mr-2" />
+                                <span className="hidden sm:inline">From screenplay</span>
+                                <span className="sm:hidden">Script</span>
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void reloadScriptFromProject()}
+                            disabled={isLoadingScript}
+                            className="border-muted-foreground/30 text-muted-foreground hover:bg-muted/50 flex-shrink-0 px-2 sm:px-3"
+                            title="Reload screenplay text from project"
+                          >
+                            <RefreshCw className={`h-4 w-4 ${isLoadingScript ? 'animate-spin' : ''}`} />
+                            <span className="sr-only">Reload screenplay</span>
+                          </Button>
+                        </>
+                      )}
                       {/* AI Regenerate Button */}
                       {(treatment.synopsis || treatment.logline || treatment.title || treatment.prompt) && (
                         <Button 
@@ -6335,7 +6696,24 @@ Return ONLY the JSON object, no other text:`
                 </div>
               </div>
               <CardDescription className="pt-1 pl-6">
-                Full treatment document - paste your complete treatment here (matches ideas.prompt field)
+                Full treatment document - paste your complete treatment here (matches ideas.prompt field).
+                {treatment.project_id && (
+                  <span className="block mt-1 text-xs text-muted-foreground">
+                    {!treatment.prompt?.trim() ? (
+                  <>
+                    Have an imported screenplay? Use <span className="font-medium text-foreground">From screenplay</span> after it appears in the project, or open{' '}
+                    <Link href={`/screenplay/${treatment.project_id}`} className="underline underline-offset-2 hover:text-primary">
+                      Screenplay
+                    </Link>
+                    .
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground">From screenplay</span> always re-builds the treatment from the latest script loaded for this project (tap ↻ to refresh script text after edits or imports). This replaces the current treatment document.
+                  </>
+                )}
+                  </span>
+                )}
               </CardDescription>
             </CardHeader>
             <CollapsibleContent>

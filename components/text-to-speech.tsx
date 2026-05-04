@@ -88,79 +88,40 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }, [voices, selectedVoice])
 
   const loadApiKey = async () => {
-    console.log('🔑 [DEBUG] loadApiKey called, userId:', userId)
-    if (!userId) {
-      console.log('❌ [DEBUG] No userId available, skipping API key load')
-      return
-    }
+    if (!userId) return
 
     try {
       const supabase = getSupabaseClient()
-      
-      // First, try to get user's API key
-      console.log('🔑 [DEBUG] Checking user-specific API key...')
+
       const { data: userData, error: userError } = await supabase
         .from('users')
         .select('elevenlabs_api_key')
         .eq('id', userId)
         .maybeSingle()
 
-      console.log('🔑 [DEBUG] User key query result:', {
-        hasData: !!userData,
-        hasKey: !!userData?.elevenlabs_api_key,
-        keyLength: userData?.elevenlabs_api_key?.length || 0,
-        error: userError?.message || null
-      })
-
       if (!userError && userData?.elevenlabs_api_key?.trim()) {
-        console.log('✅ [DEBUG] Using user-specific ElevenLabs API key')
         setElevenLabsApiKey(userData.elevenlabs_api_key.trim())
         return
       }
 
-      // If no user key, try system-wide key via API route (bypasses RLS)
-      console.log('🔑 [DEBUG] No user key found, checking system-wide key via API route...')
       try {
         const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
-        console.log('🔑 [DEBUG] API route response status:', response.status, response.statusText)
-        
+
         if (response.ok) {
           const data = await response.json()
-          console.log('🔑 [DEBUG] API route response data (full):', JSON.stringify(data, null, 2))
-          console.log('🔑 [DEBUG] API route response data (parsed):', {
-            hasApiKey: !!data.apiKey,
-            apiKeyValue: data.apiKey,
-            apiKeyType: typeof data.apiKey,
-            apiKeyLength: data.apiKey?.length || 0,
-            debug: data.debug,
-            allKeys: Object.keys(data)
-          })
-          
           if (data.apiKey?.trim()) {
             setElevenLabsApiKey(data.apiKey.trim())
-            console.log('✅ [DEBUG] Using system-wide ElevenLabs API key')
             return
-      } else {
-            console.log('❌ [DEBUG] System-wide API key is empty or null', {
-              apiKey: data.apiKey,
-              trimmed: data.apiKey?.trim(),
-              isEmpty: !data.apiKey?.trim()
-            })
           }
         } else {
           const errorData = await response.json().catch(() => ({}))
-          console.error('❌ [DEBUG] API route error:', response.status, errorData)
+          console.error('ElevenLabs system key route error:', response.status, errorData)
         }
       } catch (apiError) {
-        console.error('❌ [DEBUG] Error fetching system-wide API key:', apiError)
+        console.error('Error fetching system-wide ElevenLabs API key:', apiError)
       }
-
-      // No key found - only show error if user tried to use the feature
-      // Don't show error on mount, only when they try to use it
-      console.log('❌ [DEBUG] ElevenLabs API key not found in user profile or system config')
     } catch (error) {
-      console.error('❌ [DEBUG] Error loading API key:', error)
-      // Don't show error toast on mount, only log it
+      console.error('Error loading ElevenLabs API key:', error)
     }
   }
 
@@ -239,38 +200,22 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
 
     setIsLoading(true)
     try {
-      console.log('🎵 Client: Starting text-to-speech request...')
-      console.log('🎵 Client: Text length:', text.trim().length)
-      console.log('🎵 Client: Voice ID:', selectedVoice)
-      console.log('🎵 Client: API Key configured')
-      console.log('🎵 Client: Request URL:', '/api/ai/text-to-speech')
-      
-      const requestBody = {
-        text: text.trim(),
-        voiceId: selectedVoice,
-        apiKey: elevenLabsApiKey
-      }
-      console.log('🎵 Client: Request body:', requestBody)
-      
       const response = await fetch('/api/ai/text-to-speech', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify({
+          text: text.trim(),
+          voiceId: selectedVoice,
+          apiKey: elevenLabsApiKey,
+        }),
       })
 
-      console.log('🎵 Client: Response received, status:', response.status)
-      console.log('🎵 Client: Response headers:', Object.fromEntries(response.headers.entries()))
-      
       if (!response.ok) {
-        console.log('🎵 Client: Response not OK, trying to parse error...')
         const errorData = await response.json().catch(() => ({}))
-        console.log('🎵 Client: Error data:', errorData)
         throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate speech`)
       }
 
-      console.log('🎵 Client: Response OK, processing audio blob...')
       const audioBlob = await response.blob()
-      console.log('🎵 Client: Audio blob received, size:', audioBlob.size, 'bytes')
       const url = URL.createObjectURL(audioBlob)
       setAudioUrl(url)
       

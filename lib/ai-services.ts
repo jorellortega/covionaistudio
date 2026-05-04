@@ -674,8 +674,7 @@ export class ElevenLabsService {
         promptLength: request.prompt?.length || 0,
         voiceId: request.voiceId,
         hasApiKey: !!request.apiKey,
-        apiKeyStart: request.apiKey?.substring(0, 10) + '...',
-        type: request.type
+        type: request.type,
       })
       
       // Use the voice from the request or default to Rachel
@@ -692,9 +691,11 @@ export class ElevenLabsService {
           use_speaker_boost: true,
         },
       }
-      
-      console.log('📤 Request body:', requestBody)
-      console.log('🔑 API Key header:', request.apiKey?.substring(0, 10) + '...')
+
+      console.log('📤 ElevenLabs TTS request:', {
+        textLength: request.prompt?.length ?? 0,
+        model_id: requestBody.model_id,
+      })
       
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',

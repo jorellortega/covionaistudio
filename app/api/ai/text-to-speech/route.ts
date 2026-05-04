@@ -1,6 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ElevenLabsService } from '@/lib/ai-services'
 
+/** ElevenLabs per-request text limit is 10_000; stay under for safety. */
+const ELEVENLABS_TTS_MAX_CHARS = 9500
+
+/**
+ * Split long text into segments under ElevenLabs' limit, preferring higher-level
+ * boundaries (paragraph, line, sentence, word) in that order.
+ */
+function splitTextForElevenLabsTts(text: string): string[] {
+  const t = text.trim()
+  if (!t) return []
+  if (t.length <= ELEVENLABS_TTS_MAX_CHARS) return [t]
+
+  const delims = ['\n\n', '\n', '. ', '! ', '? ', '; ', ', ', ' '] as const
+  const out: string[] = []
+  let pos = 0
+
+  while (pos < t.length) {
+    const limit = pos + ELEVENLABS_TTS_MAX_CHARS
+    if (limit >= t.length) {
+      const rest = t.slice(pos).trim()
+      if (rest) out.push(rest)
+      break
+    }
+
+    const minPos = pos + Math.floor(ELEVENLABS_TTS_MAX_CHARS * 0.55)
+    let split = -1
+
+    for (const d of delims) {
+      let searchEnd = Math.min(limit - 1, t.length - 1)
+      while (searchEnd >= minPos) {
+        const idx = t.lastIndexOf(d, searchEnd)
+        if (idx < pos) break
+        const after = idx + d.length
+        if (after <= limit && after > minPos) {
+          split = after
+          break
+        }
+        searchEnd = idx - 1
+      }
+      if (split !== -1) break
+    }
+
+    if (split === -1) split = limit
+
+    const chunk = t.slice(pos, split).trim()
+    if (chunk) out.push(chunk)
+    pos = split
+    while (pos < t.length && /\s/.test(t[pos])) pos++
+  }
+
+  return out
+}
+
+function mergeMp3ArrayBuffers(buffers: ArrayBuffer[]): ArrayBuffer {
+  if (buffers.length === 1) return buffers[0]
+  const total = buffers.reduce((sum, b) => sum + b.byteLength, 0)
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const b of buffers) {
+    merged.set(new Uint8Array(b), offset)
+    offset += b.byteLength
+  }
+  return merged.buffer
+}
+
 export async function POST(request: NextRequest) {
   console.log('🚀 TEXT-TO-SPEECH API: Route called!')
   try {
@@ -73,53 +138,57 @@ export async function POST(request: NextRequest) {
     console.log('🎵 Generating audio with ElevenLabs...')
     console.log('📝 Text length:', text.length)
     console.log('🎤 Voice ID:', voiceId || "21m00Tcm4TlvDq8ikWAM")
-    console.log('🔑 API Key (first 10 chars):', apiKey.substring(0, 10) + '...')
-    
-    const result = await ElevenLabsService.generateAudio({
-      prompt: text,
-      voiceId: voiceId || "21m00Tcm4TlvDq8ikWAM", // Default to Rachel voice
-      apiKey: apiKey,
-      type: 'audio'
-    })
-    
-    console.log('🎵 ElevenLabs generateAudio result:', {
-      success: result.success,
-      error: result.error,
-      hasData: !!result.data,
-      dataKeys: result.data ? Object.keys(result.data) : []
-    })
 
-    if (!result.success) {
-      return NextResponse.json(
-        { error: result.error || 'Failed to generate audio' },
-        { status: 500 }
-      )
+    const chunks = splitTextForElevenLabsTts(text)
+    if (chunks.length > 1) {
+      console.log(`📝 Long text: splitting into ${chunks.length} TTS segments`)
     }
 
-    // Return the audio blob as a response
-    const contentType = result.data?.content_type || 'audio/mpeg'
+    const voice = voiceId || '21m00Tcm4TlvDq8ikWAM'
+    const audioBuffers: ArrayBuffer[] = []
+    let contentType = 'audio/mpeg'
 
-    if (result.data?.audio_array_buffer) {
-      return new NextResponse(result.data.audio_array_buffer, {
-        headers: {
-          'Content-Type': contentType,
-        },
+    for (let c = 0; c < chunks.length; c++) {
+      const result = await ElevenLabsService.generateAudio({
+        prompt: chunks[c],
+        voiceId: voice,
+        apiKey: apiKey,
+        type: 'audio',
       })
-    }
 
-    if (result.data?.blob) {
-      const arrayBuffer = await result.data.blob.arrayBuffer()
-      return new NextResponse(arrayBuffer, {
-        headers: {
-          'Content-Type': contentType,
-        },
+      console.log('🎵 ElevenLabs generateAudio chunk', c + 1, '/', chunks.length, {
+        success: result.success,
+        error: result.error,
+        hasData: !!result.data,
       })
+
+      if (!result.success) {
+        return NextResponse.json(
+          { error: result.error || 'Failed to generate audio' },
+          { status: 500 }
+        )
+      }
+
+      contentType = result.data?.content_type || contentType
+
+      if (result.data?.audio_array_buffer) {
+        audioBuffers.push(result.data.audio_array_buffer)
+      } else if (result.data?.blob) {
+        audioBuffers.push(await result.data.blob.arrayBuffer())
+      } else {
+        return NextResponse.json(
+          { error: 'Audio data missing from ElevenLabs response' },
+          { status: 500 }
+        )
+      }
     }
 
-    return NextResponse.json(
-      { error: 'Audio data missing from ElevenLabs response' },
-      { status: 500 }
-    )
+    const merged = mergeMp3ArrayBuffers(audioBuffers)
+    return new NextResponse(merged, {
+      headers: {
+        'Content-Type': contentType,
+      },
+    })
   } catch (error) {
     console.error('Text-to-speech error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'

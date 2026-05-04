@@ -42,6 +42,7 @@ import {
   MapPin,
   Share2,
   Shield,
+  ScrollText,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -1838,6 +1839,7 @@ export default function MoviesPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6 mb-8">
               {sharedMovies.map((sharedProject: any) => {
                 const movie = sharedProject as Movie
+                const viewMovieId = movie.treatment_id || movie.id
                 return (
                   <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group border-primary/20">
                     <CardHeader className="pb-2">
@@ -1854,7 +1856,7 @@ export default function MoviesPage() {
                         )}
                       </div>
                       <Link 
-                        href={`/timeline?movie=${movie.id}`}
+                        href={`/viewmovie/${viewMovieId}`}
                         className="block"
                       >
                         <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
@@ -1882,8 +1884,8 @@ export default function MoviesPage() {
                           {movie.movie_status}
                         </Badge>
                         </div>
-                        {movie.treatment_id && (
-                          <Link href={`/viewmovie/${movie.treatment_id}`} className="block mb-3">
+                        <div className="space-y-2 mb-3">
+                          <Link href={`/viewmovie/${viewMovieId}`} className="block">
                             <Button 
                               variant="outline" 
                               size="sm" 
@@ -1893,7 +1895,17 @@ export default function MoviesPage() {
                               View Movie
                             </Button>
                           </Link>
-                        )}
+                          <Link href={`/treatments/${viewMovieId}`} className="block">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="w-full border-cyan-500/30 bg-transparent hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 h-8 text-xs"
+                            >
+                              <ScrollText className="h-3.5 w-3.5 mr-2" />
+                              Treatment
+                            </Button>
+                          </Link>
+                        </div>
                         <div className="grid grid-cols-2 gap-1 mt-2">
                           <Link href={`/timeline?movie=${movie.id}`}>
                             <Button
@@ -2042,14 +2054,15 @@ export default function MoviesPage() {
 
         {/* Movies Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
-          {filteredMovies.map((movie) => (
+          {filteredMovies.map((movie) => {
+            const viewMovieId = movie.treatment_id || movie.id
+            return (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
               <CardHeader className="pb-2">
-                {movie.treatment_id ? (
-                  <Link 
-                    href={`/viewmovie/${movie.treatment_id}`}
-                    className="block"
-                  >
+                <Link 
+                  href={`/viewmovie/${viewMovieId}`}
+                  className="block"
+                >
                     <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
                       <img
                         src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
@@ -2065,27 +2078,6 @@ export default function MoviesPage() {
                       />
                     </div>
                   </Link>
-                ) : (
-                  <Link 
-                    href={`/timeline?movie=${movie.id}`}
-                    className="block"
-                  >
-                    <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
-                      <img
-                        src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
-                        alt={movie.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        onError={(e) => {
-                          // Fallback to placeholder if image fails to load
-                          const target = e.target as HTMLImageElement
-                          if (target.src !== "/placeholder.svg?height=300&width=200") {
-                            target.src = "/placeholder.svg?height=300&width=200"
-                          }
-                        }}
-                      />
-                    </div>
-                  </Link>
-                )}
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <CardTitle className="text-lg mb-1 group-hover:text-primary transition-colors">
@@ -2141,8 +2133,8 @@ export default function MoviesPage() {
               </CardHeader>
               <CardContent>
                 <CardDescription className="mb-3 line-clamp-2 text-sm">{movie.description}</CardDescription>
-                {movie.treatment_id && (
-                  <Link href={`/viewmovie/${movie.treatment_id}`} className="block mb-3">
+                <div className="space-y-2 mb-3">
+                  <Link href={`/viewmovie/${viewMovieId}`} className="block">
                     <Button 
                       variant="outline" 
                       size="sm" 
@@ -2152,7 +2144,17 @@ export default function MoviesPage() {
                       View Movie
                     </Button>
                   </Link>
-                )}
+                  <Link href={`/treatments/${viewMovieId}`} className="block">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="w-full border-cyan-500/30 bg-transparent hover:bg-cyan-500/10 text-cyan-400 hover:text-cyan-300 h-8 text-xs"
+                    >
+                      <ScrollText className="h-3.5 w-3.5 mr-2" />
+                      Treatment
+                    </Button>
+                  </Link>
+                </div>
 
                 <div className="grid grid-cols-2 gap-1 mt-2">
                   <Link href={`/timeline?movie=${movie.id}`}>
@@ -2237,7 +2239,8 @@ export default function MoviesPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            )
+          })}
         </div>
 
         {/* Empty State */}
