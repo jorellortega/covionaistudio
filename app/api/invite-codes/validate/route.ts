@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     )
     const { searchParams } = new URL(request.url)
     const code = searchParams.get('code')
+    const linkToken = searchParams.get('token') || searchParams.get('st') || null
 
     if (!code) {
       return NextResponse.json(
@@ -36,18 +37,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Validate invite code without using it (just check validity)
-    const { data: role, error } = await supabase
-      .rpc('validate_invite_code', { code_to_use: code.toUpperCase() })
+    const { data: payload, error } = await supabase.rpc('validate_invite_for_signup', {
+      code_to_use: code.toUpperCase(),
+      link_token: linkToken,
+    })
 
     if (error) {
-      // Check if it's a custom exception (invalid code)
-      if (error.message?.includes('Invalid or expired')) {
-        return NextResponse.json(
-          { valid: false, error: 'Invalid or expired invite code' },
-          { status: 200 } // Return 200 with valid: false for client-side handling
-        )
-      }
       console.error('Error validating invite code:', error)
       return NextResponse.json(
         { valid: false, error: 'Failed to validate invite code' },
@@ -55,11 +50,21 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // If we get here, the code is valid (but not used yet)
+    const row = payload as Record<string, unknown> | null
+    if (!row || row.valid !== true) {
+      return NextResponse.json({
+        valid: false,
+        error: (typeof row?.error === 'string' && row.error) || 'Invalid or expired invite code',
+      })
+    }
+
     return NextResponse.json({
       valid: true,
-      role,
-      message: 'Invite code is valid'
+      role: row.role,
+      requiresLinkToken: row.requires_link_token === true,
+      accountAccessExpiresAt: row.account_access_expires_at ?? null,
+      blockedRoutes: row.blocked_routes ?? [],
+      message: 'Invite code is valid',
     })
   } catch (error) {
     console.error('Error in GET /api/invite-codes/validate:', error)

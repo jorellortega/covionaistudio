@@ -5,12 +5,31 @@ import Header from "@/components/header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Check, Video, Mic, Image, HardDrive, Users, Zap, Shield, Building2, RefreshCw, Infinity, Loader2, AlertTriangle, FileText, Film, Camera, BookOpen, LayoutGrid, Palette } from "lucide-react"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { Check, Video, Mic, Image, HardDrive, Users, Zap, Shield, Building2, RefreshCw, Loader2, AlertTriangle, FileText, Film, Camera, BookOpen, LayoutGrid, Palette } from "lucide-react"
 import Link from "next/link"
+import { useAuth } from "@/components/AuthProvider"
 import { useAuthReady } from "@/components/auth-hooks"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+
+type PricedPlanId = "creator" | "studio" | "production"
+
+const DEFAULT_PLAN_BILLING: Record<PricedPlanId, "monthly" | "annual"> = {
+  creator: "monthly",
+  studio: "monthly",
+  production: "monthly",
+}
+
+/** Annual price already reflects discount vs 12× monthly — returns $ and % saved. */
+function annualDiscountVsMonthly(priceMonthly: number, priceAnnual: number) {
+  const fullYearAtMonthly = priceMonthly * 12
+  const dollarsSaved = fullYearAtMonthly - priceAnnual
+  const pct =
+    fullYearAtMonthly > 0 ? Math.round((dollarsSaved / fullYearAtMonthly) * 100) : 0
+  return { fullYearAtMonthly, dollarsSaved, pct }
+}
 
 const plans = [
   {
@@ -18,6 +37,8 @@ const plans = [
     name: "Creator",
     nameAlt: "Script Writer",
     price: 45,
+    /** Stripe yearly price ($360/yr in dashboard) — shown when Annual is selected */
+    annualPrice: 360,
     description: "For professional creators",
     popular: true,
     credits: "25,000 Studio Credits",
@@ -43,6 +64,7 @@ const plans = [
     name: "Studio",
     nameAlt: "Script Writer and Producer",
     price: 150,
+    annualPrice: 1440,
     description: "For production teams",
     popular: false,
     credits: "90,000 Studio Credits",
@@ -71,6 +93,7 @@ const plans = [
     name: "Production House",
     nameAlt: "Writer and Executive Producer",
     price: 500,
+    annualPrice: 4800,
     description: "For large production companies",
     popular: false,
     credits: "220,000 Studio Credits",
@@ -98,19 +121,35 @@ const plans = [
 ]
 
 export default function SubscriptionsPage() {
-  const { userId, ready, signedIn, user, session } = useAuthReady()
+  const { loading: authLoading } = useAuth()
+  const { userId, signedIn, user, session } = useAuthReady()
   const { toast } = useToast()
   const router = useRouter()
   const [loadingPlan, setLoadingPlan] = useState<string | null>(null)
+  /** Which plan card looks “selected” — default Creator (Most Popular). */
+  const [focusedPlanId, setFocusedPlanId] = useState<string>("creator")
+  /** Per-plan Stripe checkout interval (monthly vs yearly). */
+  const [planBilling, setPlanBilling] =
+    useState<Record<PricedPlanId, "monthly" | "annual">>(DEFAULT_PLAN_BILLING)
+
+  const checkoutLoadingKey = (planId: string) =>
+    `${planId}:${planBilling[planId as PricedPlanId]}`
 
   const handleSubscribe = async (planId: string) => {
-    // If user is not signed in, redirect to login
+    setFocusedPlanId(planId)
+    // New users: sign up first (same page returns them here to finish in-app if needed)
     if (!signedIn) {
-      router.push(`/login?next=${encodeURIComponent('/subscriptions')}`)
+      const qs = new URLSearchParams({
+        mode: "signup",
+        next: "/subscriptions",
+        plan: planId,
+      })
+      qs.set("billing", planBilling[planId as PricedPlanId])
+      router.push(`/login?${qs.toString()}`)
       return
     }
 
-    setLoadingPlan(planId)
+    setLoadingPlan(checkoutLoadingKey(planId))
     try {
       // Get email from user object or session
       const userEmail = user?.email || session?.user?.email
@@ -124,7 +163,8 @@ export default function SubscriptionsPage() {
           planId,
           userId,
           userEmail,
-          action: 'subscribe',
+          action: "subscribe",
+          billingInterval: planBilling[planId as PricedPlanId],
         }),
       })
 
@@ -164,7 +204,7 @@ export default function SubscriptionsPage() {
             Do Not Sign Up Yet
           </AlertTitle>
           <AlertDescription className="text-base text-orange-700 dark:text-orange-300 mt-1">
-            We will be ready to go live in January 2026. Please check back then!
+            Please check back—we&apos;ll be open soon.
           </AlertDescription>
         </Alert>
         {/* Header Section */}
@@ -173,10 +213,10 @@ export default function SubscriptionsPage() {
             AI Cinema Studio — Pricing
           </h1>
           <p className="text-xl text-muted-foreground mb-2">
-            Creator / Producer Plans (Monthly)
+            Monthly or annual billing — pick per plan before checkout
           </p>
           <Badge variant="outline" className="mt-4">
-            Annual billing: ~20% off all paid plans
+            Annual plans include the discount vs 12× monthly (~20% on Studio &amp; Production House at current prices)
           </Badge>
         </div>
 
@@ -185,14 +225,27 @@ export default function SubscriptionsPage() {
           {plans.map((plan) => {
             const Icon = plan.icon
             const isPopular = plan.popular
-            const isLoading = loadingPlan === plan.id
+            const isSelected = focusedPlanId === plan.id
+            const isLoading = loadingPlan === checkoutLoadingKey(plan.id)
+            const billing = planBilling[plan.id as PricedPlanId]
+            const hasAnnual = "annualPrice" in plan && plan.annualPrice != null
+            const displayPrice =
+              hasAnnual && billing === "annual" && plan.annualPrice != null
+                ? plan.annualPrice
+                : plan.price
+            const displaySuffix = hasAnnual && billing === "annual" ? "/year" : "/month"
+            const annualDiscount =
+              hasAnnual && plan.annualPrice != null
+                ? annualDiscountVsMonthly(plan.price, plan.annualPrice)
+                : null
             
             return (
               <Card
                 key={plan.id}
-                className={`cinema-card relative overflow-hidden transition-all duration-300 ${
-                  isPopular
-                    ? "border-primary shadow-lg scale-105 ring-2 ring-primary/20"
+                onClick={() => setFocusedPlanId(plan.id)}
+                className={`cinema-card relative overflow-hidden transition-all duration-300 cursor-pointer ${
+                  isSelected
+                    ? "border-primary shadow-lg z-10 scale-[1.02] sm:scale-105 ring-2 ring-primary/20"
                     : "hover:border-primary/50 hover:shadow-md"
                 }`}
               >
@@ -215,11 +268,60 @@ export default function SubscriptionsPage() {
                     )}
                   </CardTitle>
                   <CardDescription>{plan.description}</CardDescription>
+
+                  {hasAnnual && (
+                    <div className="mt-4" onClick={(e) => e.stopPropagation()}>
+                      <p className="text-xs text-muted-foreground mb-2">Billing</p>
+                      <ToggleGroup
+                        type="single"
+                        value={billing}
+                        onValueChange={(v) => {
+                          if (v === "monthly" || v === "annual") {
+                            setPlanBilling((prev) => ({
+                              ...prev,
+                              [plan.id as PricedPlanId]: v,
+                            }))
+                          }
+                        }}
+                        variant="outline"
+                        className="grid w-full grid-cols-2 gap-2"
+                      >
+                        <ToggleGroupItem value="monthly" className="text-sm">
+                          Monthly
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="annual" className="text-sm">
+                          Annual
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                    </div>
+                  )}
                   
                   <div className="mt-4">
-                    <span className="text-3xl font-bold">${plan.price}</span>
-                    <span className="text-muted-foreground">/month</span>
+                    <span className="text-3xl font-bold">${displayPrice}</span>
+                    <span className="text-muted-foreground">{displaySuffix}</span>
                   </div>
+                  {hasAnnual && annualDiscount && (
+                    <p
+                      className={`mt-2 text-xs leading-snug ${
+                        billing === "annual"
+                          ? "text-primary font-medium"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {billing === "annual" ? (
+                        <>
+                          vs ${annualDiscount.fullYearAtMonthly.toLocaleString()} if you paid monthly for 12
+                          months — save ${annualDiscount.pct}% (
+                          ${annualDiscount.dollarsSaved.toLocaleString()})
+                        </>
+                      ) : (
+                        <>
+                          Annual saves ~{annualDiscount.pct}% (
+                          ${annualDiscount.dollarsSaved.toLocaleString()}) vs 12 monthly payments
+                        </>
+                      )}
+                    </p>
+                  )}
                 </CardHeader>
 
                 <CardContent className="space-y-4">
@@ -342,13 +444,16 @@ export default function SubscriptionsPage() {
                   {/* CTA Button */}
                   <Button
                     className={`w-full mt-6 ${
-                      isPopular
+                      isSelected
                         ? "gradient-button text-white"
                         : "border-border hover:bg-primary hover:text-primary-foreground"
                     }`}
-                    variant={isPopular ? "default" : "outline"}
-                    onClick={() => handleSubscribe(plan.id)}
-                    disabled={isLoading || !ready}
+                    variant={isSelected ? "default" : "outline"}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleSubscribe(plan.id)
+                    }}
+                    disabled={isLoading || authLoading}
                   >
                     {isLoading ? (
                       <>
@@ -358,7 +463,7 @@ export default function SubscriptionsPage() {
                     ) : signedIn ? (
                       "Subscribe Now"
                     ) : (
-                      "Sign In to Subscribe"
+                      "Sign up to subscribe"
                     )}
                   </Button>
                 </CardContent>
@@ -376,12 +481,11 @@ export default function SubscriptionsPage() {
                   <RefreshCw className="h-6 w-6 text-white" />
                 </div>
                 <div>
-                  <CardTitle className="text-2xl flex items-center gap-2">
-                    Unlimited Usage
-                    <Infinity className="h-5 w-5 text-primary" />
+                  <CardTitle className="text-2xl">
+                    Add credits when you need them
                   </CardTitle>
                   <CardDescription className="text-base mt-1">
-                    Load up credits on any plan for unlimited usage
+                    Each plan includes a monthly credit allowance. When you run low, purchase more credits—no confusing cap on how often you can top up.
                   </CardDescription>
                 </div>
               </div>
@@ -389,25 +493,24 @@ export default function SubscriptionsPage() {
             <CardContent>
               <div className="space-y-3">
                 <p className="text-foreground leading-relaxed">
-                  Don't let credit limits hold you back! You can reload credits on any plan at any time to keep creating without interruption. 
-                  Whether you're on Creator, Studio, or Production House, you can add more credits whenever you need them.
+                  AI features and renders draw from your credit balance. Creator, Studio, and Production House each include credits with the subscription; when you&apos;ve used them, buy additional credit packs to keep working—same plan, same workspace.
                 </p>
                 <div className="flex items-start gap-2 pt-2">
                   <Check className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
                   <p className="text-sm text-muted-foreground">
-                    <span className="font-medium text-foreground">Stay on your current plan</span> — reload credits as many times as you need without changing plans
+                    <span className="font-medium text-foreground">Stay on your current plan</span> — top up credits without changing tiers
                   </p>
                 </div>
                 <div className="flex items-start gap-2">
                   <Check className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
                   <p className="text-sm text-muted-foreground">
-                    <span className="font-medium text-foreground">No plan upgrade required</span> — add credits to your existing plan whenever you need more
+                    <span className="font-medium text-foreground">No upgrade required to buy more</span> — purchase packs whenever your balance runs low
                   </p>
                 </div>
                 <div className="flex items-start gap-2">
                   <Check className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
                   <p className="text-sm text-muted-foreground">
-                    <span className="font-medium text-foreground">Unlimited reloads</span> — keep reloading on the same plan for continuous, unlimited usage
+                    <span className="font-medium text-foreground">Buy packs as often as you like</span> — there&apos;s no limit on how many times you can add credits to the same plan
                   </p>
                 </div>
                 <div className="pt-4">

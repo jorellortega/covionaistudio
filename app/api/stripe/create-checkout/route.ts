@@ -16,6 +16,39 @@ const plans = {
   production: { priceId: process.env.STRIPE_PRICE_PRODUCTION!, name: 'Production House', amount: 50000 },
 }
 
+const yearlyStripePriceIdByPlan: Record<string, string | undefined> = {
+  creator: process.env.STRIPE_PRICE_CREATOR_YEARLY,
+  studio: process.env.STRIPE_PRICE_STUDIO_YEARLY,
+  production: process.env.STRIPE_PRICE_PRODUCTION_YEARLY,
+}
+
+const yearlyEnvNameByPlan: Record<string, string> = {
+  creator: 'STRIPE_PRICE_CREATOR_YEARLY',
+  studio: 'STRIPE_PRICE_STUDIO_YEARLY',
+  production: 'STRIPE_PRICE_PRODUCTION_YEARLY',
+}
+
+function resolveSubscriptionStripePriceId(
+  planId: string,
+  billingInterval?: string
+): { priceId: string; billingNote: string } {
+  if (billingInterval === 'annual') {
+    const yearly = yearlyStripePriceIdByPlan[planId]
+    if (!yearly) {
+      const envName = yearlyEnvNameByPlan[planId] || 'STRIPE_PRICE_*_YEARLY'
+      throw new Error(
+        `Annual price for "${planId}" is not configured. Set ${envName} to your Stripe yearly price id (price_…).`
+      )
+    }
+    return { priceId: yearly, billingNote: 'annual' }
+  }
+  const plan = plans[planId as keyof typeof plans]
+  if (!plan?.priceId) {
+    throw new Error('Invalid plan')
+  }
+  return { priceId: plan.priceId, billingNote: 'monthly' }
+}
+
 const creditPackages = {
   pack1: { name: 'Starter Pack', credits: 5000, amount: 1000 },
   pack2: { name: 'Creator Pack', credits: 15000, amount: 2500 },
@@ -37,9 +70,19 @@ export async function POST(request: NextRequest) {
     console.log('🔧 CHECKOUT: ========== CREATE CHECKOUT REQUEST ==========')
     console.log('🔧 CHECKOUT: Timestamp:', new Date().toISOString())
     
-    const { planId, packageId, userId, userEmail, action, customAmount, credits } = await request.json()
+    const { planId, packageId, userId, userEmail, action, customAmount, credits, billingInterval } =
+      await request.json()
 
-    console.log('📋 CHECKOUT: Request payload:', { planId, packageId, userId, userEmail, action, customAmount, credits })
+    console.log('📋 CHECKOUT: Request payload:', {
+      planId,
+      packageId,
+      userId,
+      userEmail,
+      action,
+      customAmount,
+      credits,
+      billingInterval,
+    })
 
     if (!userId) {
       return NextResponse.json(
@@ -166,26 +209,33 @@ export async function POST(request: NextRequest) {
       console.log('📋 CHECKOUT: User ID:', userId)
       console.log('📋 CHECKOUT: User Email:', userEmail)
       
-      const plan = plans[planId as keyof typeof plans]
-      if (!plan) {
-        console.error('❌ CHECKOUT: Invalid plan ID:', planId)
-        return NextResponse.json(
-          { error: 'Invalid plan' },
-          { status: 400 }
-        )
+      let stripePriceId: string
+      let billingNote: string
+      try {
+        const resolved = resolveSubscriptionStripePriceId(planId, billingInterval)
+        stripePriceId = resolved.priceId
+        billingNote = resolved.billingNote
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Invalid plan or billing'
+        console.error('❌ CHECKOUT:', msg)
+        return NextResponse.json({ error: msg }, { status: 400 })
       }
+
+      const planMeta = plans[planId as keyof typeof plans]
       
       console.log('📋 CHECKOUT: Plan details:', {
-        name: plan.name,
-        priceId: plan.priceId,
-        amount: plan.amount,
+        name: planMeta?.name ?? planId,
+        stripePriceId,
+        billingInterval: billingNote,
       })
       
       console.log('📋 CHECKOUT: Environment variables check:')
       console.log('  - STRIPE_PRICE_CREATOR:', process.env.STRIPE_PRICE_CREATOR ? `✅ ${process.env.STRIPE_PRICE_CREATOR.substring(0, 20)}...` : '❌ Missing')
+      console.log('  - STRIPE_PRICE_CREATOR_YEARLY:', process.env.STRIPE_PRICE_CREATOR_YEARLY ? `✅ ${process.env.STRIPE_PRICE_CREATOR_YEARLY.substring(0, 20)}...` : '❌ Missing')
       console.log('  - STRIPE_PRICE_STUDIO:', process.env.STRIPE_PRICE_STUDIO ? `✅ ${process.env.STRIPE_PRICE_STUDIO.substring(0, 20)}...` : '❌ Missing')
+      console.log('  - STRIPE_PRICE_STUDIO_YEARLY:', process.env.STRIPE_PRICE_STUDIO_YEARLY ? `✅ ${process.env.STRIPE_PRICE_STUDIO_YEARLY.substring(0, 20)}...` : '❌ Missing')
       console.log('  - STRIPE_PRICE_PRODUCTION:', process.env.STRIPE_PRICE_PRODUCTION ? `✅ ${process.env.STRIPE_PRICE_PRODUCTION.substring(0, 20)}...` : '❌ Missing')
-      console.log('  - Plan priceId matches env:', plan.priceId === process.env[`STRIPE_PRICE_${planId.toUpperCase()}`] ? '✅ Yes' : '❌ No')
+      console.log('  - STRIPE_PRICE_PRODUCTION_YEARLY:', process.env.STRIPE_PRICE_PRODUCTION_YEARLY ? `✅ ${process.env.STRIPE_PRICE_PRODUCTION_YEARLY.substring(0, 20)}...` : '❌ Missing')
 
       // Create checkout session for subscription
       const stripe = getStripe()
@@ -194,11 +244,13 @@ export async function POST(request: NextRequest) {
         userId,
         type: action || 'subscribe',
         planId,
+        billing: billingNote,
       }
       
       const subscriptionMetadata = {
         userId,
         planId,
+        billing: billingNote,
       }
       
       console.log('📋 CHECKOUT: Checkout session metadata:', JSON.stringify(checkoutMetadata, null, 2))
@@ -212,7 +264,7 @@ export async function POST(request: NextRequest) {
         customer_email: userEmail || undefined, // Pre-fill email if provided
         line_items: [
           {
-            price: plan.priceId,
+            price: stripePriceId,
             quantity: 1,
           },
         ],

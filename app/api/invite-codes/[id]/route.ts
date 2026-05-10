@@ -67,6 +67,17 @@ export async function PATCH(
       }
     }
 
+    let initialBlocked: unknown = undefined
+    if (updates.initialBlockedRoutes !== undefined) {
+      if (Array.isArray(updates.initialBlockedRoutes)) {
+        initialBlocked = updates.initialBlockedRoutes.filter(
+          (x: unknown) => typeof x === 'string' && String(x).trim().length > 0
+        )
+      } else {
+        initialBlocked = []
+      }
+    }
+
     // Update invite code
     const { data: inviteCode, error } = await supabase
       .from('invite_codes')
@@ -76,6 +87,14 @@ export async function PATCH(
         ...(updates.expiresAt !== undefined && { expires_at: updates.expiresAt }),
         ...(updates.isActive !== undefined && { is_active: updates.isActive }),
         ...(updates.notes !== undefined && { notes: updates.notes }),
+        ...(updates.accountAccessExpiresAt !== undefined && {
+          account_access_expires_at: updates.accountAccessExpiresAt,
+        }),
+        ...(initialBlocked !== undefined && { initial_blocked_routes: initialBlocked }),
+        ...(updates.regenerateLinkToken === true && {
+          invite_link_token: crypto.randomUUID().replace(/-/g, '').slice(0, 24),
+        }),
+        ...(updates.clearLinkToken === true && { invite_link_token: null }),
       })
       .eq('id', id)
       .select()

@@ -37,8 +37,11 @@ function getSupabaseAdmin() {
 function getPlanIdFromPriceId(priceId: string): { planId: string; planName: string } | null {
   const priceIdToPlan: Record<string, { planId: string; planName: string }> = {
     [process.env.STRIPE_PRICE_CREATOR || '']: { planId: 'creator', planName: 'Creator' },
+    [process.env.STRIPE_PRICE_CREATOR_YEARLY || '']: { planId: 'creator', planName: 'Creator' },
     [process.env.STRIPE_PRICE_STUDIO || '']: { planId: 'studio', planName: 'Studio' },
+    [process.env.STRIPE_PRICE_STUDIO_YEARLY || '']: { planId: 'studio', planName: 'Studio' },
     [process.env.STRIPE_PRICE_PRODUCTION || '']: { planId: 'production', planName: 'Production House' },
+    [process.env.STRIPE_PRICE_PRODUCTION_YEARLY || '']: { planId: 'production', planName: 'Production House' },
   }
   return priceIdToPlan[priceId] || null
 }
@@ -251,8 +254,11 @@ export async function POST(request: NextRequest) {
             console.error('❌ Unknown price ID:', priceId)
             console.error('📋 Available price IDs in env:')
             console.error('  - STRIPE_PRICE_CREATOR:', process.env.STRIPE_PRICE_CREATOR)
+            console.error('  - STRIPE_PRICE_CREATOR_YEARLY:', process.env.STRIPE_PRICE_CREATOR_YEARLY)
             console.error('  - STRIPE_PRICE_STUDIO:', process.env.STRIPE_PRICE_STUDIO)
+            console.error('  - STRIPE_PRICE_STUDIO_YEARLY:', process.env.STRIPE_PRICE_STUDIO_YEARLY)
             console.error('  - STRIPE_PRICE_PRODUCTION:', process.env.STRIPE_PRICE_PRODUCTION)
+            console.error('  - STRIPE_PRICE_PRODUCTION_YEARLY:', process.env.STRIPE_PRICE_PRODUCTION_YEARLY)
             break
           }
 

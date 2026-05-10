@@ -225,8 +225,13 @@ export function AIChat({ className }: AIChatProps) {
 
   // Expanded view - full chat
   return (
-    <Card className={cn("flex flex-col h-[600px] max-h-[80vh] transition-all duration-300", className)}>
-      <CardHeader className="border-b">
+    <Card
+      className={cn(
+        "flex flex-col h-[600px] max-h-[80vh] min-h-0 overflow-hidden transition-all duration-300",
+        className
+      )}
+    >
+      <CardHeader className="flex-shrink-0 border-b">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Bot className="h-5 w-5" />
@@ -252,14 +257,14 @@ export function AIChat({ className }: AIChatProps) {
           )}
         </div>
       </CardHeader>
-      <CardContent className="flex-1 flex flex-col p-0 min-h-0">
-        <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
+      <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+        <ScrollArea className="min-h-0 flex-1 overflow-hidden p-4" ref={scrollAreaRef}>
           <div className="space-y-4">
             {messages.map((message, index) => (
               <div
                 key={index}
                 className={cn(
-                  "flex gap-3",
+                  "flex min-w-0 gap-3",
                   message.role === 'user' ? "justify-end" : "justify-start"
                 )}
               >
@@ -270,13 +275,13 @@ export function AIChat({ className }: AIChatProps) {
                 )}
                 <div
                   className={cn(
-                    "max-w-[80%] rounded-lg px-4 py-2",
+                    "min-w-0 max-w-[80%] rounded-lg px-4 py-2",
                     message.role === 'user'
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-foreground"
                   )}
                 >
-                  <div className="text-sm whitespace-pre-wrap break-words">
+                  <div className="text-sm whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                     {renderMessageContent(message.content)}
                   </div>
                 </div>
@@ -288,7 +293,7 @@ export function AIChat({ className }: AIChatProps) {
               </div>
             ))}
             {isLoading && (
-              <div className="flex gap-3 justify-start">
+              <div className="flex min-w-0 gap-3 justify-start">
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
                   <Bot className="h-4 w-4 text-primary" />
                 </div>
@@ -300,7 +305,7 @@ export function AIChat({ className }: AIChatProps) {
             <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
-        <div className="border-t p-4">
+        <div className="flex-shrink-0 border-t p-4">
           <div className="flex gap-2">
             <Textarea
               value={input}

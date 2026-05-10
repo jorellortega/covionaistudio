@@ -16,6 +16,7 @@ import {
 import { useAuth } from "@/components/AuthProvider"
 import { useAuthReady } from "@/components/auth-hooks"
 import Header from "@/components/header"
+import { HomeBelowFold } from "@/components/home-below-fold"
 
 export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -122,6 +123,8 @@ export default function HomePage() {
               </Card>
             </div>
           </section>
+
+          <HomeBelowFold />
         </main>
         <footer className="border-t border-border bg-background/50">
           <div className="container mx-auto px-4 sm:px-6 py-6 sm:py-8 md:py-12">
@@ -312,78 +315,8 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* Promo Section (refined, fewer buttons, stronger narrative) */}
-        <section className="container mx-auto px-4 sm:px-6 pb-16 sm:pb-20 md:pb-24">
-          <div className="max-w-6xl mx-auto">
-            {/* Cinematic strip (auto-scroll) */}
-            <div className="mt-4 sm:mt-6 overflow-hidden rounded-lg sm:rounded-xl border border-border/50 bg-background/50">
-              <div className="whitespace-nowrap will-change-transform marquee-track">
-                <div className="inline-flex gap-3 sm:gap-4 px-3 sm:px-4 py-2 sm:py-3">
-                  <img src="/quantum-heist-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/cyberpunk-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/classical-music-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/digital-horror-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/abstract-geometric-scene.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/placeholder.jpg" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                </div>
-                <div className="inline-flex gap-3 sm:gap-4 px-3 sm:px-4 py-2 sm:py-3">
-                  <img src="/quantum-heist-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/cyberpunk-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/classical-music-movie-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/digital-horror-poster.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/abstract-geometric-scene.png" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                  <img src="/placeholder.jpg" alt="Frame" className="h-16 sm:h-20 w-auto rounded-md border border-border/40" />
-                </div>
-              </div>
-            </div>
-
-            {/* Three pillars */}
-            <div className="grid gap-4 sm:gap-6 mt-6 sm:mt-8 md:mt-10 grid-cols-1 sm:grid-cols-3 relative">
-              {/* connector line */}
-              <div className="hidden sm:block absolute left-1/2 -translate-x-1/2 top-8 w-[80%] h-px bg-gradient-to-r from-transparent via-border to-transparent" />
-              <div className="rounded-lg sm:rounded-xl border border-border/60 p-4 sm:p-6 bg-background/60 backdrop-blur">
-                <div className="text-xs sm:text-sm uppercase tracking-wide text-muted-foreground mb-2">01</div>
-                <h4 className="text-base sm:text-lg font-semibold mb-2">Write & Plan</h4>
-                <p className="text-xs sm:text-sm text-muted-foreground">
-                  Turn ideas into polished treatments and scenes. Keep everything structured, trackable, and ready for production.
-                </p>
-              </div>
-              <div className="rounded-lg sm:rounded-xl border border-border/60 p-4 sm:p-6 bg-background/60 backdrop-blur">
-                <div className="text-xs sm:text-sm uppercase tracking-wide text-muted-foreground mb-2">02</div>
-                <h4 className="text-base sm:text-lg font-semibold mb-2">Visualize the Mood</h4>
-                <p className="text-xs sm:text-sm text-muted-foreground">
-                  Explore cohesive looks with context-aware prompts from your treatment, scene, or shot. Collect references and keep them tied to the work.
-                </p>
-              </div>
-              <div className="rounded-lg sm:rounded-xl border border-border/60 p-4 sm:p-6 bg-background/60 backdrop-blur">
-                <div className="text-xs sm:text-sm uppercase tracking-wide text-muted-foreground mb-2">03</div>
-                <h4 className="text-base sm:text-lg font-semibold mb-2">Build the Timeline</h4>
-                <p className="text-xs sm:text-sm text-muted-foreground">
-                  Arrange scenes, iterate quickly, and keep production moving with a clean cinematic view that's easy to share.
-                </p>
-              </div>
-            </div>
-
-            {/* Sub-features as inline list instead of buttons */}
-            <div className="mt-6 sm:mt-8 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 text-xs sm:text-sm text-muted-foreground">
-              <div className="rounded-lg border border-border/50 px-3 sm:px-4 py-2 sm:py-3 bg-background/60">From concept to scenes—one continuous flow</div>
-              <div className="rounded-lg border border-border/50 px-3 sm:px-4 py-2 sm:py-3 bg-background/60">Mood boards at film, scene, and shot level</div>
-              <div className="rounded-lg border border-border/50 px-3 sm:px-4 py-2 sm:py-3 bg-background/60">All visuals organized in a single library</div>
-              <div className="rounded-lg border border-border/50 px-3 sm:px-4 py-2 sm:py-3 bg-background/60">One‑click look exploration from your script</div>
-            </div>
-          </div>
-        </section>
+        <HomeBelowFold />
       </main>
-      <style jsx>{`
-        .marquee-track {
-          display: inline-block;
-          animation: marquee 28s linear infinite;
-        }
-        @keyframes marquee {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-      `}</style>
 
       {/* Footer */}
       <footer className="border-t border-border bg-background/50">

@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     )
     const { searchParams } = new URL(request.url)
     const code = searchParams.get('code')
+    const linkToken = searchParams.get('token') || searchParams.get('st') || null
 
     if (!code) {
       return NextResponse.json(
@@ -36,17 +37,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Use invite code (this increments used_count)
-    const { data: role, error } = await supabase
-      .rpc('use_invite_code', { code_to_use: code.toUpperCase() })
+    const { data: payload, error } = await supabase.rpc('use_invite_for_signup', {
+      code_to_use: code.toUpperCase(),
+      link_token: linkToken,
+    })
 
     if (error) {
-      if (error.message?.includes('Invalid or expired')) {
-        return NextResponse.json(
-          { error: 'Invalid or expired invite code' },
-          { status: 400 }
-        )
-      }
       console.error('Error using invite code:', error)
       return NextResponse.json(
         { error: 'Failed to use invite code' },
@@ -54,10 +50,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    const row = payload as Record<string, unknown> | null
+    if (!row || row.success !== true) {
+      return NextResponse.json(
+        { error: (typeof row?.error === 'string' && row.error) || 'Invalid or expired invite code' },
+        { status: 400 }
+      )
+    }
+
     return NextResponse.json({
       success: true,
-      role,
-      message: 'Invite code used successfully'
+      role: row.role,
+      message: 'Invite code used successfully',
     })
   } catch (error) {
     console.error('Error in GET /api/invite-codes/use:', error)

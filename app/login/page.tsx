@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState, Suspense } from 'react';
+import { useEffect, useMemo, useState, Suspense, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { getSupabaseClient } from '@/lib/supabase';
@@ -9,15 +9,25 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/hooks/use-toast';
 
 type Mode = 'signin' | 'signup' | 'reset';
+
+function annualDiscountVsMonthly(priceMonthly: number, priceAnnual: number) {
+  const fullYearAtMonthly = priceMonthly * 12
+  const dollarsSaved = fullYearAtMonthly - priceAnnual
+  const pct =
+    fullYearAtMonthly > 0 ? Math.round((dollarsSaved / fullYearAtMonthly) * 100) : 0
+  return { fullYearAtMonthly, dollarsSaved, pct }
+}
 
 const plans = [
   {
     id: 'creator',
     name: 'Creator',
     price: 45,
+    annualPrice: 360,
     description: 'For professional creators',
     features: ['25,000 Studio Credits', '300s Standard Video', '60s Cinematic Video'],
   },
@@ -25,6 +35,7 @@ const plans = [
     id: 'studio',
     name: 'Studio',
     price: 150,
+    annualPrice: 1440,
     description: 'For production teams',
     features: ['90,000 Studio Credits', '900s Standard Video', '240s Cinematic Video'],
   },
@@ -32,6 +43,7 @@ const plans = [
     id: 'production',
     name: 'Production House',
     price: 500,
+    annualPrice: 4800,
     description: 'For large production companies',
     features: ['220,000 Studio Credits', '2,400s Standard Video', '600s Cinematic Video'],
   },
@@ -58,7 +70,9 @@ function LoginPageContent() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [selectedPlan, setSelectedPlan] = useState<string>('studio');
+  const [checkoutBilling, setCheckoutBilling] = useState<'monthly' | 'annual'>('monthly');
   const [inviteCode, setInviteCode] = useState<string>('');
+  const [inviteLinkToken, setInviteLinkToken] = useState<string>('');
   const [inviteCodeRole, setInviteCodeRole] = useState<string | null>(null);
   const [validatingInviteCode, setValidatingInviteCode] = useState(false);
   const [showInviteCodeField, setShowInviteCodeField] = useState(false);
@@ -74,6 +88,15 @@ function LoginPageContent() {
     if (!loading && session) router.replace(next);
   }, [loading, session, next, router]);
 
+  useEffect(() => {
+    const r = sp.get('reason');
+    if (r === 'disabled') {
+      setError('This account has been disabled. Contact your administrator.');
+    } else if (r === 'expired') {
+      setError('This account has expired. Contact your administrator for access.');
+    }
+  }, [sp]);
+
   function validate(): string | null {
     if (!email) return 'Email is required.';
     if (mode !== 'reset') {
@@ -88,8 +111,8 @@ function LoginPageContent() {
     return null;
   }
 
-  // Validate invite code when user enters it
-  async function validateInviteCode(code: string) {
+  // Validate invite code when user enters it (optional st / signup token for secret links)
+  const validateInviteCode = useCallback(async (code: string, linkToken?: string) => {
     if (!code || code.trim().length === 0) {
       setInviteCodeRole(null);
       return;
@@ -97,7 +120,12 @@ function LoginPageContent() {
 
     setValidatingInviteCode(true);
     try {
-      const response = await fetch(`/api/invite-codes/validate?code=${encodeURIComponent(code.toUpperCase())}`);
+      const token = linkToken !== undefined ? linkToken : inviteLinkToken;
+      const tokenQs =
+        token && token.trim().length > 0 ? `&st=${encodeURIComponent(token.trim())}` : '';
+      const response = await fetch(
+        `/api/invite-codes/validate?code=${encodeURIComponent(code.toUpperCase())}${tokenQs}`
+      );
       const data = await response.json();
 
       if (data.valid && data.role) {
@@ -114,7 +142,32 @@ function LoginPageContent() {
     } finally {
       setValidatingInviteCode(false);
     }
-  }
+  }, [inviteLinkToken]);
+
+  // Deep link: /login?mode=signup&code=XXXX&st=secret (st = signup token for invite-only links)
+  // Pricing page: /login?mode=signup&next=/subscriptions&plan=creator|studio|production
+  useEffect(() => {
+    const m = sp.get('mode');
+    if (m === 'signup') setMode('signup');
+    if (m === 'signin') setMode('signin');
+    const plan = sp.get('plan');
+    if (plan === 'creator' || plan === 'studio' || plan === 'production') {
+      setSelectedPlan(plan);
+    }
+    const billing = sp.get('billing');
+    if (billing === 'annual' || billing === 'monthly') {
+      setCheckoutBilling(billing);
+    }
+    const c = sp.get('code');
+    const st = sp.get('st') || sp.get('token') || '';
+    if (c && c.trim().length > 0) {
+      const upper = c.trim().toUpperCase();
+      setInviteCode(upper);
+      setShowInviteCodeField(true);
+      setInviteLinkToken(st);
+      void validateInviteCode(upper, st);
+    }
+  }, [sp, validateInviteCode]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -126,13 +179,39 @@ function LoginPageContent() {
       if (mode === 'signin') {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+        const {
+          data: { user: authUser },
+        } = await supabase.auth.getUser();
+        if (authUser) {
+          const { data: accessRow } = await supabase
+            .from('users')
+            .select('login_disabled, access_expires_at')
+            .eq('id', authUser.id)
+            .maybeSingle();
+          const expired =
+            accessRow?.access_expires_at &&
+            new Date(accessRow.access_expires_at).getTime() <= Date.now();
+          if (accessRow?.login_disabled) {
+            await supabase.auth.signOut();
+            throw new Error('This account has been disabled. Contact your administrator.');
+          }
+          if (expired) {
+            await supabase.auth.signOut();
+            throw new Error('This account has expired. Contact your administrator for access.');
+          }
+        }
         router.replace(next);
       } else if (mode === 'signup') {
         // If invite code is provided, validate and use it
         let finalRole = null;
         if (inviteCode && inviteCode.trim().length > 0) {
-          // First validate it (without using it)
-          const validateResponse = await fetch(`/api/invite-codes/validate?code=${encodeURIComponent(inviteCode.toUpperCase())}`);
+          const tokenQs =
+            inviteLinkToken && inviteLinkToken.trim().length > 0
+              ? `&st=${encodeURIComponent(inviteLinkToken.trim())}`
+              : '';
+          const validateResponse = await fetch(
+            `/api/invite-codes/validate?code=${encodeURIComponent(inviteCode.toUpperCase())}${tokenQs}`
+          );
           const validateData = await validateResponse.json();
           
           if (!validateData.valid || !validateData.role) {
@@ -155,6 +234,10 @@ function LoginPageContent() {
               selectedPlan: finalRole ? null : selectedPlan, // Store plan only if no invite code
               inviteCodeRole: finalRole, // Store role from invite code
               inviteCode: finalRole ? inviteCode.toUpperCase() : null,
+              inviteLinkToken:
+                finalRole && inviteLinkToken && inviteLinkToken.trim().length > 0
+                  ? inviteLinkToken.trim()
+                  : null,
             }
           }
         });
@@ -173,7 +256,13 @@ function LoginPageContent() {
         // If invite code was used, skip Stripe and assign role directly
         if (finalRole && signUpData.user && inviteCode) {
           // Use the invite code (increment used_count)
-          const useCodeResponse = await fetch(`/api/invite-codes/use?code=${encodeURIComponent(inviteCode.toUpperCase())}`);
+          const useTokenQs =
+            inviteLinkToken && inviteLinkToken.trim().length > 0
+              ? `&st=${encodeURIComponent(inviteLinkToken.trim())}`
+              : '';
+          const useCodeResponse = await fetch(
+            `/api/invite-codes/use?code=${encodeURIComponent(inviteCode.toUpperCase())}${useTokenQs}`
+          );
           if (!useCodeResponse.ok) {
             console.error('❌ SIGNUP: Error using invite code');
             // Continue anyway - role is already set by trigger
@@ -234,6 +323,9 @@ function LoginPageContent() {
               userId: signUpData.user.id,
               userEmail: email,
               action: 'subscribe',
+              ...(['creator', 'studio', 'production'].includes(selectedPlan)
+                ? { billingInterval: checkoutBilling }
+                : {}),
             }
             
             console.log('📤 SIGNUP: Sending checkout request to /api/stripe/create-checkout')
@@ -405,7 +497,7 @@ function LoginPageContent() {
                         const code = e.target.value.toUpperCase();
                         setInviteCode(code);
                         if (code.length > 0) {
-                          validateInviteCode(code);
+                          void validateInviteCode(code, inviteLinkToken);
                         } else {
                           setInviteCodeRole(null);
                           setError(null);
@@ -459,13 +551,74 @@ function LoginPageContent() {
                               <p className="text-xs text-muted-foreground">{plan.description}</p>
                             </div>
                             <div className="text-right ml-4">
-                              <span className="text-sm font-semibold">${plan.price}<span className="text-xs text-muted-foreground">/mo</span></span>
+                              <span className="text-sm font-semibold">
+                                {plan.id === selectedPlan &&
+                                checkoutBilling === 'annual' &&
+                                'annualPrice' in plan &&
+                                plan.annualPrice != null ? (
+                                  <>
+                                    ${plan.annualPrice}
+                                    <span className="text-xs text-muted-foreground">/yr</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    ${plan.price}
+                                    <span className="text-xs text-muted-foreground">/mo</span>
+                                  </>
+                                )}
+                              </span>
                             </div>
                           </div>
                         </Label>
                       </div>
                     ))}
                   </RadioGroup>
+                  {['creator', 'studio', 'production'].includes(selectedPlan) && (
+                    <div className="space-y-2 pt-1">
+                      <Label className="text-xs font-medium text-muted-foreground">Billing</Label>
+                      <ToggleGroup
+                        type="single"
+                        value={checkoutBilling}
+                        onValueChange={(v) => {
+                          if (v === 'monthly' || v === 'annual') setCheckoutBilling(v);
+                        }}
+                        variant="outline"
+                        className="grid w-full grid-cols-2 gap-2"
+                      >
+                        <ToggleGroupItem value="monthly" className="text-sm">
+                          Monthly
+                        </ToggleGroupItem>
+                        <ToggleGroupItem value="annual" className="text-sm">
+                          Annual
+                        </ToggleGroupItem>
+                      </ToggleGroup>
+                      {(() => {
+                        const row = plans.find((p) => p.id === selectedPlan);
+                        if (
+                          !row ||
+                          !('annualPrice' in row) ||
+                          row.annualPrice == null
+                        )
+                          return null;
+                        const d = annualDiscountVsMonthly(row.price, row.annualPrice);
+                        return (
+                          <p className="text-xs text-muted-foreground pt-1 leading-snug">
+                            {checkoutBilling === 'annual' ? (
+                              <>
+                                vs ${d.fullYearAtMonthly.toLocaleString()} at monthly rates — save{' '}
+                                {d.pct}% (${d.dollarsSaved.toLocaleString()})
+                              </>
+                            ) : (
+                              <>
+                                Annual saves ~{d.pct}% (${d.dollarsSaved.toLocaleString()}) vs 12 monthly
+                                payments
+                              </>
+                            )}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  )}
                   {!selectedPlan && mode === 'signup' && (
                     <p className="text-xs text-red-500">Please select a subscription plan to continue.</p>
                   )}
@@ -506,8 +659,19 @@ function LoginPageContent() {
                   ? 'Please wait…' 
                   : inviteCodeRole
                     ? `Create free account (${inviteCodeRole} role)`
-                    : selectedPlan 
-                      ? `Continue to checkout - $${plans.find(p => p.id === selectedPlan)?.price}/mo` 
+                    : selectedPlan
+                      ? (() => {
+                          const p = plans.find((x) => x.id === selectedPlan);
+                          if (
+                            p &&
+                            checkoutBilling === 'annual' &&
+                            'annualPrice' in p &&
+                            p.annualPrice != null
+                          ) {
+                            return `Continue to checkout - $${p.annualPrice}/yr`;
+                          }
+                          return `Continue to checkout - $${p?.price ?? '—'}/mo`;
+                        })()
                       : 'Select a plan or enter invite code to continue'
                 }
               </button>

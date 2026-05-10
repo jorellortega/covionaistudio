@@ -122,7 +122,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const { role, maxUses, expiresAt, notes } = await request.json()
+    const {
+      role,
+      maxUses,
+      expiresAt,
+      notes,
+      accountAccessExpiresAt,
+      initialBlockedRoutes,
+      requireSecretLink,
+    } = await request.json()
 
     // Validate role
     const validRoles = ['user', 'creator', 'studio', 'production']
@@ -131,6 +139,11 @@ export async function POST(request: NextRequest) {
         { error: 'Invalid role. Must be one of: user, creator, studio, production' },
         { status: 400 }
       )
+    }
+
+    let blockedJson: unknown[] = []
+    if (Array.isArray(initialBlockedRoutes)) {
+      blockedJson = initialBlockedRoutes.filter((x) => typeof x === 'string' && x.trim().length > 0)
     }
 
     // Generate invite code using database function
@@ -145,6 +158,11 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const linkToken =
+      requireSecretLink === true
+        ? crypto.randomUUID().replace(/-/g, '').slice(0, 24)
+        : null
+
     // Create invite code
     const { data: inviteCode, error: insertError } = await supabase
       .from('invite_codes')
@@ -156,6 +174,9 @@ export async function POST(request: NextRequest) {
         expires_at: expiresAt || null,
         notes: notes || null,
         is_active: true,
+        account_access_expires_at: accountAccessExpiresAt || null,
+        initial_blocked_routes: blockedJson,
+        invite_link_token: linkToken,
       })
       .select()
       .single()
@@ -168,7 +189,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    return NextResponse.json({ inviteCode })
+    const origin =
+      request.headers.get('origin') ||
+      (process.env.NEXT_PUBLIC_SITE_URL ? String(process.env.NEXT_PUBLIC_SITE_URL) : '')
+
+    const signupPath = `/login?mode=signup&code=${encodeURIComponent(inviteCode.code)}${
+      linkToken ? `&st=${encodeURIComponent(linkToken)}` : ''
+    }`
+    const signupUrl = origin ? `${origin.replace(/\/$/, '')}${signupPath}` : signupPath
+
+    return NextResponse.json({ inviteCode, signupUrl })
   } catch (error) {
     console.error('Error in POST /api/invite-codes:', error)
     return NextResponse.json(

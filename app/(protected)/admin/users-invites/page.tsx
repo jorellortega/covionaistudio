@@ -10,9 +10,27 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { useToast } from '@/hooks/use-toast'
-import { Shield, Users, Key, Plus, Trash2, Copy, Check, X, Calendar, Hash } from 'lucide-react'
+import {
+  BLOCKABLE_ROUTES,
+  mergeBlockedRoutesFromEditor,
+  splitBlockedRoutesForEditor,
+  type BlockableRoute,
+} from '@/lib/blockable-routes'
+import { Shield, Users, Key, Plus, Trash2, Copy, Check, X, Link2, Ban } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
 import Header from '@/components/header'
 
 interface InviteCode {
@@ -27,14 +45,285 @@ interface InviteCode {
   notes: string | null
   created_at: string
   updated_at: string
+  account_access_expires_at?: string | null
+  initial_blocked_routes?: string[] | null
+  invite_link_token?: string | null
 }
 
-interface User {
+interface ManagedUser {
   id: string
   email: string
   name: string
   role: 'user' | 'creator' | 'studio' | 'production' | 'ceo'
   created_at: string
+  login_disabled?: boolean
+  access_expires_at?: string | null
+  blocked_routes?: unknown
+}
+
+function parseBlockedRoutesInput(raw: string): string[] {
+  return raw
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function blockedRoutesList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .map((s) => s.trim())
+}
+
+function blockedRoutesSummary(value: unknown): string {
+  const list = blockedRoutesList(value)
+  if (list.length === 0) return 'No blocks'
+  if (list.length === 1) return list[0]
+  return `${list.length} paths`
+}
+
+function localDatetimeFromIso(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function signupLinkForInvite(code: InviteCode): string {
+  if (typeof window === 'undefined') return ''
+  const origin = window.location.origin
+  const base = `${origin}/login?mode=signup&code=${encodeURIComponent(code.code)}`
+  if (code.invite_link_token) {
+    return `${base}&st=${encodeURIComponent(code.invite_link_token)}`
+  }
+  return base
+}
+
+function UserAccessEditor({
+  user,
+  saving,
+  onToggleDisabled,
+  onSaveAccess,
+  onSaveBlockedRoutes,
+}: {
+  user: ManagedUser
+  saving: boolean
+  onToggleDisabled: (id: string, v: boolean) => void
+  onSaveAccess: (id: string, expiresLocal: string) => void
+  onSaveBlockedRoutes: (id: string, paths: string[]) => Promise<boolean>
+}) {
+  const { toast } = useToast()
+  const [permanentAccess, setPermanentAccess] = useState(() => !user.access_expires_at)
+  const [expires, setExpires] = useState(() => localDatetimeFromIso(user.access_expires_at))
+  const [blockedDialogOpen, setBlockedDialogOpen] = useState(false)
+  const [selectedPages, setSelectedPages] = useState<string[]>(() => splitBlockedRoutesForEditor(user.blocked_routes).catalogSelected)
+  const [extraPathsRaw, setExtraPathsRaw] = useState(() => splitBlockedRoutesForEditor(user.blocked_routes).extraLines)
+
+  const routesByGroup = BLOCKABLE_ROUTES.reduce<Record<string, BlockableRoute[]>>((acc, r) => {
+    if (!acc[r.group]) acc[r.group] = []
+    acc[r.group].push(r)
+    return acc
+  }, {})
+
+  useEffect(() => {
+    setPermanentAccess(!user.access_expires_at)
+    setExpires(localDatetimeFromIso(user.access_expires_at))
+  }, [user])
+
+  function openBlockedDialog() {
+    const { catalogSelected, extraLines } = splitBlockedRoutesForEditor(user.blocked_routes)
+    setSelectedPages(catalogSelected)
+    setExtraPathsRaw(extraLines)
+    setBlockedDialogOpen(true)
+  }
+
+  function togglePage(path: string) {
+    setSelectedPages((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]))
+  }
+
+  return (
+    <TableRow>
+      <TableCell className="font-medium">{user.email}</TableCell>
+      <TableCell>{user.name}</TableCell>
+      <TableCell>
+        <span className="text-xs rounded bg-muted px-2 py-1">{user.role}</span>
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <Switch
+            checked={!!user.login_disabled}
+            onCheckedChange={(v) => onToggleDisabled(user.id, v)}
+            disabled={saving}
+          />
+          <span className="text-xs text-muted-foreground">Login off</span>
+        </div>
+      </TableCell>
+      <TableCell className="min-w-[220px] space-y-2">
+        <div className="flex items-center gap-2">
+          <Switch
+            id={`perm-${user.id}`}
+            checked={permanentAccess}
+            onCheckedChange={(v) => {
+              setPermanentAccess(v)
+              if (v) {
+                setExpires('')
+              } else {
+                setExpires(localDatetimeFromIso(user.access_expires_at))
+              }
+            }}
+            disabled={saving}
+          />
+          <Label htmlFor={`perm-${user.id}`} className="text-xs font-normal cursor-pointer">
+            Permanent access
+          </Label>
+        </div>
+        {!permanentAccess ? (
+          <>
+            <Label className="text-xs text-muted-foreground">Expires on</Label>
+            <Input
+              type="datetime-local"
+              value={expires}
+              onChange={(e) => setExpires(e.target.value)}
+              disabled={saving}
+            />
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            No end date. Turn off &apos;Permanent access&apos; to add an expiry, or change it anytime with Save.
+          </p>
+        )}
+      </TableCell>
+      <TableCell className="max-w-[200px]">
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground truncate" title={blockedRoutesList(user.blocked_routes).join(', ')}>
+            {blockedRoutesSummary(user.blocked_routes)}
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="gap-1 w-full sm:w-auto"
+            disabled={saving}
+            onClick={openBlockedDialog}
+          >
+            <Ban className="h-3 w-3" />
+            Blocked routes
+          </Button>
+          <Dialog open={blockedDialogOpen} onOpenChange={setBlockedDialogOpen}>
+            <DialogContent className="sm:max-w-lg" onOpenAutoFocus={(e) => e.preventDefault()}>
+              <DialogHeader>
+                <DialogTitle>Blocked pages</DialogTitle>
+                <DialogDescription>
+                  {user.email} — choose app areas this user cannot open. Matching uses path prefixes (sub-routes are
+                  included).
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="ghost" size="sm" className="h-8 text-xs" onClick={() => setSelectedPages([])} disabled={saving}>
+                    Clear pages
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => setSelectedPages(BLOCKABLE_ROUTES.map((r) => r.path))}
+                    disabled={saving}
+                  >
+                    Select all pages
+                  </Button>
+                </div>
+                <ScrollArea className="h-[min(50vh,360px)] pr-3">
+                  <div className="space-y-5">
+                    {Object.entries(routesByGroup).map(([group, routes]) => (
+                      <div key={group} className="space-y-2">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{group}</p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {routes.map((r) => {
+                            const id = `block-${user.id}-${r.path.replace(/\//g, '-')}`
+                            const checked = selectedPages.includes(r.path)
+                            return (
+                              <div key={r.path} className="flex items-start gap-2 rounded-md border border-border/60 p-2">
+                                <Checkbox
+                                  id={id}
+                                  checked={checked}
+                                  onCheckedChange={() => togglePage(r.path)}
+                                  disabled={saving}
+                                />
+                                <label htmlFor={id} className="text-sm leading-tight cursor-pointer select-none">
+                                  <span className="font-medium">{r.label}</span>
+                                  <span className="block text-[11px] text-muted-foreground font-mono">{r.path}</span>
+                                </label>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+                <div className="space-y-2">
+                  <Label htmlFor={`routes-extra-${user.id}`} className="text-sm">
+                    Additional paths (optional)
+                  </Label>
+                  <Textarea
+                    id={`routes-extra-${user.id}`}
+                    rows={2}
+                    className="font-mono text-xs"
+                    placeholder="One path per line, e.g. /temp-kling"
+                    value={extraPathsRaw}
+                    onChange={(e) => setExtraPathsRaw(e.target.value)}
+                    disabled={saving}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Only needed for URLs not in the list. Save applies immediately.
+                  </p>
+                </div>
+              </div>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button type="button" variant="outline" onClick={() => setBlockedDialogOpen(false)} disabled={saving}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  disabled={saving}
+                  onClick={async () => {
+                    const merged = mergeBlockedRoutesFromEditor(selectedPages, extraPathsRaw)
+                    const ok = await onSaveBlockedRoutes(user.id, merged)
+                    if (ok) setBlockedDialogOpen(false)
+                  }}
+                >
+                  Save routes
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </TableCell>
+      <TableCell>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={saving}
+          onClick={() => {
+            if (!permanentAccess && !expires.trim()) {
+              toast({
+                title: 'Expiry required',
+                description: 'Choose an end date, or turn Permanent access back on.',
+                variant: 'destructive',
+              })
+              return
+            }
+            onSaveAccess(user.id, permanentAccess ? '' : expires)
+          }}
+        >
+          Save access
+        </Button>
+      </TableCell>
+    </TableRow>
+  )
 }
 
 export default function UsersInvitesAdminPage() {
@@ -45,16 +334,20 @@ export default function UsersInvitesAdminPage() {
   const [userRole, setUserRole] = useState<string | null>(null)
   const [isLoadingRole, setIsLoadingRole] = useState(true)
   const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([])
-  const [users, setUsers] = useState<User[]>([])
+  const [users, setUsers] = useState<ManagedUser[]>([])
+  const [savingUserId, setSavingUserId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [showUserDialog, setShowUserDialog] = useState(false)
   
   // Create invite code form
   const [newCodeRole, setNewCodeRole] = useState<'user' | 'creator' | 'studio' | 'production'>('user')
   const [newCodeMaxUses, setNewCodeMaxUses] = useState<string>('')
   const [newCodeExpiresAt, setNewCodeExpiresAt] = useState<string>('')
   const [newCodeNotes, setNewCodeNotes] = useState<string>('')
+  const [newCodeAccountAccessExpires, setNewCodeAccountAccessExpires] = useState<string>('')
+  const [newCodeInviteProgramExpiry, setNewCodeInviteProgramExpiry] = useState(false)
+  const [newCodeBlockedRoutes, setNewCodeBlockedRoutes] = useState<string>('')
+  const [newCodeSecretLink, setNewCodeSecretLink] = useState(false)
   const [creatingCode, setCreatingCode] = useState(false)
 
   useEffect(() => {
@@ -149,11 +442,69 @@ export default function UsersInvitesAdminPage() {
 
   async function loadUsers() {
     try {
-      // User management will be added later
-      // For now, this is a placeholder
+      const supabase = getSupabaseClient()
+      const { data, error } = await supabase
+        .from('users')
+        .select(
+          'id, email, name, role, login_disabled, access_expires_at, blocked_routes, created_at'
+        )
+        .order('created_at', { ascending: false })
+        .limit(400)
+
+      if (error) throw error
+      setUsers((data as ManagedUser[]) || [])
     } catch (error) {
       console.error('Error loading users:', error)
+      setUsers([])
     }
+  }
+
+  async function saveUserAccess(
+    userId: string,
+    fields: {
+      login_disabled?: boolean
+      access_expires_at?: string | null
+      blocked_route_list?: string[]
+    }
+  ): Promise<boolean> {
+    setSavingUserId(userId)
+    try {
+      const supabase = getSupabaseClient()
+      const update: Record<string, unknown> = {}
+      if (fields.login_disabled !== undefined) update.login_disabled = fields.login_disabled
+      if (fields.access_expires_at !== undefined) {
+        update.access_expires_at = fields.access_expires_at || null
+      }
+      if (fields.blocked_route_list !== undefined) {
+        update.blocked_routes = fields.blocked_route_list
+      }
+
+      const { error } = await supabase.from('users').update(update).eq('id', userId)
+      if (error) throw error
+
+      toast({ title: 'Saved', description: 'User access settings updated.' })
+      await loadUsers()
+      return true
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Failed to save'
+      toast({ title: 'Error', description: msg, variant: 'destructive' })
+      return false
+    } finally {
+      setSavingUserId(null)
+    }
+  }
+
+  function handleSaveUserAccessFields(userId: string, expiresLocal: string) {
+    const iso = expiresLocal.trim() ? new Date(expiresLocal).toISOString() : null
+    void saveUserAccess(userId, {
+      access_expires_at: iso,
+    })
+  }
+
+  async function handleSaveBlockedRoutes(userId: string, paths: string[]) {
+    return saveUserAccess(userId, {
+      blocked_route_list: paths,
+    })
   }
 
   async function createInviteCode() {
@@ -176,6 +527,12 @@ export default function UsersInvitesAdminPage() {
           maxUses: newCodeMaxUses ? parseInt(newCodeMaxUses) : null,
           expiresAt: newCodeExpiresAt || null,
           notes: newCodeNotes || null,
+          accountAccessExpiresAt:
+            newCodeInviteProgramExpiry && newCodeAccountAccessExpires
+              ? new Date(newCodeAccountAccessExpires).toISOString()
+              : null,
+          initialBlockedRoutes: parseBlockedRoutesInput(newCodeBlockedRoutes),
+          requireSecretLink: newCodeSecretLink,
         }),
       })
 
@@ -187,7 +544,9 @@ export default function UsersInvitesAdminPage() {
       const data = await response.json()
       toast({
         title: "Success",
-        description: `Invite code created: ${data.inviteCode.code}`,
+        description: data.signupUrl
+          ? `Invite created. Copy the signup link from the table (secret links are only shown once in the link).`
+          : `Invite code created: ${data.inviteCode.code}`,
         variant: "default",
       })
 
@@ -196,6 +555,10 @@ export default function UsersInvitesAdminPage() {
       setNewCodeMaxUses('')
       setNewCodeExpiresAt('')
       setNewCodeNotes('')
+      setNewCodeAccountAccessExpires('')
+      setNewCodeInviteProgramExpiry(false)
+      setNewCodeBlockedRoutes('')
+      setNewCodeSecretLink(false)
       setShowCreateDialog(false)
 
       // Reload codes
@@ -369,6 +732,59 @@ export default function UsersInvitesAdminPage() {
                       placeholder="e.g., For friend John"
                     />
                   </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id="invite-program-expiry"
+                        checked={newCodeInviteProgramExpiry}
+                        onCheckedChange={(v) => {
+                          setNewCodeInviteProgramExpiry(v)
+                          if (!v) setNewCodeAccountAccessExpires('')
+                        }}
+                      />
+                      <Label htmlFor="invite-program-expiry" className="text-sm font-normal cursor-pointer">
+                        Limit account lifetime for signups from this invite
+                      </Label>
+                    </div>
+                    {newCodeInviteProgramExpiry ? (
+                      <>
+                        <Label>Accounts expire on</Label>
+                        <Input
+                          type="datetime-local"
+                          value={newCodeAccountAccessExpires}
+                          onChange={(e) => setNewCodeAccountAccessExpires(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Each new account gets this date as their access end. You can still edit individuals later.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Off = permanent access for everyone who signs up with this invite (until you add an end date on the user row).
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <Label>Blocked routes for new accounts (optional)</Label>
+                    <Input
+                      value={newCodeBlockedRoutes}
+                      onChange={(e) => setNewCodeBlockedRoutes(e.target.value)}
+                      placeholder="/admin/users-invites, /settings-ai"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Comma-separated path prefixes. Use role &apos;user&apos; for interns/students.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Switch
+                      id="secret-link"
+                      checked={newCodeSecretLink}
+                      onCheckedChange={setNewCodeSecretLink}
+                    />
+                    <Label htmlFor="secret-link" className="text-sm font-normal cursor-pointer">
+                      Secret signup link (code alone will not work on the public signup page)
+                    </Label>
+                  </div>
                   <Button onClick={createInviteCode} disabled={creatingCode} className="w-full">
                     {creatingCode ? 'Creating...' : 'Create Invite Code'}
                   </Button>
@@ -399,10 +815,12 @@ export default function UsersInvitesAdminPage() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Code</TableHead>
+                        <TableHead>Signup link</TableHead>
                         <TableHead>Role</TableHead>
                         <TableHead>Used</TableHead>
                         <TableHead>Max Uses</TableHead>
                         <TableHead>Expires</TableHead>
+                        <TableHead>Default expiry (invite)</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Notes</TableHead>
                         <TableHead>Created</TableHead>
@@ -432,6 +850,20 @@ export default function UsersInvitesAdminPage() {
                               </div>
                             </TableCell>
                             <TableCell>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() => copyToClipboard(signupLinkForInvite(code))}
+                              >
+                                <Link2 className="h-3 w-3" />
+                                Copy
+                              </Button>
+                              {code.invite_link_token ? (
+                                <p className="text-[10px] text-muted-foreground mt-1">Secret link</p>
+                              ) : null}
+                            </TableCell>
+                            <TableCell>
                               <span className="px-2 py-1 rounded text-xs bg-primary/10 text-primary">
                                 {code.role}
                               </span>
@@ -446,6 +878,11 @@ export default function UsersInvitesAdminPage() {
                               ) : (
                                 'Never'
                               )}
+                            </TableCell>
+                            <TableCell className="text-sm">
+                              {code.account_access_expires_at
+                                ? formatDate(code.account_access_expires_at)
+                                : '—'}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-2">
@@ -508,9 +945,37 @@ export default function UsersInvitesAdminPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <p className="text-muted-foreground">
-                User management interface coming soon. For now, you can manage user roles directly in the database.
-              </p>
+              {users.length === 0 ? (
+                <p className="text-muted-foreground">No users loaded.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Role</TableHead>
+                        <TableHead>Login</TableHead>
+                        <TableHead>Account access</TableHead>
+                        <TableHead>Blocked routes</TableHead>
+                        <TableHead />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {users.map((u) => (
+                        <UserAccessEditor
+                          key={u.id}
+                          user={u}
+                          saving={savingUserId === u.id}
+                          onToggleDisabled={(id, v) => void saveUserAccess(id, { login_disabled: v })}
+                          onSaveAccess={handleSaveUserAccessFields}
+                          onSaveBlockedRoutes={handleSaveBlockedRoutes}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
