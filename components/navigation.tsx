@@ -22,7 +22,9 @@ import {
   Users,
   Package,
   Sparkles,
-  Box
+  Box,
+  Mic,
+  Type,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -72,6 +74,9 @@ const navigationCategories: NavCategory[] = [
     icon: Palette,
     items: [
       { name: "Treatments", href: "/treatments", icon: FileText },
+      { name: "Create Cover", href: "/create-cover", icon: ImageIcon },
+      { name: "Create Voice", href: "/create-voice", icon: Mic },
+      { name: "Create Titles", href: "/create-titles", icon: Type },
       { name: "Projects", href: "/ideas", icon: Lightbulb },
       { name: "Visual Dev", href: "/visdev", icon: Palette },
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },

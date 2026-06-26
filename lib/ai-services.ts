@@ -1084,6 +1084,93 @@ export class ElevenLabsService {
       }
     }
   }
+
+  static async getVoiceById(apiKey: string, voiceId: string): Promise<AIResponse> {
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+        method: 'GET',
+        headers: { 'xi-api-key': apiKey },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+
+      const voice = await response.json()
+      return {
+        success: true,
+        data: {
+          voice_id: voice.voice_id,
+          name: voice.name,
+          category: voice.category,
+          description: voice.description,
+          labels: voice.labels,
+          preview_url: voice.preview_url,
+        },
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to fetch voice' }
+    }
+  }
+
+  static async cloneVoice(
+    apiKey: string,
+    name: string,
+    description: string,
+    files: Array<File | Blob>,
+  ): Promise<AIResponse> {
+    try {
+      const formData = new FormData()
+      formData.append('name', name)
+      if (description.trim()) {
+        formData.append('description', description.trim())
+      }
+      for (const file of files) {
+        formData.append('files', file)
+      }
+
+      const response = await fetch('https://api.elevenlabs.io/v1/voices/add', {
+        method: 'POST',
+        headers: { 'xi-api-key': apiKey },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+
+      const result = await response.json()
+      return {
+        success: true,
+        data: {
+          voice_id: result.voice_id,
+          name: result.name ?? name,
+        },
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to clone voice' }
+    }
+  }
+
+  static async deleteVoice(apiKey: string, voiceId: string): Promise<AIResponse> {
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
+        method: 'DELETE',
+        headers: { 'xi-api-key': apiKey },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+      }
+
+      return { success: true, data: { voiceId } }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to delete voice' }
+    }
+  }
 }
 
 // Suno AI Service (Music Generation)

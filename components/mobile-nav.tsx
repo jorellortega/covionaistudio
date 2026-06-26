@@ -31,6 +31,8 @@ import {
   Package,
   Sparkles,
   Box,
+  Mic,
+  Type,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -58,6 +60,9 @@ const navigationCategories: NavCategory[] = [
     items: [
       { name: "Movies", href: "/movies", icon: Film },
       { name: "Treatments", href: "/treatments", icon: FileText },
+      { name: "Create Cover", href: "/create-cover", icon: ImageIcon },
+      { name: "Create Voice", href: "/create-voice", icon: Mic },
+      { name: "Create Titles", href: "/create-titles", icon: Type },
     ],
   },
   {

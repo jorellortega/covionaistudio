@@ -162,7 +162,8 @@ export async function POST(request: NextRequest) {
         width: parseInt(formData.get('width') as string),
         height: parseInt(formData.get('height') as string),
         apiKey: formData.get('apiKey'),
-        userId: formData.get('userId')
+        userId: formData.get('userId'),
+        seed: formData.get('seed') ? parseInt(formData.get('seed') as string) : undefined,
       }
       file = formData.get('file') as File
       console.log('FormData request received with file:', file?.name)
@@ -174,7 +175,7 @@ export async function POST(request: NextRequest) {
     
     console.log('Request body:', { ...body, apiKey: body.apiKey ? `${body.apiKey.substring(0, 10)}...` : 'undefined' })
     
-    let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true } = body
+    let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true, seed } = body
 
     // Set default width and height if not provided
     if (!width) width = 1280
@@ -540,8 +541,12 @@ export async function POST(request: NextRequest) {
             promptText: prompt,
             ratio: `${width}:${height}`,
             referenceImages: [{
-              uri: dataUrl
-            }]
+              uri: dataUrl,
+              tag: 'reference',
+            }],
+          }
+          if (seed !== undefined && seed !== null && !Number.isNaN(Number(seed))) {
+            requestBody.seed = Number(seed)
           }
         } else {
           requestBody = {

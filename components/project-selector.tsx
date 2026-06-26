@@ -38,6 +38,13 @@ export function ProjectSelector({ selectedProject, onProjectChange, showCreateNe
     loadProjects()
   }, [])
 
+  // Sync when parent passes a new selected project (e.g. from URL params)
+  useEffect(() => {
+    if (selectedProject !== undefined) {
+      setSelected(selectedProject)
+    }
+  }, [selectedProject])
+
   const handleChange = (value: string) => {
     if (value === "new") {
       router.push("/dashboard") // Navigate to dashboard to create new project

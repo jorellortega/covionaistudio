@@ -164,6 +164,8 @@ export interface Character {
   role_contact_email?: string | null
   role_contact_phone?: string | null
   casting_status?: 'open' | 'filled' | 'pending' | 'on_hold' | 'cancelled' | null
+  elevenlabs_voice_id?: string | null
+  elevenlabs_voice_name?: string | null
 }
 
 export interface CreateCharacterData extends Partial<Omit<Character, 'id' | 'user_id' | 'created_at' | 'updated_at'>> {

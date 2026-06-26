@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, Wand2, Sparkles, Star } from "lucide-react"
+import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File as FileIcon, X, ExternalLink, Trash2, Wand2, Sparkles, Star, Camera, Shuffle } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -28,6 +28,80 @@ import { MovieService } from "@/lib/movie-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
+
+const LOCATION_SHOT_PRESETS = [
+  "Establishing Shot",
+  "Wide Shot",
+  "Extreme Wide Shot",
+  "Medium Wide Shot",
+  "Low Angle",
+  "High Angle",
+  "Bird's Eye View",
+  "Dutch Angle",
+  "Close-up architectural detail",
+  "Over-the-shoulder street view",
+  "Tracking shot perspective",
+  "Point of View (POV)",
+] as const
+
+const INTRO_SHOT_PACK = ["Low Angle", "High Angle", "Bird's Eye View", "Medium Wide Shot"]
+const RANDOM_SHOT_BATCH_SIZE = 4
+
+function pickRandomShots(count: number): string[] {
+  const pool = [...LOCATION_SHOT_PRESETS]
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[pool[i], pool[j]] = [pool[j], pool[i]]
+  }
+  return pool.slice(0, Math.min(count, pool.length))
+}
+
+const SHOT_COMPOSITION_DIRECTIVES: Record<string, string> = {
+  "Establishing Shot":
+    "Extreme wide establishing shot from a NEW vantage point — different corner or distance than the reference. Show full city scale. Do NOT copy the reference framing.",
+  "Wide Shot":
+    "Wide shot from street level at a different position along the plaza. New angle on walkways and crowd — clearly different composition from the reference.",
+  "Extreme Wide Shot":
+    "Extreme wide panoramic shot pulling back further than the reference. More skyline visible, different horizon line and framing.",
+  "Medium Wide Shot":
+    "Medium-wide shot focusing on the central walkway and mid-ground architecture. Tighter than an establishing shot, different from the reference wide master.",
+  "Low Angle":
+    "Low angle shot from ground level, camera tilted UP toward skyscrapers and drones against the sky. Worm's-eye view — dramatically different from a wide master shot.",
+  "High Angle":
+    "High angle shot from an elevated position looking DOWN on the plaza, crowd, and streets below. Top-down oblique angle.",
+  "Bird's Eye View":
+    "Bird's eye aerial view looking straight down or steeply down on the city blocks and plaza. Drone overhead perspective.",
+  "Dutch Angle":
+    "Dutch angle / canted camera — horizon tilted, dynamic diagonal composition. Same location, skewed camera.",
+  "Close-up architectural detail":
+    "Tight close-up on a specific building facade, sign, or architectural detail. Shallow depth of field, NOT a wide city view.",
+  "Over-the-shoulder street view":
+    "Over-the-shoulder framing from behind a figure or foreground element, looking into the location depth.",
+  "Tracking shot perspective":
+    "Dynamic tracking shot perspective moving through the plaza or street, motion blur suggestion, forward-moving camera.",
+  "Point of View (POV)":
+    "First-person POV walking through the location at eye level, immersive forward-facing view.",
+}
+
+function getShotCompositionDirective(shotPreset: string, extraDirection?: string): string {
+  const base =
+    SHOT_COMPOSITION_DIRECTIVES[shotPreset] ??
+    `${shotPreset}. Reframe with a clearly different camera position and composition from the reference image.`
+  if (extraDirection?.trim()) {
+    return `${base} Additional direction: ${extraDirection.trim()}.`
+  }
+  return base
+}
+
+async function referenceUrlToFile(url: string, filename: string): Promise<File> {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error("Could not load reference image")
+  }
+  const blob = await response.blob()
+  const type = blob.type || "image/png"
+  return new File([blob], filename, { type })
+}
 
 export default function LocationsPage() {
   const { toast } = useToast()
@@ -62,6 +136,14 @@ export default function LocationsPage() {
   const [includeLocationDetails, setIncludeLocationDetails] = useState(true)
   const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
+  const [isGenerateShotsDialogOpen, setIsGenerateShotsDialogOpen] = useState(false)
+  const [referenceAssetForShots, setReferenceAssetForShots] = useState<Asset | null>(null)
+  const [selectedShotPreset, setSelectedShotPreset] = useState<string>("Establishing Shot")
+  const [shotCustomPrompt, setShotCustomPrompt] = useState("")
+  const [includeLocationDetailsInShot, setIncludeLocationDetailsInShot] = useState(false)
+  const [isGeneratingShot, setIsGeneratingShot] = useState(false)
+  const [shotGenerationProgress, setShotGenerationProgress] = useState("")
+  const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
   const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null)
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const [treatmentId, setTreatmentId] = useState<string | null>(null)
@@ -71,6 +153,7 @@ export default function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([])
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
   const [isCreatingLocation, setIsCreatingLocation] = useState(false)
+  const [isCreateLocationDialogOpen, setIsCreateLocationDialogOpen] = useState(false)
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null)
   const [locationAssets, setLocationAssets] = useState<Asset[]>([])
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
@@ -828,6 +911,319 @@ export default function LocationsPage() {
     }
   }
 
+  const imageAssetsForLocation = useMemo(
+    () => locationAssets.filter((a) => a.content_type === "image" && a.content_url),
+    [locationAssets],
+  )
+
+  const getImagesTabSetting = () => aiSettings.find((s) => s.tab_type === "images")
+
+  const getLockedImageModelLabel = () => {
+    const setting = getImagesTabSetting()
+    if (setting?.is_locked && setting.locked_model) {
+      return setting.locked_model
+    }
+    if (selectedImageService === "openart") return "OpenArt"
+    return "DALL-E 3"
+  }
+
+  const SHOT_REFERENCE_MODEL_LABEL = "Runway Gen-4 Image Turbo"
+
+  const buildLocationShotPrompt = (shotPreset: string, loc: Location, customPrompt?: string) => {
+    const composition = getShotCompositionDirective(shotPreset, customPrompt)
+    let prompt = `@reference Same location and visual world as the reference image — same buildings, signage, lighting style, and futuristic NYC atmosphere. CRITICAL: Create a completely NEW camera setup for a film sequence. ${composition} Change camera position, lens, and framing substantially. This must NOT look like a duplicate of the reference image.`
+    if (includeLocationDetailsInShot) {
+      if (loc.name) prompt += ` Location: ${loc.name}.`
+      if (loc.description) prompt += ` ${loc.description.replace(/\s+/g, " ").trim().slice(0, 120)}.`
+    }
+    prompt += " Cinematic movie sequence still, photorealistic, professional cinematography."
+    return prompt.slice(0, 990)
+  }
+
+  const buildCustomLocationShotPrompt = (userDirection: string, loc: Location) => {
+    let prompt = `@reference Same location and world as the reference image. NEW SHOT for a film sequence — change camera position and framing dramatically: ${userDirection.trim()}. Do NOT reproduce the same wide composition as the reference unless explicitly requested. Keep matching buildings, signage, color palette, and atmosphere.`
+    if (includeLocationDetailsInShot) {
+      if (loc.name) prompt += ` Location: ${loc.name}.`
+      if (loc.description) prompt += ` ${loc.description.replace(/\s+/g, " ").trim().slice(0, 120)}.`
+    }
+    prompt += " Cinematic, photorealistic, professional cinematography, distinct shot in a film edit."
+    return prompt.slice(0, 990)
+  }
+
+  const saveGeneratedLocationShot = async (
+    imageUrl: string,
+    loc: Location,
+    shotPreset: string,
+    prompt: string,
+    referenceAsset: Asset,
+    model: string,
+    service: string,
+  ) => {
+    const now = new Date()
+    const dateStr = now.toLocaleDateString()
+    const timeStr = now.toLocaleTimeString()
+    const assetData = {
+      project_id: projectId,
+      location_id: selectedLocationId!,
+      title: `${loc.name} - ${shotPreset} (${dateStr} ${timeStr})`,
+      content_type: "image" as const,
+      content: "",
+      content_url: imageUrl,
+      prompt,
+      model,
+      generation_settings: {
+        service,
+        location_id: selectedLocationId,
+        location_name: loc.name,
+        shot_preset: shotPreset,
+        reference_asset_id: referenceAsset.id,
+      },
+      metadata: {
+        location_name: loc.name,
+        generated_at: now.toISOString(),
+        source: "location_shot_variation",
+        service,
+        shot_preset: shotPreset,
+        reference_asset_id: referenceAsset.id,
+      },
+    }
+    const savedAsset = await AssetService.createAsset(assetData)
+    setLocationAssets((prev) => [savedAsset, ...prev])
+    setTimeout(() => carouselApi?.scrollTo(0), 100)
+    return savedAsset
+  }
+
+  const generateLocationShotFromReference = async (
+    referenceAsset: Asset,
+    shotPreset: string,
+    options?: { customPrompt?: string; promptOverride?: string },
+  ) => {
+    if (!selectedLocationId || !userId || !ready || !referenceAsset.content_url) {
+      throw new Error("Select a location and reference image first.")
+    }
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc) {
+      throw new Error("Location not found.")
+    }
+
+    const prompt =
+      options?.promptOverride ??
+      buildLocationShotPrompt(shotPreset, selectedLoc, options?.customPrompt)
+    const referenceFile = await referenceUrlToFile(
+      referenceAsset.content_url,
+      `location-ref-${referenceAsset.id}.png`,
+    )
+
+    const formData = new FormData()
+    formData.append("prompt", prompt)
+    formData.append("model", "gen4_image_turbo")
+    formData.append("service", "runway")
+    formData.append("width", "1280")
+    formData.append("height", "720")
+    formData.append("apiKey", "configured")
+    formData.append("userId", userId)
+    formData.append("file", referenceFile)
+    formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
+
+    const response = await fetch("/api/ai/generate-image", {
+      method: "POST",
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || "Failed to generate shot from reference")
+    }
+
+    const result = await response.json()
+    if (!result.success || !result.imageUrl) {
+      throw new Error("Failed to generate shot from reference")
+    }
+
+    const imageUrlToUse = result.bucketUrl || result.imageUrl
+    await saveGeneratedLocationShot(
+      imageUrlToUse,
+      selectedLoc,
+      shotPreset,
+      prompt,
+      referenceAsset,
+      "gen4_image_turbo",
+      "runway",
+    )
+  }
+
+  const openGenerateShotsDialog = (asset?: Asset) => {
+    const defaultAsset = asset || imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!defaultAsset?.content_url) {
+      toast({
+        title: "No reference image",
+        description: "Upload or generate a location image first, then create new angles from it.",
+        variant: "destructive",
+      })
+      return
+    }
+    setReferenceAssetForShots(defaultAsset)
+    setSelectedShotPreset("Establishing Shot")
+    setShotCustomPrompt("")
+    setShotGenerationProgress("")
+    setIsGenerateShotsDialogOpen(true)
+  }
+
+  const handleGenerateSingleShot = async () => {
+    if (!referenceAssetForShots) return
+    setIsGeneratingShot(true)
+    setShotGenerationProgress(`Generating ${selectedShotPreset}...`)
+    try {
+      await generateLocationShotFromReference(
+        referenceAssetForShots,
+        selectedShotPreset,
+        { customPrompt: shotCustomPrompt },
+      )
+      toast({
+        title: "New angle generated",
+        description: `${selectedShotPreset} added to location assets.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Shot generation failed",
+        description:
+          error instanceof Error
+            ? error.message.includes("Runway") || error.message.includes("API key")
+              ? `${error.message} Add a Runway ML API key in Settings → AI Settings to generate matching angles from your reference image.`
+              : error.message
+            : "Could not generate a new angle from this image.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
+  }
+
+  const handleGenerateIntroPack = async () => {
+    if (!referenceAssetForShots) return
+    setIsGeneratingShot(true)
+    try {
+      for (let i = 0; i < INTRO_SHOT_PACK.length; i++) {
+        const shot = INTRO_SHOT_PACK[i]
+        setShotGenerationProgress(`Generating intro pack (${i + 1}/${INTRO_SHOT_PACK.length}): ${shot}...`)
+        await generateLocationShotFromReference(referenceAssetForShots, shot, {
+          customPrompt: shotCustomPrompt,
+        })
+      }
+      toast({
+        title: "Intro pack complete",
+        description: `Generated ${INTRO_SHOT_PACK.length} angles for your movie intro.`,
+      })
+      setIsGenerateShotsDialogOpen(false)
+    } catch (error) {
+      toast({
+        title: "Intro pack failed",
+        description:
+          error instanceof Error
+            ? error.message.includes("Runway") || error.message.includes("API key")
+              ? `${error.message} Runway Gen-4 Image Turbo (with reference image) is required for matching angles.`
+              : error.message
+            : "Could not finish the intro shot pack.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
+  }
+
+  const handleRandomFourShots = async () => {
+    const referenceAsset =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!referenceAsset) {
+      toast({
+        title: "No reference image",
+        description: "Upload or generate a location image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const randomShots = pickRandomShots(RANDOM_SHOT_BATCH_SIZE)
+    setIsGeneratingShot(true)
+    try {
+      for (let i = 0; i < randomShots.length; i++) {
+        const shot = randomShots[i]
+        setShotGenerationProgress(`Random angles (${i + 1}/${randomShots.length}): ${shot}...`)
+        await generateLocationShotFromReference(referenceAsset, shot)
+      }
+      toast({
+        title: "4 random angles generated",
+        description: randomShots.join(" · "),
+      })
+    } catch (error) {
+      toast({
+        title: "Random shot batch failed",
+        description:
+          error instanceof Error
+            ? error.message.includes("Runway") || error.message.includes("API key")
+              ? `${error.message} Add a Runway ML API key in Settings → AI Settings.`
+              : error.message
+            : "Could not finish generating random angles.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
+  }
+
+  const handleGenerateInlineCustomShot = async () => {
+    const direction = inlineCustomShotPrompt.trim()
+    if (!direction) {
+      toast({
+        title: "Describe your shot",
+        description: 'Enter what you want, e.g. "close up of the drone on the right" or "zoom into the city".',
+        variant: "destructive",
+      })
+      return
+    }
+
+    const referenceAsset =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!referenceAsset) return
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc) return
+
+    const shotLabel =
+      direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
+
+    setIsGeneratingShot(true)
+    setShotGenerationProgress("Generating custom shot...")
+    try {
+      await generateLocationShotFromReference(referenceAsset, shotLabel, {
+        promptOverride: buildCustomLocationShotPrompt(direction, selectedLoc),
+      })
+      setInlineCustomShotPrompt("")
+      toast({
+        title: "Custom shot generated",
+        description: "Your directed shot was added to location assets.",
+      })
+    } catch (error) {
+      toast({
+        title: "Custom shot failed",
+        description:
+          error instanceof Error
+            ? error.message.includes("Runway") || error.message.includes("API key")
+              ? `${error.message} Add a Runway ML API key in Settings → AI Settings.`
+              : error.message
+            : "Could not generate your custom shot.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
+  }
+
   const loadLocationIntoForm = (loc: Location) => {
     setSelectedLocationId(loc.id)
     setEditingLocationInFormId(loc.id)
@@ -849,13 +1245,7 @@ export default function LocationsPage() {
     setNewLocRestrictions(loc.restrictions || "")
     setNewLocAccessNotes(loc.access_notes || "")
     setNewLocShootingNotes(loc.shooting_notes || "")
-    
-    setTimeout(() => {
-      const locationsCard = document.getElementById("locations-form-card")
-      if (locationsCard) {
-        locationsCard.scrollIntoView({ behavior: "smooth", block: "nearest" })
-      }
-    }, 100)
+    setIsCreateLocationDialogOpen(true)
   }
 
   const clearForm = () => {
@@ -878,6 +1268,14 @@ export default function LocationsPage() {
     setNewLocRestrictions("")
     setNewLocAccessNotes("")
     setNewLocShootingNotes("")
+  }
+
+  const openCreateLocationDialog = (namePrefill?: string) => {
+    clearForm()
+    if (namePrefill) {
+      setNewLocName(namePrefill)
+    }
+    setIsCreateLocationDialogOpen(true)
   }
 
   const createLocation = async (namePrefill?: string) => {
@@ -924,13 +1322,16 @@ export default function LocationsPage() {
         const updated = await LocationsService.updateLocation(editingLocationInFormId, locationData)
         setLocations(prev => prev.map(l => l.id === editingLocationInFormId ? updated : l))
         clearForm()
+        setIsCreateLocationDialogOpen(false)
         toast({ title: "Location updated", description: `"${updated.name}" saved.` })
       } else {
         locationData.project_id = projectId
         const created = await LocationsService.createLocation(locationData)
         setLocations([created, ...locations])
+        setSelectedLocationId(created.id)
         if (!namePrefill) {
           clearForm()
+          setIsCreateLocationDialogOpen(false)
         }
         toast({ title: "Location created", description: `"${created.name}" added.` })
       }
@@ -1120,9 +1521,9 @@ export default function LocationsPage() {
       case 'video':
         return <Video className="h-4 w-4" />
       case 'audio':
-        return <File className="h-4 w-4" />
+        return <FileIcon className="h-4 w-4" />
       default:
-        return <File className="h-4 w-4" />
+        return <FileIcon className="h-4 w-4" />
     }
   }
 
@@ -1130,7 +1531,7 @@ export default function LocationsPage() {
     <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
       <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-8">
-        <div className="flex items-center justify-between mb-4 sm:mb-6">
+        <div className="flex items-center justify-between gap-3 mb-4 sm:mb-6">
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent break-words">
               Locations
@@ -1139,6 +1540,13 @@ export default function LocationsPage() {
               Aggregate locations from scenes and manage location profiles.
             </p>
           </div>
+          {projectId && !loading && (
+            <Button onClick={() => openCreateLocationDialog()} className="gap-2 shrink-0">
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">Create Location</span>
+              <span className="sm:hidden">Create</span>
+            </Button>
+          )}
         </div>
 
         <div className="mb-6">
@@ -1183,7 +1591,7 @@ export default function LocationsPage() {
                     disabled={locations.length === 0}
                   >
                     <SelectTrigger id="location-selector" className="bg-input border-border text-xs sm:text-sm">
-                      <SelectValue placeholder={locations.length === 0 ? "No locations available. Create one below." : "Select a location to view details..."} />
+                      <SelectValue placeholder={locations.length === 0 ? "No locations available. Create one above." : "Select a location to view details..."} />
                     </SelectTrigger>
                     <SelectContent>
                       {locations.length === 0 ? (
@@ -1341,6 +1749,19 @@ export default function LocationsPage() {
                                                     variant="secondary"
                                                     onClick={(e) => {
                                                       e.stopPropagation()
+                                                      openGenerateShotsDialog(asset)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
+                                                    title="Generate new angle from this image"
+                                                  >
+                                                    <Camera className="h-3 w-3 mr-1" />
+                                                    New Angle
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
                                                       setViewingImage(asset)
                                                       setViewImageDialogOpen(true)
                                                     }}
@@ -1428,6 +1849,91 @@ export default function LocationsPage() {
                                           ))}
                                         </div>
                                       )}
+                                    </div>
+
+                                    <div className="flex flex-col gap-2 pt-1">
+                                      <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
+                                        <Button
+                                          size="sm"
+                                          onClick={handleRandomFourShots}
+                                          disabled={isGeneratingShot}
+                                          className="gap-2 w-full sm:w-auto"
+                                          title="Randomly pick 4 camera angles and generate them from this image"
+                                        >
+                                          {isGeneratingShot && shotGenerationProgress.startsWith("Random") ? (
+                                            <>
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                              Generating 4 angles...
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Shuffle className="h-4 w-4" />
+                                              Random 4 Angles
+                                            </>
+                                          )}
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() =>
+                                            openGenerateShotsDialog(
+                                              imageAssets[currentImageIndex] || imageAssets[0],
+                                            )
+                                          }
+                                          disabled={isGeneratingShot}
+                                          className="gap-2 w-full sm:w-auto"
+                                          title="Pick specific camera angles manually"
+                                        >
+                                          <Camera className="h-4 w-4" />
+                                          Choose Shots
+                                        </Button>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground">
+                                        Angle shots use {SHOT_REFERENCE_MODEL_LABEL} with your image as reference — not your locked image model ({getLockedImageModelLabel()}). GPT/DALL-E text-to-image cannot reframe from a reference photo; Runway can.
+                                      </p>
+                                      {isGeneratingShot && shotGenerationProgress && (
+                                        <p className="text-xs text-muted-foreground flex items-center gap-2">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {shotGenerationProgress}
+                                        </p>
+                                      )}
+                                    </div>
+
+                                    <div className="space-y-2 pt-2 border-t border-border/60">
+                                      <Label htmlFor="inline-custom-shot" className="text-xs sm:text-sm">
+                                        Describe your shot
+                                      </Label>
+                                      <Textarea
+                                        id="inline-custom-shot"
+                                        value={inlineCustomShotPrompt}
+                                        onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+                                        placeholder='e.g., close up of the drone on the right, zoom into the city skyline, push in on the NEW YORK sign'
+                                        className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
+                                        disabled={isGeneratingShot}
+                                      />
+                                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                        <Button
+                                          size="sm"
+                                          onClick={handleGenerateInlineCustomShot}
+                                          disabled={isGeneratingShot || !inlineCustomShotPrompt.trim()}
+                                          className="gap-2 w-full sm:w-auto"
+                                        >
+                                          {isGeneratingShot && inlineCustomShotPrompt.trim() ? (
+                                            <>
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                              Generating...
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Wand2 className="h-4 w-4" />
+                                              Generate Custom Shot
+                                            </>
+                                          )}
+                                        </Button>
+                                        <p className="text-xs text-muted-foreground">
+                                          Uses this image as reference — describe exactly what to focus on or zoom into
+                                        </p>
+                                      </div>
                                     </div>
                                   </div>
                                 )}
@@ -1581,185 +2087,22 @@ export default function LocationsPage() {
                   
                   {locations.length === 0 && (
                     <div className="text-xs sm:text-sm text-muted-foreground text-center py-4 px-2 break-words">
-                      No locations created yet. Create your first location below.
+                      No locations created yet. Click <strong>Create Location</strong> above to add your first one.
                     </div>
                   )}
                 </CardContent>
               </Card>
             
             <div className="space-y-4 sm:space-y-6">
-            {/* Locations list and create */}
+            {/* Locations list */}
             <Card id="locations-form-card" className="cinema-card">
               <CardHeader className="pb-4 p-4 sm:p-6">
-                <CardTitle className="text-lg sm:text-xl">Locations</CardTitle>
+                <CardTitle className="text-lg sm:text-xl">Your Locations</CardTitle>
                 <p className="text-xs sm:text-sm text-muted-foreground break-words">
-                  {editingLocationInFormId ? "Edit location details below." : "Create and manage location profiles for this movie."}
+                  Select a location to view details, or use Create Location above to add a new one.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4 p-4 sm:p-6">
-                <div className="space-y-4">
-                  {/* Basic Info */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-name">Name *</Label>
-                      <Input id="loc-name" value={newLocName} onChange={(e) => setNewLocName(e.target.value)} className="bg-input border-border" placeholder="e.g., Main Street Coffee Shop" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-type">Type</Label>
-                      <Select value={newLocType} onValueChange={(value: any) => setNewLocType(value)}>
-                        <SelectTrigger id="loc-type" className="bg-input border-border">
-                          <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="interior">Interior</SelectItem>
-                          <SelectItem value="exterior">Exterior</SelectItem>
-                          <SelectItem value="both">Both</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2 sm:col-span-2">
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <Label htmlFor="loc-description" className="text-xs sm:text-sm">Description</Label>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => enhanceField(newLocDescription, setNewLocDescription)}
-                          disabled={isEnhancingText || !newLocDescription.trim()}
-                          className="flex items-center gap-2 text-xs sm:text-sm w-full sm:w-auto"
-                        >
-                          {isEnhancingText ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Wand2 className="h-4 w-4" />
-                          )}
-                          {isEnhancingText ? "Enhancing..." : "Enhance Text"}
-                        </Button>
-                      </div>
-                      <Textarea id="loc-description" value={newLocDescription} onChange={(e) => setNewLocDescription(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Brief overview of the location..." />
-                    </div>
-                  </div>
-
-                  {/* Address */}
-                  <div className="space-y-3">
-                    <Label className="text-xs sm:text-sm font-medium">Address</Label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div className="space-y-2">
-                        <Label htmlFor="loc-address">Street Address</Label>
-                        <Input id="loc-address" value={newLocAddress} onChange={(e) => setNewLocAddress(e.target.value)} className="bg-input border-border" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="loc-city">City</Label>
-                        <Input id="loc-city" value={newLocCity} onChange={(e) => setNewLocCity(e.target.value)} className="bg-input border-border" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="loc-state">State/Province</Label>
-                        <Input id="loc-state" value={newLocState} onChange={(e) => setNewLocState(e.target.value)} className="bg-input border-border" />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="loc-country">Country</Label>
-                        <Input id="loc-country" value={newLocCountry} onChange={(e) => setNewLocCountry(e.target.value)} className="bg-input border-border" />
-                      </div>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Visual & Atmosphere */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-time-of-day">Time of Day (comma-separated)</Label>
-                      <Input id="loc-time-of-day" value={newLocTimeOfDay} onChange={(e) => setNewLocTimeOfDay(e.target.value)} className="bg-input border-border" placeholder="day, night, dawn, dusk" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-atmosphere">Atmosphere</Label>
-                      <Input id="loc-atmosphere" value={newLocAtmosphere} onChange={(e) => setNewLocAtmosphere(e.target.value)} className="bg-input border-border" placeholder="cozy, industrial, mysterious" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-mood">Mood</Label>
-                      <Input id="loc-mood" value={newLocMood} onChange={(e) => setNewLocMood(e.target.value)} className="bg-input border-border" placeholder="tense, peaceful, chaotic" />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="loc-visual">Visual Description</Label>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => enhanceField(newLocVisualDescription, setNewLocVisualDescription)}
-                        disabled={isEnhancingText || !newLocVisualDescription.trim()}
-                        className="flex items-center gap-2"
-                      >
-                        {isEnhancingText ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Wand2 className="h-4 w-4" />
-                        )}
-                        {isEnhancingText ? "Enhancing..." : "Enhance Text"}
-                      </Button>
-                    </div>
-                    <Textarea id="loc-visual" value={newLocVisualDescription} onChange={(e) => setNewLocVisualDescription(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Detailed visual description of the location..." />
-                  </div>
-
-                  <Separator />
-
-                  {/* Technical Notes */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-lighting">Lighting Notes</Label>
-                      <Textarea id="loc-lighting" value={newLocLightingNotes} onChange={(e) => setNewLocLightingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-sound">Sound Notes</Label>
-                      <Textarea id="loc-sound" value={newLocSoundNotes} onChange={(e) => setNewLocSoundNotes(e.target.value)} className="bg-input border-border min-h-[60px]" />
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Features & Props */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-features">Key Features (comma-separated)</Label>
-                      <Input id="loc-features" value={newLocKeyFeatures} onChange={(e) => setNewLocKeyFeatures(e.target.value)} className="bg-input border-border" placeholder="large windows, exposed brick, vintage furniture" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-props">Props (comma-separated)</Label>
-                      <Input id="loc-props" value={newLocProps} onChange={(e) => setNewLocProps(e.target.value)} className="bg-input border-border" placeholder="coffee cups, newspapers, plants" />
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Production Notes */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-restrictions">Restrictions</Label>
-                      <Textarea id="loc-restrictions" value={newLocRestrictions} onChange={(e) => setNewLocRestrictions(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Time restrictions, noise limits, etc." />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="loc-access">Access Notes</Label>
-                      <Textarea id="loc-access" value={newLocAccessNotes} onChange={(e) => setNewLocAccessNotes(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Parking, entry points, permissions needed" />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="loc-shooting">Shooting Notes</Label>
-                    <Textarea id="loc-shooting" value={newLocShootingNotes} onChange={(e) => setNewLocShootingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Camera angles, challenges, opportunities" />
-                  </div>
-                </div>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <Button onClick={() => createLocation()} disabled={isCreatingLocation || !newLocName.trim()} className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
-                    {isCreatingLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : editingLocationInFormId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    <span className="hidden sm:inline">{editingLocationInFormId ? "Update Location" : "Create Location"}</span>
-                    <span className="sm:hidden">{editingLocationInFormId ? "Update" : "Create"}</span>
-                  </Button>
-                  {editingLocationInFormId && (
-                    <Button variant="outline" onClick={clearForm} disabled={isCreatingLocation} className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
-                      <X className="h-4 w-4" />
-                      Cancel
-                    </Button>
-                  )}
-                </div>
-                <Separator />
                 <div className="space-y-2">
                   <div className="text-sm text-muted-foreground">
                     {isLoadingLocations ? "Loading locations..." : `${locations.length} location${locations.length === 1 ? "" : "s"}`}
@@ -1850,7 +2193,7 @@ export default function LocationsPage() {
                                 Added
                               </Badge>
                             ) : (
-                              <Button variant="ghost" size="icon" onClick={() => createLocation(l.name)} disabled={isCreatingLocation} title="Create Location">
+                              <Button variant="ghost" size="icon" onClick={() => openCreateLocationDialog(l.name)} disabled={isCreatingLocation} title="Create Location">
                                 <Plus className="h-4 w-4" />
                               </Button>
                             )}
@@ -1866,6 +2209,179 @@ export default function LocationsPage() {
           </>
         )}
       </main>
+
+      {/* Create / Edit Location Dialog */}
+      <Dialog
+        open={isCreateLocationDialogOpen}
+        onOpenChange={(open) => {
+          setIsCreateLocationDialogOpen(open)
+          if (!open) clearForm()
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">
+              {editingLocationInFormId ? "Edit Location" : "Create Location"}
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {editingLocationInFormId
+                ? "Update this location's profile for the project."
+                : "Add a new location profile with optional production details."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="loc-name">Name *</Label>
+                <Input id="loc-name" value={newLocName} onChange={(e) => setNewLocName(e.target.value)} className="bg-input border-border" placeholder="e.g., Main Street Coffee Shop" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-type">Type</Label>
+                <Select value={newLocType} onValueChange={(value: any) => setNewLocType(value)}>
+                  <SelectTrigger id="loc-type" className="bg-input border-border">
+                    <SelectValue placeholder="Select type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="interior">Interior</SelectItem>
+                    <SelectItem value="exterior">Exterior</SelectItem>
+                    <SelectItem value="both">Both</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <Label htmlFor="loc-description" className="text-xs sm:text-sm">Description</Label>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => enhanceField(newLocDescription, setNewLocDescription)}
+                    disabled={isEnhancingText || !newLocDescription.trim()}
+                    className="flex items-center gap-2 text-xs sm:text-sm w-full sm:w-auto"
+                  >
+                    {isEnhancingText ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                    {isEnhancingText ? "Enhancing..." : "Enhance Text"}
+                  </Button>
+                </div>
+                <Textarea id="loc-description" value={newLocDescription} onChange={(e) => setNewLocDescription(e.target.value)} className="bg-input border-border min-h-[70px] text-xs sm:text-sm" placeholder="Brief overview of the location..." />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-xs sm:text-sm font-medium">Address</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="loc-address">Street Address</Label>
+                  <Input id="loc-address" value={newLocAddress} onChange={(e) => setNewLocAddress(e.target.value)} className="bg-input border-border" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="loc-city">City</Label>
+                  <Input id="loc-city" value={newLocCity} onChange={(e) => setNewLocCity(e.target.value)} className="bg-input border-border" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="loc-state">State/Province</Label>
+                  <Input id="loc-state" value={newLocState} onChange={(e) => setNewLocState(e.target.value)} className="bg-input border-border" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="loc-country">Country</Label>
+                  <Input id="loc-country" value={newLocCountry} onChange={(e) => setNewLocCountry(e.target.value)} className="bg-input border-border" />
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="loc-time-of-day">Time of Day (comma-separated)</Label>
+                <Input id="loc-time-of-day" value={newLocTimeOfDay} onChange={(e) => setNewLocTimeOfDay(e.target.value)} className="bg-input border-border" placeholder="day, night, dawn, dusk" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-atmosphere">Atmosphere</Label>
+                <Input id="loc-atmosphere" value={newLocAtmosphere} onChange={(e) => setNewLocAtmosphere(e.target.value)} className="bg-input border-border" placeholder="cozy, industrial, mysterious" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-mood">Mood</Label>
+                <Input id="loc-mood" value={newLocMood} onChange={(e) => setNewLocMood(e.target.value)} className="bg-input border-border" placeholder="tense, peaceful, chaotic" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="loc-visual">Visual Description</Label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => enhanceField(newLocVisualDescription, setNewLocVisualDescription)}
+                  disabled={isEnhancingText || !newLocVisualDescription.trim()}
+                  className="flex items-center gap-2"
+                >
+                  {isEnhancingText ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                  {isEnhancingText ? "Enhancing..." : "Enhance Text"}
+                </Button>
+              </div>
+              <Textarea id="loc-visual" value={newLocVisualDescription} onChange={(e) => setNewLocVisualDescription(e.target.value)} className="bg-input border-border min-h-[70px]" placeholder="Detailed visual description of the location..." />
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="loc-lighting">Lighting Notes</Label>
+                <Textarea id="loc-lighting" value={newLocLightingNotes} onChange={(e) => setNewLocLightingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-sound">Sound Notes</Label>
+                <Textarea id="loc-sound" value={newLocSoundNotes} onChange={(e) => setNewLocSoundNotes(e.target.value)} className="bg-input border-border min-h-[60px]" />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="loc-features">Key Features (comma-separated)</Label>
+                <Input id="loc-features" value={newLocKeyFeatures} onChange={(e) => setNewLocKeyFeatures(e.target.value)} className="bg-input border-border" placeholder="large windows, exposed brick, vintage furniture" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-props">Props (comma-separated)</Label>
+                <Input id="loc-props" value={newLocProps} onChange={(e) => setNewLocProps(e.target.value)} className="bg-input border-border" placeholder="coffee cups, newspapers, plants" />
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="loc-restrictions">Restrictions</Label>
+                <Textarea id="loc-restrictions" value={newLocRestrictions} onChange={(e) => setNewLocRestrictions(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Time restrictions, noise limits, etc." />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="loc-access">Access Notes</Label>
+                <Textarea id="loc-access" value={newLocAccessNotes} onChange={(e) => setNewLocAccessNotes(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Parking, entry points, permissions needed" />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="loc-shooting">Shooting Notes</Label>
+              <Textarea id="loc-shooting" value={newLocShootingNotes} onChange={(e) => setNewLocShootingNotes(e.target.value)} className="bg-input border-border min-h-[60px]" placeholder="Camera angles, challenges, opportunities" />
+            </div>
+          </div>
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => {
+                clearForm()
+                setIsCreateLocationDialogOpen(false)
+              }}
+              disabled={isCreatingLocation}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => createLocation()} disabled={isCreatingLocation || !newLocName.trim()} className="gap-2">
+              {isCreatingLocation ? <Loader2 className="h-4 w-4 animate-spin" /> : editingLocationInFormId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+              {editingLocationInFormId ? "Update Location" : "Create Location"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Generate Image Dialog */}
       <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
@@ -1922,7 +2438,7 @@ export default function LocationsPage() {
               </Select>
               {aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked) && (
                 <p className="text-xs text-muted-foreground">
-                  Service is locked in AI Settings
+                  Using locked model from AI Settings: {getLockedImageModelLabel()}
                 </p>
               )}
             </div>
@@ -1959,6 +2475,125 @@ export default function LocationsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Generate Shots Dialog */}
+      <Dialog open={isGenerateShotsDialogOpen} onOpenChange={setIsGenerateShotsDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Generate Shots from Reference</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              Uses {SHOT_REFERENCE_MODEL_LABEL} with your reference image to create new camera angles. Your locked AI Settings image model ({getLockedImageModelLabel()}) is used for Quick Generate / Generate Image only — it does text-to-image without your photo as reference.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {referenceAssetForShots?.content_url && (
+              <div className="space-y-2">
+                <Label className="text-xs sm:text-sm">Reference Image</Label>
+                <div className="relative aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                  <img
+                    src={referenceAssetForShots.content_url}
+                    alt={referenceAssetForShots.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                {imageAssetsForLocation.length > 1 && (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {imageAssetsForLocation.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        onClick={() => setReferenceAssetForShots(asset)}
+                        className={`relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                          referenceAssetForShots.id === asset.id
+                            ? "border-primary ring-2 ring-primary/50"
+                            : "border-border hover:border-primary/50"
+                        }`}
+                      >
+                        <img src={asset.content_url!} alt={asset.title} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="shot-preset">Camera Angle / Shot Type</Label>
+              <Select value={selectedShotPreset} onValueChange={setSelectedShotPreset}>
+                <SelectTrigger id="shot-preset" className="bg-input border-border">
+                  <SelectValue placeholder="Choose a shot type" />
+                </SelectTrigger>
+                <SelectContent>
+                  {LOCATION_SHOT_PRESETS.map((shot) => (
+                    <SelectItem key={shot} value={shot}>
+                      {shot}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="shot-custom-prompt">Extra Direction (optional)</Label>
+              <Textarea
+                id="shot-custom-prompt"
+                value={shotCustomPrompt}
+                onChange={(e) => setShotCustomPrompt(e.target.value)}
+                placeholder="e.g., push in toward the skyline, more drones in foreground, golden hour glow"
+                className="bg-input border-border min-h-[70px]"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id="include-location-shot-details"
+                checked={includeLocationDetailsInShot}
+                onCheckedChange={(checked) => setIncludeLocationDetailsInShot(checked === true)}
+              />
+              <Label htmlFor="include-location-shot-details" className="text-sm font-normal cursor-pointer">
+                Include location description in prompt
+              </Label>
+            </div>
+
+            {shotGenerationProgress && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {shotGenerationProgress}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              onClick={() => setIsGenerateShotsDialogOpen(false)}
+              disabled={isGeneratingShot}
+            >
+              Close
+            </Button>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <Button
+                variant="secondary"
+                onClick={handleGenerateIntroPack}
+                disabled={isGeneratingShot || !referenceAssetForShots}
+                className="gap-2"
+              >
+                {isGeneratingShot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
+                Intro Pack (4 distinct angles)
+              </Button>
+              <Button
+                onClick={handleGenerateSingleShot}
+                disabled={isGeneratingShot || !referenceAssetForShots}
+                className="gap-2"
+              >
+                {isGeneratingShot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Generate Shot
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* View Full Image Dialog */}
       <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
         <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
@@ -1976,7 +2611,18 @@ export default function LocationsPage() {
               </div>
             )}
           </div>
-          <DialogFooter className="px-6 pb-6">
+          <DialogFooter className="px-6 pb-6 flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage) {
+                  openGenerateShotsDialog(viewingImage)
+                }
+              }}
+            >
+              <Camera className="h-4 w-4 mr-2" />
+              Generate New Angle
+            </Button>
             <Button
               variant="outline"
               onClick={() => {
