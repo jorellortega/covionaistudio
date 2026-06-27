@@ -14,6 +14,10 @@ import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, AISetting, AISettingUpdate } from "@/lib/ai-settings-service"
 import { useToast } from "@/hooks/use-toast"
 import { getSupabaseClient } from "@/lib/supabase"
+import {
+  migrateGPTImageDisplayLabel,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
 import { 
   FileText, 
   ImageIcon, 
@@ -32,10 +36,10 @@ import {
 
 const aiModels = {
   scripts: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  images: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  images: ["GPT Image 2", "GPT Image 1", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   videos: ["Kling", "Runway ML", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
-  timeline: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  timeline: ["GPT Image 2", "GPT Image 1", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
 // OpenAI models
@@ -364,6 +368,9 @@ export default function AISettingsPage() {
               setting.selected_model = 'claude-3-5-sonnet-20241022'
             }
           }
+          if (setting.tab_type === 'images' || setting.tab_type === 'timeline') {
+            setting.locked_model = migrateGPTImageDisplayLabel(setting.locked_model)
+          }
           return setting
         })
         
@@ -411,7 +418,14 @@ export default function AISettingsPage() {
     if (!ready) return { isReady: false, statusText: "Not logged in" }
     
     // Check specific API key requirements (user keys take precedence, but system keys are checked too)
-    if (model === "DALL-E 3" || model === "ChatGPT" || model === "GPT-4" || model === "GPT Image") {
+    if (
+      model === "DALL-E 3" ||
+      model === "ChatGPT" ||
+      model === "GPT-4" ||
+      model === "GPT Image" ||
+      model === "GPT Image 1" ||
+      model === "GPT Image 2"
+    ) {
       const hasKey = !!userApiKeys.openai_api_key
       return { 
         isReady: hasKey, 
@@ -1024,6 +1038,14 @@ export default function AISettingsPage() {
                           <span className="text-sm text-muted-foreground">LLM Model:</span>
                           <Badge variant="outline" className="text-xs">
                             {setting.selected_model}
+                          </Badge>
+                        </div>
+                      )}
+                      {(setting.tab_type === 'images' || setting.tab_type === 'timeline') && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-muted-foreground">API model:</span>
+                          <Badge variant="outline" className="text-xs font-mono">
+                            {normalizeDisplayModelToApiId(setting.locked_model)}
                           </Badge>
                         </div>
                       )}

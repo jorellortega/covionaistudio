@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
+import { isGPTImageApiModel, isGPTImage2ApiModel } from '@/lib/image-model-utils'
+import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
+import {
+  buildRunwayReferenceImagesFromFiles,
+  ensureRunwayReferenceTagsInPrompt,
+  normalizeRunwayRatio,
+} from '@/lib/runway-reference'
 
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
@@ -149,6 +156,7 @@ export async function POST(request: NextRequest) {
     // Handle both JSON and FormData requests
     let body: any
     let file: File | null = null
+    let styleFile: File | null = null
     
     const contentType = request.headers.get('content-type') || ''
     
@@ -166,7 +174,8 @@ export async function POST(request: NextRequest) {
         seed: formData.get('seed') ? parseInt(formData.get('seed') as string) : undefined,
       }
       file = formData.get('file') as File
-      console.log('FormData request received with file:', file?.name)
+      styleFile = formData.get('styleFile') as File
+      console.log('FormData request received with file:', file?.name, styleFile?.name ? `+ style: ${styleFile.name}` : '')
     } else {
       // Handle JSON request
       body = await request.json()
@@ -363,6 +372,30 @@ export async function POST(request: NextRequest) {
 
     let imageUrl = ""
 
+    const imageModelForRequest = model || 'dall-e-3'
+    if (file && isGPTImage2ApiModel(imageModelForRequest)) {
+      console.log('🖼️ API ROUTE - GPT Image 2 edit with reference file(s)')
+      const additionalFiles = styleFile && styleFile.size > 0 ? [styleFile] : undefined
+      const editResponse = await OpenAIService.editImageWithReference({
+        prompt,
+        model: imageModelForRequest,
+        apiKey,
+        file,
+        additionalFiles,
+        size: '1024x1024',
+      })
+
+      if (!editResponse.success) {
+        throw new Error(editResponse.error || 'GPT Image edit failed')
+      }
+
+      const first = editResponse.data?.data?.[0]
+      if (!first?.b64_json && !first?.url) {
+        throw new Error('Invalid response structure from GPT Image edit API')
+      }
+
+      imageUrl = first.url || `data:image/png;base64,${first.b64_json}`
+    } else {
     switch (normalizedService) {
       case 'dalle':
         console.log('Generating image with prompt:', prompt)
@@ -371,10 +404,10 @@ export async function POST(request: NextRequest) {
         
         // Determine the model to use - support GPT image models
         const imageModel = model || 'dall-e-3'
-        const isGPTImageModel = imageModel === 'gpt-image-1' || imageModel.startsWith('gpt-')
+        const isGPTImageModel = isGPTImageApiModel(imageModel)
         
         if (isGPTImageModel) {
-          console.log('🖼️ API ROUTE - Using GPT Image (Responses API) for model:', imageModel)
+          console.log('🖼️ API ROUTE - Using GPT Image for model:', imageModel)
         } else {
           console.log('🖼️ API ROUTE - Using DALL-E (Images API) for model:', imageModel)
         }
@@ -399,17 +432,16 @@ export async function POST(request: NextRequest) {
           throw new Error(dalleResponse.error || 'Image generation failed')
         }
         
-        // Handle both DALL-E (URL) and GPT Image (base64) responses
+        // Handle GPT Image (base64 or URL) and DALL-E (URL) responses
         if (isGPTImageModel) {
-          // GPT Image returns base64 data
-          if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].b64_json) {
+          const first = dalleResponse.data?.data?.[0]
+          if (!first?.b64_json && !first?.url) {
             console.error('Invalid GPT Image response structure:', dalleResponse.data)
             throw new Error('Invalid response structure from GPT Image API')
           }
-          
-          // Convert base64 to data URL
-          imageUrl = dalleResponse.data.data[0].url || `data:image/png;base64,${dalleResponse.data.data[0].b64_json}`
-          console.log('Generated image (base64):', imageUrl.substring(0, 50) + '...')
+
+          imageUrl = first.url || `data:image/png;base64,${first.b64_json}`
+          console.log('Generated GPT Image:', imageUrl.substring(0, 50) + '...')
         } else {
           // DALL-E returns URL
           if (!dalleResponse.data || !dalleResponse.data.data || !dalleResponse.data.data[0] || !dalleResponse.data.data[0].url) {
@@ -526,24 +558,22 @@ export async function POST(request: NextRequest) {
         
         let requestBody: any
         
+        const additionalRefFiles =
+          styleFile && styleFile.size > 0 ? [styleFile] : undefined
+
         if (model === 'gen4_image_turbo') {
           if (!file) {
             throw new Error('Gen-4 Image Turbo requires a reference image file')
           }
-          
-          // Convert file to base64 for Runway ML API
-          const fileBuffer = await file.arrayBuffer()
-          const base64File = Buffer.from(fileBuffer).toString('base64')
-          const dataUrl = `data:${file.type};base64,${base64File}`
-          
+
+          const referenceImages = await buildRunwayReferenceImagesFromFiles(file, additionalRefFiles)
+          const refTags = referenceImages.map((ref) => ref.tag)
+
           requestBody = {
             model: model,
-            promptText: prompt,
-            ratio: `${width}:${height}`,
-            referenceImages: [{
-              uri: dataUrl,
-              tag: 'reference',
-            }],
+            promptText: ensureRunwayReferenceTagsInPrompt(prompt, refTags),
+            ratio: normalizeRunwayRatio(width, height),
+            referenceImages,
           }
           if (seed !== undefined && seed !== null && !Number.isNaN(Number(seed))) {
             requestBody.seed = Number(seed)
@@ -552,17 +582,21 @@ export async function POST(request: NextRequest) {
           requestBody = {
             model: model,
             promptText: prompt,
-            ratio: `${width}:${height}`
+            ratio: normalizeRunwayRatio(width, height),
+          }
+          if (file && file.size > 0) {
+            const referenceImages = await buildRunwayReferenceImagesFromFiles(file, additionalRefFiles)
+            requestBody.referenceImages = referenceImages
+            requestBody.promptText = ensureRunwayReferenceTagsInPrompt(
+              prompt,
+              referenceImages.map((ref) => ref.tag),
+            )
           }
         }
-        
-        const runwayResponse = await fetch('https://api.dev.runwayml.com/v1/text_to_image', {
+
+        const runwayResponse = await fetch(`${RUNWAY.HOST}/v1/text_to_image`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-            'X-Runway-Version': '2024-11-06',
-          },
+          headers: getRunwayHeaders(apiKey),
           body: JSON.stringify(requestBody)
         })
         
@@ -581,10 +615,9 @@ export async function POST(request: NextRequest) {
           
           // Try different possible endpoints for job status
           const possibleEndpoints = [
-            `https://api.dev.runwayml.com/v1/jobs/${runwayData.id}`,
-            `https://api.dev.runwayml.com/v1/tasks/${runwayData.id}`,
-            `https://api.dev.runwayml.com/v1/text_to_image/${runwayData.id}`,
-            `https://api.dev.runwayml.com/v1/inference/${runwayData.id}`
+            `${RUNWAY.HOST}/v1/tasks/${runwayData.id}`,
+            `${RUNWAY.HOST}/v1/jobs/${runwayData.id}`,
+            `${RUNWAY.HOST}/v1/text_to_image/${runwayData.id}`,
           ]
           
           // Poll for job completion
@@ -604,10 +637,7 @@ export async function POST(request: NextRequest) {
                 console.log(`Trying endpoint: ${endpoint}`)
                 const statusResponse = await fetch(endpoint, {
                   method: 'GET',
-                  headers: {
-                    'Authorization': `Bearer ${apiKey}`,
-                    'X-Runway-Version': '2024-11-06',
-                  },
+                  headers: getRunwayHeaders(apiKey),
                 })
                 
                 if (statusResponse.ok) {
@@ -664,6 +694,7 @@ export async function POST(request: NextRequest) {
         
       default:
         throw new Error(`Unsupported service: ${service}`)
+    }
     }
 
     console.log('Successfully generated image:', imageUrl)

@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
+import { getRunwayApiKeyForUser } from '@/lib/runway-api-key'
 
 // Increase body size limit for this route (100MB for video uploads)
 export const maxDuration = 300 // 5 minutes
@@ -58,34 +60,19 @@ export async function POST(request: NextRequest) {
       }, { status: 413 })
     }
 
-    // Get the API key from environment variable
-    const rawKey = process.env.RUNWAYML_API_SECRET?.trim()
-    
-    if (!rawKey) {
-      return NextResponse.json({ error: 'RUNWAYML_API_SECRET is missing. Please set this environment variable.' }, { status: 500 })
-    }
-    
-    // Remove any placeholder text that might be appended
-    const cleanKey = rawKey.replace(/nway_ml_api_key_here.*$/, '').trim()
-    
-    if (!cleanKey.startsWith('key_')) {
-      return NextResponse.json({ error: 'RUNWAYML_API_SECRET is invalid. API key must start with "key_".' }, { status: 500 })
-    }
-    
-    if (cleanKey.length < 50) {
-      return NextResponse.json({ error: 'RUNWAYML_API_SECRET appears to be too short. Please check your API key.' }, { status: 500 })
+    const cleanKey = await getRunwayApiKeyForUser(user.id)
+    if (!cleanKey) {
+      return NextResponse.json({
+        error: 'No Runway ML API key configured. Add one in Settings → AI Settings or set RUNWAYML_API_SECRET on the server.',
+      }, { status: 403 })
     }
 
     console.log('🎬 Uploading file to Runway ML - type:', file.type, 'size:', file.size)
 
     // Step 1: Create upload request to get upload URL
-    const uploadRequestResponse = await fetch('https://api.dev.runwayml.com/v1/uploads', {
+    const uploadRequestResponse = await fetch(`${RUNWAY.HOST}/v1/uploads`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${cleanKey}`,
-        'X-Runway-Version': '2024-11-06'
-      },
+      headers: getRunwayHeaders(cleanKey),
       body: JSON.stringify({
         filename: file.name || (file.type.startsWith('video/') ? 'video.mp4' : 'image.jpg'),
         type: 'ephemeral'

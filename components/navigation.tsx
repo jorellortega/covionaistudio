@@ -25,6 +25,7 @@ import {
   Box,
   Mic,
   Type,
+  Video,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -90,6 +91,7 @@ const navigationCategories: NavCategory[] = [
     icon: Bot,
     items: [
       { name: "AI Studio", href: "/ai-studio", icon: Bot },
+      { name: "Runway ML", href: "/runwayml", icon: Video },
       { name: "Prompts List", href: "/prompts-list", icon: Sparkles },
     ],
   },

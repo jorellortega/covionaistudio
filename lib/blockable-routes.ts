@@ -37,6 +37,7 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'AI & keys', path: '/settings-ai', label: 'AI API keys' },
   { group: 'AI & keys', path: '/setup-ai', label: 'Setup AI' },
   { group: 'AI & keys', path: '/ai-studio', label: 'AI studio' },
+  { group: 'AI & keys', path: '/runwayml', label: 'Runway ML' },
   { group: 'AI & keys', path: '/ai-info', label: 'AI info' },
 
   { group: 'Productions', path: '/movies', label: 'Movies' },

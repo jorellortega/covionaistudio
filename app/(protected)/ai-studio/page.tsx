@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { ProjectSelector } from "@/components/project-selector"
 import { useAuthReady } from "@/components/auth-hooks"
 import { OpenAIService } from "@/lib/openai-service"
+import { isGPTImageApiModel, normalizeDisplayModelToApiId } from "@/lib/image-model-utils"
 import { MovieService, Movie } from "@/lib/movie-service"
 import { TimelineService } from "@/lib/timeline-service"
 import { AssetService } from "@/lib/asset-service"
@@ -88,7 +89,7 @@ interface GeneratedContent {
 
 const aiModels = {
   script: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
-  image: ["GPT Image", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
+  image: ["GPT Image 2", "GPT Image 1", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
   video: ["Kling T2V", "Kling I2V", "Kling I2V Extended", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
@@ -1046,18 +1047,37 @@ export default function AIStudioPage() {
         // Get actual model from settings to check if it's an OpenAI image model
         const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
         const actualImageModel = imagesSetting?.selected_model || null
-        const isOpenAIImageFromSettings = actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-'))
-        
+        const isOpenAIGPTImageLabel = (label: string) =>
+          label === "GPT Image" ||
+          label === "GPT Image 1" ||
+          label === "GPT Image 2"
+
+        const isOpenAIImageFromSettings =
+          !!actualImageModel && isGPTImageApiModel(actualImageModel)
+
         // Check if this is a supported image model
-        if (!(selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || selectedModel.startsWith("Runway") || isOpenAIImageFromSettings)) {
-          alert(`${selectedModel} is not yet implemented. Please use DALL-E 3, GPT Image, or Runway models for images.`)
+        if (
+          !(
+            selectedModel === "DALL-E 3" ||
+            isOpenAIGPTImageLabel(selectedModel) ||
+            selectedModel.startsWith("Runway") ||
+            isOpenAIImageFromSettings
+          )
+        ) {
+          alert(
+            `${selectedModel} is not yet implemented. Please use DALL-E 3, GPT Image 2, or Runway models for images.`,
+          )
           setIsGenerating(false)
           return
         }
         
         let response: any = null
         
-        if (selectedModel === "DALL-E 3" || selectedModel === "GPT Image" || isOpenAIImageFromSettings) {
+        if (
+          selectedModel === "DALL-E 3" ||
+          isOpenAIGPTImageLabel(selectedModel) ||
+          isOpenAIImageFromSettings
+        ) {
           console.log('Attempting to generate image with:', {
             prompt: imagePrompt,
             shot: selectedShot || "",
@@ -1082,25 +1102,22 @@ export default function AIStudioPage() {
           console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
           
           // Check if this is an OpenAI image model (GPT Image or DALL-E 3)
-          const isOpenAIImageModel = selectedModel === "DALL-E 3" || 
-                                     selectedModel === "GPT Image" ||
-                                     (actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-')))
-          
+          const isOpenAIImageModel =
+            selectedModel === "DALL-E 3" ||
+            isOpenAIGPTImageLabel(selectedModel) ||
+            isOpenAIImageFromSettings
+
           if (isOpenAIImageModel) {
           console.log(`🚀 IMAGE GENERATION - Calling OpenAIService.generateImage...`)
-          
-          // Use actual model from settings if available, otherwise use default mapping
+
           let modelToUse: string
-          if (actualImageModel && (actualImageModel === 'gpt-image-1' || actualImageModel.startsWith('gpt-'))) {
-            // Use the model from settings (could be gpt-image-1 or gpt-5*)
+          if (actualImageModel && isGPTImageApiModel(actualImageModel)) {
             modelToUse = actualImageModel
             console.log(`🚀 IMAGE GENERATION - Using model from settings: ${modelToUse}`)
-          } else if (selectedModel === "GPT Image") {
-            // Fallback to gpt-image-1 if GPT Image is selected but no model in settings
-            modelToUse = "gpt-image-1"
-            console.log(`🚀 IMAGE GENERATION - Using default GPT Image model: ${modelToUse}`)
+          } else if (isOpenAIGPTImageLabel(selectedModel)) {
+            modelToUse = normalizeDisplayModelToApiId(selectedModel)
+            console.log(`🚀 IMAGE GENERATION - Using GPT Image model: ${modelToUse}`)
           } else {
-            // DALL-E 3
             modelToUse = "dall-e-3"
             console.log(`🚀 IMAGE GENERATION - Using DALL-E 3 model: ${modelToUse}`)
           }

@@ -22,6 +22,15 @@ interface GenerateImageRequest {
   apiKey: string
 }
 
+interface EditImageRequest {
+  prompt: string
+  model: string
+  apiKey: string
+  file: File
+  additionalFiles?: File[]
+  size?: string
+}
+
 interface GenerateVideoRequest {
   prompt: string
   duration: string
@@ -185,10 +194,74 @@ export class OpenAIService {
         model: request.model
       })
 
-      // Check if this is a GPT image model (gpt-image-1 or GPT-5 models)
-      const isGPTImageModel = request.model === 'gpt-image-1' || request.model.startsWith('gpt-')
-      
-      if (isGPTImageModel) {
+      // GPT Image 2 uses the Images API (/v1/images/generations)
+      const isGPTImage2Model =
+        request.model === "gpt-image-2" || request.model.startsWith("gpt-image-2")
+
+      // GPT Image 1 and GPT-5 image tool models use the Responses API
+      const isGPTImage1OrResponsesModel =
+        request.model === "gpt-image-1" ||
+        request.model.startsWith("gpt-image-1") ||
+        (request.model.startsWith("gpt-") && !isGPTImage2Model)
+
+      if (isGPTImage2Model) {
+        console.log("🖼️ IMAGE GENERATION - Using GPT Image 2 (Images API)")
+        console.log("🖼️ IMAGE GENERATION - Model:", request.model)
+        console.log("🖼️ IMAGE GENERATION - API Endpoint: /v1/images/generations")
+
+        const response = await fetch("https://api.openai.com/v1/images/generations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${request.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: request.model,
+            prompt: `${request.style} style: ${request.prompt}`,
+            n: 1,
+            size: "1024x1024",
+          }),
+        })
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          let errorJson: Record<string, unknown> = {}
+          try {
+            errorJson = JSON.parse(errorText)
+          } catch {
+            // keep raw text
+          }
+          const errorMessage =
+            (errorJson.error as { message?: string } | undefined)?.message ||
+            errorText ||
+            "Unknown error"
+          throw new Error(`API Error (${response.status}): ${errorMessage}`)
+        }
+
+        const data = await response.json()
+        const first = data?.data?.[0]
+        const b64 = first?.b64_json
+        const remoteUrl = first?.url
+
+        if (!b64 && !remoteUrl) {
+          throw new Error("Invalid response structure from GPT Image 2 API")
+        }
+
+        console.log("🖼️ IMAGE GENERATION - ✅ Successfully generated image using GPT Image 2")
+        return {
+          success: true,
+          data: {
+            data: [
+              {
+                url: b64 ? `data:image/png;base64,${b64}` : remoteUrl,
+                ...(b64 ? { b64_json: b64 } : {}),
+              },
+            ],
+          },
+        }
+      }
+
+      if (isGPTImage1OrResponsesModel) {
         // Use Responses API for GPT Image models
         console.log('🖼️ IMAGE GENERATION - Using GPT Image (Responses API)')
         console.log('🖼️ IMAGE GENERATION - Model:', request.model === 'gpt-image-1' ? 'gpt-4.1-mini (with image_generation tool)' : request.model)
@@ -347,6 +420,73 @@ export class OpenAIService {
     } catch (error) {
       console.error('🎬 DEBUG - OpenAI API error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+    }
+  }
+
+  static async editImageWithReference(request: EditImageRequest): Promise<AIResponse> {
+    try {
+      console.log("🖼️ IMAGE EDIT - Using GPT Image edits API")
+      console.log("🖼️ IMAGE EDIT - Model:", request.model)
+      console.log("🖼️ IMAGE EDIT - Prompt:", request.prompt)
+
+      const formData = new FormData()
+      formData.append("model", request.model)
+      formData.append("prompt", request.prompt)
+      formData.append("image[]", request.file, request.file.name)
+      for (const extra of request.additionalFiles ?? []) {
+        formData.append("image[]", extra, extra.name)
+      }
+      if (request.size) {
+        formData.append("size", request.size)
+      }
+
+      const response = await fetch("https://api.openai.com/v1/images/edits", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${request.apiKey}`,
+        },
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        let errorJson: Record<string, unknown> = {}
+        try {
+          errorJson = JSON.parse(errorText)
+        } catch {
+          // keep raw text
+        }
+        const errorMessage =
+          (errorJson.error as { message?: string } | undefined)?.message ||
+          errorText ||
+          "Unknown error"
+        throw new Error(`API Error (${response.status}): ${errorMessage}`)
+      }
+
+      const data = await response.json()
+      const first = data?.data?.[0]
+      const b64 = first?.b64_json
+      const remoteUrl = first?.url
+
+      if (!b64 && !remoteUrl) {
+        throw new Error("Invalid response structure from GPT Image edit API")
+      }
+
+      console.log("🖼️ IMAGE EDIT - ✅ Successfully edited image with reference")
+      return {
+        success: true,
+        data: {
+          data: [
+            {
+              url: b64 ? `data:image/png;base64,${b64}` : remoteUrl,
+              ...(b64 ? { b64_json: b64 } : {}),
+            },
+          ],
+        },
+      }
+    } catch (error) {
+      console.error("🖼️ IMAGE EDIT - Error:", error)
+      return { success: false, error: error instanceof Error ? error.message : "Unknown error" }
     }
   }
 

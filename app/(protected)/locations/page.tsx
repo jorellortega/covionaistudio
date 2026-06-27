@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
 import { Button } from "@/components/ui/button"
@@ -10,8 +10,8 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File as FileIcon, X, ExternalLink, Trash2, Wand2, Sparkles, Star, Camera, Shuffle } from "lucide-react"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Loader2, MapPin, Plus, Check, RefreshCw, ListFilter, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File as FileIcon, X, ExternalLink, Trash2, Wand2, Sparkles, Star, Camera, Link2, Play, Download, ArrowRightLeft } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -19,12 +19,22 @@ import { TreatmentsService } from "@/lib/treatments-service"
 import { TreatmentScenesService, type TreatmentScene } from "@/lib/treatment-scenes-service"
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import {
+  displayModelSupportsReferenceImage,
+  mapDisplayModelToService,
+  migrateGPTImageDisplayLabel,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { useAuthReady } from "@/components/auth-hooks"
 import { OpenAIService } from "@/lib/ai-services"
+import { KlingService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
+import { CharactersService, type Character } from "@/lib/characters-service"
+import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
+import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -44,53 +54,50 @@ const LOCATION_SHOT_PRESETS = [
   "Point of View (POV)",
 ] as const
 
-const INTRO_SHOT_PACK = ["Low Angle", "High Angle", "Bird's Eye View", "Medium Wide Shot"]
-const RANDOM_SHOT_BATCH_SIZE = 4
-
-function pickRandomShots(count: number): string[] {
-  const pool = [...LOCATION_SHOT_PRESETS]
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[pool[i], pool[j]] = [pool[j], pool[i]]
-  }
-  return pool.slice(0, Math.min(count, pool.length))
+interface CustomShotAngle {
+  id: string
+  label: string
+  directive: string
 }
 
-const SHOT_COMPOSITION_DIRECTIVES: Record<string, string> = {
-  "Establishing Shot":
-    "Extreme wide establishing shot from a NEW vantage point — different corner or distance than the reference. Show full city scale. Do NOT copy the reference framing.",
-  "Wide Shot":
-    "Wide shot from street level at a different position along the plaza. New angle on walkways and crowd — clearly different composition from the reference.",
-  "Extreme Wide Shot":
-    "Extreme wide panoramic shot pulling back further than the reference. More skyline visible, different horizon line and framing.",
-  "Medium Wide Shot":
-    "Medium-wide shot focusing on the central walkway and mid-ground architecture. Tighter than an establishing shot, different from the reference wide master.",
-  "Low Angle":
-    "Low angle shot from ground level, camera tilted UP toward skyscrapers and drones against the sky. Worm's-eye view — dramatically different from a wide master shot.",
-  "High Angle":
-    "High angle shot from an elevated position looking DOWN on the plaza, crowd, and streets below. Top-down oblique angle.",
-  "Bird's Eye View":
-    "Bird's eye aerial view looking straight down or steeply down on the city blocks and plaza. Drone overhead perspective.",
-  "Dutch Angle":
-    "Dutch angle / canted camera — horizon tilted, dynamic diagonal composition. Same location, skewed camera.",
-  "Close-up architectural detail":
-    "Tight close-up on a specific building facade, sign, or architectural detail. Shallow depth of field, NOT a wide city view.",
-  "Over-the-shoulder street view":
-    "Over-the-shoulder framing from behind a figure or foreground element, looking into the location depth.",
-  "Tracking shot perspective":
-    "Dynamic tracking shot perspective moving through the plaza or street, motion blur suggestion, forward-moving camera.",
-  "Point of View (POV)":
-    "First-person POV walking through the location at eye level, immersive forward-facing view.",
+function getCustomShotAnglesFromLocation(loc: Location | undefined): CustomShotAngle[] {
+  const raw = loc?.metadata?.custom_shot_angles
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item): item is CustomShotAngle =>
+      typeof item === "object" &&
+      item !== null &&
+      typeof item.id === "string" &&
+      typeof item.label === "string" &&
+      typeof item.directive === "string",
+  )
 }
 
-function getShotCompositionDirective(shotPreset: string, extraDirection?: string): string {
-  const base =
-    SHOT_COMPOSITION_DIRECTIVES[shotPreset] ??
-    `${shotPreset}. Reframe with a clearly different camera position and composition from the reference image.`
+function getShotDescription(
+  shotPreset: string,
+  extraDirection?: string,
+  customAngles?: CustomShotAngle[],
+): string {
+  const custom = customAngles?.find((a) => a.label === shotPreset)
+  const shot = custom?.directive ?? shotPreset
   if (extraDirection?.trim()) {
-    return `${base} Additional direction: ${extraDirection.trim()}.`
+    return `${shot}. ${extraDirection.trim()}`
   }
-  return base
+  return shot
+}
+
+function buildReferenceShotPrompt(
+  shotDescription: string,
+  options?: {
+    includeLocationDetails?: boolean
+    locationName?: string
+  },
+): string {
+  let prompt = `Give me a ${shotDescription.toLowerCase()} of this image. Keep the same scene, characters, lighting, and world — only change the camera angle and framing.`
+  if (options?.includeLocationDetails && options.locationName) {
+    prompt += ` Location: ${options.locationName}.`
+  }
+  return prompt.slice(0, 990)
 }
 
 async function referenceUrlToFile(url: string, filename: string): Promise<File> {
@@ -101,6 +108,136 @@ async function referenceUrlToFile(url: string, filename: string): Promise<File> 
   const blob = await response.blob()
   const type = blob.type || "image/png"
   return new File([blob], filename, { type })
+}
+
+async function downloadMediaToDevice(url: string, fileName: string): Promise<void> {
+  const safeName = fileName.replace(/[^\w.\-() ]/g, "_") || "download.mp4"
+  const proxyUrl = `/api/ai/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`
+  const response = await fetch(proxyUrl)
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}))
+    throw new Error(errorData.error || "Download failed")
+  }
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = blobUrl
+  link.download = safeName
+  link.style.display = "none"
+  document.body.appendChild(link)
+  link.click()
+  setTimeout(() => {
+    document.body.removeChild(link)
+    URL.revokeObjectURL(blobUrl)
+  }, 100)
+}
+
+function getProjectAssetSourceLabel(
+  asset: Asset,
+  locations: Location[],
+  characters: Character[],
+): string {
+  if (asset.character_id) {
+    const character = characters.find((c) => c.id === asset.character_id)
+    return character ? `Character · ${character.name}` : "Character"
+  }
+  if (asset.location_id) {
+    const location = locations.find((l) => l.id === asset.location_id)
+    return location ? `Location · ${location.name}` : "Location"
+  }
+  if (asset.is_default_cover) return "Project cover"
+  const source = asset.metadata?.source ?? asset.metadata?.page
+  if (typeof source === "string" && source.trim()) return source
+  return "Project asset"
+}
+
+function buildLinkedAssetGroups(
+  assets: Asset[],
+  locations: Location[],
+  characters: Character[],
+): { label: string; assets: Asset[] }[] {
+  const characterAssets = assets.filter((a) => a.character_id)
+  const locationAssets = assets.filter((a) => a.location_id && !a.character_id)
+  const projectAssets = assets.filter((a) => !a.character_id && !a.location_id)
+
+  const groups: { label: string; assets: Asset[] }[] = []
+
+  if (characterAssets.length > 0) {
+    groups.push({
+      label: "Characters",
+      assets: [...characterAssets].sort((a, b) => {
+        const nameA = characters.find((c) => c.id === a.character_id)?.name ?? a.title
+        const nameB = characters.find((c) => c.id === b.character_id)?.name ?? b.title
+        return nameA.localeCompare(nameB)
+      }),
+    })
+  }
+
+  if (locationAssets.length > 0) {
+    groups.push({
+      label: "Other locations",
+      assets: [...locationAssets].sort((a, b) => {
+        const nameA = locations.find((l) => l.id === a.location_id)?.name ?? a.title
+        const nameB = locations.find((l) => l.id === b.location_id)?.name ?? b.title
+        return nameA.localeCompare(nameB)
+      }),
+    })
+  }
+
+  if (projectAssets.length > 0) {
+    groups.push({ label: "Project assets", assets: projectAssets })
+  }
+
+  return groups
+}
+
+function normalizeLockedImageModel(
+  displayName: string,
+  options?: { withReferenceImage?: boolean },
+): string {
+  const lower = displayName.toLowerCase()
+  if (lower.includes("runway")) {
+    return options?.withReferenceImage ? "gen4_image_turbo" : "gen4_image"
+  }
+  return normalizeDisplayModelToApiId(displayName)
+}
+
+function mapLockedModelToService(model: string): string {
+  return mapDisplayModelToService(model)
+}
+
+function lockedModelSupportsReferenceImage(model: string): boolean {
+  return displayModelSupportsReferenceImage(model)
+}
+
+function normalizeLockedVideoModel(displayName: string): string {
+  const lower = displayName.toLowerCase()
+  if (lower.includes("gen-4.5") || lower.includes("gen4.5")) return "gen4.5"
+  if (lower.includes("veo 3.1 fast") || lower.includes("veo3.1_fast")) return "veo3.1_fast"
+  if (lower.includes("veo")) return "veo3.1"
+  if (lower.includes("seedance")) return "seedance2"
+  if (lower.includes("runway")) return "gen4_turbo"
+  return "gen4_turbo"
+}
+
+function lockedVideoModelRequiresRunway(displayName: string): boolean {
+  return displayName.toLowerCase().includes("runway")
+}
+
+type LocationTransitionVideoModel =
+  | "kling_i2v_extended"
+  | "leonardo_kling_2_1"
+  | "leonardo_veo_3_1"
+  | "leonardo_veo_3_1_fast"
+
+function getTransitionDurationOptions(model: LocationTransitionVideoModel): number[] {
+  if (model === "kling_i2v_extended" || model === "leonardo_kling_2_1") return [5, 10]
+  return [4, 6, 8]
+}
+
+function getDefaultTransitionDuration(model: LocationTransitionVideoModel): number {
+  if (model === "kling_i2v_extended" || model === "leonardo_kling_2_1") return 5
+  return 8
 }
 
 export default function LocationsPage() {
@@ -132,10 +269,30 @@ export default function LocationsPage() {
   const [isGeneratingQuickImage, setIsGeneratingQuickImage] = useState(false)
   const [isGenerateImageDialogOpen, setIsGenerateImageDialogOpen] = useState(false)
   const [imagePrompt, setImagePrompt] = useState("")
-  const [selectedImageService, setSelectedImageService] = useState("dalle")
   const [includeLocationDetails, setIncludeLocationDetails] = useState(true)
   const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
+  const [viewVideoDialogOpen, setViewVideoDialogOpen] = useState(false)
+  const [viewingVideo, setViewingVideo] = useState<Asset | null>(null)
+  const [isLinkVideoDialogOpen, setIsLinkVideoDialogOpen] = useState(false)
+  const [linkingVideoAsset, setLinkingVideoAsset] = useState<Asset | null>(null)
+  const [linkScenes, setLinkScenes] = useState<SceneWithMetadata[]>([])
+  const [linkStoryboards, setLinkStoryboards] = useState<Storyboard[]>([])
+  const [linkSceneId, setLinkSceneId] = useState<string>("")
+  const [linkStoryboardId, setLinkStoryboardId] = useState<string>("")
+  const [linkVideoAsDefault, setLinkVideoAsDefault] = useState(true)
+  const [isLoadingLinkScenes, setIsLoadingLinkScenes] = useState(false)
+  const [isLoadingLinkStoryboards, setIsLoadingLinkStoryboards] = useState(false)
+  const [isLinkingVideoToShot, setIsLinkingVideoToShot] = useState(false)
+  const [isTransitionVideoDialogOpen, setIsTransitionVideoDialogOpen] = useState(false)
+  const [transitionVideoPrompt, setTransitionVideoPrompt] = useState("")
+  const [transitionVideoModel, setTransitionVideoModel] =
+    useState<LocationTransitionVideoModel>("kling_i2v_extended")
+  const [transitionVideoDuration, setTransitionVideoDuration] = useState(5)
+  const [transitionStartAssetId, setTransitionStartAssetId] = useState<string | null>(null)
+  const [transitionEndAssetId, setTransitionEndAssetId] = useState<string | null>(null)
+  const [isGeneratingTransitionVideo, setIsGeneratingTransitionVideo] = useState(false)
+  const [transitionVideoProgress, setTransitionVideoProgress] = useState("")
   const [isGenerateShotsDialogOpen, setIsGenerateShotsDialogOpen] = useState(false)
   const [referenceAssetForShots, setReferenceAssetForShots] = useState<Asset | null>(null)
   const [selectedShotPreset, setSelectedShotPreset] = useState<string>("Establishing Shot")
@@ -144,6 +301,17 @@ export default function LocationsPage() {
   const [isGeneratingShot, setIsGeneratingShot] = useState(false)
   const [shotGenerationProgress, setShotGenerationProgress] = useState("")
   const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
+  const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
+  const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
+  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
+  const [isGenerateVideoDialogOpen, setIsGenerateVideoDialogOpen] = useState(false)
+  const [videoMotionPrompt, setVideoMotionPrompt] = useState("")
+  const [videoDuration, setVideoDuration] = useState<5 | 10>(5)
+  const [isGeneratingVideo, setIsGeneratingVideo] = useState(false)
+  const [videoGenerationProgress, setVideoGenerationProgress] = useState("")
+  const [isCreateAngleDialogOpen, setIsCreateAngleDialogOpen] = useState(false)
+  const [newAngleLabel, setNewAngleLabel] = useState("")
+  const [newAngleDirective, setNewAngleDirective] = useState("")
   const [carouselApi, setCarouselApi] = useState<CarouselApi | null>(null)
   const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const [treatmentId, setTreatmentId] = useState<string | null>(null)
@@ -156,6 +324,9 @@ export default function LocationsPage() {
   const [isCreateLocationDialogOpen, setIsCreateLocationDialogOpen] = useState(false)
   const [selectedLocationId, setSelectedLocationId] = useState<string | null>(null)
   const [locationAssets, setLocationAssets] = useState<Asset[]>([])
+  const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
+  const [projectCharacters, setProjectCharacters] = useState<Character[]>([])
+  const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
   
@@ -263,6 +434,35 @@ export default function LocationsPage() {
     }
     loadAssets()
   }, [selectedLocationId, toast])
+
+  // Load all project image assets (characters, other locations, etc.)
+  useEffect(() => {
+    const loadProjectAssets = async () => {
+      if (!projectId) {
+        setProjectImageAssets([])
+        setProjectCharacters([])
+        return
+      }
+      try {
+        setIsLoadingProjectAssets(true)
+        const [assets, characters] = await Promise.all([
+          AssetService.getAssetsForProject(projectId),
+          CharactersService.getCharacters(projectId),
+        ])
+        setProjectImageAssets(
+          assets.filter((a) => a.content_type === "image" && a.content_url),
+        )
+        setProjectCharacters(characters)
+      } catch (err) {
+        console.error("Failed to load project assets:", err)
+        setProjectImageAssets([])
+        setProjectCharacters([])
+      } finally {
+        setIsLoadingProjectAssets(false)
+      }
+    }
+    loadProjectAssets()
+  }, [projectId])
 
   // Load text enhancer settings and user API keys
   useEffect(() => {
@@ -623,35 +823,14 @@ export default function LocationsPage() {
       }
 
       // Use the locked model from settings
-      const lockedModel = imagesSetting.locked_model
-      let apiKey = 'configured'
-
-      // Helper function to normalize model name
-      const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) return "dall-e-3"
-        const model = displayName.toLowerCase()
-        if (model === "gpt image" || model.includes("gpt-image")) {
-          return "gpt-image-1"
-        } else if (model.includes("dall") || model.includes("dalle")) {
-          return "dall-e-3"
-        }
-        return "dall-e-3"
-      }
-
-      // Normalize service name for API
-      let normalizedService = 'dalle'
-      if (lockedModel?.toLowerCase().includes('openart')) {
-        normalizedService = 'openart'
-      }
-
-      const normalizedModel = normalizeImageModel(lockedModel)
+      const config = requireLockedImageConfig()
 
       const requestBody = {
         prompt: imagePrompt,
-        service: normalizedService,
-        apiKey: apiKey,
+        service: config.service,
+        apiKey: 'configured',
         userId: userId,
-        model: normalizedModel,
+        model: config.apiModel,
         width: 1024,
         height: 1024,
         autoSaveToBucket: true,
@@ -688,9 +867,9 @@ export default function LocationsPage() {
           content: '',
           content_url: imageUrlToUse,
           prompt: imagePrompt,
-          model: lockedModel || 'dall-e-3',
+          model: config.lockedModel,
           generation_settings: {
-            service: normalizedService,
+            service: config.service,
             location_id: selectedLocationId,
             location_name: selectedLoc.name,
           },
@@ -698,7 +877,7 @@ export default function LocationsPage() {
             location_name: selectedLoc.name,
             generated_at: timestamp,
             source: 'ai_generation',
-            service: normalizedService,
+            service: config.service,
           }
         }
 
@@ -762,6 +941,15 @@ export default function LocationsPage() {
       return
     }
 
+    if (!getLockedImageConfig()) {
+      toast({
+        title: "AI Not Available",
+        description: "Please lock an image model in AI Settings first.",
+        variant: "destructive",
+      })
+      return
+    }
+
     try {
       setIsGeneratingImage(true)
 
@@ -795,53 +983,10 @@ export default function LocationsPage() {
         enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality.`
       }
 
-      // Check for locked image model
-      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
-      const isImagesTabLocked = imagesSetting?.is_locked || false
-      const lockedModel = imagesSetting?.locked_model || null
-      
-      // Use locked model if available, otherwise use selected service
-      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : selectedImageService
-      let apiKey = 'configured'
+      // Use locked image model from AI Settings
+      const config = requireLockedImageConfig()
 
-      // Helper function to normalize model name
-      const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) return "dall-e-3"
-        const model = displayName.toLowerCase()
-        if (model === "gpt image" || model.includes("gpt-image")) {
-          return "gpt-image-1"
-        } else if (model.includes("dall") || model.includes("dalle")) {
-          return "dall-e-3"
-        }
-        return "dall-e-3"
-      }
-
-      // Normalize service name for API
-      let normalizedService = 'dalle'
-      if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
-        normalizedService = 'openart'
-      }
-
-      const normalizedModel = normalizeImageModel(serviceToUse)
-
-      const requestBody = {
-        prompt: enhancedPrompt,
-        service: normalizedService,
-        apiKey: apiKey,
-        userId: userId,
-        model: normalizedModel,
-        width: 1024,
-        height: 1024,
-        autoSaveToBucket: true,
-      }
-
-      const response = await fetch('/api/ai/generate-image', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      })
+      const response = await requestLockedImageGeneration(enhancedPrompt, config)
 
       if (!response.ok) {
         const errorData = await response.json()
@@ -862,9 +1007,9 @@ export default function LocationsPage() {
           content: '',
           content_url: imageUrlToUse,
           prompt: imagePrompt,
-          model: serviceToUse,
+          model: config.lockedModel,
           generation_settings: {
-            service: serviceToUse,
+            service: config.service,
             location_id: selectedLocationId,
             location_name: selectedLoc.name,
           },
@@ -872,7 +1017,7 @@ export default function LocationsPage() {
             location_name: selectedLoc.name,
             generated_at: new Date().toISOString(),
             source: 'ai_generation',
-            service: serviceToUse,
+            service: config.service,
           }
         }
 
@@ -916,38 +1061,328 @@ export default function LocationsPage() {
     [locationAssets],
   )
 
+  const linkableProjectAssets = useMemo(
+    () =>
+      projectImageAssets.filter(
+        (a) => !a.location_id || a.location_id !== selectedLocationId,
+      ),
+    [projectImageAssets, selectedLocationId],
+  )
+
+  const linkedAssetGroups = useMemo(
+    () => buildLinkedAssetGroups(linkableProjectAssets, locations, projectCharacters),
+    [linkableProjectAssets, locations, projectCharacters],
+  )
+
+  const framePickerAssets = useMemo(() => {
+    const byId = new Map<string, Asset>()
+    for (const asset of imageAssetsForLocation) {
+      if (asset.content_url) byId.set(asset.id, asset)
+    }
+    for (const asset of projectImageAssets) {
+      if (asset.content_url) byId.set(asset.id, asset)
+    }
+    return Array.from(byId.values())
+  }, [imageAssetsForLocation, projectImageAssets])
+
+  const framePickerAssetGroups = useMemo(() => {
+    const locationImageIds = new Set(imageAssetsForLocation.map((a) => a.id))
+    const groups: { label: string; assets: Asset[] }[] = []
+    if (imageAssetsForLocation.length > 0) {
+      groups.push({ label: "This location", assets: imageAssetsForLocation })
+    }
+    const otherAssets = projectImageAssets.filter(
+      (a) => a.content_url && !locationImageIds.has(a.id),
+    )
+    groups.push(...buildLinkedAssetGroups(otherAssets, locations, projectCharacters))
+    return groups
+  }, [imageAssetsForLocation, projectImageAssets, locations, projectCharacters])
+
+  const selectedLocation = useMemo(
+    () => locations.find((l) => l.id === selectedLocationId),
+    [locations, selectedLocationId],
+  )
+
+  const customShotAngles = useMemo(
+    () => getCustomShotAnglesFromLocation(selectedLocation),
+    [selectedLocation],
+  )
+
   const getImagesTabSetting = () => aiSettings.find((s) => s.tab_type === "images")
+
+  const getVideosTabSetting = () => aiSettings.find((s) => s.tab_type === "videos")
+
+  const getLockedVideoModelLabel = () => {
+    const setting = getVideosTabSetting()
+    if (setting?.is_locked && setting.locked_model) {
+      return setting.locked_model
+    }
+    return "Runway ML"
+  }
+
+  const getLockedVideoApiModel = () => {
+    const setting = getVideosTabSetting()
+    const label = setting?.is_locked && setting.locked_model ? setting.locked_model : "Runway ML"
+    if (setting?.selected_model && lockedVideoModelRequiresRunway(label)) {
+      return normalizeLockedVideoModel(setting.selected_model)
+    }
+    return normalizeLockedVideoModel(label)
+  }
+
+  const requireRunwayVideoConfig = () => {
+    const setting = getVideosTabSetting()
+    const label = setting?.is_locked && setting.locked_model ? setting.locked_model : "Runway ML"
+    if (!lockedVideoModelRequiresRunway(label)) {
+      throw new Error(
+        "Animate location images requires Runway ML. Lock Runway ML under AI Settings → Videos.",
+      )
+    }
+    return {
+      displayModel: label,
+      apiModel: getLockedVideoApiModel(),
+    }
+  }
 
   const getLockedImageModelLabel = () => {
     const setting = getImagesTabSetting()
     if (setting?.is_locked && setting.locked_model) {
-      return setting.locked_model
+      return migrateGPTImageDisplayLabel(setting.locked_model)
     }
-    if (selectedImageService === "openart") return "OpenArt"
-    return "DALL-E 3"
+    return "Not locked"
   }
 
-  const SHOT_REFERENCE_MODEL_LABEL = "Runway Gen-4 Image Turbo"
-
-  const buildLocationShotPrompt = (shotPreset: string, loc: Location, customPrompt?: string) => {
-    const composition = getShotCompositionDirective(shotPreset, customPrompt)
-    let prompt = `@reference Same location and visual world as the reference image — same buildings, signage, lighting style, and futuristic NYC atmosphere. CRITICAL: Create a completely NEW camera setup for a film sequence. ${composition} Change camera position, lens, and framing substantially. This must NOT look like a duplicate of the reference image.`
-    if (includeLocationDetailsInShot) {
-      if (loc.name) prompt += ` Location: ${loc.name}.`
-      if (loc.description) prompt += ` ${loc.description.replace(/\s+/g, " ").trim().slice(0, 120)}.`
+  const getLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const setting = getImagesTabSetting()
+    if (!setting?.is_locked || !setting.locked_model) {
+      return null
     }
-    prompt += " Cinematic movie sequence still, photorealistic, professional cinematography."
-    return prompt.slice(0, 990)
+    const lockedModel = setting.locked_model
+    return {
+      lockedModel,
+      service: mapLockedModelToService(lockedModel),
+      apiModel: normalizeLockedImageModel(lockedModel, options),
+      supportsReference: lockedModelSupportsReferenceImage(lockedModel),
+    }
   }
+
+  const requireLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const config = getLockedImageConfig(options)
+    if (!config) {
+      throw new Error("Please lock an image model in AI Settings first.")
+    }
+    return config
+  }
+
+  const requestLockedImageGeneration = async (
+    prompt: string,
+    config: ReturnType<typeof requireLockedImageConfig>,
+    options?: {
+      referenceFile?: File
+      styleReferenceFile?: File
+      width?: number
+      height?: number
+    },
+  ) => {
+    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
+    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+
+    if (config.supportsReference && options?.referenceFile) {
+      const formData = new FormData()
+      formData.append("prompt", prompt)
+      formData.append("model", config.apiModel)
+      formData.append("service", config.service)
+      formData.append("width", String(width))
+      formData.append("height", String(height))
+      formData.append("apiKey", "configured")
+      formData.append("userId", userId!)
+      formData.append("file", options.referenceFile)
+      if (options.styleReferenceFile) {
+        formData.append("styleFile", options.styleReferenceFile)
+      }
+      if (config.service === "runway") {
+        formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
+      }
+
+      return fetch("/api/ai/generate-image", {
+        method: "POST",
+        body: formData,
+      })
+    }
+
+    return fetch("/api/ai/generate-image", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt,
+        service: config.service,
+        apiKey: "configured",
+        userId,
+        model: config.apiModel,
+        width,
+        height,
+        autoSaveToBucket: true,
+      }),
+    })
+  }
+
+  const getImageGenerationErrorMessage = (error: unknown, fallback: string) => {
+    if (!(error instanceof Error)) return fallback
+    if (error.message.includes("API key")) {
+      return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
+    }
+    return error.message
+  }
+
+  const buildLocationShotPrompt = (shotPreset: string, loc: Location, customPrompt?: string) =>
+    buildReferenceShotPrompt(
+      getShotDescription(shotPreset, customPrompt, customShotAngles),
+      {
+        includeLocationDetails: includeLocationDetailsInShot,
+        locationName: loc.name,
+      },
+    )
 
   const buildCustomLocationShotPrompt = (userDirection: string, loc: Location) => {
-    let prompt = `@reference Same location and world as the reference image. NEW SHOT for a film sequence — change camera position and framing dramatically: ${userDirection.trim()}. Do NOT reproduce the same wide composition as the reference unless explicitly requested. Keep matching buildings, signage, color palette, and atmosphere.`
-    if (includeLocationDetailsInShot) {
-      if (loc.name) prompt += ` Location: ${loc.name}.`
-      if (loc.description) prompt += ` ${loc.description.replace(/\s+/g, " ").trim().slice(0, 120)}.`
+    let prompt = userDirection.trim()
+    if (includeLocationDetailsInShot && loc.name) {
+      prompt += ` Location: ${loc.name}.`
     }
-    prompt += " Cinematic, photorealistic, professional cinematography, distinct shot in a film edit."
     return prompt.slice(0, 990)
+  }
+
+  const handleDownloadLocationVideo = async (asset: Asset) => {
+    if (!asset.content_url) return
+    const fileName = `${asset.title.replace(/ - Video \(.*\)$/, "")}.mp4`
+    try {
+      toast({
+        title: "Preparing download…",
+        description: "Fetching video file.",
+      })
+      await downloadMediaToDevice(asset.content_url, fileName)
+      toast({
+        title: "Download started",
+        description: "Your video should appear in Downloads.",
+      })
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Could not download video.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const openLinkVideoToProduction = async (asset: Asset) => {
+    if (!projectId) {
+      toast({
+        title: "No project selected",
+        description: "Select a project first to link this video to a production shot.",
+        variant: "destructive",
+      })
+      return
+    }
+    setLinkingVideoAsset(asset)
+    setLinkSceneId("")
+    setLinkStoryboardId("")
+    setLinkStoryboards([])
+    setLinkVideoAsDefault(true)
+    setIsLinkVideoDialogOpen(true)
+
+    setIsLoadingLinkScenes(true)
+    try {
+      const scenes = await TimelineService.getMovieScenes(projectId)
+      setLinkScenes(scenes)
+      if (scenes.length === 1) {
+        setLinkSceneId(scenes[0].id)
+      }
+    } catch (error) {
+      toast({
+        title: "Could not load scenes",
+        description: error instanceof Error ? error.message : "Failed to load production scenes.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingLinkScenes(false)
+    }
+  }
+
+  useEffect(() => {
+    const loadLinkStoryboards = async () => {
+      if (!linkSceneId || !isLinkVideoDialogOpen) {
+        setLinkStoryboards([])
+        setLinkStoryboardId("")
+        return
+      }
+      setIsLoadingLinkStoryboards(true)
+      try {
+        const boards = await StoryboardsService.getStoryboardsByScene(linkSceneId)
+        const sorted = [...boards].sort((a, b) => a.shot_number - b.shot_number)
+        setLinkStoryboards(sorted)
+        if (sorted.length === 1) {
+          setLinkStoryboardId(sorted[0].id)
+        }
+      } catch (error) {
+        console.error("Failed to load storyboards for link:", error)
+        setLinkStoryboards([])
+        toast({
+          title: "Could not load shots",
+          description: "Failed to load storyboard shots for this scene.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsLoadingLinkStoryboards(false)
+      }
+    }
+    loadLinkStoryboards()
+  }, [linkSceneId, isLinkVideoDialogOpen, toast])
+
+  const handleLinkVideoToShot = async () => {
+    if (!linkingVideoAsset?.content_url || !linkStoryboardId) return
+
+    const storyboard = linkStoryboards.find((s) => s.id === linkStoryboardId)
+    if (!storyboard) return
+
+    setIsLinkingVideoToShot(true)
+    try {
+      const response = await fetch("/api/storyboard-videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storyboardId: linkStoryboardId,
+          videoUrl: linkingVideoAsset.content_url,
+          videoName: linkingVideoAsset.title.replace(/ - Video \(.*\)$/, ""),
+          generationModel: linkingVideoAsset.model,
+          generationPrompt: linkingVideoAsset.prompt,
+          metadata: {
+            source: "location_asset",
+            asset_id: linkingVideoAsset.id,
+            location_id: linkingVideoAsset.location_id,
+            project_id: projectId,
+          },
+          isDefault: linkVideoAsDefault,
+        }),
+      })
+      const result = await response.json()
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to link video to shot")
+      }
+
+      setIsLinkVideoDialogOpen(false)
+      toast({
+        title: "Video linked to shot",
+        description: `Added to Scene ${storyboard.scene_number} · Shot ${storyboard.shot_number}${storyboard.title ? ` (${storyboard.title})` : ""}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Link failed",
+        description: error instanceof Error ? error.message : "Could not link video to shot.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLinkingVideoToShot(false)
+    }
   }
 
   const saveGeneratedLocationShot = async (
@@ -993,10 +1428,394 @@ export default function LocationsPage() {
     return savedAsset
   }
 
+  const saveGeneratedLocationVideo = async (
+    videoUrl: string,
+    loc: Location,
+    prompt: string,
+    referenceAsset: Asset,
+    model: string,
+    options?: {
+      startAssetId?: string
+      endAssetId?: string
+      source?: string
+      duration?: number
+    },
+  ) => {
+    const now = new Date()
+    const dateStr = now.toLocaleDateString()
+    const timeStr = now.toLocaleTimeString()
+    const isTransition = options?.source === "location_frame_to_frame"
+    const assetData = {
+      project_id: projectId,
+      location_id: selectedLocationId!,
+      title: `${loc.name} - ${isTransition ? "Transition Video" : "Video"} (${dateStr} ${timeStr})`,
+      content_type: "video" as const,
+      content: "",
+      content_url: videoUrl,
+      prompt,
+      model,
+      generation_settings: {
+        service: isTransition ? options?.source : "runway",
+        location_id: selectedLocationId,
+        location_name: loc.name,
+        reference_asset_id: referenceAsset.id,
+        duration: options?.duration ?? videoDuration,
+        start_asset_id: options?.startAssetId,
+        end_asset_id: options?.endAssetId,
+      },
+      metadata: {
+        location_name: loc.name,
+        generated_at: now.toISOString(),
+        source: options?.source || "location_image_to_video",
+        service: isTransition ? model : "runway",
+        reference_asset_id: referenceAsset.id,
+        duration: options?.duration ?? videoDuration,
+        start_asset_id: options?.startAssetId,
+        end_asset_id: options?.endAssetId,
+      },
+    }
+    const savedAsset = await AssetService.createAsset(assetData)
+    setLocationAssets((prev) => [savedAsset, ...prev])
+    return savedAsset
+  }
+
+  const pollLocationVideoJob = (jobId: string, loc: Location, prompt: string, referenceAsset: Asset, model: string) => {
+    let attempts = 0
+    const poll = async () => {
+      attempts++
+      try {
+        const res = await fetch("/api/ai/check-video-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId }),
+        })
+        if (!res.ok) {
+          throw new Error("Failed to check video status")
+        }
+
+        const result = await res.json()
+        const url = result.data?.url as string | undefined
+        const status = result.data?.status as string | undefined
+
+        if (url && (status === "completed" || status === "SUCCEEDED")) {
+          setVideoGenerationProgress("Saving video to your location…")
+          const stored = await fetch("/api/ai/download-and-store-video", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              videoUrl: url,
+              fileName: `location-${selectedLocationId}-${Date.now()}`,
+              userId: userId!,
+            }),
+          })
+          const storedData = await stored.json()
+          if (!stored.ok || !storedData.supabaseUrl) {
+            throw new Error(storedData.error || "Failed to save video")
+          }
+          await saveGeneratedLocationVideo(storedData.supabaseUrl, loc, prompt, referenceAsset, model)
+          setIsGenerateVideoDialogOpen(false)
+          setVideoMotionPrompt("")
+          toast({
+            title: "Video generated",
+            description: `"${loc.name}" video was added to location assets.`,
+          })
+          setIsGeneratingVideo(false)
+          setVideoGenerationProgress("")
+          return
+        }
+
+        if (status === "failed" || status === "FAILED") {
+          throw new Error("Runway video generation failed")
+        }
+
+        if (attempts < 90) {
+          setVideoGenerationProgress(`Rendering video… (${attempts * 3}s)`)
+          setTimeout(poll, 3000)
+          return
+        }
+
+        throw new Error("Video generation timed out. Try again in a few minutes.")
+      } catch (error) {
+        toast({
+          title: "Video generation failed",
+          description: error instanceof Error ? error.message : "Could not generate video.",
+          variant: "destructive",
+        })
+        setIsGeneratingVideo(false)
+        setVideoGenerationProgress("")
+      }
+    }
+    poll()
+  }
+
+  const openGenerateVideoDialog = () => {
+    const referenceAsset =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!referenceAsset?.content_url) {
+      toast({
+        title: "No reference image",
+        description: "Generate or upload a location image first, then animate it.",
+        variant: "destructive",
+      })
+      return
+    }
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    const atmosphere = selectedLoc?.atmosphere || selectedLoc?.mood || selectedLoc?.visual_description
+    setVideoMotionPrompt(
+      atmosphere
+        ? `Subtle cinematic motion. ${atmosphere.trim()}.`
+        : "Subtle cinematic camera motion with atmospheric lighting and gentle movement.",
+    )
+    setIsGenerateVideoDialogOpen(true)
+  }
+
+  const handleGenerateLocationVideo = async () => {
+    const prompt = videoMotionPrompt.trim()
+    if (!prompt) {
+      toast({
+        title: "Describe the motion",
+        description: "Enter how you want the image to move or animate.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const referenceAsset =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!referenceAsset?.content_url || !selectedLocationId || !userId) return
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc) return
+
+    setIsGeneratingVideo(true)
+    setVideoGenerationProgress("Uploading reference image to Runway…")
+
+    try {
+      const videoConfig = requireRunwayVideoConfig()
+      const imageFile = await referenceUrlToFile(
+        referenceAsset.content_url,
+        `location-video-ref-${referenceAsset.id}.png`,
+      )
+
+      const uploadForm = new FormData()
+      uploadForm.append("file", imageFile)
+      const uploadRes = await fetch("/api/ai/upload-to-runway", { method: "POST", body: uploadForm })
+      const uploadData = await uploadRes.json()
+      if (!uploadRes.ok || !uploadData.runwayUri) {
+        throw new Error(uploadData.error || "Failed to upload image to Runway")
+      }
+
+      setVideoGenerationProgress("Starting video generation…")
+      const videoRes = await fetch("/api/ai/runway", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "image_to_video",
+          model: videoConfig.apiModel,
+          promptText: prompt,
+          ratio: "1280:720",
+          duration: videoDuration,
+          runwayUri: uploadData.runwayUri,
+        }),
+      })
+      const videoData = await videoRes.json()
+      if (!videoRes.ok || !videoData.taskId) {
+        throw new Error(videoData.error || "Failed to start video generation")
+      }
+
+      setVideoGenerationProgress("Rendering video on Runway…")
+      pollLocationVideoJob(videoData.taskId, selectedLoc, prompt, referenceAsset, videoConfig.apiModel)
+    } catch (error) {
+      toast({
+        title: "Video generation failed",
+        description: error instanceof Error ? error.message : "Could not generate video.",
+        variant: "destructive",
+      })
+      setIsGeneratingVideo(false)
+      setVideoGenerationProgress("")
+    }
+  }
+
+  const storeRemoteVideoToLocation = async (
+    remoteVideoUrl: string,
+    loc: Location,
+    prompt: string,
+    referenceAsset: Asset,
+    model: string,
+    options?: {
+      startAssetId?: string
+      endAssetId?: string
+      source?: string
+      duration?: number
+    },
+  ) => {
+    const stored = await fetch("/api/ai/download-and-store-video", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        videoUrl: remoteVideoUrl,
+        fileName: `location-${selectedLocationId}-${Date.now()}`,
+        userId: userId!,
+      }),
+    })
+    const storedData = await stored.json()
+    if (!stored.ok || !storedData.supabaseUrl) {
+      throw new Error(storedData.error || "Failed to save video")
+    }
+    await saveGeneratedLocationVideo(storedData.supabaseUrl, loc, prompt, referenceAsset, model, options)
+  }
+
+  const openTransitionVideoDialog = () => {
+    const defaultStart =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!defaultStart?.content_url) {
+      toast({
+        title: "Need images first",
+        description: "Generate or upload at least one location image to use as a start frame.",
+        variant: "destructive",
+      })
+      return
+    }
+    setTransitionStartAssetId(defaultStart.id)
+    setTransitionEndAssetId(null)
+    setTransitionVideoModel("kling_i2v_extended")
+    setTransitionVideoDuration(5)
+    setTransitionVideoPrompt(
+      "Smooth cinematic transition between the start and end frames. Maintain world consistency and lighting.",
+    )
+    setIsTransitionVideoDialogOpen(true)
+  }
+
+  const handleGenerateTransitionVideo = async () => {
+    const prompt = transitionVideoPrompt.trim()
+    if (!prompt) {
+      toast({
+        title: "Describe the transition",
+        description: "Enter how the motion should flow between your two frames.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const startAsset = framePickerAssets.find((a) => a.id === transitionStartAssetId)
+    const endAsset = framePickerAssets.find((a) => a.id === transitionEndAssetId)
+    if (!startAsset?.content_url) {
+      toast({ title: "Pick a start frame", variant: "destructive" })
+      return
+    }
+    if (!endAsset?.content_url) {
+      toast({
+        title: "Pick an end frame",
+        description: "Frame-to-frame requires a second image (another angle, character, etc.).",
+        variant: "destructive",
+      })
+      return
+    }
+    if (startAsset.id === endAsset.id) {
+      toast({
+        title: "Different frames required",
+        description: "Choose two different images for start and end.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc || !userId) return
+
+    setIsGeneratingTransitionVideo(true)
+    setTransitionVideoProgress("Preparing frames…")
+
+    try {
+      let remoteVideoUrl: string | null = null
+      let modelLabel = transitionVideoModel
+
+      if (transitionVideoModel === "kling_i2v_extended") {
+        setTransitionVideoProgress("Generating with Kling (2 frames)…")
+        const startFile = await referenceUrlToFile(startAsset.content_url, "start-frame.png")
+        const endFile = await referenceUrlToFile(endAsset.content_url, "end-frame.png")
+        const response = await KlingService.generateVideo({
+          prompt,
+          model: "Kling I2V Extended",
+          duration: String(transitionVideoDuration),
+          resolution: "1280:720",
+          startFrame: startFile,
+          endFrame: endFile,
+        })
+        if (!response.success || !response.data?.url) {
+          throw new Error(response.error || "Kling frame-to-frame failed")
+        }
+        remoteVideoUrl = response.data.url
+        modelLabel = "kling_i2v_extended"
+      } else {
+        const leonardoModel =
+          transitionVideoModel === "leonardo_kling_2_1"
+            ? "KLING2_1"
+            : transitionVideoModel === "leonardo_veo_3_1_fast"
+              ? "VEO3_1FAST"
+              : "VEO3_1"
+
+        setTransitionVideoProgress(`Generating with ${leonardoModel} via Leonardo…`)
+        const response = await fetch("/api/ai/frame-to-frame-video", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            model: leonardoModel,
+            duration: transitionVideoDuration,
+            startFrameUrl: startAsset.content_url,
+            endFrameUrl: endAsset.content_url,
+          }),
+        })
+        const result = await response.json()
+        if (!response.ok || !result.success || !result.data?.url) {
+          throw new Error(result.error || "Frame-to-frame generation failed")
+        }
+        remoteVideoUrl = result.data.url
+        modelLabel = transitionVideoModel
+      }
+
+      setTransitionVideoProgress("Saving to your location…")
+      await storeRemoteVideoToLocation(
+        remoteVideoUrl!,
+        selectedLoc,
+        prompt,
+        startAsset,
+        modelLabel,
+        {
+          source: "location_frame_to_frame",
+          startAssetId: startAsset.id,
+          endAssetId: endAsset.id,
+          duration: transitionVideoDuration,
+        },
+      )
+
+      setIsTransitionVideoDialogOpen(false)
+      toast({
+        title: "Transition video created",
+        description: "Your two-frame video was saved under Videos.",
+      })
+    } catch (error) {
+      toast({
+        title: "Transition video failed",
+        description: error instanceof Error ? error.message : "Could not generate transition video.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingTransitionVideo(false)
+      setTransitionVideoProgress("")
+    }
+  }
+
   const generateLocationShotFromReference = async (
     referenceAsset: Asset,
     shotPreset: string,
-    options?: { customPrompt?: string; promptOverride?: string },
+    options?: {
+      customPrompt?: string
+      promptOverride?: string
+      referenceFile?: File
+      styleReferenceFile?: File
+    },
   ) => {
     if (!selectedLocationId || !userId || !ready || !referenceAsset.content_url) {
       throw new Error("Select a location and reference image first.")
@@ -1007,28 +1826,21 @@ export default function LocationsPage() {
       throw new Error("Location not found.")
     }
 
+    const config = requireLockedImageConfig({ withReferenceImage: true })
+
     const prompt =
       options?.promptOverride ??
       buildLocationShotPrompt(shotPreset, selectedLoc, options?.customPrompt)
-    const referenceFile = await referenceUrlToFile(
-      referenceAsset.content_url,
-      `location-ref-${referenceAsset.id}.png`,
-    )
 
-    const formData = new FormData()
-    formData.append("prompt", prompt)
-    formData.append("model", "gen4_image_turbo")
-    formData.append("service", "runway")
-    formData.append("width", "1280")
-    formData.append("height", "720")
-    formData.append("apiKey", "configured")
-    formData.append("userId", userId)
-    formData.append("file", referenceFile)
-    formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
-
-    const response = await fetch("/api/ai/generate-image", {
-      method: "POST",
-      body: formData,
+    const response = await requestLockedImageGeneration(prompt, config, {
+      referenceFile: config.supportsReference
+        ? options?.referenceFile ??
+          (await referenceUrlToFile(
+            referenceAsset.content_url,
+            `location-ref-${referenceAsset.id}.png`,
+          ))
+        : undefined,
+      styleReferenceFile: config.supportsReference ? options?.styleReferenceFile : undefined,
     })
 
     if (!response.ok) {
@@ -1048,9 +1860,124 @@ export default function LocationsPage() {
       shotPreset,
       prompt,
       referenceAsset,
-      "gen4_image_turbo",
-      "runway",
+      config.apiModel,
+      config.service,
     )
+  }
+
+  const openCreateAngleDialog = () => {
+    const defaultAsset =
+      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+    if (!defaultAsset?.content_url) {
+      toast({
+        title: "No reference image",
+        description: "Upload or generate a location image first, then define custom angles from it.",
+        variant: "destructive",
+      })
+      return
+    }
+    setNewAngleLabel("")
+    setNewAngleDirective(inlineCustomShotPrompt.trim())
+    setIsCreateAngleDialogOpen(true)
+  }
+
+  const saveCustomShotAngle = async (label: string, directive: string) => {
+    if (!selectedLocationId || !selectedLocation) {
+      throw new Error("Select a location first.")
+    }
+    const trimmedLabel = label.trim()
+    const trimmedDirective = directive.trim()
+    if (!trimmedLabel || !trimmedDirective) {
+      throw new Error("Enter a name and direction for your angle.")
+    }
+    const allLabels = [
+      ...LOCATION_SHOT_PRESETS,
+      ...customShotAngles.map((a) => a.label),
+    ]
+    if (allLabels.includes(trimmedLabel)) {
+      throw new Error("An angle with this name already exists. Choose a different name.")
+    }
+    const newAngle: CustomShotAngle = {
+      id: crypto.randomUUID(),
+      label: trimmedLabel,
+      directive: trimmedDirective,
+    }
+    const updatedAngles = [...customShotAngles, newAngle]
+    const updated = await LocationsService.updateLocation(selectedLocationId, {
+      metadata: {
+        ...(selectedLocation.metadata ?? {}),
+        custom_shot_angles: updatedAngles,
+      },
+    })
+    setLocations((prev) => prev.map((l) => (l.id === selectedLocationId ? updated : l)))
+    setSelectedShotPreset(trimmedLabel)
+    return newAngle
+  }
+
+  const handleGenerateCustomAngle = async () => {
+    const trimmedLabel = newAngleLabel.trim()
+    const trimmedDirective = newAngleDirective.trim()
+    if (!trimmedLabel || !trimmedDirective) {
+      toast({
+        title: "Missing details",
+        description: "Enter a shot name and describe what the AI should show.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const referenceAsset =
+      referenceAssetForShots ||
+      imageAssetsForLocation[currentImageIndex] ||
+      imageAssetsForLocation[0]
+    if (!referenceAsset) {
+      toast({
+        title: "No reference image",
+        description: "Upload or generate a location image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc) return
+
+    setIsGeneratingShot(true)
+    setShotGenerationProgress(`Generating ${trimmedLabel}...`)
+    try {
+      const allLabels = [
+        ...LOCATION_SHOT_PRESETS,
+        ...customShotAngles.map((a) => a.label),
+      ]
+      const isNewAngle = !allLabels.includes(trimmedLabel)
+      if (isNewAngle) {
+        await saveCustomShotAngle(trimmedLabel, trimmedDirective)
+      }
+
+      await generateLocationShotFromReference(referenceAsset, trimmedLabel, {
+        promptOverride: buildCustomLocationShotPrompt(trimmedDirective, selectedLoc),
+      })
+
+      setIsCreateAngleDialogOpen(false)
+      setNewAngleLabel("")
+      setNewAngleDirective("")
+      toast({
+        title: "Shot generated",
+        description: `"${trimmedLabel}" was added to your location images${isNewAngle ? " and saved to Choose Shots" : ""}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Generation failed",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not generate your custom shot.",
+        ),
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
   }
 
   const openGenerateShotsDialog = (asset?: Asset) => {
@@ -1087,12 +2014,10 @@ export default function LocationsPage() {
     } catch (error) {
       toast({
         title: "Shot generation failed",
-        description:
-          error instanceof Error
-            ? error.message.includes("Runway") || error.message.includes("API key")
-              ? `${error.message} Add a Runway ML API key in Settings → AI Settings to generate matching angles from your reference image.`
-              : error.message
-            : "Could not generate a new angle from this image.",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not generate a new angle from this image.",
+        ),
         variant: "destructive",
       })
     } finally {
@@ -1101,78 +2026,35 @@ export default function LocationsPage() {
     }
   }
 
-  const handleGenerateIntroPack = async () => {
-    if (!referenceAssetForShots) return
-    setIsGeneratingShot(true)
-    try {
-      for (let i = 0; i < INTRO_SHOT_PACK.length; i++) {
-        const shot = INTRO_SHOT_PACK[i]
-        setShotGenerationProgress(`Generating intro pack (${i + 1}/${INTRO_SHOT_PACK.length}): ${shot}...`)
-        await generateLocationShotFromReference(referenceAssetForShots, shot, {
-          customPrompt: shotCustomPrompt,
-        })
-      }
-      toast({
-        title: "Intro pack complete",
-        description: `Generated ${INTRO_SHOT_PACK.length} angles for your movie intro.`,
-      })
-      setIsGenerateShotsDialogOpen(false)
-    } catch (error) {
-      toast({
-        title: "Intro pack failed",
-        description:
-          error instanceof Error
-            ? error.message.includes("Runway") || error.message.includes("API key")
-              ? `${error.message} Runway Gen-4 Image Turbo (with reference image) is required for matching angles.`
-              : error.message
-            : "Could not finish the intro shot pack.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsGeneratingShot(false)
-      setShotGenerationProgress("")
+  const clearInlineShotReference = () => {
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
     }
+    setInlineShotReferenceFile(null)
+    setInlineShotReferencePreview(null)
   }
 
-  const handleRandomFourShots = async () => {
-    const referenceAsset =
-      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
-    if (!referenceAsset) {
+  const handleInlineShotReferenceSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
       toast({
-        title: "No reference image",
-        description: "Upload or generate a location image first.",
+        title: "Invalid file",
+        description: "Please upload an image file (PNG, JPG, WebP, etc.).",
         variant: "destructive",
       })
       return
     }
-
-    const randomShots = pickRandomShots(RANDOM_SHOT_BATCH_SIZE)
-    setIsGeneratingShot(true)
-    try {
-      for (let i = 0; i < randomShots.length; i++) {
-        const shot = randomShots[i]
-        setShotGenerationProgress(`Random angles (${i + 1}/${randomShots.length}): ${shot}...`)
-        await generateLocationShotFromReference(referenceAsset, shot)
-      }
-      toast({
-        title: "4 random angles generated",
-        description: randomShots.join(" · "),
-      })
-    } catch (error) {
-      toast({
-        title: "Random shot batch failed",
-        description:
-          error instanceof Error
-            ? error.message.includes("Runway") || error.message.includes("API key")
-              ? `${error.message} Add a Runway ML API key in Settings → AI Settings.`
-              : error.message
-            : "Could not finish generating random angles.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsGeneratingShot(false)
-      setShotGenerationProgress("")
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
     }
+    setInlineShotReferenceFile(file)
+    setInlineShotReferencePreview(URL.createObjectURL(file))
+    event.target.value = ""
+  }
+
+  const clearInlineStyleLink = () => {
+    setInlineStyleLinkAssetId(null)
   }
 
   const handleGenerateInlineCustomShot = async () => {
@@ -1196,13 +2078,28 @@ export default function LocationsPage() {
     const shotLabel =
       direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
 
+    let styleReferenceFile: File | undefined
+    if (inlineStyleLinkAssetId) {
+      const styleAsset = projectImageAssets.find((a) => a.id === inlineStyleLinkAssetId)
+      if (styleAsset?.content_url) {
+        styleReferenceFile = await referenceUrlToFile(
+          styleAsset.content_url,
+          `style-ref-${styleAsset.id}.png`,
+        )
+      }
+    }
+
     setIsGeneratingShot(true)
     setShotGenerationProgress("Generating custom shot...")
     try {
       await generateLocationShotFromReference(referenceAsset, shotLabel, {
         promptOverride: buildCustomLocationShotPrompt(direction, selectedLoc),
+        referenceFile: inlineShotReferenceFile ?? undefined,
+        styleReferenceFile,
       })
       setInlineCustomShotPrompt("")
+      clearInlineShotReference()
+      clearInlineStyleLink()
       toast({
         title: "Custom shot generated",
         description: "Your directed shot was added to location assets.",
@@ -1210,12 +2107,10 @@ export default function LocationsPage() {
     } catch (error) {
       toast({
         title: "Custom shot failed",
-        description:
-          error instanceof Error
-            ? error.message.includes("Runway") || error.message.includes("API key")
-              ? `${error.message} Add a Runway ML API key in Settings → AI Settings.`
-              : error.message
-            : "Could not generate your custom shot.",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not generate your custom shot.",
+        ),
         variant: "destructive",
       })
     } finally {
@@ -1716,7 +2611,12 @@ export default function LocationsPage() {
                             </div>
                           ) : (() => {
                             const imageAssets = locationAssets.filter(a => a.content_type === 'image' && a.content_url)
-                            const nonImageAssets = locationAssets.filter(a => a.content_type !== 'image' || !a.content_url)
+                            const videoAssets = locationAssets.filter(a => a.content_type === 'video' && a.content_url)
+                            const otherAssets = locationAssets.filter((a) => {
+                              if (a.content_type === 'image' && a.content_url) return false
+                              if (a.content_type === 'video' && a.content_url) return false
+                              return true
+                            })
                             
                             return (
                               <div className="space-y-4">
@@ -1854,25 +2754,6 @@ export default function LocationsPage() {
                                     <div className="flex flex-col gap-2 pt-1">
                                       <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2">
                                         <Button
-                                          size="sm"
-                                          onClick={handleRandomFourShots}
-                                          disabled={isGeneratingShot}
-                                          className="gap-2 w-full sm:w-auto"
-                                          title="Randomly pick 4 camera angles and generate them from this image"
-                                        >
-                                          {isGeneratingShot && shotGenerationProgress.startsWith("Random") ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 animate-spin" />
-                                              Generating 4 angles...
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Shuffle className="h-4 w-4" />
-                                              Random 4 Angles
-                                            </>
-                                          )}
-                                        </Button>
-                                        <Button
                                           variant="outline"
                                           size="sm"
                                           onClick={() =>
@@ -1887,16 +2768,70 @@ export default function LocationsPage() {
                                           <Camera className="h-4 w-4" />
                                           Choose Shots
                                         </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={openCreateAngleDialog}
+                                          disabled={isGeneratingShot || !selectedLocationId}
+                                          className="gap-2 w-full sm:w-auto"
+                                          title="Save a custom angle to the shot dropdown and generate it from this image"
+                                        >
+                                          <Plus className="h-4 w-4" />
+                                          Custom Angle
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={openGenerateVideoDialog}
+                                          disabled={
+                                            isGeneratingVideo ||
+                                            isGeneratingTransitionVideo ||
+                                            isGeneratingShot ||
+                                            imageAssetsForLocation.length === 0
+                                          }
+                                          className="gap-2 w-full sm:w-auto"
+                                          title="Animate the selected image into a short video with Runway ML"
+                                        >
+                                          <Video className="h-4 w-4" />
+                                          Generate Video
+                                        </Button>
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={openTransitionVideoDialog}
+                                          disabled={
+                                            isGeneratingVideo ||
+                                            isGeneratingTransitionVideo ||
+                                            isGeneratingShot ||
+                                            framePickerAssets.length < 2
+                                          }
+                                          className="gap-2 w-full sm:w-auto"
+                                          title="Generate a transition between two frames (Kling or Leonardo)"
+                                        >
+                                          <ArrowRightLeft className="h-4 w-4" />
+                                          Transition Video
+                                        </Button>
                                       </div>
                                       <p className="text-xs text-muted-foreground">
-                                        Angle shots use {SHOT_REFERENCE_MODEL_LABEL} with your image as reference — not your locked image model ({getLockedImageModelLabel()}). GPT/DALL-E text-to-image cannot reframe from a reference photo; Runway can.
+                                        Image shots use your locked model ({getLockedImageModelLabel()}).
+                                        {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                                          ? " Angle shots include your reference image with the prompt."
+                                          : " Angle shots use your locked model with a text prompt describing the new view."}
+                                        {" "}Video uses Runway ML ({getLockedVideoModelLabel()}) from the selected carousel image.
+                                        {" "}Transition video animates between two project images via Kling or Leonardo.
                                       </p>
-                                      {isGeneratingShot && shotGenerationProgress && (
+                                      {(isGeneratingShot && shotGenerationProgress) ||
+                                      (isGeneratingVideo && videoGenerationProgress) ||
+                                      (isGeneratingTransitionVideo && transitionVideoProgress) ? (
                                         <p className="text-xs text-muted-foreground flex items-center gap-2">
                                           <Loader2 className="h-3 w-3 animate-spin" />
-                                          {shotGenerationProgress}
+                                          {isGeneratingTransitionVideo
+                                            ? transitionVideoProgress
+                                            : isGeneratingVideo
+                                              ? videoGenerationProgress
+                                              : shotGenerationProgress}
                                         </p>
-                                      )}
+                                      ) : null}
                                     </div>
 
                                     <div className="space-y-2 pt-2 border-t border-border/60">
@@ -1911,6 +2846,141 @@ export default function LocationsPage() {
                                         className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
                                         disabled={isGeneratingShot}
                                       />
+                                      <div className="space-y-2">
+                                        <Label htmlFor="inline-shot-ref-upload" className="text-xs text-muted-foreground">
+                                          Primary reference (optional)
+                                        </Label>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <input
+                                            id="inline-shot-ref-upload"
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={handleInlineShotReferenceSelect}
+                                            disabled={isGeneratingShot}
+                                          />
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="gap-2"
+                                            disabled={isGeneratingShot}
+                                            onClick={() =>
+                                              document.getElementById("inline-shot-ref-upload")?.click()
+                                            }
+                                          >
+                                            <Upload className="h-4 w-4" />
+                                            Upload reference
+                                          </Button>
+                                          {inlineShotReferencePreview && (
+                                            <>
+                                              <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                                                <img
+                                                  src={inlineShotReferencePreview}
+                                                  alt="Uploaded reference"
+                                                  className="w-full h-full object-cover"
+                                                />
+                                              </div>
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                disabled={isGeneratingShot}
+                                                onClick={clearInlineShotReference}
+                                                title="Remove uploaded reference"
+                                              >
+                                                <X className="h-4 w-4" />
+                                              </Button>
+                                            </>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                          {inlineShotReferenceFile
+                                            ? "Using your uploaded image as the primary reference."
+                                            : "Uses the selected carousel image if you don't upload one."}
+                                        </p>
+                                      </div>
+
+                                      {(linkedAssetGroups.length > 0 || isLoadingProjectAssets) && (
+                                        <div className="space-y-2">
+                                          <div className="flex items-center gap-2">
+                                            <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                                            <Label className="text-xs text-muted-foreground">
+                                              Link existing image (optional)
+                                            </Label>
+                                          </div>
+                                          <p className="text-xs text-muted-foreground">
+                                            Adds another image from your project as a second reference — characters, other locations, covers, etc. Your description above is the only prompt.
+                                          </p>
+                                          {isLoadingProjectAssets ? (
+                                            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                              Loading project assets…
+                                            </div>
+                                          ) : (
+                                            <div className="space-y-3">
+                                              {linkedAssetGroups.map((group) => (
+                                                <div key={group.label} className="space-y-1.5">
+                                                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                                                    {group.label}
+                                                  </p>
+                                                  <div className="flex gap-2 overflow-x-auto pb-1">
+                                                    {group.assets.map((asset) => (
+                                                      <button
+                                                        key={asset.id}
+                                                        type="button"
+                                                        disabled={isGeneratingShot}
+                                                        onClick={() =>
+                                                          setInlineStyleLinkAssetId((prev) =>
+                                                            prev === asset.id ? null : asset.id,
+                                                          )
+                                                        }
+                                                        className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                                                          inlineStyleLinkAssetId === asset.id
+                                                            ? "border-violet-500 ring-2 ring-violet-500/40"
+                                                            : "border-border hover:border-violet-500/50"
+                                                        }`}
+                                                        title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                                                      >
+                                                        <img
+                                                          src={asset.content_url!}
+                                                          alt=""
+                                                          className="w-full h-full object-cover"
+                                                        />
+                                                      </button>
+                                                    ))}
+                                                  </div>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {inlineStyleLinkAssetId ? (
+                                            <div className="flex items-center gap-2">
+                                              <p className="text-xs text-violet-400">
+                                                Linked as an additional reference image
+                                                {(() => {
+                                                  const linked = projectImageAssets.find(
+                                                    (a) => a.id === inlineStyleLinkAssetId,
+                                                  )
+                                                  if (!linked) return "."
+                                                  return ` (${getProjectAssetSourceLabel(linked, locations, projectCharacters)}).`
+                                                })()}
+                                              </p>
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs"
+                                                disabled={isGeneratingShot}
+                                                onClick={clearInlineStyleLink}
+                                              >
+                                                Clear
+                                              </Button>
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      )}
                                       <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                                         <Button
                                           size="sm"
@@ -1930,20 +3000,103 @@ export default function LocationsPage() {
                                             </>
                                           )}
                                         </Button>
-                                        <p className="text-xs text-muted-foreground">
-                                          Uses this image as reference — describe exactly what to focus on or zoom into
-                                        </p>
                                       </div>
                                     </div>
                                   </div>
                                 )}
                                 
-                                {/* Non-Image Assets */}
-                                {nonImageAssets.length > 0 && (
+                                {/* Videos */}
+                                {videoAssets.length > 0 && (
                                   <div className="space-y-2">
-                                    <Label className="text-xs text-muted-foreground">Other Files ({nonImageAssets.length})</Label>
+                                    <Label className="text-xs text-muted-foreground">
+                                      Videos ({videoAssets.length})
+                                    </Label>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                      {nonImageAssets.map((asset) => (
+                                      {videoAssets.map((asset) => {
+                                        const refId =
+                                          (asset.metadata?.reference_asset_id as string | undefined) ||
+                                          (asset.generation_settings?.reference_asset_id as string | undefined)
+                                        const posterUrl = refId
+                                          ? imageAssets.find((img) => img.id === refId)?.content_url
+                                          : undefined
+
+                                        return (
+                                          <div
+                                            key={asset.id}
+                                            className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
+                                          >
+                                            <button
+                                              type="button"
+                                              className="relative aspect-video w-full block cursor-pointer"
+                                              onClick={() => {
+                                                setViewingVideo(asset)
+                                                setViewVideoDialogOpen(true)
+                                              }}
+                                            >
+                                              <video
+                                                src={asset.content_url}
+                                                poster={posterUrl}
+                                                preload="metadata"
+                                                muted
+                                                playsInline
+                                                className="w-full h-full object-cover pointer-events-none"
+                                              />
+                                              <div className="absolute inset-0 bg-black/25 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                                                <div className="rounded-full bg-black/60 p-3 backdrop-blur-sm">
+                                                  <Play className="h-6 w-6 text-white fill-white" />
+                                                </div>
+                                              </div>
+                                              <div className="absolute bottom-2 left-2 right-2">
+                                                <p className="text-xs text-white font-medium truncate drop-shadow-md">
+                                                  {asset.title.replace(/ - Video \(.*\)$/, "")}
+                                                </p>
+                                              </div>
+                                            </button>
+                                            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => {
+                                                  setViewingVideo(asset)
+                                                  setViewVideoDialogOpen(true)
+                                                }}
+                                                className="h-7 w-7 bg-black/60 hover:bg-black/80 border-0"
+                                                title="Play video"
+                                              >
+                                                <Play className="h-3 w-3" />
+                                              </Button>
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => window.open(asset.content_url!, "_blank")}
+                                                className="h-7 w-7 bg-black/60 hover:bg-black/80 border-0"
+                                                title="Open in new tab"
+                                              >
+                                                <ExternalLink className="h-3 w-3" />
+                                              </Button>
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => handleDeleteAsset(asset.id)}
+                                                className="h-7 w-7 bg-black/60 hover:bg-destructive border-0"
+                                                title="Delete video"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Other Files (audio, scripts, etc.) */}
+                                {otherAssets.length > 0 && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">Other Files ({otherAssets.length})</Label>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {otherAssets.map((asset) => (
                                         <div
                                           key={asset.id}
                                           className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
@@ -2422,25 +3575,12 @@ export default function LocationsPage() {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="image-service">AI Service</Label>
-              <Select
-                value={selectedImageService}
-                onValueChange={setSelectedImageService}
-                disabled={aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked)}
-              >
-                <SelectTrigger id="image-service" className="bg-input border-border">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="dalle">DALL-E 3</SelectItem>
-                  <SelectItem value="openart">OpenArt</SelectItem>
-                </SelectContent>
-              </Select>
-              {aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked) && (
-                <p className="text-xs text-muted-foreground">
-                  Using locked model from AI Settings: {getLockedImageModelLabel()}
-                </p>
-              )}
+              <Label>AI Model</Label>
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
+                {getLockedImageConfig()
+                  ? getLockedImageModelLabel()
+                  : "Lock an image model in AI Settings to generate images."}
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -2475,13 +3615,376 @@ export default function LocationsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Generate Custom Angle Dialog */}
+      <Dialog open={isCreateAngleDialogOpen} onOpenChange={setIsCreateAngleDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Generate Custom Angle</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              Describe a new camera angle from your reference image using {getLockedImageModelLabel()}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="new-angle-label">Shot name</Label>
+              <Input
+                id="new-angle-label"
+                value={newAngleLabel}
+                onChange={(e) => setNewAngleLabel(e.target.value)}
+                placeholder="e.g., Close up, Drone right, Sign detail"
+                className="bg-input border-border"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="new-angle-directive">Describe the shot</Label>
+              <Textarea
+                id="new-angle-directive"
+                value={newAngleDirective}
+                onChange={(e) => setNewAngleDirective(e.target.value)}
+                placeholder="e.g., close up of the robot on the right, same lighting and world as the reference"
+                className="bg-input border-border min-h-[90px]"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setIsCreateAngleDialogOpen(false)}
+              disabled={isGeneratingShot}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateCustomAngle}
+              disabled={isGeneratingShot || !newAngleLabel.trim() || !newAngleDirective.trim()}
+              className="gap-2"
+            >
+              {isGeneratingShot ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Generate
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Generate Video Dialog */}
+      <Dialog open={isGenerateVideoDialogOpen} onOpenChange={setIsGenerateVideoDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Generate Video from Image</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              Animates the selected carousel image into a short clip using Runway ML ({getLockedVideoApiModel()}).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {(imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0])?.content_url && (
+              <div className="space-y-2">
+                <Label className="text-xs sm:text-sm">Source image</Label>
+                <div className="relative aspect-video rounded-lg overflow-hidden border border-border bg-muted/30">
+                  <img
+                    src={
+                      (imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0])
+                        .content_url!
+                    }
+                    alt="Video source"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="video-motion-prompt">Describe the motion</Label>
+              <Textarea
+                id="video-motion-prompt"
+                value={videoMotionPrompt}
+                onChange={(e) => setVideoMotionPrompt(e.target.value)}
+                placeholder="e.g., slow push-in on the street, rain falling, neon lights flickering, subtle camera drift"
+                className="bg-input border-border min-h-[90px]"
+                disabled={isGeneratingVideo}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Duration</Label>
+              <Select
+                value={String(videoDuration)}
+                onValueChange={(v) => setVideoDuration(parseInt(v, 10) as 5 | 10)}
+                disabled={isGeneratingVideo}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="5">5 seconds</SelectItem>
+                  <SelectItem value="10">10 seconds</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {isGeneratingVideo && videoGenerationProgress && (
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {videoGenerationProgress}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setIsGenerateVideoDialogOpen(false)}
+              disabled={isGeneratingVideo}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateLocationVideo}
+              disabled={isGeneratingVideo || !videoMotionPrompt.trim()}
+              className="gap-2"
+            >
+              {isGeneratingVideo ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <Video className="h-4 w-4" />
+                  Generate Video
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Transition Video (2 frames) Dialog */}
+      <Dialog open={isTransitionVideoDialogOpen} onOpenChange={setIsTransitionVideoDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Transition Video (2 Frames)</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              Pick a start and end image — from this location, other locations, or characters — and generate a motion clip between them using Kling or Leonardo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Model</Label>
+              <Select
+                value={transitionVideoModel}
+                onValueChange={(v) => {
+                  const model = v as LocationTransitionVideoModel
+                  setTransitionVideoModel(model)
+                  setTransitionVideoDuration(getDefaultTransitionDuration(model))
+                }}
+                disabled={isGeneratingTransitionVideo}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="kling_i2v_extended">Kling I2V Extended</SelectItem>
+                  <SelectItem value="leonardo_kling_2_1">Leonardo · Kling 2.1 Pro</SelectItem>
+                  <SelectItem value="leonardo_veo_3_1">Leonardo · Veo 3.1</SelectItem>
+                  <SelectItem value="leonardo_veo_3_1_fast">Leonardo · Veo 3.1 Fast</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Duration</Label>
+              <Select
+                value={String(transitionVideoDuration)}
+                onValueChange={(v) => setTransitionVideoDuration(parseInt(v, 10))}
+                disabled={isGeneratingTransitionVideo}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {getTransitionDurationOptions(transitionVideoModel).map((seconds) => (
+                    <SelectItem key={seconds} value={String(seconds)}>
+                      {seconds} seconds
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Start frame</Label>
+              {framePickerAssetGroups.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No images available in this project.</p>
+              ) : (
+                <div className="space-y-3 max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2">
+                  {framePickerAssetGroups.map((group) => (
+                    <div key={`start-${group.label}`} className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {group.label}
+                      </p>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {group.assets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            disabled={isGeneratingTransitionVideo}
+                            onClick={() => setTransitionStartAssetId(asset.id)}
+                            className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                              transitionStartAssetId === asset.id
+                                ? "border-emerald-500 ring-2 ring-emerald-500/40"
+                                : "border-border hover:border-emerald-500/50"
+                            }`}
+                            title={asset.title}
+                          >
+                            <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>End frame</Label>
+              {framePickerAssetGroups.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No images available in this project.</p>
+              ) : (
+                <div className="space-y-3 max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2">
+                  {framePickerAssetGroups.map((group) => (
+                    <div key={`end-${group.label}`} className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {group.label}
+                      </p>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {group.assets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            disabled={isGeneratingTransitionVideo}
+                            onClick={() => setTransitionEndAssetId(asset.id)}
+                            className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                              transitionEndAssetId === asset.id
+                                ? "border-sky-500 ring-2 ring-sky-500/40"
+                                : "border-border hover:border-sky-500/50"
+                            }`}
+                            title={asset.title}
+                          >
+                            <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {(transitionStartAssetId || transitionEndAssetId) && (
+              <div className="grid grid-cols-2 gap-3">
+                {transitionStartAssetId && (
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-muted-foreground uppercase tracking-wide">Start</p>
+                    <div className="aspect-video rounded-lg overflow-hidden border border-emerald-500/40 bg-muted/30">
+                      <img
+                        src={framePickerAssets.find((a) => a.id === transitionStartAssetId)?.content_url || ""}
+                        alt="Start frame"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  </div>
+                )}
+                {transitionEndAssetId && (
+                  <div className="space-y-1">
+                    <p className="text-[11px] text-muted-foreground uppercase tracking-wide">End</p>
+                    <div className="aspect-video rounded-lg overflow-hidden border border-sky-500/40 bg-muted/30">
+                      <img
+                        src={framePickerAssets.find((a) => a.id === transitionEndAssetId)?.content_url || ""}
+                        alt="End frame"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="transition-motion-prompt">Describe the transition</Label>
+              <Textarea
+                id="transition-motion-prompt"
+                value={transitionVideoPrompt}
+                onChange={(e) => setTransitionVideoPrompt(e.target.value)}
+                placeholder="e.g., smooth dolly from the wide street into a close-up of the character, maintain lighting and atmosphere"
+                className="bg-input border-border min-h-[90px]"
+                disabled={isGeneratingTransitionVideo}
+              />
+            </div>
+
+            {isGeneratingTransitionVideo && transitionVideoProgress && (
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {transitionVideoProgress}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setIsTransitionVideoDialogOpen(false)}
+              disabled={isGeneratingTransitionVideo}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleGenerateTransitionVideo}
+              disabled={
+                isGeneratingTransitionVideo ||
+                !transitionVideoPrompt.trim() ||
+                !transitionStartAssetId ||
+                !transitionEndAssetId
+              }
+              className="gap-2"
+            >
+              {isGeneratingTransitionVideo ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Generating…
+                </>
+              ) : (
+                <>
+                  <ArrowRightLeft className="h-4 w-4" />
+                  Generate Transition
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Generate Shots Dialog */}
       <Dialog open={isGenerateShotsDialogOpen} onOpenChange={setIsGenerateShotsDialogOpen}>
         <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader className="pb-2">
             <DialogTitle className="text-lg sm:text-xl">Generate Shots from Reference</DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
-              Uses {SHOT_REFERENCE_MODEL_LABEL} with your reference image to create new camera angles. Your locked AI Settings image model ({getLockedImageModelLabel()}) is used for Quick Generate / Generate Image only — it does text-to-image without your photo as reference.
+              Picks a shot type and sends your reference image with a simple prompt like &quot;Give me a wide shot of this image&quot; using {getLockedImageModelLabel()}.
             </DialogDescription>
           </DialogHeader>
 
@@ -2524,11 +4027,25 @@ export default function LocationsPage() {
                   <SelectValue placeholder="Choose a shot type" />
                 </SelectTrigger>
                 <SelectContent>
-                  {LOCATION_SHOT_PRESETS.map((shot) => (
-                    <SelectItem key={shot} value={shot}>
-                      {shot}
-                    </SelectItem>
-                  ))}
+                  {customShotAngles.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Your custom angles</SelectLabel>
+                      {customShotAngles.map((angle) => (
+                        <SelectItem key={angle.id} value={angle.label}>
+                          {angle.label}
+                        </SelectItem>
+                      ))}
+                      <SelectSeparator />
+                    </SelectGroup>
+                  )}
+                  <SelectGroup>
+                    <SelectLabel>Standard angles</SelectLabel>
+                    {LOCATION_SHOT_PRESETS.map((shot) => (
+                      <SelectItem key={shot} value={shot}>
+                        {shot}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
                 </SelectContent>
               </Select>
             </div>
@@ -2563,7 +4080,7 @@ export default function LocationsPage() {
             )}
           </div>
 
-          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-2 sm:justify-between">
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
             <Button
               variant="outline"
               onClick={() => setIsGenerateShotsDialogOpen(false)}
@@ -2571,25 +4088,14 @@ export default function LocationsPage() {
             >
               Close
             </Button>
-            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-              <Button
-                variant="secondary"
-                onClick={handleGenerateIntroPack}
-                disabled={isGeneratingShot || !referenceAssetForShots}
-                className="gap-2"
-              >
-                {isGeneratingShot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
-                Intro Pack (4 distinct angles)
-              </Button>
-              <Button
-                onClick={handleGenerateSingleShot}
-                disabled={isGeneratingShot || !referenceAssetForShots}
-                className="gap-2"
-              >
-                {isGeneratingShot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                Generate Shot
-              </Button>
-            </div>
+            <Button
+              onClick={handleGenerateSingleShot}
+              disabled={isGeneratingShot || !referenceAssetForShots}
+              className="gap-2"
+            >
+              {isGeneratingShot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Generate Shot
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2651,6 +4157,255 @@ export default function LocationsPage() {
             >
               Close
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Video Dialog */}
+      <Dialog open={viewVideoDialogOpen} onOpenChange={setViewVideoDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-4xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <DialogTitle>
+              {(viewingVideo?.title || "Location Video").replace(/ - Video \(.*\)$/, "")}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="px-6 pb-6">
+            {viewingVideo?.content_url && (
+              <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-border bg-black">
+                <video
+                  key={viewingVideo.content_url}
+                  src={viewingVideo.content_url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
+            {viewingVideo?.prompt && (
+              <p className="text-xs text-muted-foreground mt-3 whitespace-pre-wrap">
+                {viewingVideo.prompt}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="px-6 pb-6 flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo) {
+                  void openLinkVideoToProduction(viewingVideo)
+                }
+              }}
+            >
+              <Link2 className="h-4 w-4 mr-2" />
+              Link to Shot
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo) {
+                  void handleDownloadLocationVideo(viewingVideo)
+                }
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo?.content_url) {
+                  window.open(viewingVideo.content_url, "_blank")
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open in New Tab
+            </Button>
+            <Button variant="outline" onClick={() => setViewVideoDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Link Video to Production Shot */}
+      <Dialog
+        open={isLinkVideoDialogOpen}
+        onOpenChange={(open) => {
+          setIsLinkVideoDialogOpen(open)
+          if (!open) {
+            setLinkingVideoAsset(null)
+            setLinkSceneId("")
+            setLinkStoryboardId("")
+            setLinkStoryboards([])
+          }
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Link to Production Shot</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              Insert this video into a storyboard shot on Cinema Production. It will appear in that shot&apos;s video list.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {linkingVideoAsset?.content_url && (
+              <div className="flex gap-3 items-center rounded-lg border border-border bg-muted/20 p-2">
+                <div className="relative w-20 aspect-video rounded overflow-hidden flex-shrink-0 bg-black">
+                  <video
+                    src={linkingVideoAsset.content_url}
+                    preload="metadata"
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <p className="text-sm font-medium truncate">
+                  {linkingVideoAsset.title.replace(/ - Video \(.*\)$/, "")}
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Scene</Label>
+              {isLoadingLinkScenes ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading scenes…
+                </div>
+              ) : linkScenes.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No timeline scenes found for this project. Add scenes on the Timeline first.
+                </p>
+              ) : (
+                <Select value={linkSceneId || undefined} onValueChange={setLinkSceneId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a scene" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkScenes.map((scene) => (
+                      <SelectItem key={scene.id} value={scene.id}>
+                        {scene.name || `Scene ${scene.metadata?.sceneNumber || scene.order_index || "?"}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            {linkSceneId && (
+              <div className="space-y-2">
+                <Label>Shot</Label>
+                {isLoadingLinkStoryboards ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading shots…
+                  </div>
+                ) : linkStoryboards.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No storyboard shots in this scene yet.{" "}
+                    <Link
+                      href={`/storyboards/${linkSceneId}`}
+                      className="text-primary underline-offset-2 hover:underline"
+                    >
+                      Create shots in Storyboards
+                    </Link>
+                  </p>
+                ) : (
+                  <div className="max-h-52 overflow-y-auto space-y-2 rounded-lg border border-border p-2">
+                    {linkStoryboards.map((board) => (
+                      <button
+                        key={board.id}
+                        type="button"
+                        onClick={() => setLinkStoryboardId(board.id)}
+                        className={`w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors ${
+                          linkStoryboardId === board.id
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-primary/40"
+                        }`}
+                      >
+                        <div className="w-14 aspect-video rounded overflow-hidden flex-shrink-0 bg-muted">
+                          {board.image_url ? (
+                            <img
+                              src={board.image_url}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <Camera className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            Shot {board.shot_number}
+                            {board.title ? ` · ${board.title}` : ""}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[board.shot_type, board.camera_angle, board.movement]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="link-video-default"
+                checked={linkVideoAsDefault}
+                onCheckedChange={(checked) => setLinkVideoAsDefault(checked === true)}
+              />
+              <Label htmlFor="link-video-default" className="text-sm font-normal cursor-pointer">
+                Set as the default video for this shot
+              </Label>
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-between">
+            <Button variant="ghost" asChild className="sm:mr-auto">
+              <Link href={projectId ? `/cinema-production?project=${projectId}` : "/cinema-production"}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Production
+              </Link>
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setIsLinkVideoDialogOpen(false)}
+                disabled={isLinkingVideoToShot}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleLinkVideoToShot()}
+                disabled={
+                  isLinkingVideoToShot ||
+                  !linkStoryboardId ||
+                  !linkingVideoAsset?.content_url
+                }
+                className="gap-2"
+              >
+                {isLinkingVideoToShot ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Linking…
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="h-4 w-4" />
+                    Link to Shot
+                  </>
+                )}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
