@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo, type ChangeEvent } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useAuthReady } from "@/components/auth-hooks"
 import Header from "@/components/header"
@@ -14,8 +14,20 @@ import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import { AssetService, type Asset } from "@/lib/asset-service"
+import {
+  buildLinkedAssetGroups,
+  getProjectAssetSourceLabel,
+  referenceUrlToFile,
+} from "@/lib/project-image-linking"
+import {
+  displayModelSupportsReferenceImage,
+  mapDisplayModelToService,
+  migrateGPTImageDisplayLabel,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -166,29 +178,7 @@ export default function SceneStoryboardsPage() {
     return { isReady: true, statusText: "Ready" }
   }
 
-  // Function to map model names to service identifiers
-  const mapModelToService = (model: string) => {
-    switch (model) {
-      case "DALL-E 3": return "dalle"
-      case "GPT Image": return "dalle" // GPT Image uses the dalle service but different endpoint
-      case "OpenArt": return "openart"
-      case "Runway ML": return "runway"
-      case "Leonardo AI": return "leonardo"
-      default: return "dalle"
-    }
-  }
-
-  // Helper function to normalize model name from display name to API model identifier
-  const normalizeImageModel = (displayName: string | null | undefined): string => {
-    if (!displayName) return "dall-e-3"
-    const model = displayName.toLowerCase()
-    if (model === "gpt image" || model.includes("gpt-image")) {
-      return "gpt-image-1"
-    } else if (model.includes("dall") || model.includes("dalle")) {
-      return "dall-e-3"
-    }
-    return "dall-e-3"
-  }
+  const mapModelToService = (model: string) => mapDisplayModelToService(model)
   // State variables
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneScript, setSceneScript] = useState<string>("")
@@ -256,6 +246,23 @@ export default function SceneStoryboardsPage() {
   const [hidePromptText, setHidePromptText] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
   const [showDescriptionDialog, setShowDescriptionDialog] = useState(false)
+  const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
+  const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
+  const [linkImageDialogOpen, setLinkImageDialogOpen] = useState(false)
+  const [linkingStoryboard, setLinkingStoryboard] = useState<Storyboard | null>(null)
+  const [selectedLinkAssetId, setSelectedLinkAssetId] = useState<string | null>(null)
+  const [linkImageSearch, setLinkImageSearch] = useState("")
+  const [isLinkingImage, setIsLinkingImage] = useState(false)
+
+  // Reference-based image edit (secondary edit — opens in dialog)
+  const [referenceEditDialogOpen, setReferenceEditDialogOpen] = useState(false)
+  const [referenceEditStoryboard, setReferenceEditStoryboard] = useState<Storyboard | null>(null)
+  const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
+  const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
+  const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
+  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
+  const [isGeneratingReferenceEdit, setIsGeneratingReferenceEdit] = useState(false)
+  const [referenceEditProgress, setReferenceEditProgress] = useState("")
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -811,6 +818,558 @@ export default function SceneStoryboardsPage() {
     
     loadLocations()
   }, [sceneInfo?.project_id, ready, userId])
+
+  // Load project image assets for linking to shots
+  useEffect(() => {
+    const loadProjectAssets = async () => {
+      if (!sceneInfo?.project_id || !ready || !userId) {
+        setProjectImageAssets([])
+        return
+      }
+      setIsLoadingProjectAssets(true)
+      try {
+        const assets = await AssetService.getAssetsForProject(sceneInfo.project_id)
+        setProjectImageAssets(
+          assets.filter((a) => a.content_type === "image" && a.content_url),
+        )
+      } catch (error) {
+        console.error("Error loading project image assets:", error)
+        setProjectImageAssets([])
+      } finally {
+        setIsLoadingProjectAssets(false)
+      }
+    }
+    loadProjectAssets()
+  }, [sceneInfo?.project_id, ready, userId])
+
+  const linkedProjectImageGroups = useMemo(
+    () => buildLinkedAssetGroups(projectImageAssets, locations, characters),
+    [projectImageAssets, locations, characters],
+  )
+
+  const filteredLinkImageGroups = useMemo(() => {
+    const term = linkImageSearch.trim().toLowerCase()
+    if (!term) return linkedProjectImageGroups
+    return linkedProjectImageGroups
+      .map((group) => ({
+        ...group,
+        assets: group.assets.filter((asset) => {
+          const label = getProjectAssetSourceLabel(asset, locations, characters)
+          return (
+            asset.title.toLowerCase().includes(term) ||
+            label.toLowerCase().includes(term)
+          )
+        }),
+      }))
+      .filter((group) => group.assets.length > 0)
+  }, [linkedProjectImageGroups, linkImageSearch, locations, characters])
+
+  const openLinkImageDialog = (storyboard: Storyboard) => {
+    setLinkingStoryboard(storyboard)
+    setSelectedLinkAssetId(null)
+    setLinkImageSearch("")
+    setLinkImageDialogOpen(true)
+  }
+
+  const handleLinkExistingImageToShot = async () => {
+    if (!linkingStoryboard || !selectedLinkAssetId) return
+    const asset = projectImageAssets.find((a) => a.id === selectedLinkAssetId)
+    if (!asset?.content_url) return
+
+    setIsLinkingImage(true)
+    try {
+      const updated = await StoryboardsService.updateStoryboardImage(
+        linkingStoryboard.id,
+        asset.content_url,
+      )
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === linkingStoryboard.id ? updated : sb)),
+      )
+      setLinkImageDialogOpen(false)
+      setLinkingStoryboard(null)
+      toast({
+        title: "Image linked to shot",
+        description: `Shot ${linkingStoryboard.shot_number} now uses your selected project image.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Link failed",
+        description: error instanceof Error ? error.message : "Could not link image to shot.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLinkingImage(false)
+    }
+  }
+
+  const getLockedImageModelLabel = () => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+      return migrateGPTImageDisplayLabel(imagesSetting.locked_model)
+    }
+    return null
+  }
+
+  const normalizeLockedImageModel = (
+    displayName: string,
+    options?: { withReferenceImage?: boolean },
+  ): string => {
+    const lower = displayName.toLowerCase()
+    if (lower.includes("runway")) {
+      return options?.withReferenceImage ? "gen4_image_turbo" : "gen4_image"
+    }
+    return normalizeDisplayModelToApiId(displayName)
+  }
+
+  const getLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (!imagesSetting?.is_locked || !imagesSetting.locked_model) {
+      return null
+    }
+    const lockedModel = imagesSetting.locked_model
+    return {
+      lockedModel,
+      service: mapDisplayModelToService(lockedModel),
+      apiModel: normalizeLockedImageModel(lockedModel, options),
+      supportsReference: displayModelSupportsReferenceImage(lockedModel),
+    }
+  }
+
+  const requireLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const config = getLockedImageConfig(options)
+    if (!config) {
+      throw new Error("Please lock an image model in AI Settings first.")
+    }
+    return config
+  }
+
+  const requestLockedImageGeneration = async (
+    prompt: string,
+    config: ReturnType<typeof requireLockedImageConfig>,
+    options?: {
+      referenceFile?: File
+      styleReferenceFile?: File
+      width?: number
+      height?: number
+    },
+  ) => {
+    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
+    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+
+    if (config.supportsReference && options?.referenceFile) {
+      const formData = new FormData()
+      formData.append("prompt", prompt)
+      formData.append("model", config.apiModel)
+      formData.append("service", config.service)
+      formData.append("width", String(width))
+      formData.append("height", String(height))
+      formData.append("apiKey", "configured")
+      formData.append("userId", userId!)
+      formData.append("file", options.referenceFile)
+      if (options.styleReferenceFile) {
+        formData.append("styleFile", options.styleReferenceFile)
+      }
+      if (config.service === "runway") {
+        formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
+      }
+
+      return fetch("/api/ai/generate-image", {
+        method: "POST",
+        body: formData,
+      })
+    }
+
+    return fetch("/api/ai/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        service: config.service,
+        apiKey: "configured",
+        userId,
+        model: config.apiModel,
+        width,
+        height,
+        autoSaveToBucket: true,
+      }),
+    })
+  }
+
+  const getImageGenerationErrorMessage = (error: unknown, fallback: string) => {
+    if (!(error instanceof Error)) return fallback
+    if (error.message.includes("API key")) {
+      return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
+    }
+    return error.message
+  }
+
+  const findStyleLinkAsset = (assetId: string) =>
+    projectImageAssets.find((a) => a.id === assetId)
+
+  const buildStoryboardEditPrompt = (userDirection: string, storyboard: Storyboard) => {
+    let prompt = userDirection.trim()
+    if (storyboard.title) {
+      prompt += ` Shot: ${storyboard.title}.`
+    }
+    return prompt.slice(0, 990)
+  }
+
+  const handleInlineShotReferenceSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
+    }
+    setInlineShotReferenceFile(file)
+    setInlineShotReferencePreview(URL.createObjectURL(file))
+    event.target.value = ""
+  }
+
+  const clearInlineShotReference = () => {
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
+    }
+    setInlineShotReferenceFile(null)
+    setInlineShotReferencePreview(null)
+  }
+
+  const clearInlineStyleLink = () => {
+    setInlineStyleLinkAssetId(null)
+  }
+
+  const clearInlineReferenceEditState = () => {
+    setInlineCustomShotPrompt("")
+    clearInlineShotReference()
+    clearInlineStyleLink()
+  }
+
+  const openReferenceEditDialog = (storyboard: Storyboard) => {
+    setReferenceEditStoryboard(storyboard)
+    clearInlineReferenceEditState()
+    setReferenceEditDialogOpen(true)
+  }
+
+  const closeReferenceEditDialog = () => {
+    setReferenceEditDialogOpen(false)
+    setReferenceEditStoryboard(null)
+    clearInlineReferenceEditState()
+  }
+
+  const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
+    const direction = inlineCustomShotPrompt.trim()
+    if (!direction) {
+      toast({
+        title: "Describe your edit",
+        description: 'Enter what you want, e.g. "warmer lighting" or "wider framing".',
+        variant: "destructive",
+      })
+      return
+    }
+
+    const storyboard = storyboards.find((sb) => sb.id === storyboardId)
+    if (!storyboard || !userId) return
+
+    if (!inlineShotReferenceFile && !storyboard.image_url) {
+      toast({
+        title: "Reference image required",
+        description: "Link or generate a shot image first, or upload a reference to edit from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    let styleReferenceFile: File | undefined
+    if (inlineStyleLinkAssetId) {
+      const styleAsset = findStyleLinkAsset(inlineStyleLinkAssetId)
+      if (styleAsset?.content_url) {
+        styleReferenceFile = await referenceUrlToFile(
+          styleAsset.content_url,
+          `style-ref-${styleAsset.id}.png`,
+        )
+      }
+    }
+
+    setIsGeneratingReferenceEdit(true)
+    setReferenceEditProgress("Editing image...")
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      const prompt = buildStoryboardEditPrompt(direction, storyboard)
+
+      let referenceFile: File | undefined
+      if (config.supportsReference) {
+        referenceFile =
+          inlineShotReferenceFile ??
+          (await referenceUrlToFile(
+            storyboard.image_url!,
+            `storyboard-ref-${storyboard.id}.png`,
+          ))
+      }
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile,
+        styleReferenceFile: config.supportsReference ? styleReferenceFile : undefined,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to edit image from reference")
+      }
+
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to edit image from reference")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(
+        storyboardId,
+        imageUrlToUse,
+      )
+
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === storyboardId ? updatedStoryboard : sb)),
+      )
+
+      if (editingStoryboard?.id === storyboardId) {
+        setFormData((prev) => ({ ...prev, image_url: imageUrlToUse }))
+        setEditingStoryboard(updatedStoryboard)
+      }
+
+      clearInlineReferenceEditState()
+      closeReferenceEditDialog()
+      toast({
+        title: "Image edited",
+        description: "The storyboard shot image was updated with your edit.",
+      })
+    } catch (error) {
+      toast({
+        title: "Edit failed",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not edit the storyboard image.",
+        ),
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingReferenceEdit(false)
+      setReferenceEditProgress("")
+    }
+  }
+
+  const renderStoryboardReferenceEdit = (
+    storyboard: Storyboard,
+    idPrefix: string,
+    inDialog = false,
+  ) => (
+    <div
+      className={
+        inDialog
+          ? "space-y-3"
+          : "border border-violet-500/20 rounded-lg p-4 bg-violet-500/5 space-y-3"
+      }
+    >
+      {!inDialog && (
+        <div className="flex items-center gap-2">
+          <Wand2 className="h-4 w-4 text-violet-500" />
+          <h3 className="text-sm font-medium">Reference Image Edit</h3>
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
+        {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+          ? " Describe changes below and optionally link another project image as a second reference."
+          : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+      </p>
+      {isGeneratingReferenceEdit && referenceEditProgress ? (
+        <p className="text-xs text-muted-foreground flex items-center gap-2">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {referenceEditProgress}
+        </p>
+      ) : null}
+      <div className="space-y-2">
+        <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
+          Describe your edit
+        </Label>
+        <Textarea
+          id={`${idPrefix}-inline-edit`}
+          value={inlineCustomShotPrompt}
+          onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+          placeholder='e.g., warmer lighting, wider framing, add rain, closer on the character'
+          className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
+          disabled={isGeneratingReferenceEdit}
+        />
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-ref-upload`} className="text-xs text-muted-foreground">
+            Primary reference (optional)
+          </Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              id={`${idPrefix}-ref-upload`}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleInlineShotReferenceSelect}
+              disabled={isGeneratingReferenceEdit}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              disabled={isGeneratingReferenceEdit}
+              onClick={() =>
+                document.getElementById(`${idPrefix}-ref-upload`)?.click()
+              }
+            >
+              <Upload className="h-4 w-4" />
+              Upload reference
+            </Button>
+            {inlineShotReferencePreview && (
+              <>
+                <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                  <img
+                    src={inlineShotReferencePreview}
+                    alt="Uploaded reference"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  disabled={isGeneratingReferenceEdit}
+                  onClick={clearInlineShotReference}
+                  title="Remove uploaded reference"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </>
+            )}
+            {!inlineShotReferencePreview && storyboard.image_url && (
+              <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
+                <img
+                  src={storyboard.image_url}
+                  alt="Current shot"
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {inlineShotReferenceFile
+              ? "Using your uploaded image as the primary reference."
+              : storyboard.image_url
+                ? "Uses the current shot image if you don't upload one."
+                : "Upload a reference or link an image to this shot first."}
+          </p>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+            <Label className="text-xs text-muted-foreground">
+              Link existing image (optional)
+            </Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Adds another image as a second reference from characters, locations, or project assets.
+            Your description above is the only prompt.
+          </p>
+          {isLoadingProjectAssets ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading project assets…
+            </div>
+          ) : linkedProjectImageGroups.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1">
+              No other images in this project yet. Generate character or location images to link here.
+            </p>
+          ) : (
+            <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+              {linkedProjectImageGroups.map((group) => (
+                <div key={group.label} className="space-y-1.5">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                    {group.label}
+                  </p>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {group.assets.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        disabled={isGeneratingReferenceEdit}
+                        onClick={() =>
+                          setInlineStyleLinkAssetId((prev) =>
+                            prev === asset.id ? null : asset.id,
+                          )
+                        }
+                        className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                          inlineStyleLinkAssetId === asset.id
+                            ? "border-violet-500 ring-2 ring-violet-500/40"
+                            : "border-border hover:border-violet-500/50"
+                        }`}
+                        title={`${getProjectAssetSourceLabel(asset, locations, characters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                      >
+                        <img
+                          src={asset.content_url!}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {inlineStyleLinkAssetId ? (
+            <div className="flex items-center gap-2">
+              <p className="text-xs text-violet-400">
+                Linked as an additional reference image
+                {(() => {
+                  const linked = findStyleLinkAsset(inlineStyleLinkAssetId)
+                  if (!linked) return "."
+                  return ` (${getProjectAssetSourceLabel(linked, locations, characters)}).`
+                })()}
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={isGeneratingReferenceEdit}
+                onClick={clearInlineStyleLink}
+              >
+                Clear
+              </Button>
+            </div>
+          ) : null}
+        </div>
+        <Button
+          size="sm"
+          onClick={() => handleGenerateStoryboardReferenceEdit(storyboard.id)}
+          disabled={
+            isGeneratingReferenceEdit ||
+            !inlineCustomShotPrompt.trim() ||
+            !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
+            (!inlineShotReferenceFile && !storyboard.image_url)
+          }
+          className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
+        >
+          {isGeneratingReferenceEdit && inlineCustomShotPrompt.trim() ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Editing...
+            </>
+          ) : (
+            <>
+              <Wand2 className="h-4 w-4" />
+              Edit Image
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  )
 
   // Update current scene index when sceneId or allScenes changes
   useEffect(() => {
@@ -1822,8 +2381,8 @@ export default function SceneStoryboardsPage() {
       let modelToUse: string | undefined = undefined
       
       if (imagesSetting?.is_locked && imagesSetting.locked_model) {
-        serviceToUse = mapModelToService(imagesSetting.locked_model)
-        modelToUse = normalizeImageModel(imagesSetting.locked_model)
+        serviceToUse = mapDisplayModelToService(imagesSetting.locked_model)
+        modelToUse = normalizeDisplayModelToApiId(imagesSetting.locked_model)
         console.log('🎬 Using locked model from AI settings:', imagesSetting.locked_model)
         console.log('🎬 Mapped to service identifier:', serviceToUse)
         console.log('🎬 Normalized model for API:', modelToUse)
@@ -3653,6 +4212,31 @@ export default function SceneStoryboardsPage() {
                 </div>
               </div>
 
+              {/* Reference Image Edit — opens in dialog */}
+              <div className="border border-violet-500/20 rounded-lg p-4 bg-violet-500/5">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium flex items-center gap-2">
+                      <Wand2 className="h-4 w-4 text-violet-500" />
+                      Reference Image Edit
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Edit the current shot image using your locked model and optional project references.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 border-violet-500/30 text-violet-600 hover:bg-violet-500/10 shrink-0"
+                    onClick={() => openReferenceEditDialog(editingStoryboard)}
+                  >
+                    <Wand2 className="h-4 w-4" />
+                    Edit Image
+                  </Button>
+                </div>
+              </div>
+
               {/* Form Actions */}
               <div className="flex gap-2 justify-end">
                 <Button
@@ -3660,6 +4244,7 @@ export default function SceneStoryboardsPage() {
                   onClick={() => {
                     setShowEditForm(false)
                     setEditingStoryboard(null)
+                    closeReferenceEditDialog()
                     resetForm()
                   }}
                 >
@@ -3775,46 +4360,68 @@ export default function SceneStoryboardsPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 p-4 sm:p-6">
-                {storyboard.image_url && (
+                {storyboard.image_url ? (
                   <div className="relative h-40 sm:h-48 bg-muted rounded-lg overflow-hidden group">
                     <img
                       src={storyboard.image_url}
                       alt={storyboard.title}
                       className="w-full h-full object-cover"
                     />
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={async () => {
-                        try {
-                          const response = await fetch(storyboard.image_url!)
-                          const blob = await response.blob()
-                          const url = window.URL.createObjectURL(blob)
-                          const a = document.createElement('a')
-                          a.href = url
-                          a.download = `${storyboard.title || 'storyboard'}-${storyboard.id}.${blob.type.split('/')[1] || 'png'}`
-                          document.body.appendChild(a)
-                          a.click()
-                          window.URL.revokeObjectURL(url)
-                          document.body.removeChild(a)
-                          toast({
-                            title: "Download Started",
-                            description: "Image download has started.",
-                          })
-                        } catch (error) {
-                          toast({
-                            title: "Download Failed",
-                            description: "Failed to download image. Please try again.",
-                            variant: "destructive",
-                          })
-                        }
-                      }}
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Download
-                    </Button>
+                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        title="Link a different project image"
+                        onClick={() => openLinkImageDialog(storyboard)}
+                      >
+                        <Link2 className="h-4 w-4 mr-2" />
+                        Link
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const response = await fetch(storyboard.image_url!)
+                            const blob = await response.blob()
+                            const url = window.URL.createObjectURL(blob)
+                            const a = document.createElement('a')
+                            a.href = url
+                            a.download = `${storyboard.title || 'storyboard'}-${storyboard.id}.${blob.type.split('/')[1] || 'png'}`
+                            document.body.appendChild(a)
+                            a.click()
+                            window.URL.revokeObjectURL(url)
+                            document.body.removeChild(a)
+                            toast({
+                              title: "Download Started",
+                              description: "Image download has started.",
+                            })
+                          } catch (error) {
+                            toast({
+                              title: "Download Failed",
+                              description: "Failed to download image. Please try again.",
+                              variant: "destructive",
+                            })
+                          }
+                        }}
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                      </Button>
+                    </div>
                   </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => openLinkImageDialog(storyboard)}
+                    className="flex h-40 sm:h-48 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 hover:bg-muted/50 hover:border-primary/40 transition-colors"
+                  >
+                    <Link2 className="h-7 w-7 text-muted-foreground" />
+                    <span className="text-sm font-medium text-muted-foreground">Link existing image</span>
+                    <span className="text-xs text-muted-foreground px-4 text-center">
+                      Browse images from characters, locations, and project assets
+                    </span>
+                  </button>
                 )}
                 
                 <div className="space-y-2">
@@ -3848,6 +4455,17 @@ export default function SceneStoryboardsPage() {
                       <Eye className="h-4 w-4" />
                     </Button>
                     
+                    {/* Link existing project image */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 hover:text-violet-500 flex-shrink-0"
+                      title="Link existing project image"
+                      onClick={() => openLinkImageDialog(storyboard)}
+                    >
+                      <Link2 className="h-4 w-4" />
+                    </Button>
+
                     {/* Quick AI Image Generation Button */}
                     <Button 
                       variant="ghost" 
@@ -3856,6 +4474,7 @@ export default function SceneStoryboardsPage() {
                       title="Generate AI Image"
                       onClick={() => {
                         // Set the editing storyboard and show edit form with AI focus
+                        closeReferenceEditDialog()
                         setEditingStoryboard(storyboard)
                         setFormData({
                           title: storyboard.title,
@@ -3891,12 +4510,28 @@ export default function SceneStoryboardsPage() {
                     >
                       <Sparkles className="h-4 w-4" />
                     </Button>
+
+                    {/* Secondary reference-based image edit */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 flex-shrink-0 hover:text-violet-500"
+                      title="Edit image from reference"
+                      onClick={() => {
+                        setShowEditForm(false)
+                        setEditingStoryboard(null)
+                        openReferenceEditDialog(storyboard)
+                      }}
+                    >
+                      <Wand2 className="h-4 w-4" />
+                    </Button>
                     
                     <Button 
                       variant="ghost" 
                       size="sm" 
                       className="h-8 w-8 p-0 hover:text-blue-600"
                       onClick={() => {
+                        closeReferenceEditDialog()
                         setEditingStoryboard(storyboard)
                         setFormData({
                           title: storyboard.title,
@@ -4068,6 +4703,186 @@ export default function SceneStoryboardsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Link Existing Project Image */}
+      <Dialog
+        open={linkImageDialogOpen}
+        onOpenChange={(open) => {
+          setLinkImageDialogOpen(open)
+          if (!open) {
+            setLinkingStoryboard(null)
+            setSelectedLinkAssetId(null)
+            setLinkImageSearch("")
+          }
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Link Existing Image</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {linkingStoryboard
+                ? `Choose an image you've already generated for Shot ${linkingStoryboard.shot_number}${linkingStoryboard.title ? ` · ${linkingStoryboard.title}` : ""}.`
+                : "Choose a project image to use on this storyboard shot."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="link-image-search">Search</Label>
+              <Input
+                id="link-image-search"
+                value={linkImageSearch}
+                onChange={(e) => setLinkImageSearch(e.target.value)}
+                placeholder="Search by title, character, or location…"
+                className="bg-input border-border"
+              />
+            </div>
+
+            {isLoadingProjectAssets ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading project images…
+              </div>
+            ) : filteredLinkImageGroups.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  {projectImageAssets.length === 0
+                    ? "No images in this project yet. Generate some on the Characters or Locations pages first."
+                    : "No images match your search."}
+                </p>
+                {projectImageAssets.length === 0 && sceneInfo?.project_id && (
+                  <div className="flex flex-wrap justify-center gap-2 pt-2">
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href={`/characters?movie=${sceneInfo.project_id}`}>Characters</Link>
+                    </Button>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href={`/locations?movie=${sceneInfo.project_id}`}>Locations</Link>
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                {filteredLinkImageGroups.map((group) => (
+                  <div key={group.label} className="space-y-2">
+                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                      {group.label}
+                    </p>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                      {group.assets.map((asset) => (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedLinkAssetId((prev) =>
+                              prev === asset.id ? null : asset.id,
+                            )
+                          }
+                          className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                            selectedLinkAssetId === asset.id
+                              ? "border-primary ring-2 ring-primary/40"
+                              : "border-border hover:border-primary/50"
+                          }`}
+                          title={`${getProjectAssetSourceLabel(asset, locations, characters)} — ${asset.title}`}
+                        >
+                          <img
+                            src={asset.content_url!}
+                            alt=""
+                            className="w-full h-full object-cover"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {selectedLinkAssetId && (
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-2 flex gap-3 items-center">
+                <div className="w-16 h-16 rounded overflow-hidden flex-shrink-0">
+                  <img
+                    src={projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.content_url || ""}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground line-clamp-3">
+                  {projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.title}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setLinkImageDialogOpen(false)}
+              disabled={isLinkingImage}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleLinkExistingImageToShot()}
+              disabled={isLinkingImage || !selectedLinkAssetId || !linkingStoryboard}
+              className="gap-2"
+            >
+              {isLinkingImage ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Linking…
+                </>
+              ) : (
+                <>
+                  <Link2 className="h-4 w-4" />
+                  Link to Shot
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reference image edit dialog */}
+      <Dialog
+        open={referenceEditDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !isGeneratingReferenceEdit) closeReferenceEditDialog()
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
+              <Wand2 className="h-5 w-5 text-violet-500" />
+              Edit Image
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {referenceEditStoryboard
+                ? `Reference edit for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
+                : "Edit this storyboard shot using a reference image."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {referenceEditStoryboard && (
+            <>
+              {referenceEditStoryboard.image_url && (
+                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                  <img
+                    src={referenceEditStoryboard.image_url}
+                    alt={referenceEditStoryboard.title}
+                    className="w-full h-full max-h-40 object-contain"
+                  />
+                </div>
+              )}
+              {renderStoryboardReferenceEdit(
+                referenceEditStoryboard,
+                "reference-edit-dialog",
+                true,
+              )}
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
   

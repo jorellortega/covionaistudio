@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
 import { Button } from "@/components/ui/button"
@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight, Star, Eye } from "lucide-react"
+import { Loader2, Users, Plus, ArrowRight, Check, RefreshCw, ListFilter, Sparkles, Edit, Save, ChevronDown, ChevronUp, Upload, Image as ImageIcon, Video, File, X, ExternalLink, Trash2, ChevronLeft, ChevronRight, Star, Eye, Link2, Wand2, Play, Download, Camera } from "lucide-react"
 import Link from "next/link"
 import { useSearchParams, useRouter } from "next/navigation"
 import { useToast } from "@/hooks/use-toast"
@@ -23,15 +23,29 @@ import { TreatmentScenesService, type TreatmentScene } from "@/lib/treatment-sce
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 import { CastingService, type CastingSetting } from "@/lib/casting-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { LocationsService, type Location } from "@/lib/locations-service"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
+import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { OpenAIService } from "@/lib/ai-services"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
-import { MovieService, type Movie } from "@/lib/movie-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuthReady } from "@/components/auth-hooks"
+import {
+  displayModelSupportsReferenceImage,
+  mapDisplayModelToService,
+  migrateGPTImageDisplayLabel,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
+import {
+  buildLinkedAssetGroups,
+  downloadMediaToDevice,
+  getProjectAssetSourceLabel,
+  referenceUrlToFile,
+} from "@/lib/project-image-linking"
 
 export default function CharactersPage() {
   const { toast } = useToast()
@@ -43,7 +57,6 @@ export default function CharactersPage() {
 
   const [projectId, setProjectId] = useState<string>(initialProject)
   const [loading, setLoading] = useState(false)
-  const [movie, setMovie] = useState<Movie | null>(null)
   const [treatmentId, setTreatmentId] = useState<string | null>(null)
   const [treatmentScenes, setTreatmentScenes] = useState<TreatmentScene[]>([])
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
@@ -222,8 +235,33 @@ export default function CharactersPage() {
   const [selectedMasterPromptForImage, setSelectedMasterPromptForImage] = useState<string>("")
   const [viewImageDialogOpen, setViewImageDialogOpen] = useState(false)
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
+  const [viewVideoDialogOpen, setViewVideoDialogOpen] = useState(false)
+  const [viewingVideo, setViewingVideo] = useState<Asset | null>(null)
+  const [isLinkProductionDialogOpen, setIsLinkProductionDialogOpen] = useState(false)
+  const [linkProductionAsset, setLinkProductionAsset] = useState<Asset | null>(null)
+  const [linkProductionMediaType, setLinkProductionMediaType] = useState<"image" | "video">("video")
+  const [linkScenes, setLinkScenes] = useState<SceneWithMetadata[]>([])
+  const [linkStoryboards, setLinkStoryboards] = useState<Storyboard[]>([])
+  const [linkSceneId, setLinkSceneId] = useState<string>("")
+  const [linkStoryboardId, setLinkStoryboardId] = useState<string>("")
+  const [linkVideoAsDefault, setLinkVideoAsDefault] = useState(true)
+  const [isLoadingLinkScenes, setIsLoadingLinkScenes] = useState(false)
+  const [isLoadingLinkStoryboards, setIsLoadingLinkStoryboards] = useState(false)
+  const [isLinkingToProduction, setIsLinkingToProduction] = useState(false)
   const [aiSettings, setAiSettings] = useState<AISetting[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
+
+  // Reference-based image edit (link + custom shot)
+  const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
+  const [projectCharacters, setProjectCharacters] = useState<Character[]>([])
+  const [projectLocations, setProjectLocations] = useState<Location[]>([])
+  const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
+  const [isGeneratingShot, setIsGeneratingShot] = useState(false)
+  const [shotGenerationProgress, setShotGenerationProgress] = useState("")
+  const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
+  const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
+  const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
+  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
   
   // Description editing state
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null)
@@ -233,15 +271,10 @@ export default function CharactersPage() {
   useEffect(() => {
     const load = async () => {
       if (!projectId) {
-        setMovie(null)
         return
       }
       setLoading(true)
       try {
-        // Load movie data
-        const movieData = await MovieService.getMovieById(projectId)
-        setMovie(movieData)
-
         // Find treatment for project (if any)
         const treatment = await TreatmentsService.getTreatmentByProjectId(projectId)
         setTreatmentId(treatment?.id || null)
@@ -337,6 +370,39 @@ export default function CharactersPage() {
     loadAssets()
   }, [selectedCharacterId, toast])
 
+  // Load project-wide image assets for linking
+  useEffect(() => {
+    const loadProjectAssets = async () => {
+      if (!projectId) {
+        setProjectImageAssets([])
+        setProjectCharacters([])
+        setProjectLocations([])
+        return
+      }
+      try {
+        setIsLoadingProjectAssets(true)
+        const [assets, characters, locations] = await Promise.all([
+          AssetService.getAssetsForProject(projectId),
+          CharactersService.getCharacters(projectId),
+          LocationsService.getLocations(projectId),
+        ])
+        setProjectImageAssets(
+          assets.filter((a) => a.content_type === "image" && a.content_url),
+        )
+        setProjectCharacters(characters)
+        setProjectLocations(locations)
+      } catch (err) {
+        console.error("Failed to load project assets:", err)
+        setProjectImageAssets([])
+        setProjectCharacters([])
+        setProjectLocations([])
+      } finally {
+        setIsLoadingProjectAssets(false)
+      }
+    }
+    loadProjectAssets()
+  }, [projectId])
+
   // Load AI settings
   useEffect(() => {
     const loadAISettings = async () => {
@@ -349,7 +415,7 @@ export default function CharactersPage() {
         // Auto-select locked model for images if available
         const imagesSetting = settings.find(setting => setting.tab_type === 'images')
         if (imagesSetting?.is_locked && imagesSetting.locked_model) {
-          setSelectedImageService(imagesSetting.locked_model.toLowerCase())
+          setSelectedImageService(migrateGPTImageDisplayLabel(imagesSetting.locked_model).toLowerCase())
         }
       } catch (err) {
         console.error('Failed to load AI settings:', err)
@@ -357,6 +423,389 @@ export default function CharactersPage() {
     }
     loadAISettings()
   }, [ready])
+
+  useEffect(() => {
+    const loadLinkStoryboards = async () => {
+      if (!linkSceneId || !isLinkProductionDialogOpen) {
+        setLinkStoryboards([])
+        setLinkStoryboardId("")
+        return
+      }
+      setIsLoadingLinkStoryboards(true)
+      try {
+        const boards = await StoryboardsService.getStoryboardsByScene(linkSceneId)
+        const sorted = [...boards].sort((a, b) => a.shot_number - b.shot_number)
+        setLinkStoryboards(sorted)
+        if (sorted.length === 1) {
+          setLinkStoryboardId(sorted[0].id)
+        }
+      } catch (error) {
+        console.error("Failed to load storyboards for link:", error)
+        setLinkStoryboards([])
+        toast({
+          title: "Could not load shots",
+          description: "Failed to load storyboard shots for this scene.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsLoadingLinkStoryboards(false)
+      }
+    }
+    loadLinkStoryboards()
+  }, [linkSceneId, isLinkProductionDialogOpen, toast])
+
+  const resolveImageGenerationConfig = (explicitDisplay?: string) => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+
+    let displayModel: string
+    if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+      displayModel = migrateGPTImageDisplayLabel(imagesSetting.locked_model)
+    } else if (explicitDisplay) {
+      const lower = explicitDisplay.toLowerCase()
+      if (lower === "openart") displayModel = "OpenArt"
+      else if (lower === "dalle") displayModel = "DALL-E 3"
+      else displayModel = migrateGPTImageDisplayLabel(explicitDisplay)
+    } else if (imagesSetting?.selected_model) {
+      displayModel = migrateGPTImageDisplayLabel(imagesSetting.selected_model)
+    } else {
+      const fallback = (selectedImageService || "dalle").toLowerCase()
+      displayModel = fallback === "openart" ? "OpenArt" : "DALL-E 3"
+    }
+
+    return {
+      displayModel,
+      apiModel: normalizeDisplayModelToApiId(displayModel),
+      service: mapDisplayModelToService(displayModel),
+      isLocked: !!(imagesSetting?.is_locked && imagesSetting.locked_model),
+    }
+  }
+
+  const getLockedImageModelLabel = () => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+      return migrateGPTImageDisplayLabel(imagesSetting.locked_model)
+    }
+    return null
+  }
+
+  const imageAssetsForCharacter = useMemo(
+    () => characterAssets.filter((a) => a.content_type === "image" && a.content_url),
+    [characterAssets],
+  )
+
+  const linkableProjectAssets = useMemo(
+    () =>
+      projectImageAssets.filter(
+        (a) => !a.character_id || a.character_id !== selectedCharacterId,
+      ),
+    [projectImageAssets, selectedCharacterId],
+  )
+
+  const linkedAssetGroups = useMemo(() => {
+    const groups: { label: string; assets: Asset[] }[] = []
+    if (imageAssetsForCharacter.length > 0) {
+      groups.push({ label: "This character", assets: imageAssetsForCharacter })
+    }
+    if (linkableProjectAssets.length > 0) {
+      groups.push(
+        ...buildLinkedAssetGroups(linkableProjectAssets, projectLocations, projectCharacters),
+      )
+    }
+    return groups
+  }, [imageAssetsForCharacter, linkableProjectAssets, projectLocations, projectCharacters])
+
+  const findStyleLinkAsset = (assetId: string) =>
+    characterAssets.find((a) => a.id === assetId) ??
+    projectImageAssets.find((a) => a.id === assetId)
+
+  const normalizeLockedImageModel = (
+    displayName: string,
+    options?: { withReferenceImage?: boolean },
+  ): string => {
+    const lower = displayName.toLowerCase()
+    if (lower.includes("runway")) {
+      return options?.withReferenceImage ? "gen4_image_turbo" : "gen4_image"
+    }
+    return normalizeDisplayModelToApiId(displayName)
+  }
+
+  const getLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (!imagesSetting?.is_locked || !imagesSetting.locked_model) {
+      return null
+    }
+    const lockedModel = imagesSetting.locked_model
+    return {
+      lockedModel,
+      service: mapDisplayModelToService(lockedModel),
+      apiModel: normalizeLockedImageModel(lockedModel, options),
+      supportsReference: displayModelSupportsReferenceImage(lockedModel),
+    }
+  }
+
+  const requireLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const config = getLockedImageConfig(options)
+    if (!config) {
+      throw new Error("Please lock an image model in AI Settings first.")
+    }
+    return config
+  }
+
+  const requestLockedImageGeneration = async (
+    prompt: string,
+    config: ReturnType<typeof requireLockedImageConfig>,
+    options?: {
+      referenceFile?: File
+      styleReferenceFile?: File
+      width?: number
+      height?: number
+    },
+  ) => {
+    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
+    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+
+    if (config.supportsReference && options?.referenceFile) {
+      const formData = new FormData()
+      formData.append("prompt", prompt)
+      formData.append("model", config.apiModel)
+      formData.append("service", config.service)
+      formData.append("width", String(width))
+      formData.append("height", String(height))
+      formData.append("apiKey", "configured")
+      formData.append("userId", userId!)
+      formData.append("file", options.referenceFile)
+      if (options.styleReferenceFile) {
+        formData.append("styleFile", options.styleReferenceFile)
+      }
+      if (config.service === "runway") {
+        formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
+      }
+
+      return fetch("/api/ai/generate-image", {
+        method: "POST",
+        body: formData,
+      })
+    }
+
+    return fetch("/api/ai/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        service: config.service,
+        apiKey: "configured",
+        userId,
+        model: config.apiModel,
+        width,
+        height,
+        autoSaveToBucket: true,
+      }),
+    })
+  }
+
+  const getImageGenerationErrorMessage = (error: unknown, fallback: string) => {
+    if (!(error instanceof Error)) return fallback
+    if (error.message.includes("API key")) {
+      return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
+    }
+    return error.message
+  }
+
+  const buildCustomCharacterEditPrompt = (userDirection: string, characterName?: string) => {
+    let prompt = userDirection.trim()
+    if (characterName) {
+      prompt += ` Character: ${characterName}.`
+    }
+    return prompt.slice(0, 990)
+  }
+
+  const saveGeneratedCharacterShot = async (
+    imageUrl: string,
+    character: Character,
+    shotLabel: string,
+    prompt: string,
+    referenceAsset: Asset,
+    model: string,
+    service: string,
+    styleAssetId?: string | null,
+  ) => {
+    const now = new Date()
+    const dateStr = now.toLocaleDateString()
+    const timeStr = now.toLocaleTimeString()
+    const assetData = {
+      project_id: projectId,
+      character_id: selectedCharacterId!,
+      title: `${character.name} - ${shotLabel} (${dateStr} ${timeStr})`,
+      content_type: "image" as const,
+      content: "",
+      content_url: imageUrl,
+      prompt,
+      model,
+      generation_settings: {
+        service,
+        character_id: selectedCharacterId,
+        character_name: character.name,
+        shot_label: shotLabel,
+        reference_asset_id: referenceAsset.id,
+        style_asset_id: styleAssetId ?? undefined,
+      },
+      metadata: {
+        character_name: character.name,
+        generated_at: now.toISOString(),
+        source: "character_image_edit",
+        service,
+        shot_label: shotLabel,
+        reference_asset_id: referenceAsset.id,
+        style_asset_id: styleAssetId ?? undefined,
+      },
+    }
+    const savedAsset = await AssetService.createAsset(assetData)
+    setCharacterAssets((prev) => [savedAsset, ...prev])
+    setTimeout(() => carouselApi?.scrollTo(0), 100)
+    return savedAsset
+  }
+
+  const generateCharacterShotFromReference = async (
+    referenceAsset: Asset,
+    shotLabel: string,
+    options?: {
+      promptOverride?: string
+      referenceFile?: File
+      styleReferenceFile?: File
+    },
+  ) => {
+    if (!selectedCharacterId || !userId || !ready || !referenceAsset.content_url) {
+      throw new Error("Select a character and reference image first.")
+    }
+
+    const selectedChar = characters.find((c) => c.id === selectedCharacterId)
+    if (!selectedChar) {
+      throw new Error("Character not found.")
+    }
+
+    const config = requireLockedImageConfig({ withReferenceImage: true })
+    const prompt =
+      options?.promptOverride ??
+      buildCustomCharacterEditPrompt(shotLabel, selectedChar.name)
+
+    const response = await requestLockedImageGeneration(prompt, config, {
+      referenceFile: config.supportsReference
+        ? options?.referenceFile ??
+          (await referenceUrlToFile(
+            referenceAsset.content_url,
+            `character-ref-${referenceAsset.id}.png`,
+          ))
+        : undefined,
+      styleReferenceFile: config.supportsReference ? options?.styleReferenceFile : undefined,
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || "Failed to edit image from reference")
+    }
+
+    const result = await response.json()
+    if (!result.success || !result.imageUrl) {
+      throw new Error("Failed to edit image from reference")
+    }
+
+    const imageUrlToUse = result.bucketUrl || result.imageUrl
+    await saveGeneratedCharacterShot(
+      imageUrlToUse,
+      selectedChar,
+      shotLabel,
+      prompt,
+      referenceAsset,
+      config.apiModel,
+      config.service,
+      inlineStyleLinkAssetId,
+    )
+  }
+
+  const handleInlineShotReferenceSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
+    }
+    setInlineShotReferenceFile(file)
+    setInlineShotReferencePreview(URL.createObjectURL(file))
+    event.target.value = ""
+  }
+
+  const clearInlineShotReference = () => {
+    if (inlineShotReferencePreview) {
+      URL.revokeObjectURL(inlineShotReferencePreview)
+    }
+    setInlineShotReferenceFile(null)
+    setInlineShotReferencePreview(null)
+  }
+
+  const clearInlineStyleLink = () => {
+    setInlineStyleLinkAssetId(null)
+  }
+
+  const handleGenerateInlineCustomShot = async () => {
+    const direction = inlineCustomShotPrompt.trim()
+    if (!direction) {
+      toast({
+        title: "Describe your edit",
+        description: 'Enter what you want, e.g. "three-quarter view" or "add a leather jacket".',
+        variant: "destructive",
+      })
+      return
+    }
+
+    const referenceAsset =
+      imageAssetsForCharacter[currentImageIndex] || imageAssetsForCharacter[0]
+    if (!referenceAsset) return
+
+    const selectedChar = characters.find((c) => c.id === selectedCharacterId)
+    if (!selectedChar) return
+
+    const shotLabel =
+      direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
+
+    let styleReferenceFile: File | undefined
+    if (inlineStyleLinkAssetId) {
+      const styleAsset = findStyleLinkAsset(inlineStyleLinkAssetId)
+      if (styleAsset?.content_url) {
+        styleReferenceFile = await referenceUrlToFile(
+          styleAsset.content_url,
+          `style-ref-${styleAsset.id}.png`,
+        )
+      }
+    }
+
+    setIsGeneratingShot(true)
+    setShotGenerationProgress("Editing image...")
+    try {
+      await generateCharacterShotFromReference(referenceAsset, shotLabel, {
+        promptOverride: buildCustomCharacterEditPrompt(direction, selectedChar.name),
+        referenceFile: inlineShotReferenceFile ?? undefined,
+        styleReferenceFile,
+      })
+      setInlineCustomShotPrompt("")
+      clearInlineShotReference()
+      clearInlineStyleLink()
+      toast({
+        title: "Image edited",
+        description: "Your edited character image was added to assets.",
+      })
+    } catch (error) {
+      toast({
+        title: "Edit failed",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not edit the character image.",
+        ),
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShot(false)
+      setShotGenerationProgress("")
+    }
+  }
 
   // Sync carousel with current index
   useEffect(() => {
@@ -1920,6 +2369,117 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     }
   }
 
+  const handleDownloadCharacterVideo = async (asset: Asset) => {
+    if (!asset.content_url) return
+    const fileName = `${asset.title.replace(/ - Video \(.*\)$/, "")}.mp4`
+    try {
+      toast({
+        title: "Preparing download…",
+        description: "Fetching video file.",
+      })
+      await downloadMediaToDevice(asset.content_url, fileName)
+      toast({
+        title: "Download started",
+        description: "Your video should appear in Downloads.",
+      })
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Could not download video.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const openLinkToProduction = async (asset: Asset, mediaType: "image" | "video") => {
+    if (!projectId) {
+      toast({
+        title: "No project selected",
+        description: "Select a project first to link this asset to a production shot.",
+        variant: "destructive",
+      })
+      return
+    }
+    setLinkProductionAsset(asset)
+    setLinkProductionMediaType(mediaType)
+    setLinkSceneId("")
+    setLinkStoryboardId("")
+    setLinkStoryboards([])
+    setLinkVideoAsDefault(true)
+    setIsLinkProductionDialogOpen(true)
+
+    setIsLoadingLinkScenes(true)
+    try {
+      const scenes = await TimelineService.getMovieScenes(projectId)
+      setLinkScenes(scenes)
+      if (scenes.length === 1) {
+        setLinkSceneId(scenes[0].id)
+      }
+    } catch (error) {
+      toast({
+        title: "Could not load scenes",
+        description: error instanceof Error ? error.message : "Failed to load production scenes.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingLinkScenes(false)
+    }
+  }
+
+  const handleLinkToProductionShot = async () => {
+    if (!linkProductionAsset?.content_url || !linkStoryboardId) return
+
+    const storyboard = linkStoryboards.find((s) => s.id === linkStoryboardId)
+    if (!storyboard) return
+
+    setIsLinkingToProduction(true)
+    try {
+      if (linkProductionMediaType === "video") {
+        const response = await fetch("/api/storyboard-videos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storyboardId: linkStoryboardId,
+            videoUrl: linkProductionAsset.content_url,
+            videoName: linkProductionAsset.title.replace(/ - Video \(.*\)$/, ""),
+            generationModel: linkProductionAsset.model,
+            generationPrompt: linkProductionAsset.prompt,
+            metadata: {
+              source: "character_asset",
+              asset_id: linkProductionAsset.id,
+              character_id: linkProductionAsset.character_id,
+              project_id: projectId,
+            },
+            isDefault: linkVideoAsDefault,
+          }),
+        })
+        const result = await response.json()
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Failed to link video to shot")
+        }
+      } else {
+        await StoryboardsService.updateStoryboardImage(
+          linkStoryboardId,
+          linkProductionAsset.content_url,
+        )
+      }
+
+      setIsLinkProductionDialogOpen(false)
+      toast({
+        title: linkProductionMediaType === "video" ? "Video linked to shot" : "Image linked to shot",
+        description: `${linkProductionMediaType === "video" ? "Video added" : "Storyboard image set"} for Scene ${storyboard.scene_number} · Shot ${storyboard.shot_number}${storyboard.title ? ` (${storyboard.title})` : ""}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Link failed",
+        description: error instanceof Error ? error.message : "Could not link asset to shot.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLinkingToProduction(false)
+    }
+  }
+
   const handleAnalyzeCharacterImage = async (asset: Asset) => {
     if (!selectedCharacterId || !asset.content_url) {
       toast({
@@ -2226,29 +2786,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       // Get AI settings for image generation
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
-      
-      // Determine service from model - use locked model if available, otherwise selected model
-      const modelToUse = (imagesSetting?.is_locked && imagesSetting.locked_model) 
-        ? imagesSetting.locked_model 
-        : imagesSetting?.selected_model || 'dall-e-3'
-      
-      // Map model to service
-      const mapModelToService = (modelName: string): string => {
-        const modelLower = modelName.toLowerCase()
-        if (modelLower.includes('dall') || modelLower.includes('dalle') || modelLower.includes('gpt-image')) {
-          return 'dalle'
-        } else if (modelLower.includes('leonardo')) {
-          return 'leonardo'
-        } else if (modelLower.includes('openart')) {
-          return 'openart'
-        } else if (modelLower.includes('runway')) {
-          return 'runway'
-        }
-        return 'dalle' // Default
-      }
-      
-      const service = mapModelToService(modelToUse)
-      const model = modelToUse
+      const { apiModel: normalizedModel, service: normalizedService } = resolveImageGenerationConfig()
 
       // Get API key
       const supabase = getSupabaseClient()
@@ -2273,20 +2811,6 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       // Build enhanced prompt with character context
       const characterContext = `Character: ${selectedChar.name || 'Character'}. `
       const fullPrompt = characterContext + prompt
-
-      // Normalize service and model
-      const normalizeImageModel = (service: string, model: string) => {
-        if (model === 'gpt-image-1' || model?.startsWith('gpt-')) {
-          return model
-        }
-        if (service === 'dalle' || service?.toLowerCase().includes('dalle')) {
-          return 'dall-e-3'
-        }
-        return model || 'dall-e-3'
-      }
-
-      const normalizedService = service === 'dalle' || service?.toLowerCase().includes('dalle') ? 'dalle' : service.toLowerCase()
-      const normalizedModel = normalizeImageModel(normalizedService, model)
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
@@ -2493,46 +3017,16 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       }
 
       // Check for locked image model
-      const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
-      const isImagesTabLocked = imagesSetting?.is_locked || false
-      const lockedModel = imagesSetting?.locked_model || null
-      
-      // Use locked model if available, otherwise use selected service
-      const serviceToUse = (isImagesTabLocked && lockedModel) ? lockedModel : selectedImageService
-      let apiKey = 'configured'
-
-      // Helper function to normalize model name from display name to API model identifier
-      const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) return "dall-e-3"
-        const model = displayName.toLowerCase()
-        if (model === "gpt image" || model.includes("gpt-image")) {
-          return "gpt-image-1"
-        } else if (model.includes("dall") || model.includes("dalle")) {
-          return "dall-e-3"
-        }
-        // Default to DALL-E 3 for unknown models
-        return "dall-e-3"
-      }
-
-      // Normalize service name for API
-      let normalizedService = 'dalle' // Default
-      if (serviceToUse === 'dalle' || serviceToUse === 'DALL-E 3' || serviceToUse === 'GPT Image' || serviceToUse?.toLowerCase().includes('gpt image')) {
-        normalizedService = 'dalle'
-      } else if (serviceToUse === 'openart' || serviceToUse === 'OpenArt') {
-        normalizedService = 'openart'
-      } else {
-        normalizedService = serviceToUse.toLowerCase()
-      }
-
-      // Normalize model name
-      const normalizedModel = normalizeImageModel(serviceToUse)
+      const { displayModel, apiModel: normalizedModel, service: normalizedService } =
+        resolveImageGenerationConfig(selectedImageService)
+      const apiKey = 'configured'
 
       const requestBody = {
         prompt: enhancedPrompt,
-        service: normalizedService, // Use normalized service (dalle, openart, etc.)
+        service: normalizedService,
         apiKey: apiKey,
         userId: userId,
-        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
+        model: normalizedModel,
         width: 1024,
         height: 1024,
         autoSaveToBucket: true,
@@ -2565,9 +3059,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           content: '',
           content_url: imageUrlToUse,
           prompt: imagePrompt,
-          model: serviceToUse,
+          model: displayModel,
           generation_settings: {
-            service: serviceToUse,
+            service: normalizedService,
+            model: normalizedModel,
             character_id: selectedCharacterId,
             character_name: selectedChar.name,
           },
@@ -2575,7 +3070,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             character_name: selectedChar.name,
             generated_at: new Date().toISOString(),
             source: 'ai_generation',
-            service: serviceToUse,
+            service: normalizedService,
+            model: normalizedModel,
           }
         }
 
@@ -2781,42 +3277,19 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
 
       // Use the locked model from settings
-      const lockedModel = imagesSetting.locked_model
-      let apiKey = 'configured'
-
-      // Helper function to normalize model name from display name to API model identifier
-      const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) return "dall-e-3"
-        const model = displayName.toLowerCase()
-        if (model === "gpt image" || model.includes("gpt-image")) {
-          return "gpt-image-1"
-        } else if (model.includes("dall") || model.includes("dalle")) {
-          return "dall-e-3"
-        }
-        // Default to DALL-E 3 for unknown models
-        return "dall-e-3"
-      }
-
-      // Normalize service name for API
-      let normalizedService = 'dalle' // Default
-      const serviceLower = lockedModel?.toLowerCase() || ''
-      if (serviceLower === 'dalle' || serviceLower === 'dall-e 3' || serviceLower === 'dall-e-3' || serviceLower === 'gpt image' || serviceLower.includes('gpt image')) {
-        normalizedService = 'dalle'
-      } else if (serviceLower === 'openart') {
-        normalizedService = 'openart'
-      } else {
-        normalizedService = serviceLower
-      }
-
-      // Normalize model name
-      const normalizedModel = normalizeImageModel(lockedModel)
+      const lockedDisplay = migrateGPTImageDisplayLabel(
+        imagesSetting.locked_model || imagesSetting.selected_model || "DALL-E 3",
+      )
+      const { displayModel, apiModel: normalizedModel, service: normalizedService } =
+        resolveImageGenerationConfig(lockedDisplay)
+      const apiKey = 'configured'
 
       const requestBody = {
         prompt: autoPrompt,
-        service: normalizedService, // Use normalized service (dalle, openart, etc.)
+        service: normalizedService,
         apiKey: apiKey,
         userId: userId,
-        model: normalizedModel, // Pass normalized model (gpt-image-1 or dall-e-3)
+        model: normalizedModel,
         width: 1024,
         height: 1024,
         autoSaveToBucket: true,
@@ -2858,7 +3331,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           content: '',
           content_url: imageUrlToUse,
           prompt: autoPrompt,
-          model: lockedModel || normalizedService, // Use original display name or normalized service
+          model: lockedDisplay,
           generation_settings: {
             service: normalizedService,
             model: normalizedModel,
@@ -2953,46 +3426,6 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             placeholder="Select a movie to manage characters"
           />
         </div>
-
-        {/* Movie Cover Image Preview */}
-        {projectId && movie && movie.thumbnail && (
-          <Card className="cinema-card mb-6">
-            <CardContent className="p-4 sm:p-6">
-              <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
-                <div className="w-full sm:w-auto flex-shrink-0 mx-auto sm:mx-0">
-                  <div className="bg-muted/20 rounded-xl p-2 sm:p-4 border border-border/30 shadow-lg">
-                    <div className="flex justify-center">
-                      <img
-                        src={movie.thumbnail}
-                        alt={movie.name || "Movie cover"}
-                        className="max-w-full max-h-[50vh] sm:max-h-96 object-contain rounded-lg"
-                        onError={(e) => {
-                          const target = e.target as HTMLImageElement
-                          if (target.src !== "/placeholder.svg?height=300&width=200") {
-                            target.src = "/placeholder.svg?height=300&width=200"
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-xl sm:text-2xl font-bold mb-2 break-words">{movie.name}</h2>
-                  {movie.description && (
-                    <p className="text-sm sm:text-base text-muted-foreground mb-3 line-clamp-3 break-words">
-                      {movie.description}
-                    </p>
-                  )}
-                  {movie.status && (
-                    <Badge variant="outline" className="text-xs sm:text-sm">
-                      {movie.status}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        )}
 
         {!projectId ? (
           <Card className="cinema-card">
@@ -3161,7 +3594,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             </div>
                           ) : (() => {
                             const imageAssets = characterAssets.filter(a => a.content_type === 'image' && a.content_url)
-                            const nonImageAssets = characterAssets.filter(a => a.content_type !== 'image' || !a.content_url)
+                            const videoAssets = characterAssets.filter(a => a.content_type === 'video' && a.content_url)
+                            const otherAssets = characterAssets.filter((a) => {
+                              if (a.content_type === 'image' && a.content_url) return false
+                              if (a.content_type === 'video' && a.content_url) return false
+                              return true
+                            })
                             
                             return (
                               <div className="space-y-4">
@@ -3300,15 +3738,296 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                         </div>
                                       )}
                                     </div>
+
+                                    <div className="flex flex-col gap-2 pt-1">
+                                      <p className="text-xs text-muted-foreground">
+                                        Edit images using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
+                                        {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                                          ? " Describe changes below and optionally link another project image as a second reference."
+                                          : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+                                      </p>
+                                      {!characterAssets.some((a) => a.content_type === "video" && a.content_url) && (
+                                        <p className="text-xs text-muted-foreground">
+                                          Open any image and use <span className="text-foreground/80">Link to Shot</span> to
+                                          set it on a storyboard in Cinema Production.
+                                        </p>
+                                      )}
+                                      {(isGeneratingShot && shotGenerationProgress) ? (
+                                        <p className="text-xs text-muted-foreground flex items-center gap-2">
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                          {shotGenerationProgress}
+                                        </p>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="space-y-2 pt-2 border-t border-border/60">
+                                      <Label htmlFor="inline-character-edit" className="text-xs sm:text-sm">
+                                        Describe your edit
+                                      </Label>
+                                      <Textarea
+                                        id="inline-character-edit"
+                                        value={inlineCustomShotPrompt}
+                                        onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+                                        placeholder='e.g., three-quarter view, add a leather jacket, closer portrait, same character in a rainy street'
+                                        className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
+                                        disabled={isGeneratingShot}
+                                      />
+                                      <div className="space-y-2">
+                                        <Label htmlFor="inline-character-ref-upload" className="text-xs text-muted-foreground">
+                                          Primary reference (optional)
+                                        </Label>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <input
+                                            id="inline-character-ref-upload"
+                                            type="file"
+                                            accept="image/*"
+                                            className="hidden"
+                                            onChange={handleInlineShotReferenceSelect}
+                                            disabled={isGeneratingShot}
+                                          />
+                                          <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="gap-2"
+                                            disabled={isGeneratingShot}
+                                            onClick={() =>
+                                              document.getElementById("inline-character-ref-upload")?.click()
+                                            }
+                                          >
+                                            <Upload className="h-4 w-4" />
+                                            Upload reference
+                                          </Button>
+                                          {inlineShotReferencePreview && (
+                                            <>
+                                              <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                                                <img
+                                                  src={inlineShotReferencePreview}
+                                                  alt="Uploaded reference"
+                                                  className="w-full h-full object-cover"
+                                                />
+                                              </div>
+                                              <Button
+                                                type="button"
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                disabled={isGeneratingShot}
+                                                onClick={clearInlineShotReference}
+                                                title="Remove uploaded reference"
+                                              >
+                                                <X className="h-4 w-4" />
+                                              </Button>
+                                            </>
+                                          )}
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                          {inlineShotReferenceFile
+                                            ? "Using your uploaded image as the primary reference."
+                                            : "Uses the selected carousel image if you don't upload one."}
+                                        </p>
+                                      </div>
+
+                                      <div className="space-y-2">
+                                        <div className="flex items-center gap-2">
+                                          <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                                          <Label className="text-xs text-muted-foreground">
+                                            Link existing image (optional)
+                                          </Label>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                          Adds another image as a second reference — pick another shot of this character,
+                                          or images from locations and other characters. Your description above is the only prompt.
+                                        </p>
+                                        {isLoadingProjectAssets ? (
+                                          <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                            Loading project assets…
+                                          </div>
+                                        ) : linkedAssetGroups.length === 0 ? (
+                                          <p className="text-xs text-muted-foreground py-1">
+                                            No other images in this project yet. Generate more shots or add location/character images to link here.
+                                          </p>
+                                        ) : (
+                                          <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+                                            {linkedAssetGroups.map((group) => (
+                                              <div key={group.label} className="space-y-1.5">
+                                                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                                                  {group.label}
+                                                </p>
+                                                <div className="flex gap-2 overflow-x-auto pb-1">
+                                                  {group.assets.map((asset) => (
+                                                    <button
+                                                      key={asset.id}
+                                                      type="button"
+                                                      disabled={isGeneratingShot}
+                                                      onClick={() =>
+                                                        setInlineStyleLinkAssetId((prev) =>
+                                                          prev === asset.id ? null : asset.id,
+                                                        )
+                                                      }
+                                                      className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                                                        inlineStyleLinkAssetId === asset.id
+                                                          ? "border-violet-500 ring-2 ring-violet-500/40"
+                                                          : "border-border hover:border-violet-500/50"
+                                                      }`}
+                                                      title={`${getProjectAssetSourceLabel(asset, projectLocations, projectCharacters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                                                    >
+                                                      <img
+                                                        src={asset.content_url!}
+                                                        alt=""
+                                                        className="w-full h-full object-cover"
+                                                      />
+                                                    </button>
+                                                  ))}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {inlineStyleLinkAssetId ? (
+                                          <div className="flex items-center gap-2">
+                                            <p className="text-xs text-violet-400">
+                                              Linked as an additional reference image
+                                              {(() => {
+                                                const linked = findStyleLinkAsset(inlineStyleLinkAssetId)
+                                                if (!linked) return "."
+                                                return ` (${getProjectAssetSourceLabel(linked, projectLocations, projectCharacters)}).`
+                                              })()}
+                                            </p>
+                                            <Button
+                                              type="button"
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-7 px-2 text-xs"
+                                              disabled={isGeneratingShot}
+                                              onClick={clearInlineStyleLink}
+                                            >
+                                              Clear
+                                            </Button>
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                        <Button
+                                          size="sm"
+                                          onClick={handleGenerateInlineCustomShot}
+                                          disabled={
+                                            isGeneratingShot ||
+                                            !inlineCustomShotPrompt.trim() ||
+                                            !getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                                          }
+                                          className="gap-2 w-full sm:w-auto"
+                                        >
+                                          {isGeneratingShot && inlineCustomShotPrompt.trim() ? (
+                                            <>
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                              Generating...
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Wand2 className="h-4 w-4" />
+                                              Edit Image
+                                            </>
+                                          )}
+                                        </Button>
+                                      </div>
+                                    </div>
                                   </div>
                                 )}
-                                
-                                {/* Non-Image Assets */}
-                                {nonImageAssets.length > 0 && (
+
+                                {/* Videos */}
+                                {videoAssets.length > 0 && (
                                   <div className="space-y-2">
-                                    <Label className="text-xs text-muted-foreground">Other Files ({nonImageAssets.length})</Label>
+                                    <Label className="text-xs text-muted-foreground">
+                                      Videos ({videoAssets.length})
+                                    </Label>
                                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                      {nonImageAssets.map((asset) => (
+                                      {videoAssets.map((asset) => {
+                                        const refId =
+                                          (asset.metadata?.reference_asset_id as string | undefined) ||
+                                          (asset.generation_settings?.reference_asset_id as string | undefined)
+                                        const posterUrl = refId
+                                          ? imageAssets.find((img) => img.id === refId)?.content_url
+                                          : undefined
+
+                                        return (
+                                          <div
+                                            key={asset.id}
+                                            className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
+                                          >
+                                            <button
+                                              type="button"
+                                              className="relative aspect-video w-full block cursor-pointer"
+                                              onClick={() => {
+                                                setViewingVideo(asset)
+                                                setViewVideoDialogOpen(true)
+                                              }}
+                                            >
+                                              <video
+                                                src={asset.content_url}
+                                                poster={posterUrl}
+                                                preload="metadata"
+                                                muted
+                                                playsInline
+                                                className="w-full h-full object-cover pointer-events-none"
+                                              />
+                                              <div className="absolute inset-0 bg-black/25 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                                                <div className="rounded-full bg-black/60 p-3 backdrop-blur-sm">
+                                                  <Play className="h-6 w-6 text-white fill-white" />
+                                                </div>
+                                              </div>
+                                              <div className="absolute bottom-2 left-2 right-2">
+                                                <p className="text-xs text-white font-medium truncate drop-shadow-md">
+                                                  {asset.title.replace(/ - Video \(.*\)$/, "")}
+                                                </p>
+                                              </div>
+                                            </button>
+                                            <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => {
+                                                  setViewingVideo(asset)
+                                                  setViewVideoDialogOpen(true)
+                                                }}
+                                                className="h-7 w-7 bg-black/60 hover:bg-black/80 border-0"
+                                                title="Play video"
+                                              >
+                                                <Play className="h-3 w-3" />
+                                              </Button>
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => void openLinkToProduction(asset, "video")}
+                                                className="h-7 w-7 bg-black/60 hover:bg-black/80 border-0"
+                                                title="Link to production shot"
+                                              >
+                                                <Link2 className="h-3 w-3" />
+                                              </Button>
+                                              <Button
+                                                size="icon"
+                                                variant="secondary"
+                                                onClick={() => handleDeleteAsset(asset.id)}
+                                                className="h-7 w-7 bg-black/60 hover:bg-destructive border-0"
+                                                title="Delete video"
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        )
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Other Files (audio, scripts, etc.) */}
+                                {otherAssets.length > 0 && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">Other Files ({otherAssets.length})</Label>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                      {otherAssets.map((asset) => (
                                         <div
                                           key={asset.id}
                                           className="relative group border border-border rounded-lg overflow-hidden bg-muted/30 hover:bg-muted/50 transition-colors"
@@ -5209,7 +5928,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               </Select>
               {aiSettingsLoaded && aiSettings.some(s => s.tab_type === 'images' && s.is_locked) && (
                 <p className="text-xs text-muted-foreground">
-                  Service is locked in AI Settings
+                  Using locked model: {getLockedImageModelLabel() || "AI Settings"}
                 </p>
               )}
             </div>
@@ -5312,6 +6031,19 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             <Button
               variant="outline"
               onClick={() => {
+                if (viewingImage) {
+                  void openLinkToProduction(viewingImage, "image")
+                }
+              }}
+              className="w-full sm:w-auto text-xs sm:text-sm"
+            >
+              <Link2 className="h-4 w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Link to Shot</span>
+              <span className="sm:hidden">Link</span>
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
                 if (viewingImage?.content_url) {
                   window.open(viewingImage.content_url, '_blank')
                 }
@@ -5382,6 +6114,267 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
             >
               Close
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Video Dialog */}
+      <Dialog open={viewVideoDialogOpen} onOpenChange={setViewVideoDialogOpen}>
+        <DialogContent className="cinema-card border-border max-w-4xl max-h-[90vh] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4">
+            <DialogTitle>
+              {(viewingVideo?.title || "Character Video").replace(/ - Video \(.*\)$/, "")}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="px-6 pb-6">
+            {viewingVideo?.content_url && (
+              <div className="relative w-full aspect-video rounded-lg overflow-hidden border border-border bg-black">
+                <video
+                  key={viewingVideo.content_url}
+                  src={viewingVideo.content_url}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="w-full h-full object-contain"
+                />
+              </div>
+            )}
+            {viewingVideo?.prompt && (
+              <p className="text-xs text-muted-foreground mt-3 whitespace-pre-wrap">
+                {viewingVideo.prompt}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="px-6 pb-6 flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo) {
+                  void openLinkToProduction(viewingVideo, "video")
+                }
+              }}
+            >
+              <Link2 className="h-4 w-4 mr-2" />
+              Link to Shot
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo) {
+                  void handleDownloadCharacterVideo(viewingVideo)
+                }
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingVideo?.content_url) {
+                  window.open(viewingVideo.content_url, "_blank")
+                }
+              }}
+            >
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open in New Tab
+            </Button>
+            <Button variant="outline" onClick={() => setViewVideoDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Link to Production Shot */}
+      <Dialog
+        open={isLinkProductionDialogOpen}
+        onOpenChange={(open) => {
+          setIsLinkProductionDialogOpen(open)
+          if (!open) {
+            setLinkProductionAsset(null)
+            setLinkSceneId("")
+            setLinkStoryboardId("")
+            setLinkStoryboards([])
+          }
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl">Link to Production Shot</DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {linkProductionMediaType === "video"
+                ? "Insert this video into a storyboard shot on Cinema Production. It will appear in that shot's video list."
+                : "Set this image as the storyboard shot image on Cinema Production. It will be used for that shot's reference and generation."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {linkProductionAsset?.content_url && (
+              <div className="flex gap-3 items-center rounded-lg border border-border bg-muted/20 p-2">
+                <div className="relative w-20 aspect-video rounded overflow-hidden flex-shrink-0 bg-black">
+                  {linkProductionMediaType === "video" ? (
+                    <video
+                      src={linkProductionAsset.content_url}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <img
+                      src={linkProductionAsset.content_url}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+                </div>
+                <p className="text-sm font-medium truncate">
+                  {linkProductionAsset.title.replace(/ - (Video|AI Generated Image).*(\(.*\))?$/, "")}
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Scene</Label>
+              {isLoadingLinkScenes ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading scenes…
+                </div>
+              ) : linkScenes.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  No timeline scenes found for this project. Add scenes on the Timeline first.
+                </p>
+              ) : (
+                <Select value={linkSceneId || undefined} onValueChange={setLinkSceneId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a scene" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {linkScenes.map((scene) => (
+                      <SelectItem key={scene.id} value={scene.id}>
+                        {scene.name || `Scene ${scene.metadata?.sceneNumber || scene.order_index || "?"}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            {linkSceneId && (
+              <div className="space-y-2">
+                <Label>Shot</Label>
+                {isLoadingLinkStoryboards ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading shots…
+                  </div>
+                ) : linkStoryboards.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No storyboard shots in this scene yet.{" "}
+                    <Link
+                      href={`/storyboards/${linkSceneId}`}
+                      className="text-primary underline-offset-2 hover:underline"
+                    >
+                      Create shots in Storyboards
+                    </Link>
+                  </p>
+                ) : (
+                  <div className="max-h-52 overflow-y-auto space-y-2 rounded-lg border border-border p-2">
+                    {linkStoryboards.map((board) => (
+                      <button
+                        key={board.id}
+                        type="button"
+                        onClick={() => setLinkStoryboardId(board.id)}
+                        className={`w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors ${
+                          linkStoryboardId === board.id
+                            ? "border-primary bg-primary/10"
+                            : "border-border hover:border-primary/40"
+                        }`}
+                      >
+                        <div className="w-14 aspect-video rounded overflow-hidden flex-shrink-0 bg-muted">
+                          {board.image_url ? (
+                            <img
+                              src={board.image_url}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <Camera className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">
+                            Shot {board.shot_number}
+                            {board.title ? ` · ${board.title}` : ""}
+                          </p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {[board.shot_type, board.camera_angle, board.movement]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {linkProductionMediaType === "video" && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="link-character-video-default"
+                  checked={linkVideoAsDefault}
+                  onCheckedChange={(checked) => setLinkVideoAsDefault(checked === true)}
+                />
+                <Label htmlFor="link-character-video-default" className="text-sm font-normal cursor-pointer">
+                  Set as the default video for this shot
+                </Label>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-between">
+            <Button variant="ghost" asChild className="sm:mr-auto">
+              <Link href={projectId ? `/cinema-production?project=${projectId}` : "/cinema-production"}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Production
+              </Link>
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setIsLinkProductionDialogOpen(false)}
+                disabled={isLinkingToProduction}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => void handleLinkToProductionShot()}
+                disabled={
+                  isLinkingToProduction ||
+                  !linkStoryboardId ||
+                  !linkProductionAsset?.content_url
+                }
+                className="gap-2"
+              >
+                {isLinkingToProduction ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Linking…
+                  </>
+                ) : (
+                  <>
+                    <Link2 className="h-4 w-4" />
+                    Link to Shot
+                  </>
+                )}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

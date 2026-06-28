@@ -274,8 +274,9 @@ export default function LocationsPage() {
   const [viewingImage, setViewingImage] = useState<Asset | null>(null)
   const [viewVideoDialogOpen, setViewVideoDialogOpen] = useState(false)
   const [viewingVideo, setViewingVideo] = useState<Asset | null>(null)
-  const [isLinkVideoDialogOpen, setIsLinkVideoDialogOpen] = useState(false)
-  const [linkingVideoAsset, setLinkingVideoAsset] = useState<Asset | null>(null)
+  const [isLinkProductionDialogOpen, setIsLinkProductionDialogOpen] = useState(false)
+  const [linkProductionAsset, setLinkProductionAsset] = useState<Asset | null>(null)
+  const [linkProductionMediaType, setLinkProductionMediaType] = useState<"image" | "video">("video")
   const [linkScenes, setLinkScenes] = useState<SceneWithMetadata[]>([])
   const [linkStoryboards, setLinkStoryboards] = useState<Storyboard[]>([])
   const [linkSceneId, setLinkSceneId] = useState<string>("")
@@ -283,7 +284,7 @@ export default function LocationsPage() {
   const [linkVideoAsDefault, setLinkVideoAsDefault] = useState(true)
   const [isLoadingLinkScenes, setIsLoadingLinkScenes] = useState(false)
   const [isLoadingLinkStoryboards, setIsLoadingLinkStoryboards] = useState(false)
-  const [isLinkingVideoToShot, setIsLinkingVideoToShot] = useState(false)
+  const [isLinkingToProduction, setIsLinkingToProduction] = useState(false)
   const [isTransitionVideoDialogOpen, setIsTransitionVideoDialogOpen] = useState(false)
   const [transitionVideoPrompt, setTransitionVideoPrompt] = useState("")
   const [transitionVideoModel, setTransitionVideoModel] =
@@ -1085,17 +1086,14 @@ export default function LocationsPage() {
     return Array.from(byId.values())
   }, [imageAssetsForLocation, projectImageAssets])
 
-  const framePickerAssetGroups = useMemo(() => {
+  const thisLocationFrameAssets = imageAssetsForLocation
+
+  const otherFramePickerGroups = useMemo(() => {
     const locationImageIds = new Set(imageAssetsForLocation.map((a) => a.id))
-    const groups: { label: string; assets: Asset[] }[] = []
-    if (imageAssetsForLocation.length > 0) {
-      groups.push({ label: "This location", assets: imageAssetsForLocation })
-    }
     const otherAssets = projectImageAssets.filter(
       (a) => a.content_url && !locationImageIds.has(a.id),
     )
-    groups.push(...buildLinkedAssetGroups(otherAssets, locations, projectCharacters))
-    return groups
+    return buildLinkedAssetGroups(otherAssets, locations, projectCharacters)
   }, [imageAssetsForLocation, projectImageAssets, locations, projectCharacters])
 
   const selectedLocation = useMemo(
@@ -1274,21 +1272,22 @@ export default function LocationsPage() {
     }
   }
 
-  const openLinkVideoToProduction = async (asset: Asset) => {
+  const openLinkToProduction = async (asset: Asset, mediaType: "image" | "video") => {
     if (!projectId) {
       toast({
         title: "No project selected",
-        description: "Select a project first to link this video to a production shot.",
+        description: "Select a project first to link this asset to a production shot.",
         variant: "destructive",
       })
       return
     }
-    setLinkingVideoAsset(asset)
+    setLinkProductionAsset(asset)
+    setLinkProductionMediaType(mediaType)
     setLinkSceneId("")
     setLinkStoryboardId("")
     setLinkStoryboards([])
     setLinkVideoAsDefault(true)
-    setIsLinkVideoDialogOpen(true)
+    setIsLinkProductionDialogOpen(true)
 
     setIsLoadingLinkScenes(true)
     try {
@@ -1310,7 +1309,7 @@ export default function LocationsPage() {
 
   useEffect(() => {
     const loadLinkStoryboards = async () => {
-      if (!linkSceneId || !isLinkVideoDialogOpen) {
+      if (!linkSceneId || !isLinkProductionDialogOpen) {
         setLinkStoryboards([])
         setLinkStoryboardId("")
         return
@@ -1336,52 +1335,59 @@ export default function LocationsPage() {
       }
     }
     loadLinkStoryboards()
-  }, [linkSceneId, isLinkVideoDialogOpen, toast])
+  }, [linkSceneId, isLinkProductionDialogOpen, toast])
 
-  const handleLinkVideoToShot = async () => {
-    if (!linkingVideoAsset?.content_url || !linkStoryboardId) return
+  const handleLinkToProductionShot = async () => {
+    if (!linkProductionAsset?.content_url || !linkStoryboardId) return
 
     const storyboard = linkStoryboards.find((s) => s.id === linkStoryboardId)
     if (!storyboard) return
 
-    setIsLinkingVideoToShot(true)
+    setIsLinkingToProduction(true)
     try {
-      const response = await fetch("/api/storyboard-videos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storyboardId: linkStoryboardId,
-          videoUrl: linkingVideoAsset.content_url,
-          videoName: linkingVideoAsset.title.replace(/ - Video \(.*\)$/, ""),
-          generationModel: linkingVideoAsset.model,
-          generationPrompt: linkingVideoAsset.prompt,
-          metadata: {
-            source: "location_asset",
-            asset_id: linkingVideoAsset.id,
-            location_id: linkingVideoAsset.location_id,
-            project_id: projectId,
-          },
-          isDefault: linkVideoAsDefault,
-        }),
-      })
-      const result = await response.json()
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || "Failed to link video to shot")
+      if (linkProductionMediaType === "video") {
+        const response = await fetch("/api/storyboard-videos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storyboardId: linkStoryboardId,
+            videoUrl: linkProductionAsset.content_url,
+            videoName: linkProductionAsset.title.replace(/ - Video \(.*\)$/, ""),
+            generationModel: linkProductionAsset.model,
+            generationPrompt: linkProductionAsset.prompt,
+            metadata: {
+              source: "location_asset",
+              asset_id: linkProductionAsset.id,
+              location_id: linkProductionAsset.location_id,
+              project_id: projectId,
+            },
+            isDefault: linkVideoAsDefault,
+          }),
+        })
+        const result = await response.json()
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Failed to link video to shot")
+        }
+      } else {
+        await StoryboardsService.updateStoryboardImage(
+          linkStoryboardId,
+          linkProductionAsset.content_url,
+        )
       }
 
-      setIsLinkVideoDialogOpen(false)
+      setIsLinkProductionDialogOpen(false)
       toast({
-        title: "Video linked to shot",
-        description: `Added to Scene ${storyboard.scene_number} · Shot ${storyboard.shot_number}${storyboard.title ? ` (${storyboard.title})` : ""}.`,
+        title: linkProductionMediaType === "video" ? "Video linked to shot" : "Image linked to shot",
+        description: `${linkProductionMediaType === "video" ? "Video added" : "Storyboard image set"} for Scene ${storyboard.scene_number} · Shot ${storyboard.shot_number}${storyboard.title ? ` (${storyboard.title})` : ""}.`,
       })
     } catch (error) {
       toast({
         title: "Link failed",
-        description: error instanceof Error ? error.message : "Could not link video to shot.",
+        description: error instanceof Error ? error.message : "Could not link asset to shot.",
         variant: "destructive",
       })
     } finally {
-      setIsLinkingVideoToShot(false)
+      setIsLinkingToProduction(false)
     }
   }
 
@@ -1677,7 +1683,12 @@ export default function LocationsPage() {
       return
     }
     setTransitionStartAssetId(defaultStart.id)
-    setTransitionEndAssetId(null)
+    const defaultEnd =
+      imageAssetsForLocation.length >= 2
+        ? imageAssetsForLocation.find((a) => a.id !== defaultStart.id) ??
+          imageAssetsForLocation[(currentImageIndex + 1) % imageAssetsForLocation.length]
+        : null
+    setTransitionEndAssetId(defaultEnd?.id && defaultEnd.id !== defaultStart.id ? defaultEnd.id : null)
     setTransitionVideoModel("kling_i2v_extended")
     setTransitionVideoDuration(5)
     setTransitionVideoPrompt(
@@ -1805,6 +1816,80 @@ export default function LocationsPage() {
       setIsGeneratingTransitionVideo(false)
       setTransitionVideoProgress("")
     }
+  }
+
+  const renderTransitionFramePicker = (
+    role: "start" | "end",
+    selectedId: string | null,
+    onSelect: (id: string) => void,
+  ) => {
+    const selectedBorder =
+      role === "start"
+        ? "border-emerald-500 ring-2 ring-emerald-500/40"
+        : "border-sky-500 ring-2 ring-sky-500/40"
+    const hoverBorder =
+      role === "start" ? "hover:border-emerald-500/50" : "hover:border-sky-500/50"
+    const hasAnyAssets = thisLocationFrameAssets.length > 0 || otherFramePickerGroups.length > 0
+
+    if (!hasAnyAssets) {
+      return <p className="text-xs text-muted-foreground">No images available in this project.</p>
+    }
+
+    return (
+      <div className="space-y-2">
+        {thisLocationFrameAssets.length > 0 && (
+          <div className="space-y-1.5 rounded-lg border border-primary/30 bg-primary/5 p-2">
+            <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+              This location
+            </p>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {thisLocationFrameAssets.map((asset) => (
+                <button
+                  key={`${role}-loc-${asset.id}`}
+                  type="button"
+                  disabled={isGeneratingTransitionVideo}
+                  onClick={() => onSelect(asset.id)}
+                  className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                    selectedId === asset.id ? selectedBorder : `border-border ${hoverBorder}`
+                  }`}
+                  title={asset.title}
+                >
+                  <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {otherFramePickerGroups.length > 0 && (
+          <div className="space-y-3 max-h-36 overflow-y-auto rounded-lg border border-border/60 p-2">
+            {otherFramePickerGroups.map((group) => (
+              <div key={`${role}-${group.label}`} className="space-y-1.5">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                  {group.label}
+                </p>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {group.assets.map((asset) => (
+                    <button
+                      key={asset.id}
+                      type="button"
+                      disabled={isGeneratingTransitionVideo}
+                      onClick={() => onSelect(asset.id)}
+                      className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                        selectedId === asset.id ? selectedBorder : `border-border ${hoverBorder}`
+                      }`}
+                      title={asset.title}
+                    >
+                      <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
   }
 
   const generateLocationShotFromReference = async (
@@ -3827,72 +3912,21 @@ export default function LocationsPage() {
 
             <div className="space-y-2">
               <Label>Start frame</Label>
-              {framePickerAssetGroups.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No images available in this project.</p>
-              ) : (
-                <div className="space-y-3 max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2">
-                  {framePickerAssetGroups.map((group) => (
-                    <div key={`start-${group.label}`} className="space-y-1.5">
-                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        {group.label}
-                      </p>
-                      <div className="flex gap-2 overflow-x-auto pb-1">
-                        {group.assets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            disabled={isGeneratingTransitionVideo}
-                            onClick={() => setTransitionStartAssetId(asset.id)}
-                            className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                              transitionStartAssetId === asset.id
-                                ? "border-emerald-500 ring-2 ring-emerald-500/40"
-                                : "border-border hover:border-emerald-500/50"
-                            }`}
-                            title={asset.title}
-                          >
-                            <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {renderTransitionFramePicker("start", transitionStartAssetId, setTransitionStartAssetId)}
             </div>
 
             <div className="space-y-2">
               <Label>End frame</Label>
-              {framePickerAssetGroups.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No images available in this project.</p>
-              ) : (
-                <div className="space-y-3 max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2">
-                  {framePickerAssetGroups.map((group) => (
-                    <div key={`end-${group.label}`} className="space-y-1.5">
-                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                        {group.label}
-                      </p>
-                      <div className="flex gap-2 overflow-x-auto pb-1">
-                        {group.assets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            disabled={isGeneratingTransitionVideo}
-                            onClick={() => setTransitionEndAssetId(asset.id)}
-                            className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                              transitionEndAssetId === asset.id
-                                ? "border-sky-500 ring-2 ring-sky-500/40"
-                                : "border-border hover:border-sky-500/50"
-                            }`}
-                            title={asset.title}
-                          >
-                            <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {thisLocationFrameAssets.length >= 2 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Pick another shot from this location above, or choose from characters and project assets below.
+                </p>
+              ) : thisLocationFrameAssets.length === 1 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Generate more angles for this location, or pick an end frame from project assets below.
+                </p>
+              ) : null}
+              {renderTransitionFramePicker("end", transitionEndAssetId, setTransitionEndAssetId)}
             </div>
 
             {(transitionStartAssetId || transitionEndAssetId) && (
@@ -4122,6 +4156,17 @@ export default function LocationsPage() {
               variant="outline"
               onClick={() => {
                 if (viewingImage) {
+                  void openLinkToProduction(viewingImage, "image")
+                }
+              }}
+            >
+              <Link2 className="h-4 w-4 mr-2" />
+              Link to Shot
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage) {
                   openGenerateShotsDialog(viewingImage)
                 }
               }}
@@ -4193,7 +4238,7 @@ export default function LocationsPage() {
               variant="outline"
               onClick={() => {
                 if (viewingVideo) {
-                  void openLinkVideoToProduction(viewingVideo)
+                  void openLinkToProduction(viewingVideo, "video")
                 }
               }}
             >
@@ -4229,13 +4274,13 @@ export default function LocationsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Link Video to Production Shot */}
+      {/* Link to Production Shot */}
       <Dialog
-        open={isLinkVideoDialogOpen}
+        open={isLinkProductionDialogOpen}
         onOpenChange={(open) => {
-          setIsLinkVideoDialogOpen(open)
+          setIsLinkProductionDialogOpen(open)
           if (!open) {
-            setLinkingVideoAsset(null)
+            setLinkProductionAsset(null)
             setLinkSceneId("")
             setLinkStoryboardId("")
             setLinkStoryboards([])
@@ -4246,24 +4291,34 @@ export default function LocationsPage() {
           <DialogHeader className="pb-2">
             <DialogTitle className="text-lg sm:text-xl">Link to Production Shot</DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
-              Insert this video into a storyboard shot on Cinema Production. It will appear in that shot&apos;s video list.
+              {linkProductionMediaType === "video"
+                ? "Insert this video into a storyboard shot on Cinema Production. It will appear in that shot's video list."
+                : "Set this image as the storyboard shot image on Cinema Production. It will be used for that shot's reference and generation."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {linkingVideoAsset?.content_url && (
+            {linkProductionAsset?.content_url && (
               <div className="flex gap-3 items-center rounded-lg border border-border bg-muted/20 p-2">
                 <div className="relative w-20 aspect-video rounded overflow-hidden flex-shrink-0 bg-black">
-                  <video
-                    src={linkingVideoAsset.content_url}
-                    preload="metadata"
-                    muted
-                    playsInline
-                    className="w-full h-full object-cover"
-                  />
+                  {linkProductionMediaType === "video" ? (
+                    <video
+                      src={linkProductionAsset.content_url}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <img
+                      src={linkProductionAsset.content_url}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  )}
                 </div>
                 <p className="text-sm font-medium truncate">
-                  {linkingVideoAsset.title.replace(/ - Video \(.*\)$/, "")}
+                  {linkProductionAsset.title.replace(/ - (Video|AI Generated Image).*(\(.*\))?$/, "")}
                 </p>
               </div>
             )}
@@ -4357,16 +4412,18 @@ export default function LocationsPage() {
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="link-video-default"
-                checked={linkVideoAsDefault}
-                onCheckedChange={(checked) => setLinkVideoAsDefault(checked === true)}
-              />
-              <Label htmlFor="link-video-default" className="text-sm font-normal cursor-pointer">
-                Set as the default video for this shot
-              </Label>
-            </div>
+            {linkProductionMediaType === "video" && (
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="link-video-default"
+                  checked={linkVideoAsDefault}
+                  onCheckedChange={(checked) => setLinkVideoAsDefault(checked === true)}
+                />
+                <Label htmlFor="link-video-default" className="text-sm font-normal cursor-pointer">
+                  Set as the default video for this shot
+                </Label>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-between">
@@ -4379,21 +4436,21 @@ export default function LocationsPage() {
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                onClick={() => setIsLinkVideoDialogOpen(false)}
-                disabled={isLinkingVideoToShot}
+                onClick={() => setIsLinkProductionDialogOpen(false)}
+                disabled={isLinkingToProduction}
               >
                 Cancel
               </Button>
               <Button
-                onClick={() => void handleLinkVideoToShot()}
+                onClick={() => void handleLinkToProductionShot()}
                 disabled={
-                  isLinkingVideoToShot ||
+                  isLinkingToProduction ||
                   !linkStoryboardId ||
-                  !linkingVideoAsset?.content_url
+                  !linkProductionAsset?.content_url
                 }
                 className="gap-2"
               >
-                {isLinkingVideoToShot ? (
+                {isLinkingToProduction ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Linking…
