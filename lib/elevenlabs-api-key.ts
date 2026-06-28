@@ -38,19 +38,12 @@ async function getSystemElevenLabsKey(admin: ReturnType<typeof createClient>): P
   return null
 }
 
-/** Resolve ElevenLabs API key: system config first, then user profile (service role read). */
+/** Resolve ElevenLabs API key: user profile first, then platform system key. */
 export async function getElevenLabsApiKeyForUser(userId: string): Promise<string | null> {
   const admin = getServiceRoleClient()
   if (!admin) {
     console.error('SUPABASE_SERVICE_ROLE_KEY missing — cannot resolve ElevenLabs API key')
     return null
-  }
-
-  try {
-    const systemKey = await getSystemElevenLabsKey(admin)
-    if (systemKey) return systemKey
-  } catch (error) {
-    console.error('Error checking system ElevenLabs API key:', error)
   }
 
   try {
@@ -65,6 +58,13 @@ export async function getElevenLabsApiKeyForUser(userId: string): Promise<string
     }
   } catch (error) {
     console.error('Error fetching user ElevenLabs API key:', error)
+  }
+
+  try {
+    const systemKey = await getSystemElevenLabsKey(admin)
+    if (systemKey) return systemKey
+  } catch (error) {
+    console.error('Error checking system ElevenLabs API key:', error)
   }
 
   return null

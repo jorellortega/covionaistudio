@@ -3,6 +3,47 @@ import { ElevenLabsService } from '@/lib/ai-services'
 import { getElevenLabsApiKeyForUser } from '@/lib/elevenlabs-api-key'
 import { createRouteSupabaseClient } from '@/lib/supabase-route'
 
+async function saveProjectVoice(
+  supabase: Awaited<ReturnType<typeof createRouteSupabaseClient>>,
+  userId: string,
+  input: {
+    projectId: string
+    voiceId: string
+    name: string
+    description?: string
+    category?: string
+    characterId?: string | null
+  },
+) {
+  const { data: existing } = await supabase
+    .from('project_voices')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('project_id', input.projectId)
+    .eq('elevenlabs_voice_id', input.voiceId)
+    .maybeSingle()
+
+  const payload = {
+    name: input.name,
+    description: input.description || null,
+    category: input.category || null,
+    character_id: input.characterId || null,
+    updated_at: new Date().toISOString(),
+  }
+
+  if (existing?.id) {
+    await supabase.from('project_voices').update(payload).eq('id', existing.id)
+    return
+  }
+
+  await supabase.from('project_voices').insert({
+    user_id: userId,
+    project_id: input.projectId,
+    elevenlabs_voice_id: input.voiceId,
+    ...payload,
+  })
+}
+
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createRouteSupabaseClient()
@@ -15,11 +56,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Not signed in. Refresh the page and try again.' }, { status: 401 })
     }
 
-    const { voiceId, name: customName } = await request.json()
+    const { voiceId, name: customName, projectId, characterId } = await request.json()
     const trimmedId = typeof voiceId === 'string' ? voiceId.trim() : ''
+    const trimmedProjectId = typeof projectId === 'string' ? projectId.trim() : ''
+    const trimmedCharacterId = typeof characterId === 'string' ? characterId.trim() : null
 
     if (!trimmedId) {
       return NextResponse.json({ error: 'Voice ID is required' }, { status: 400 })
+    }
+
+    if (!trimmedProjectId) {
+      return NextResponse.json({ error: 'Project is required' }, { status: 400 })
     }
 
     const apiKey = await getElevenLabsApiKeyForUser(user.id)
@@ -55,10 +102,26 @@ export async function POST(request: NextRequest) {
       description?: string
     }
 
+    const resolvedName =
+      (typeof customName === 'string' && customName.trim()) || voice.name || trimmedId
+
+    try {
+      await saveProjectVoice(supabase, user.id, {
+        projectId: trimmedProjectId,
+        voiceId: voice.voice_id,
+        name: resolvedName,
+        description: voice.description,
+        category: voice.category,
+        characterId: trimmedCharacterId,
+      })
+    } catch (saveError) {
+      console.error('Failed to save project voice record:', saveError)
+    }
+
     return NextResponse.json({
       success: true,
       voice_id: voice.voice_id,
-      name: (typeof customName === 'string' && customName.trim()) || voice.name || trimmedId,
+      name: resolvedName,
       category: voice.category,
       description: voice.description,
     })

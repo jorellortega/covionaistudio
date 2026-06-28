@@ -1294,6 +1294,126 @@ export class ElevenLabsService {
     }
   }
 
+  static async designVoicePreviews(
+    apiKey: string,
+    voiceDescription: string,
+    previewText?: string,
+  ): Promise<AIResponse> {
+    try {
+      const trimmedPreview = previewText?.trim()
+      const body: Record<string, unknown> = {
+        voice_description: voiceDescription,
+        model_id: 'eleven_ttv_v3',
+        should_enhance: true,
+        stream_previews: false,
+      }
+
+      // ElevenLabs requires preview text between 100–1000 chars, or auto_generate_text.
+      if (
+        trimmedPreview &&
+        trimmedPreview.length >= 100 &&
+        trimmedPreview.length <= 1000
+      ) {
+        body.text = trimmedPreview
+        body.auto_generate_text = false
+      } else {
+        body.auto_generate_text = true
+      }
+
+      const response = await fetch('https://api.elevenlabs.io/v1/text-to-voice/design', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(ElevenLabsService.formatApiError(response.status, errorText))
+      }
+
+      const result = await response.json()
+      const previews = result.previews || []
+      if (!Array.isArray(previews) || previews.length === 0) {
+        throw new Error('ElevenLabs did not return any voice previews')
+      }
+
+      return { success: true, data: { previews } }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to design voice',
+      }
+    }
+  }
+
+  private static formatApiError(status: number, errorText: string): string {
+    try {
+      const parsed = JSON.parse(errorText) as {
+        detail?: string | { message?: string; status?: string }
+        message?: string
+      }
+      if (typeof parsed.detail === 'string' && parsed.detail.trim()) {
+        return `ElevenLabs API error (${status}): ${parsed.detail}`
+      }
+      if (parsed.detail && typeof parsed.detail === 'object') {
+        const detailMessage = parsed.detail.message || parsed.detail.status
+        if (detailMessage) {
+          return `ElevenLabs API error (${status}): ${detailMessage}`
+        }
+      }
+      if (parsed.message) {
+        return `ElevenLabs API error (${status}): ${parsed.message}`
+      }
+    } catch {
+      // fall through
+    }
+    return `ElevenLabs API error (${status}): ${errorText}`
+  }
+
+  static async createVoiceFromDesignPreview(
+    apiKey: string,
+    voiceName: string,
+    voiceDescription: string,
+    generatedVoiceId: string,
+  ): Promise<AIResponse> {
+    try {
+      const response = await fetch('https://api.elevenlabs.io/v1/text-to-voice', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+          voice_name: voiceName,
+          voice_description: voiceDescription,
+          generated_voice_id: generatedVoiceId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(ElevenLabsService.formatApiError(response.status, errorText))
+      }
+
+      const result = await response.json()
+      return {
+        success: true,
+        data: {
+          voice_id: result.voice_id,
+          name: result.name ?? voiceName,
+        },
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to create voice from design',
+      }
+    }
+  }
+
   static async deleteVoice(apiKey: string, voiceId: string): Promise<AIResponse> {
     try {
       const response = await fetch(`https://api.elevenlabs.io/v1/voices/${voiceId}`, {
