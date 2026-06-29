@@ -588,13 +588,17 @@ export default function CreateVoicePage() {
   }
 
   const characterReferenceImages = useMemo(() => {
+    const seen = new Set<string>()
     const imgs: string[] = []
-    if (character?.image_url) imgs.push(character.image_url)
-    if (character?.reference_images?.length) imgs.push(...character.reference_images)
-    if (coverUrl && !imgs.includes(coverUrl)) imgs.push(coverUrl)
-    for (const url of referenceImages) {
-      if (!imgs.includes(url)) imgs.push(url)
+    const add = (url: string | null | undefined) => {
+      if (!url || seen.has(url)) return
+      seen.add(url)
+      imgs.push(url)
     }
+    add(character?.image_url)
+    character?.reference_images?.forEach(add)
+    add(coverUrl)
+    referenceImages.forEach(add)
     return imgs.slice(0, 16)
   }, [character, coverUrl, referenceImages])
 
