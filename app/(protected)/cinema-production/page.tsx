@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
@@ -36,6 +36,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
+import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
@@ -44,6 +45,13 @@ import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AISettingsService } from "@/lib/ai-settings-service"
+import { AssetService, type Asset } from "@/lib/asset-service"
+import { CharactersService, type Character } from "@/lib/characters-service"
+import { ProjectVoicesService, type ProjectVoice } from "@/lib/project-voices-service"
+import {
+  findHedraCharacter3ModelId,
+  runHedraAvatarPipeline,
+} from "@/lib/hedra-avatar-client"
 
 type VideoModel = 
   | "Kling T2V" 
@@ -57,6 +65,16 @@ type VideoModel =
   | "Kling 2.1 Pro (Frame-to-Frame)"
   | "Veo 3.1 (Frame-to-Frame)"
   | "Veo 3.1 Fast (Frame-to-Frame)"
+  | "Hedra Character 3"
+
+type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx"
+
+interface StoryboardAudioOption {
+  id: string
+  label: string
+  url: string
+  source: SavedAudioSource
+}
 
 interface ShotGenerationState {
   shotId: string
@@ -79,6 +97,7 @@ interface ShotGenerationState {
   videoDuration?: number // Duration in seconds for Kling/Veo (4/6/8 for Veo, 5/10 for Kling)
   startFrameImageUrl?: string | null // URL to storyboard image for start frame
   endFrameImageUrl?: string | null // URL to storyboard image for end frame
+  savedAudioOptionId?: string | null // asset id or session-dialogue / session-sfx
 }
 
 interface StoryboardVideo {
@@ -95,33 +114,167 @@ interface StoryboardVideo {
   updated_at: string
 }
 
+function suggestAudioSaveName(
+  type: "dialogue" | "sound-effect",
+  storyboard: Storyboard,
+  prompt: string,
+): string {
+  const shotLabel = `S${storyboard.shot_number}`
+  const cleaned = prompt.trim().replace(/^["']+|["']+$/g, "")
+  const snippet = cleaned.slice(0, 28).trim()
+  const ellipsis = cleaned.length > 28 ? "…" : ""
+  if (type === "dialogue") {
+    return snippet ? `${shotLabel} ${snippet}${ellipsis}` : `${shotLabel} dialogue`
+  }
+  return snippet ? `${shotLabel} SFX ${snippet}${ellipsis}` : `${shotLabel} SFX`
+}
+
+function sanitizeAudioFileName(name: string): string {
+  return name.trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 50) || "audio"
+}
+
+interface SessionAudioClip {
+  id: string
+  type: "dialogue" | "sound-effect"
+  prompt: string
+  audioUrl: string
+  createdAt: number
+}
+
+function sessionAudioOptionId(clipId: string) {
+  return `session-${clipId}`
+}
+
+function audioSaveNameKey(storyboardId: string, clipId: string) {
+  return `${storyboardId}-${clipId}`
+}
+
+function SessionAudioClipList({
+  clips,
+  getSaveName,
+  onSaveNameChange,
+  onDownload,
+  onSave,
+  onRemove,
+  savingClipId,
+}: {
+  clips: SessionAudioClip[]
+  getSaveName: (clip: SessionAudioClip) => string
+  onSaveNameChange: (clipId: string, name: string) => void
+  onDownload: (clip: SessionAudioClip) => void
+  onSave?: (clip: SessionAudioClip, saveName: string) => Promise<void>
+  onRemove?: (clipId: string) => void
+  savingClipId?: string | null
+}) {
+  if (!clips.length) return null
+
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs text-muted-foreground">
+        Generated clips ({clips.length})
+      </Label>
+      {[...clips].reverse().map((clip) => {
+        const saveName = getSaveName(clip)
+        return (
+          <div key={clip.id} className="rounded-lg border border-border p-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs text-muted-foreground line-clamp-2 flex-1">{clip.prompt}</p>
+              {onRemove && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0 shrink-0"
+                  onClick={() => onRemove(clip.id)}
+                  title="Remove clip"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+            <audio controls src={clip.audioUrl} className="w-full" />
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Save as</Label>
+              <Input
+                value={saveName}
+                onChange={(e) => onSaveNameChange(clip.id, e.target.value)}
+                placeholder="Audio name"
+                className="h-8 text-sm"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="flex-1"
+                onClick={() => onDownload(clip)}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Download
+              </Button>
+              {onSave && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1"
+                  disabled={savingClipId === clip.id}
+                  onClick={() => void onSave(clip, saveName)}
+                >
+                  {savingClipId === clip.id ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4 mr-2" />
+                      Save to Storage
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // Sound Effect Generator Component
 function SoundEffectGenerator({ 
   storyboard, 
+  clips,
   onGenerate, 
   isGenerating, 
-  audioUrl,
   hasApiKey,
   onSaveAudio,
   userId,
   projectId,
-  sceneId
+  sceneId,
+  getSaveName,
+  onSaveNameChange,
+  onRemoveClip,
+  savingClipId,
 }: { 
   storyboard: Storyboard
+  clips: SessionAudioClip[]
   onGenerate: (storyboard: Storyboard, prompt: string, duration?: number, prompt_influence?: number, looping?: boolean) => void
   isGenerating: boolean
-  audioUrl: string | null
   hasApiKey: boolean
-  onSaveAudio?: (audioUrl: string, prompt: string) => Promise<void>
+  onSaveAudio?: (clip: SessionAudioClip, saveName: string) => Promise<void>
   userId?: string
   projectId?: string
   sceneId?: string
+  getSaveName: (clip: SessionAudioClip) => string
+  onSaveNameChange: (clipId: string, name: string) => void
+  onRemoveClip?: (clipId: string) => void
+  savingClipId?: string | null
 }) {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState<number | undefined>(undefined)
   const [promptInfluence, setPromptInfluence] = useState<number>(0.5)
   const [looping, setLooping] = useState(false)
-  const [savingAudio, setSavingAudio] = useState(false)
 
   return (
     <div className="space-y-3">
@@ -185,56 +338,23 @@ function SoundEffectGenerator({
           </>
         )}
       </Button>
-      {audioUrl && (
-        <div className="space-y-2">
-          <audio controls src={audioUrl} className="w-full" />
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="flex-1"
-              onClick={() => {
-                const link = document.createElement('a')
-                link.href = audioUrl
-                link.download = `sound_effect_shot_${storyboard.shot_number}_${Date.now()}.mp3`
-                document.body.appendChild(link)
-                link.click()
-                document.body.removeChild(link)
-              }}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download
-            </Button>
-            {onSaveAudio && userId && projectId && sceneId && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="flex-1"
-                disabled={savingAudio}
-                onClick={async () => {
-                  setSavingAudio(true)
-                  try {
-                    await onSaveAudio(audioUrl, prompt)
-                  } finally {
-                    setSavingAudio(false)
-                  }
-                }}
-              >
-                {savingAudio ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save to Storage
-                  </>
-                )}
-              </Button>
-            )}
-          </div>
-        </div>
+      {userId && projectId && sceneId && (
+        <SessionAudioClipList
+          clips={clips}
+          getSaveName={getSaveName}
+          onSaveNameChange={onSaveNameChange}
+          onDownload={(clip) => {
+            const link = document.createElement("a")
+            link.href = clip.audioUrl
+            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.mp3`
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+          }}
+          onSave={onSaveAudio}
+          onRemove={onRemoveClip}
+          savingClipId={savingClipId}
+        />
       )}
     </div>
   )
@@ -284,15 +404,120 @@ export default function CinemaProductionPage() {
   const [aiSettings, setAiSettings] = useState<any[]>([])
   const [aiSettingsLoaded, setAiSettingsLoaded] = useState(false)
   const [userApiKeys, setUserApiKeys] = useState<any>({})
-  const [audioGenerations, setAudioGenerations] = useState<Map<string, {
-    type: 'dialogue' | 'sound-effect'
-    prompt: string
-    audioUrl: string | null
-    isGenerating: boolean
-    duration?: number
-    prompt_influence?: number
-    looping?: boolean
-  }>>(new Map())
+  const [sessionAudioClips, setSessionAudioClips] = useState<Map<string, SessionAudioClip[]>>(new Map())
+  const [audioGenerating, setAudioGenerating] = useState<Map<string, boolean>>(new Map())
+  const [savingAudioClipId, setSavingAudioClipId] = useState<string | null>(null)
+
+  const [hedraCharacter3ModelId, setHedraCharacter3ModelId] = useState<string | null>(null)
+  const [storyboardSavedAudio, setStoryboardSavedAudio] = useState<Map<string, Asset[]>>(new Map())
+  const [projectCharacters, setProjectCharacters] = useState<Character[]>([])
+  const [projectVoices, setProjectVoices] = useState<ProjectVoice[]>([])
+  const [dialogueVoiceByStoryboard, setDialogueVoiceByStoryboard] = useState<Map<string, string>>(new Map())
+  const [audioSaveNames, setAudioSaveNames] = useState<Map<string, string>>(new Map())
+
+  const getAudioSaveNameForClip = useCallback(
+    (storyboard: Storyboard, clip: SessionAudioClip) => {
+      const key = audioSaveNameKey(storyboard.id, clip.id)
+      return audioSaveNames.get(key) || suggestAudioSaveName(clip.type, storyboard, clip.prompt)
+    },
+    [audioSaveNames],
+  )
+
+  const setDefaultAudioSaveName = useCallback(
+    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect", prompt: string) => {
+      const key = audioSaveNameKey(storyboard.id, clipId)
+      setAudioSaveNames((prev) => {
+        const next = new Map(prev)
+        next.set(key, suggestAudioSaveName(type, storyboard, prompt))
+        return next
+      })
+    },
+    [],
+  )
+
+  const getSessionClipsForStoryboard = useCallback(
+    (storyboardId: string, type?: SessionAudioClip["type"]) => {
+      const clips = sessionAudioClips.get(storyboardId) || []
+      return type ? clips.filter((clip) => clip.type === type) : clips
+    },
+    [sessionAudioClips],
+  )
+
+  const addSessionClip = useCallback((storyboardId: string, clip: SessionAudioClip) => {
+    setSessionAudioClips((prev) => {
+      const clips = prev.get(storyboardId) || []
+      return new Map(prev).set(storyboardId, [...clips, clip])
+    })
+  }, [])
+
+  const removeSessionClip = useCallback((storyboardId: string, clipId: string) => {
+    setSessionAudioClips((prev) => {
+      const clips = prev.get(storyboardId) || []
+      const clip = clips.find((c) => c.id === clipId)
+      if (clip?.audioUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(clip.audioUrl)
+      }
+      const remaining = clips.filter((c) => c.id !== clipId)
+      const next = new Map(prev)
+      if (remaining.length) next.set(storyboardId, remaining)
+      else next.delete(storyboardId)
+      return next
+    })
+    setAudioSaveNames((prev) => {
+      const next = new Map(prev)
+      next.delete(audioSaveNameKey(storyboardId, clipId))
+      return next
+    })
+  }, [])
+
+  const dialogueVoiceOptions = useMemo(() => {
+    const map = new Map<string, { voice_id: string; name: string; characterName?: string }>()
+
+    for (const character of projectCharacters) {
+      if (character.elevenlabs_voice_id) {
+        map.set(character.elevenlabs_voice_id, {
+          voice_id: character.elevenlabs_voice_id,
+          name: character.elevenlabs_voice_name || character.name,
+          characterName: character.name,
+        })
+      }
+    }
+
+    for (const voice of projectVoices) {
+      if (!map.has(voice.elevenlabs_voice_id)) {
+        const linkedCharacter = voice.character_id
+          ? projectCharacters.find((c) => c.id === voice.character_id)
+          : null
+        map.set(voice.elevenlabs_voice_id, {
+          voice_id: voice.elevenlabs_voice_id,
+          name: voice.name,
+          characterName: linkedCharacter?.name,
+        })
+      }
+    }
+
+    return Array.from(map.values())
+  }, [projectCharacters, projectVoices])
+
+  const getDialogueVoiceId = useCallback(
+    (storyboard: Storyboard): string => {
+      const manual = dialogueVoiceByStoryboard.get(storyboard.id)
+      if (manual) return manual
+
+      if (storyboard.character_id) {
+        const character = projectCharacters.find((c) => c.id === storyboard.character_id)
+        if (character?.elevenlabs_voice_id) return character.elevenlabs_voice_id
+      }
+
+      return dialogueVoiceOptions[0]?.voice_id || ""
+    },
+    [dialogueVoiceByStoryboard, projectCharacters, dialogueVoiceOptions],
+  )
+
+  useEffect(() => {
+    if (!ready) return
+    void findHedraCharacter3ModelId().then(setHedraCharacter3ModelId)
+  }, [ready])
 
   useEffect(() => {
     if (!session?.user) {
@@ -315,6 +540,7 @@ export default function CinemaProductionPage() {
   useEffect(() => {
     if (selectedProjectId && ready) {
       loadScenes()
+      loadProjectVoiceData()
     } else {
       setScenes([])
       setSelectedSceneId("")
@@ -322,6 +548,9 @@ export default function CinemaProductionPage() {
       setStoryboards([])
       setSelectedStoryboardId("")
       setSelectedStoryboard(null)
+      setProjectCharacters([])
+      setProjectVoices([])
+      setDialogueVoiceByStoryboard(new Map())
     }
   }, [selectedProjectId, ready])
 
@@ -630,6 +859,21 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const loadProjectVoiceData = async () => {
+    if (!selectedProjectId) return
+
+    try {
+      const [characters, voices] = await Promise.all([
+        CharactersService.getCharacters(selectedProjectId),
+        ProjectVoicesService.getVoicesForProject(selectedProjectId),
+      ])
+      setProjectCharacters(characters)
+      setProjectVoices(voices)
+    } catch (error) {
+      console.error("Error loading project voices:", error)
+    }
+  }
+
   const loadStoryboards = async () => {
     if (!selectedSceneId || !userId) return
     
@@ -639,6 +883,7 @@ export default function CinemaProductionPage() {
       const sceneStoryboards = await StoryboardsService.getStoryboardsByScene(selectedSceneId)
       console.log('🎬 Loaded storyboards:', sceneStoryboards.length, sceneStoryboards)
       setStoryboards(sceneStoryboards)
+      await loadSavedAudioForScene(selectedSceneId)
       
       // Check for saved videos in the bucket for each storyboard
       // Only check bucket if we have a selected project to filter by
@@ -709,6 +954,76 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const loadSavedAudioForScene = async (sceneId: string) => {
+    try {
+      const assets = await AssetService.getAssetsForScene(sceneId)
+      const byStoryboard = new Map<string, Asset[]>()
+      for (const asset of assets) {
+        if (asset.content_type !== "audio" || !asset.content_url) continue
+        const storyboardId = asset.metadata?.storyboard_id as string | undefined
+        if (!storyboardId) continue
+        const list = byStoryboard.get(storyboardId) || []
+        list.push(asset)
+        byStoryboard.set(storyboardId, list)
+      }
+      setStoryboardSavedAudio(byStoryboard)
+    } catch (error) {
+      console.error("Error loading saved shot audio:", error)
+      setStoryboardSavedAudio(new Map())
+    }
+  }
+
+  const getAudioOptionsForStoryboard = (storyboardId: string): StoryboardAudioOption[] => {
+    const options: StoryboardAudioOption[] = []
+    const storyboard = storyboards.find((s) => s.id === storyboardId)
+    const sessionClips = [...(sessionAudioClips.get(storyboardId) || [])].reverse()
+    for (const clip of sessionClips) {
+      if (!clip.audioUrl) continue
+      const typeLabel = clip.type === "dialogue" ? "Dialogue" : "SFX"
+      const name =
+        storyboard && audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))
+          ? audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))!
+          : storyboard
+            ? suggestAudioSaveName(clip.type, storyboard, clip.prompt)
+            : clip.prompt.slice(0, 32)
+      options.push({
+        id: sessionAudioOptionId(clip.id),
+        label: `${typeLabel}: ${name}`,
+        url: clip.audioUrl,
+        source: clip.type === "dialogue" ? "session-dialogue" : "session-sfx",
+      })
+    }
+    const saved = storyboardSavedAudio.get(storyboardId) || []
+    for (const asset of saved) {
+      if (!asset.content_url) continue
+      const typeLabel =
+        asset.metadata?.type === "dialogue"
+          ? "Dialogue"
+          : asset.metadata?.type === "sound-effect"
+            ? "SFX"
+            : "Audio"
+      options.push({
+        id: asset.id,
+        label: `${typeLabel}: ${asset.title}`,
+        url: asset.content_url,
+        source: "saved",
+      })
+    }
+    return options
+  }
+
+  const resolveSelectedAudioForStoryboard = (
+    storyboardId: string,
+    optionId: string | null | undefined,
+  ): StoryboardAudioOption | null => {
+    const options = getAudioOptionsForStoryboard(storyboardId)
+    if (!options.length) return null
+    if (optionId) {
+      return options.find((o) => o.id === optionId) ?? options[0]
+    }
+    return options[0]
+  }
+
   // Get filtered storyboards based on selection
   const getDisplayedStoryboards = (): Storyboard[] => {
     if (selectedStoryboardId) {
@@ -725,8 +1040,12 @@ export default function CinemaProductionPage() {
     return filtered
   }
 
-  const getModelFileRequirement = (model: VideoModel): 'none' | 'image' | 'video' | 'start-end-frames' => {
+  const getModelFileRequirement = (
+    model: VideoModel,
+  ): "none" | "image" | "video" | "start-end-frames" | "hedra-avatar" => {
     switch (model) {
+      case "Hedra Character 3":
+        return "hedra-avatar"
       case "Kling T2V":
         return 'none'
       case "Kling I2V":
@@ -773,7 +1092,8 @@ export default function CinemaProductionPage() {
         videoModelType: undefined,
         videoDuration: undefined,
         startFrameImageUrl: null,
-        endFrameImageUrl: null
+        endFrameImageUrl: null,
+        savedAudioOptionId: null,
       }
       newMap.set(storyboardId, { ...current, ...updates })
       return newMap
@@ -1017,7 +1337,7 @@ export default function CinemaProductionPage() {
   }
 
   // Generate dialogue audio (text-to-speech)
-  const handleGenerateDialogue = async (storyboard: Storyboard, text: string) => {
+  const handleGenerateDialogue = async (storyboard: Storyboard, text: string, voiceId?: string) => {
     if (!userId || !userApiKeys.elevenlabs_api_key) {
       toast({
         title: "API Key Required",
@@ -1027,17 +1347,19 @@ export default function CinemaProductionPage() {
       return
     }
 
-    const audioKey = `${storyboard.id}-dialogue`
-    setAudioGenerations(prev => {
-      const newMap = new Map(prev)
-      newMap.set(audioKey, {
-        type: 'dialogue',
-        prompt: text,
-        audioUrl: null,
-        isGenerating: true,
+    const resolvedVoiceId = voiceId || getDialogueVoiceId(storyboard)
+    if (!resolvedVoiceId) {
+      toast({
+        title: "Voice Required",
+        description: "Assign an ElevenLabs voice to a character or import one from Create Voice.",
+        variant: "destructive",
       })
-      return newMap
-    })
+      return
+    }
+
+    const audioKey = `${storyboard.id}-dialogue`
+    const clipId = crypto.randomUUID()
+    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
 
     try {
       const response = await fetch('/api/ai/text-to-speech', {
@@ -1047,7 +1369,7 @@ export default function CinemaProductionPage() {
         },
         body: JSON.stringify({
           text: text.trim(),
-          voiceId: "21m00Tcm4TlvDq8ikWAM", // Default voice
+          voiceId: resolvedVoiceId,
           apiKey: userApiKeys.elevenlabs_api_key,
         }),
       })
@@ -1059,39 +1381,37 @@ export default function CinemaProductionPage() {
 
       const audioBlob = await response.blob()
       const audioUrl = URL.createObjectURL(audioBlob)
+      const clip: SessionAudioClip = {
+        id: clipId,
+        type: "dialogue",
+        prompt: text,
+        audioUrl,
+        createdAt: Date.now(),
+      }
 
-      setAudioGenerations(prev => {
-        const newMap = new Map(prev)
-        newMap.set(audioKey, {
-          type: 'dialogue',
-          prompt: text,
-          audioUrl,
-          isGenerating: false,
+      addSessionClip(storyboard.id, clip)
+      setDefaultAudioSaveName(storyboard, clipId, "dialogue", text)
+
+      const generation = storyboardGenerations.get(storyboard.id)
+      if (generation?.model === "Hedra Character 3") {
+        updateStoryboardGeneration(storyboard.id, {
+          savedAudioOptionId: sessionAudioOptionId(clipId),
         })
-        return newMap
-      })
+      }
 
       toast({
         title: "Dialogue Generated",
-        description: "Audio has been generated successfully!",
+        description: "New dialogue clip added. Generate again for another take.",
       })
     } catch (error) {
       console.error('Error generating dialogue:', error)
-      setAudioGenerations(prev => {
-        const newMap = new Map(prev)
-        newMap.set(audioKey, {
-          type: 'dialogue',
-          prompt: text,
-          audioUrl: null,
-          isGenerating: false,
-        })
-        return newMap
-      })
       toast({
         title: "Generation Failed",
         description: error instanceof Error ? error.message : "Failed to generate dialogue.",
         variant: "destructive",
       })
+    } finally {
+      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
     }
   }
 
@@ -1113,19 +1433,8 @@ export default function CinemaProductionPage() {
     }
 
     const audioKey = `${storyboard.id}-sound-effect`
-    setAudioGenerations(prev => {
-      const newMap = new Map(prev)
-      newMap.set(audioKey, {
-        type: 'sound-effect',
-        prompt,
-        audioUrl: null,
-        isGenerating: true,
-        duration,
-        prompt_influence,
-        looping,
-      })
-      return newMap
-    })
+    const clipId = crypto.randomUUID()
+    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
 
     try {
       const response = await fetch('/api/ai/sound-effects', {
@@ -1160,54 +1469,55 @@ export default function CinemaProductionPage() {
 
       const audioBlob = await response.blob()
       const audioUrl = URL.createObjectURL(audioBlob)
+      const clip: SessionAudioClip = {
+        id: clipId,
+        type: "sound-effect",
+        prompt,
+        audioUrl,
+        createdAt: Date.now(),
+      }
 
-      setAudioGenerations(prev => {
-        const newMap = new Map(prev)
-        newMap.set(audioKey, {
-          type: 'sound-effect',
-          prompt,
-          audioUrl,
-          isGenerating: false,
-          duration,
-          prompt_influence,
-          looping,
-        })
-        return newMap
-      })
+      addSessionClip(storyboard.id, clip)
+      setDefaultAudioSaveName(storyboard, clipId, "sound-effect", prompt)
 
       toast({
         title: "Sound Effect Generated",
-        description: "Audio has been generated successfully!",
+        description: "New sound effect clip added.",
       })
     } catch (error) {
       console.error('Error generating sound effect:', error)
-      setAudioGenerations(prev => {
-        const newMap = new Map(prev)
-        newMap.set(audioKey, {
-          type: 'sound-effect',
-          prompt,
-          audioUrl: null,
-          isGenerating: false,
-          duration,
-          prompt_influence,
-          looping,
-        })
-        return newMap
-      })
       toast({
         title: "Generation Failed",
         description: error instanceof Error ? error.message : "Failed to generate sound effect.",
         variant: "destructive",
       })
+    } finally {
+      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
     }
   }
 
   // Save audio to storage
-  const handleSaveAudio = async (audioUrl: string, prompt: string, type: 'dialogue' | 'sound-effect' = 'sound-effect', storyboard?: Storyboard) => {
+  const handleSaveAudio = async (
+    audioUrl: string,
+    prompt: string,
+    type: "dialogue" | "sound-effect" = "sound-effect",
+    storyboard?: Storyboard,
+    saveName?: string,
+  ) => {
     if (!userId || !selectedProjectId || !selectedSceneId || !storyboard) {
       toast({
         title: "Missing Information",
         description: "Please select a project and scene.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const displayName = saveName?.trim()
+    if (!displayName) {
+      toast({
+        title: "Name Required",
+        description: "Enter a name for this audio before saving.",
         variant: "destructive",
       })
       return
@@ -1231,8 +1541,8 @@ export default function CinemaProductionPage() {
           },
           body: JSON.stringify({
             audioBlob: audioBlobForApi,
-            fileName: `${type}_shot_${storyboard.shot_number}_${Date.now()}`,
-            audioTitle: `${type === 'dialogue' ? 'Dialogue' : 'Sound Effect'} - Shot ${storyboard.shot_number}: ${storyboard.title || 'Untitled'}`,
+            fileName: sanitizeAudioFileName(displayName),
+            audioTitle: displayName,
             projectId: selectedProjectId,
             sceneId: selectedSceneId,
             userId: userId,
@@ -1250,10 +1560,21 @@ export default function CinemaProductionPage() {
           throw new Error(errorData.error || 'Failed to save audio')
         }
         
+        const saveResult = await saveResponse.json()
+        const newAssetId = saveResult.data?.asset?.id as string | undefined
+
         toast({
           title: "Audio Saved",
           description: `${type === 'dialogue' ? 'Dialogue' : 'Sound effect'} audio has been saved to storage.`,
         })
+        if (selectedSceneId) {
+          await loadSavedAudioForScene(selectedSceneId)
+        }
+        if (storyboard?.id && newAssetId) {
+          updateStoryboardGeneration(storyboard.id, {
+            savedAudioOptionId: newAssetId,
+          })
+        }
       }
       reader.readAsDataURL(audioBlob)
     } catch (error) {
@@ -1303,6 +1624,97 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const handleGenerateHedraCharacter3 = async (storyboard: Storyboard) => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    if (!generation?.prompt.trim()) {
+      toast({
+        title: "Missing prompt",
+        description: "Add a performance prompt for the shot.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!hedraCharacter3ModelId) {
+      toast({
+        title: "Hedra not ready",
+        description: "Could not load Hedra Character 3 model. Set HEDRA_API_KEY and refresh.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const imageUrl = generation.filePreview || storyboard.image_url
+    if (!imageUrl) {
+      toast({
+        title: "Portrait required",
+        description: "This shot needs a storyboard image with a visible face for lip-sync.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioOption = resolveSelectedAudioForStoryboard(
+      storyboard.id,
+      generation.savedAudioOptionId,
+    )
+    if (!audioOption) {
+      toast({
+        title: "Audio required",
+        description: "Generate and save dialogue audio for this shot, or pick a saved clip below.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    updateStoryboardGeneration(storyboard.id, {
+      isGenerating: true,
+      generationStatus: "Preparing Hedra Character 3…",
+    })
+
+    try {
+      const downloadUrl = await runHedraAvatarPipeline({
+        imageUrl,
+        audioUrl: audioOption.url,
+        imageFilename: `shot-${storyboard.shot_number}-portrait.png`,
+        audioFilename: `shot-${storyboard.shot_number}-dialogue.mp3`,
+        aiModelId: hedraCharacter3ModelId,
+        textPrompt: generation.prompt,
+        aspectRatio: "16:9",
+        resolution: "720p",
+        onStatus: (status) => {
+          updateStoryboardGeneration(storyboard.id, { generationStatus: status })
+        },
+      })
+
+      updateStoryboardGeneration(storyboard.id, {
+        isGenerating: false,
+        generatedVideoUrl: downloadUrl,
+        generationStatus: "Complete",
+      })
+      setDetailViewMode((prev) => {
+        const next = new Map(prev)
+        next.set(storyboard.id, "video")
+        return next
+      })
+      toast({
+        title: "Character 3 video ready",
+        description: `Lip-sync video generated for shot ${storyboard.shot_number}.`,
+      })
+    } catch (error) {
+      console.error("Hedra Character 3 error:", error)
+      updateStoryboardGeneration(storyboard.id, {
+        isGenerating: false,
+        generationStatus: error instanceof Error ? error.message : "Failed",
+      })
+      toast({
+        title: "Hedra generation failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+    }
+  }
+
   const handleGenerateVideo = async (storyboard: Storyboard) => {
     const generation = storyboardGenerations.get(storyboard.id)
     if (!generation || !generation.model || !generation.prompt.trim()) {
@@ -1311,6 +1723,11 @@ export default function CinemaProductionPage() {
         description: "Please select a model and enter a prompt.",
         variant: "destructive"
       })
+      return
+    }
+
+    if (generation.model === "Hedra Character 3") {
+      await handleGenerateHedraCharacter3(storyboard)
       return
     }
 
@@ -3796,6 +4213,10 @@ export default function CinemaProductionPage() {
                                                      newModel === "Veo 3.1 (Frame-to-Frame)" || 
                                                      newModel === "Veo 3.1 Fast (Frame-to-Frame)"
                                     const isVeo = newModel === "Veo 3.1 (Frame-to-Frame)" || newModel === "Veo 3.1 Fast (Frame-to-Frame)"
+                                    const audioOptions =
+                                      newModel === "Hedra Character 3"
+                                        ? getAudioOptionsForStoryboard(storyboard.id)
+                                        : []
                                     
                                     updateStoryboardGeneration(storyboard.id, { 
                                       model: newModel,
@@ -3808,6 +4229,14 @@ export default function CinemaProductionPage() {
                                       endFramePreview: null,
                                       startFrameImageUrl: null,
                                       endFrameImageUrl: null,
+                                      savedAudioOptionId:
+                                        newModel === "Hedra Character 3"
+                                          ? audioOptions[0]?.id ?? null
+                                          : null,
+                                      prompt:
+                                        newModel === "Hedra Character 3" && !generation.prompt.trim()
+                                          ? "A person speaking to the camera with natural lip sync and subtle expressions"
+                                          : generation.prompt,
                                       // Set videoModelType and duration for Kling/Veo
                                       videoModelType: isKlingVeo ? (isVeo ? (newModel === "Veo 3.1 Fast (Frame-to-Frame)" ? 'VEO3_1FAST' : 'VEO3_1') : 'KLING2_1') : undefined,
                                       videoDuration: isKlingVeo ? (isVeo ? 8 : 5) : undefined,
@@ -3832,6 +4261,7 @@ export default function CinemaProductionPage() {
                                     <SelectItem value="Runway Act-Two">Runway Act-Two</SelectItem>
                                     <SelectItem value="Runway Gen-4 Aleph">Runway Gen-4 Aleph</SelectItem>
                                     <SelectItem value="Leonardo Motion 2.0">Leonardo Motion 2.0 (with Motion Control)</SelectItem>
+                                    <SelectItem value="Hedra Character 3">Hedra Character 3 (Lip-sync avatar)</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -3862,6 +4292,7 @@ export default function CinemaProductionPage() {
                                       <Select
                                         value={generation.duration}
                                         onValueChange={(value) => updateStoryboardGeneration(storyboard.id, { duration: value })}
+                                        disabled={generation.model === "Hedra Character 3"}
                                       >
                                         <SelectTrigger>
                                           <SelectValue />
@@ -3892,6 +4323,86 @@ export default function CinemaProductionPage() {
                                   </div>
 
                             {/* File Uploads Based on Model */}
+                            {fileRequirement === 'hedra-avatar' && (
+                              <div className="space-y-4 rounded-lg border p-3 bg-muted/20">
+                                <p className="text-xs text-muted-foreground">
+                                  Uses the storyboard portrait + saved or session audio. Lip-sync works best with a clear face in frame.
+                                </p>
+                                {storyboard.image_url ? (
+                                  <div className="relative">
+                                    <img
+                                      src={storyboard.image_url}
+                                      alt=""
+                                      className="w-full max-h-48 object-contain rounded-md border bg-background"
+                                    />
+                                    <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
+                                      Storyboard portrait
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-amber-600">
+                                    Add a storyboard image with a visible face before generating.
+                                  </p>
+                                )}
+                                <div>
+                                  <Label>Audio for lip-sync</Label>
+                                  {(() => {
+                                    const audioOptions = getAudioOptionsForStoryboard(storyboard.id)
+                                    if (audioOptions.length === 0) {
+                                      return (
+                                        <p className="text-sm text-muted-foreground mt-2">
+                                          No audio yet. Generate dialogue below (you can create multiple takes), save clips to storage, then pick one here for lip-sync.
+                                        </p>
+                                      )
+                                    }
+                                    return (
+                                      <div className="space-y-2">
+                                      <Select
+                                        value={generation.savedAudioOptionId || audioOptions[0]?.id || ""}
+                                        onValueChange={(value) =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            savedAudioOptionId: value,
+                                          })
+                                        }
+                                      >
+                                        <SelectTrigger className="mt-2">
+                                          <SelectValue placeholder="Select saved audio" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {audioOptions.map((option) => (
+                                            <SelectItem key={option.id} value={option.id}>
+                                              {option.label}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                      {(() => {
+                                        const selected = resolveSelectedAudioForStoryboard(
+                                          storyboard.id,
+                                          generation.savedAudioOptionId,
+                                        )
+                                        if (!selected) return null
+                                        return (
+                                          <audio
+                                            key={selected.id}
+                                            controls
+                                            src={selected.url}
+                                            className="w-full h-8"
+                                          />
+                                        )
+                                      })()}
+                                      </div>
+                                    )
+                                  })()}
+                                </div>
+                                {!hedraCharacter3ModelId && (
+                                  <p className="text-xs text-amber-600">
+                                    Hedra API key not detected. Set HEDRA_API_KEY on the server.
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
                             {fileRequirement === 'image' && (
                               <div>
                                 <Label>Image Source</Label>
@@ -4258,7 +4769,14 @@ export default function CinemaProductionPage() {
 
                             <Button
                               onClick={() => handleGenerateVideo(storyboard)}
-                              disabled={generation.isGenerating || !generation.prompt.trim()}
+                              disabled={
+                                generation.isGenerating ||
+                                !generation.prompt.trim() ||
+                                (generation.model === "Hedra Character 3" &&
+                                  (!storyboard.image_url ||
+                                    getAudioOptionsForStoryboard(storyboard.id).length === 0 ||
+                                    !hedraCharacter3ModelId))
+                              }
                               className="w-full"
                             >
                               {generation.isGenerating ? (
@@ -4269,7 +4787,9 @@ export default function CinemaProductionPage() {
                               ) : (
                                 <>
                                   <Play className="h-4 w-4 mr-2" />
-                                  Generate Video
+                                  {generation.model === "Hedra Character 3"
+                                    ? "Generate Character 3 Video"
+                                    : "Generate Video"}
                                 </>
                               )}
                             </Button>
@@ -4339,6 +4859,64 @@ export default function CinemaProductionPage() {
                               Dialogue (Text-to-Speech)
                             </Label>
                             <div className="space-y-2">
+                              {dialogueVoiceOptions.length > 0 ? (
+                                <Select
+                                  value={getDialogueVoiceId(storyboard) || undefined}
+                                  onValueChange={(value) => {
+                                    setDialogueVoiceByStoryboard((prev) => {
+                                      const next = new Map(prev)
+                                      next.set(storyboard.id, value)
+                                      return next
+                                    })
+                                  }}
+                                >
+                                  <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="Select character voice" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {dialogueVoiceOptions.map((voice) => (
+                                      <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                                        {voice.characterName
+                                          ? `${voice.characterName} — ${voice.name}`
+                                          : voice.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">
+                                  No character voices for this project.{" "}
+                                  <Link
+                                    href={
+                                      selectedProjectId
+                                        ? `/create-voice?projectId=${selectedProjectId}`
+                                        : "/create-voice"
+                                    }
+                                    className="text-primary hover:underline"
+                                  >
+                                    Create or import a voice
+                                  </Link>{" "}
+                                  and assign it on the Characters page.
+                                </p>
+                              )}
+                              {storyboard.character_id && (() => {
+                                const linkedCharacter = projectCharacters.find(
+                                  (c) => c.id === storyboard.character_id,
+                                )
+                                if (!linkedCharacter) return null
+                                if (linkedCharacter.elevenlabs_voice_name) {
+                                  return (
+                                    <p className="text-xs text-muted-foreground">
+                                      Shot character: {linkedCharacter.name} ({linkedCharacter.elevenlabs_voice_name})
+                                    </p>
+                                  )
+                                }
+                                return (
+                                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                                    Shot character {linkedCharacter.name} has no voice assigned yet.
+                                  </p>
+                                )
+                              })()}
                               <div className="flex gap-2">
                                 <Textarea
                                   value={storyboard.action || ''}
@@ -4378,13 +4956,22 @@ export default function CinemaProductionPage() {
                                   <Button
                                     onClick={() => {
                                       if (storyboard.action) {
-                                        handleGenerateDialogue(storyboard, storyboard.action)
+                                        handleGenerateDialogue(
+                                          storyboard,
+                                          storyboard.action,
+                                          getDialogueVoiceId(storyboard),
+                                        )
                                       }
                                     }}
-                                    disabled={!storyboard.action?.trim() || audioGenerations.get(`${storyboard.id}-dialogue`)?.isGenerating || !userApiKeys.elevenlabs_api_key}
+                                    disabled={
+                                      !storyboard.action?.trim() ||
+                                      !getDialogueVoiceId(storyboard) ||
+                                      audioGenerating.get(`${storyboard.id}-dialogue`) ||
+                                      !userApiKeys.elevenlabs_api_key
+                                    }
                                     size="sm"
                                   >
-                                    {audioGenerations.get(`${storyboard.id}-dialogue`)?.isGenerating ? (
+                                    {audioGenerating.get(`${storyboard.id}-dialogue`) ? (
                                       <>
                                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                         Generating...
@@ -4431,47 +5018,35 @@ export default function CinemaProductionPage() {
                                   )}
                                 </div>
                               </div>
-                              {audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl && (
-                                <div className="space-y-2">
-                                  <audio controls src={audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl || ''} className="w-full" />
-                                  <div className="flex gap-2">
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="flex-1"
-                                      onClick={() => {
-                                        const audioUrl = audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl
-                                        if (audioUrl) {
-                                          const link = document.createElement('a')
-                                          link.href = audioUrl
-                                          link.download = `dialogue_shot_${storyboard.shot_number}_${Date.now()}.mp3`
-                                          document.body.appendChild(link)
-                                          link.click()
-                                          document.body.removeChild(link)
-                                        }
-                                      }}
-                                    >
-                                      <Download className="h-4 w-4 mr-2" />
-                                      Download
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="flex-1"
-                                      onClick={async () => {
-                                        const audioUrl = audioGenerations.get(`${storyboard.id}-dialogue`)?.audioUrl
-                                        const prompt = storyboard.action || ''
-                                        if (audioUrl) {
-                                          await handleSaveAudio(audioUrl, prompt, 'dialogue', storyboard)
-                                        }
-                                      }}
-                                    >
-                                      <Save className="h-4 w-4 mr-2" />
-                                      Save to Storage
-                                    </Button>
-                                  </div>
-                                </div>
-                              )}
+                              <SessionAudioClipList
+                                clips={getSessionClipsForStoryboard(storyboard.id, "dialogue")}
+                                getSaveName={(clip) => getAudioSaveNameForClip(storyboard, clip)}
+                                onSaveNameChange={(clipId, name) => {
+                                  setAudioSaveNames((prev) => {
+                                    const next = new Map(prev)
+                                    next.set(audioSaveNameKey(storyboard.id, clipId), name)
+                                    return next
+                                  })
+                                }}
+                                onDownload={(clip) => {
+                                  const link = document.createElement("a")
+                                  link.href = clip.audioUrl
+                                  link.download = `${sanitizeAudioFileName(getAudioSaveNameForClip(storyboard, clip))}.mp3`
+                                  document.body.appendChild(link)
+                                  link.click()
+                                  document.body.removeChild(link)
+                                }}
+                                onSave={async (clip, saveName) => {
+                                  setSavingAudioClipId(clip.id)
+                                  try {
+                                    await handleSaveAudio(clip.audioUrl, clip.prompt, "dialogue", storyboard, saveName)
+                                  } finally {
+                                    setSavingAudioClipId(null)
+                                  }
+                                }}
+                                onRemove={(clipId) => removeSessionClip(storyboard.id, clipId)}
+                                savingClipId={savingAudioClipId}
+                              />
                             </div>
                           </div>
 
@@ -4483,13 +5058,28 @@ export default function CinemaProductionPage() {
                             </Label>
                             <SoundEffectGenerator
                               storyboard={storyboard}
+                              clips={getSessionClipsForStoryboard(storyboard.id, "sound-effect")}
                               onGenerate={handleGenerateSoundEffect}
-                              isGenerating={audioGenerations.get(`${storyboard.id}-sound-effect`)?.isGenerating || false}
-                              audioUrl={audioGenerations.get(`${storyboard.id}-sound-effect`)?.audioUrl || null}
+                              isGenerating={audioGenerating.get(`${storyboard.id}-sound-effect`) || false}
                               hasApiKey={!!userApiKeys.elevenlabs_api_key}
-                              onSaveAudio={async (audioUrl, prompt) => {
-                                await handleSaveAudio(audioUrl, prompt, 'sound-effect', storyboard)
+                              getSaveName={(clip) => getAudioSaveNameForClip(storyboard, clip)}
+                              onSaveNameChange={(clipId, name) => {
+                                setAudioSaveNames((prev) => {
+                                  const next = new Map(prev)
+                                  next.set(audioSaveNameKey(storyboard.id, clipId), name)
+                                  return next
+                                })
                               }}
+                              onRemoveClip={(clipId) => removeSessionClip(storyboard.id, clipId)}
+                              onSaveAudio={async (clip, saveName) => {
+                                setSavingAudioClipId(clip.id)
+                                try {
+                                  await handleSaveAudio(clip.audioUrl, clip.prompt, "sound-effect", storyboard, saveName)
+                                } finally {
+                                  setSavingAudioClipId(null)
+                                }
+                              }}
+                              savingClipId={savingAudioClipId}
                               userId={userId || undefined}
                               projectId={selectedProjectId || undefined}
                               sceneId={selectedSceneId || undefined}

@@ -72,6 +72,7 @@ const navigationCategories: NavCategory[] = [
     items: [
       { name: "Timeline", href: "/timeline", icon: Play },
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
+      { name: "Cinema Production", href: "/cinema-production", icon: Video },
       { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },
       { name: "Call Sheet", href: "/call-sheet", icon: FileText },
       { name: "Crew Sheet", href: "/crew-sheet", icon: Users },
@@ -98,6 +99,7 @@ const navigationCategories: NavCategory[] = [
     items: [
       { name: "AI Studio", href: "/ai-studio", icon: Bot },
       { name: "Runway ML", href: "/runwayml", icon: Video },
+      { name: "Hedra Testing", href: "/hedra-testing", icon: UserCircle },
       { name: "Prompts List", href: "/prompts-list", icon: Sparkles },
     ],
   },
