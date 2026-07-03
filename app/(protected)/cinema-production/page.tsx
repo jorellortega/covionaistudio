@@ -31,7 +31,8 @@ import {
   MoreVertical,
   Volume2,
   Music,
-  Zap
+  Zap,
+  Trash2
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
@@ -131,6 +132,12 @@ function suggestAudioSaveName(
 
 function sanitizeAudioFileName(name: string): string {
   return name.trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 50) || "audio"
+}
+
+function safeVideoPlay(video: HTMLVideoElement) {
+  void video.play().catch(() => {
+    /* aborted when switching clips or closing dialog */
+  })
 }
 
 interface SessionAudioClip {
@@ -396,6 +403,7 @@ export default function CinemaProductionPage() {
   const [videoSelectorOpen, setVideoSelectorOpen] = useState(false)
   const [selectedStoryboardForVideos, setSelectedStoryboardForVideos] = useState<string | null>(null)
   const [selectedVideoUrl, setSelectedVideoUrl] = useState<string | null>(null)
+  const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
   
   // Toggle between image and video in detail view (per storyboard)
   const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
@@ -1267,8 +1275,8 @@ export default function CinemaProductionPage() {
   }
 
   // Load videos for a storyboard
-  const loadStoryboardVideos = async (storyboardId: string) => {
-    if (!userId) return
+  const loadStoryboardVideos = async (storyboardId: string): Promise<StoryboardVideo[]> => {
+    if (!userId) return []
 
     try {
       const response = await fetch(`/api/storyboard-videos?storyboardId=${storyboardId}`)
@@ -1293,10 +1301,12 @@ export default function CinemaProductionPage() {
             })
           }
         }
+        return videos as StoryboardVideo[]
       }
     } catch (error) {
       console.error('Error loading storyboard videos:', error)
     }
+    return []
   }
 
   // Set video as default
@@ -1621,6 +1631,72 @@ export default function CinemaProductionPage() {
         description: error instanceof Error ? error.message : "Failed to remove default video.",
         variant: "destructive",
       })
+    }
+  }
+
+  const handleDeleteVideo = async (video: StoryboardVideo) => {
+    if (!userId) return
+
+    const label = video.video_name || "this video"
+    if (!window.confirm(`Delete "${label}"? This cannot be undone.`)) return
+
+    setDeletingVideoId(video.id)
+
+    try {
+      if (video.id === "generated-temp") {
+        updateStoryboardGeneration(video.storyboard_id, {
+          generatedVideoUrl: null,
+          generationStatus: null,
+        })
+        if (selectedVideoUrl === video.video_url) {
+          const remaining = (storyboardVideos.get(video.storyboard_id) || []).filter(
+            (v) => v.video_url !== video.video_url,
+          )
+          const next = remaining.find((v) => v.is_default) || remaining[0]
+          setSelectedVideoUrl(next?.video_url || null)
+        }
+        toast({
+          title: "Video removed",
+          description: "Unsaved generated video cleared from this session.",
+        })
+        return
+      }
+
+      const response = await fetch(`/api/storyboard-videos?videoId=${encodeURIComponent(video.id)}`, {
+        method: "DELETE",
+      })
+      const result = await response.json()
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to delete video")
+      }
+
+      const remaining = await loadStoryboardVideos(video.storyboard_id)
+      if (selectedVideoUrl === video.video_url) {
+        const next = remaining.find((v) => v.is_default) || remaining[0]
+        setSelectedVideoUrl(next?.video_url || null)
+      }
+
+      const generation = storyboardGenerations.get(video.storyboard_id)
+      if (generation?.generatedVideoUrl === video.video_url) {
+        const fallback = remaining.find((v) => v.is_default) || remaining[0]
+        updateStoryboardGeneration(video.storyboard_id, {
+          generatedVideoUrl: fallback?.video_url || null,
+        })
+      }
+
+      toast({
+        title: "Video deleted",
+        description: `"${label}" has been removed.`,
+      })
+    } catch (error) {
+      console.error("Error deleting video:", error)
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete video.",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingVideoId(null)
     }
   }
 
@@ -3523,10 +3599,11 @@ export default function CinemaProductionPage() {
                                     id={`video-${storyboard.id}`}
                                     data-storyboard-id={storyboard.id}
                                     src={generation.generatedVideoUrl!}
+                                    poster={storyboard.image_url || undefined}
                                     className="w-full h-full object-cover"
                                     muted
                                     playsInline
-                                    preload="auto"
+                                    preload="metadata"
                                     onEnded={(e) => {
                                       if (!isPlayingSequence) return // Only chain if sequence is playing
                                       
@@ -3865,8 +3942,9 @@ export default function CinemaProductionPage() {
                               <div className="relative">
                                 <video 
                                   src={displayVideoUrl} 
+                                  poster={storyboard.image_url || undefined}
                                   controls 
-                                  className="w-full rounded-md"
+                                  className="w-full rounded-md bg-muted"
                                   preload="metadata"
                                   playsInline
                                 />
@@ -4078,11 +4156,12 @@ export default function CinemaProductionPage() {
                                   <div className="space-y-2">
                                     <div className="relative">
                                       <video 
-                                        src={displayVideoUrl} 
+                                        src={displayVideoUrl}
+                                        poster={storyboard.image_url || undefined}
                                         controls 
                                         preload="metadata"
                                         playsInline
-                                        className="w-full rounded-md"
+                                        className="w-full rounded-md bg-muted aspect-video object-cover"
                                         key={displayVideoUrl}
                                       />
                                       {hasMultipleVideos && (
@@ -5148,15 +5227,17 @@ export default function CinemaProductionPage() {
                         <div className="relative">
                           <video
                             src={video.video_url}
-                            className="w-full aspect-video object-cover"
+                            poster={storyboard?.image_url || undefined}
+                            className="w-full aspect-video object-cover bg-muted"
                             muted
-                            onMouseEnter={(e) => e.currentTarget.play()}
+                            preload="metadata"
+                            onMouseEnter={(e) => safeVideoPlay(e.currentTarget)}
                             onMouseLeave={(e) => {
                               e.currentTarget.pause()
                               e.currentTarget.currentTime = 0
                             }}
                           />
-                          <div className="absolute top-2 right-2">
+                          <div className="absolute top-2 right-2 flex gap-1">
                             {video.id !== 'generated-temp' ? (
                               <Button
                                 size="sm"
@@ -5180,6 +5261,25 @@ export default function CinemaProductionPage() {
                               </Badge>
                             )}
                           </div>
+                          <div className="absolute bottom-2 right-2">
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="h-8 w-8 p-0"
+                              disabled={deletingVideoId === video.id}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void handleDeleteVideo(video)
+                              }}
+                              title="Delete video"
+                            >
+                              {deletingVideoId === video.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
                           {video.is_default && (
                             <div className="absolute top-2 left-2 bg-primary text-primary-foreground text-xs px-2 py-1 rounded">
                               Default
@@ -5197,15 +5297,14 @@ export default function CinemaProductionPage() {
                   <div className="mt-4">
                     <video
                       src={selectedVideoUrl}
+                      poster={storyboard?.image_url || undefined}
                       controls
-                      className="w-full rounded-md"
+                      className="w-full rounded-md bg-muted aspect-video object-cover"
                       key={selectedVideoUrl}
-                      autoPlay
+                      preload="metadata"
+                      playsInline
                       onLoadedData={(e) => {
-                        // Ensure video plays when loaded
-                        e.currentTarget.play().catch(() => {
-                          // Autoplay might be blocked, that's okay
-                        })
+                        safeVideoPlay(e.currentTarget)
                       }}
                     />
                   </div>
