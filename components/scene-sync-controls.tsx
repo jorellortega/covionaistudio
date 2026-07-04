@@ -14,10 +14,9 @@ import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2, RefreshCw, Undo2, Pencil, ArrowLeft, Sparkles } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { ShotListService } from "@/lib/shot-list-service"
-import { StoryboardsService } from "@/lib/storyboards-service"
 import {
   applySceneSync,
+  loadSceneSyncData,
   loadUndoStack,
   popUndoEntry,
   previewSceneSync,
@@ -28,6 +27,7 @@ import {
   type SyncPreview,
   type SyncPreviewItem,
   type SyncUndoEntry,
+  type SceneSyncData,
 } from "@/lib/scene-shot-sync"
 import type { AISyncPlan } from "@/lib/scene-sync-ai"
 
@@ -168,6 +168,7 @@ export function SceneSyncControls({
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
   const [aiPlan, setAiPlan] = useState<AISyncPlan | null>(null)
   const [usedAiMatching, setUsedAiMatching] = useState(false)
+  const [pendingSyncData, setPendingSyncData] = useState<SceneSyncData | null>(null)
 
   useEffect(() => {
     setUndoCount(loadUndoStack(sceneId).length)
@@ -189,15 +190,15 @@ export function SceneSyncControls({
     setSelectedKeys(new Set())
     setAiPlan(null)
     setUsedAiMatching(false)
+    setPendingSyncData(null)
   }
 
   const runPreview = useCallback(async (direction: SyncDirection) => {
     setLoading(true)
     try {
-      const [shots, storyboards] = await Promise.all([
-        ShotListService.getShotListsByScene(sceneId),
-        StoryboardsService.getStoryboardsByScene(sceneId),
-      ])
+      const syncData = await loadSceneSyncData(sceneId)
+      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount } = syncData
+      setPendingSyncData(syncData)
 
       let plan: AISyncPlan | null = null
       let aiUsed = false
@@ -213,13 +214,18 @@ export function SceneSyncControls({
           plan = aiData.plan as AISyncPlan
           aiUsed = true
         } else if (!aiRes.ok && !aiData.fallback) {
-          console.warn("[sync] AI unavailable:", aiData.error)
+          console.warn("[scene-sync] AI unavailable:", aiData.error)
         }
       } catch (aiError) {
-        console.warn("[sync] AI request failed, using shot-number matching:", aiError)
+        console.warn("[scene-sync] AI request failed, using deterministic matching:", aiError)
       }
 
-      const nextPreview = previewSceneSync(direction, shots, storyboards, plan)
+      const nextPreview = previewSceneSync(direction, shots, storyboards, plan, {
+        sceneId,
+        sceneShotCount,
+        linkedOrphanCount,
+        sceneShots,
+      })
       const keys = new Set([...nextPreview.creates, ...nextPreview.updates].map((item) => item.key))
       setPreview(nextPreview)
       setAiPlan(plan)
@@ -229,10 +235,26 @@ export function SceneSyncControls({
       setDialogMode("review")
       setPreviewOpen(true)
 
-      if (!aiUsed) {
+      console.log("[scene-sync] preview ready", {
+        direction,
+        sceneShotCount,
+        linkedOrphanCount,
+        storyboards: storyboards.length,
+        creates: nextPreview.creates.length,
+        updates: nextPreview.updates.length,
+        orphans: nextPreview.orphans.length,
+        debug: nextPreview.debug,
+      })
+
+      if (linkedOrphanCount > 0) {
         toast({
-          title: "Using basic matching",
-          description: "AI matching unavailable — matched by shot number and links. You can still review before applying.",
+          title: "Found hidden shot list rows",
+          description: `${linkedOrphanCount} shot${linkedOrphanCount === 1 ? "" : "s"} linked to storyboards but not on this scene — will re-attach.`,
+        })
+      } else if (!aiUsed) {
+        toast({
+          title: "Using scene-order matching",
+          description: "Matched by links, shot numbers, and scene order. Review before applying.",
         })
       }
     } catch (error) {
@@ -260,10 +282,23 @@ export function SceneSyncControls({
 
     setLoading(true)
     try {
-      const [shots, storyboards] = await Promise.all([
-        ShotListService.getShotListsByScene(sceneId),
-        StoryboardsService.getStoryboardsByScene(sceneId),
-      ])
+      if (!pendingSyncData) {
+        toast({
+          title: "Sync data expired",
+          description: "Close the dialog and run preview again before applying.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const { shots, storyboards, sceneShotCount } = pendingSyncData
+      console.log("[scene-sync] applying with cached data", {
+        storyboards: storyboards.length,
+        shots: shots.length,
+        sceneShotCount,
+        selected: selectedCount,
+      })
+
       const undoEntry = await applySceneSync({
         direction: pendingDirection,
         sceneId,
@@ -279,15 +314,45 @@ export function SceneSyncControls({
       setPreviewOpen(false)
       resetDialog()
       onSynced?.()
+
+      const created = undoEntry.createdShotIds.length
+      const updated = undoEntry.updatedShots.length
+      const reattached = undoEntry.updatedShots.filter(
+        (row) => row.before.scene_id !== sceneId
+      ).length
+      const expectedTotal =
+        pendingDirection === "storyboards-to-shotlist"
+          ? sceneShotCount + created + reattached
+          : undefined
+
+      console.log("[scene-sync] apply complete", {
+        created,
+        updated,
+        reattached,
+        expectedShotListTotal: expectedTotal,
+        createdShotIds: undoEntry.createdShotIds,
+      })
+
       toast({
         title: "Sync complete",
-        description: `Applied ${selectedCount} change${selectedCount === 1 ? "" : "s"}. Nothing was deleted.`,
+        description:
+          expectedTotal != null
+            ? `Updated ${updated}${created > 0 ? `, added ${created} new` : ""}${reattached > 0 ? `, re-attached ${reattached}` : ""}. Shot list should now show ${expectedTotal} entries — refresh the shot list page.`
+            : `Applied ${selectedCount} change${selectedCount === 1 ? "" : "s"}. Nothing was deleted.`,
       })
     } catch (error) {
       console.error("Sync apply failed:", error)
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message: unknown }).message)
+          : "Could not apply sync."
       toast({
         title: "Sync failed",
-        description: error instanceof Error ? error.message : "Could not apply sync.",
+        description: message.includes("network") || message.includes("connection")
+          ? `${message} — try Apply again without closing the preview (data is cached).`
+          : message,
         variant: "destructive",
       })
     } finally {
@@ -409,7 +474,19 @@ export function SceneSyncControls({
             <DialogDescription>
               {pendingDirection ? directionLabel(pendingDirection) : ""}
               {preview
-                ? ` — ${preview.shotListCount} shot list · ${preview.storyboardCount} storyboards`
+                ? ` — ${preview.shotListCount} visible on shot list · ${preview.storyboardCount} storyboards`
+                : ""}
+              {preview?.debug?.storyboardsOnScene != null &&
+              preview.debug.storyboardsOnScene !== preview.storyboardCount ? (
+                <span className="text-amber-600 dark:text-amber-400">
+                  {" "}
+                  · {preview.storyboardCount - preview.debug.storyboardsOnScene} storyboard
+                  {preview.storyboardCount - preview.debug.storyboardsOnScene === 1 ? "" : "s"} not
+                  on shot list yet
+                </span>
+              ) : null}
+              {preview?.debug?.linkedOrphanCount
+                ? ` · ${preview.debug.linkedOrphanCount} off-scene linked row${preview.debug.linkedOrphanCount === 1 ? "" : "s"}`
                 : ""}
             </DialogDescription>
           </DialogHeader>
@@ -420,12 +497,44 @@ export function SceneSyncControls({
                 <div className="flex items-start gap-2 rounded-md border border-violet-500/25 bg-violet-500/5 p-3">
                   <Sparkles className="h-4 w-4 text-violet-500 mt-0.5 flex-shrink-0" />
                   <div className="space-y-1">
-                    <p className="font-medium text-sm">AI-assisted matching</p>
+                    <p className="font-medium text-sm">AI field suggestions</p>
                     <p className="text-xs text-muted-foreground">
                       {preview.aiSummary ||
-                        "Shots were matched by dialogue, action, and description — not just shot numbers."}
+                        "Pairing uses links, shot numbers, and scene order. AI only suggests dialogue and description text."}
                     </p>
                   </div>
+                </div>
+              ) : null}
+              {preview.debug ? (
+                <details className="rounded-md border bg-muted/30 p-2 text-xs">
+                  <summary className="cursor-pointer font-medium text-muted-foreground">
+                    Sync debug (console: [scene-sync])
+                  </summary>
+                  <pre className="mt-2 overflow-x-auto whitespace-pre-wrap text-[10px] leading-relaxed">
+                    {JSON.stringify(preview.debug, null, 2)}
+                  </pre>
+                </details>
+              ) : null}
+              {preview.direction === "storyboards-to-shotlist" &&
+              preview.creates.length > 0 ? (
+                <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3 text-xs">
+                  <p className="font-medium text-green-800 dark:text-green-200">
+                    {preview.creates.length} shot list{" "}
+                    {preview.creates.length === 1 ? "entry" : "entries"} will be added to this scene
+                  </p>
+                </div>
+              ) : null}
+              {preview.direction === "storyboards-to-shotlist" &&
+              preview.storyboardCount > preview.shotListCount &&
+              preview.creates.length === 0 ? (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-100">
+                  <p className="font-medium">Missing shot list row</p>
+                  <p className="mt-1 text-muted-foreground">
+                    {(() => {
+                      const n = preview.storyboardCount - preview.shotListCount
+                      return `${n} storyboard${n === 1 ? "" : "s"} ${n === 1 ? "has" : "have"} no shot list entry. Apply will force-create any still missing after sync.`
+                    })()}
+                  </p>
                 </div>
               ) : null}
               <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-1">
@@ -455,6 +564,28 @@ export function SceneSyncControls({
                         </li>
                       ) : null}
                     </ul>
+                    {preview.direction === "storyboards-to-shotlist" &&
+                    preview.storyboardCount !== preview.shotListCount ? (
+                      <p className="text-xs text-muted-foreground pt-1">
+                        Shot list: {preview.shotListCount} →{" "}
+                        <strong className="text-foreground">
+                          {preview.shotListCount +
+                            preview.creates.length +
+                            (preview.debug?.linkedOrphanCount ?? 0)}
+                        </strong>{" "}
+                        entries ({preview.storyboardCount} storyboards)
+                      </p>
+                    ) : null}
+                    {preview.direction === "shotlist-to-storyboards" &&
+                    preview.shotListCount !== preview.storyboardCount ? (
+                      <p className="text-xs text-muted-foreground pt-1">
+                        Storyboards: {preview.storyboardCount} →{" "}
+                        <strong className="text-foreground">
+                          {preview.storyboardCount + preview.creates.length}
+                        </strong>{" "}
+                        entries ({preview.shotListCount} shot list rows)
+                      </p>
+                    ) : null}
                   </>
                 )}
               </div>

@@ -146,6 +146,31 @@ export class ShotListService {
     }
   }
 
+  /** Shots linked to any of these storyboards (for sync — catches rows missing scene_id) */
+  static async getShotListsByStoryboardIds(storyboardIds: string[]): Promise<ShotList[]> {
+    if (storyboardIds.length === 0) return []
+    try {
+      const user = await this.ensureAuthenticated()
+      const { data, error } = await getSupabaseClient()
+        .from('shot_lists')
+        .select('*')
+        .in('storyboard_id', storyboardIds)
+        .eq('user_id', user.id)
+        .order('sequence_order', { ascending: true })
+        .order('shot_number', { ascending: true })
+
+      if (error) {
+        console.error('Error fetching shot lists by storyboard ids:', error)
+        throw error
+      }
+
+      return data || []
+    } catch (error) {
+      console.error('Error in getShotListsByStoryboardIds:', error)
+      throw error
+    }
+  }
+
   // Create a new shot list item
   static async createShotList(shotListData: CreateShotListData): Promise<ShotList> {
     try {

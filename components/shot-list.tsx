@@ -95,8 +95,14 @@ export function ShotListComponent({
         loadedShots = await ShotListService.getShotListsByStoryboard(storyboardId)
       }
 
-      setShots(loadedShots)
-      onShotsChange?.(loadedShots)
+      const sortedShots = loadedShots.sort((a, b) => {
+        const orderA = Number(a.sequence_order ?? a.shot_number)
+        const orderB = Number(b.sequence_order ?? b.shot_number)
+        if (orderA !== orderB) return orderA - orderB
+        return Number(a.shot_number) - Number(b.shot_number)
+      })
+      setShots(sortedShots)
+      onShotsChange?.(sortedShots)
     } catch (error) {
       console.error('Error loading shot lists:', error)
       toast({
