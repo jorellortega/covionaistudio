@@ -154,25 +154,12 @@ export class ShotListService {
     linkedOrphanCount: number
     storyboardsCovered: number
   }> {
-    const debug = await this.getShotListSceneDebug(sceneId)
-    return {
-      shots: debug.displayShots,
-      sceneRowCount: debug.sceneRowCount,
-      linkedOrphanCount: debug.linkedOrphanCount,
-      storyboardsCovered: debug.storyboardsLinkedOnScene,
-    }
-  }
-
-  /** Full diagnostic snapshot for shot list vs storyboard mismatch debugging */
-  static async getShotListSceneDebug(sceneId: string) {
     const { StoryboardsService } = await import('./storyboards-service')
     const sceneShots = await this.getShotListsByScene(sceneId)
     const storyboards = await StoryboardsService.getStoryboardsBySceneOrdered(sceneId)
     const sbIds = storyboards.map((sb) => sb.id)
     const linked =
       sbIds.length > 0 ? await this.getShotListsByStoryboardIds(sbIds) : []
-
-    const sortRows = (rows: ShotList[]) => sortShotListRows(rows)
 
     const merged = new Map<string, ShotList>()
     for (const row of sceneShots) merged.set(row.id, row)
@@ -186,129 +173,18 @@ export class ShotListService {
       }
     }
 
-    const displayShots = sortRows([...merged.values()])
-    const sceneShotIds = new Set(sceneShots.map((r) => r.id))
-
-    const rows = displayShots.map((row) => ({
-      id: row.id,
-      shot_number: row.shot_number,
-      sequence_order: row.sequence_order ?? null,
-      storyboard_id: row.storyboard_id ?? null,
-      scene_id: row.scene_id ?? null,
-      description: row.description?.slice(0, 80) ?? null,
-      source: sceneShotIds.has(row.id)
-        ? ('scene_query' as const)
-        : ('linked_orphan' as const),
-      onScene: row.scene_id === sceneId,
-    }))
-
-    const linkedByStoryboard = new Map<string, ShotList>()
-    for (const row of linked) {
-      if (row.storyboard_id) linkedByStoryboard.set(row.storyboard_id, row)
-    }
-
-    const onSceneByStoryboard = new Map<string, ShotList>()
-    for (const row of sceneShots) {
-      if (row.storyboard_id) onSceneByStoryboard.set(row.storyboard_id, row)
-    }
-
-    const storyboardRows = storyboards.map((sb) => {
-      const onScene = onSceneByStoryboard.get(sb.id)
-      const linkedRow = linkedByStoryboard.get(sb.id)
-      return {
-        id: sb.id,
-        shot_number: sb.shot_number,
-        title: sb.title?.slice(0, 60) ?? null,
-        linkedShotId: linkedRow?.id ?? onScene?.id ?? null,
-        linkedShotSceneId: linkedRow?.scene_id ?? onScene?.scene_id ?? null,
-        linkedShotNumber: linkedRow?.shot_number ?? onScene?.shot_number ?? null,
-        linkedOnScene: Boolean(onScene),
-        inDisplay: displayShots.some(
-          (r) => r.storyboard_id === sb.id || r.id === onScene?.id
-        ),
-      }
-    })
+    const displayShots = sortShotListRows([...merged.values()])
 
     const covered = new Set<string>()
     for (const row of sceneShots) {
       if (row.storyboard_id) covered.add(row.storyboard_id)
     }
 
-    const missingStoryboards = storyboardRows
-      .filter((sb) => !covered.has(sb.id))
-      .map((sb) => ({
-        id: sb.id,
-        shot_number: sb.shot_number,
-        title: sb.title,
-      }))
-
-    const storyboardToShots = new Map<string, string[]>()
-    for (const row of sceneShots) {
-      if (!row.storyboard_id) continue
-      const list = storyboardToShots.get(row.storyboard_id) ?? []
-      list.push(row.id)
-      storyboardToShots.set(row.storyboard_id, list)
-    }
-    const duplicateStoryboardLinks = [...storyboardToShots.entries()]
-      .filter(([, ids]) => ids.length > 1)
-      .map(([storyboard_id, shotIds]) => ({ storyboard_id, shotIds }))
-
-    const unlinkedSceneRows = sceneShots
-      .filter((r) => !r.storyboard_id)
-      .map((r) => ({
-        id: r.id,
-        shot_number: r.shot_number,
-        description: r.description?.slice(0, 60) ?? null,
-      }))
-
-    const sb11 = storyboards.find((sb) => Number(sb.shot_number) === 11)
-    const shot11DisplayIndex = sb11
-      ? displayShots.findIndex((r) => r.storyboard_id === sb11.id)
-      : -1
-    const orderMismatches = sceneShots
-      .filter((r) => {
-        const sn = Number(r.shot_number)
-        const so = Number(r.sequence_order ?? sn)
-        return so !== sn && Number.isInteger(so)
-      })
-      .map((r) => ({
-        id: r.id,
-        shot_number: r.shot_number,
-        sequence_order: r.sequence_order ?? null,
-      }))
-
-    const shot11Debug = sb11
-      ? {
-          storyboard: storyboardRows.find((s) => s.id === sb11.id),
-          sceneRow: rows.find(
-            (r) => r.storyboard_id === sb11.id && r.onScene
-          ),
-          linkedRow: rows.find(
-            (r) => r.storyboard_id === sb11.id && !r.onScene
-          ),
-          displayRow: rows.find((r) => r.storyboard_id === sb11.id),
-          inUi: displayShots.some((r) => r.storyboard_id === sb11.id),
-          displayIndex: shot11DisplayIndex >= 0 ? shot11DisplayIndex + 1 : null,
-        }
-      : undefined
-
     return {
-      sceneId,
-      loadedAt: new Date().toISOString(),
+      shots: displayShots,
       sceneRowCount: sceneShots.length,
-      displayRowCount: displayShots.length,
-      storyboardCount: storyboards.length,
-      storyboardsLinkedOnScene: covered.size,
       linkedOrphanCount,
-      displayShots,
-      rows,
-      storyboards: storyboardRows,
-      missingStoryboards,
-      duplicateStoryboardLinks,
-      unlinkedSceneRows,
-      shot11: shot11Debug,
-      orderMismatches,
-      displayOrder: rows.map((r) => r.shot_number),
+      storyboardsCovered: covered.size,
     }
   }
 

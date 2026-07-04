@@ -42,7 +42,6 @@ import { useToast } from "@/hooks/use-toast"
 import { ShotListService, type ShotList, type CreateShotListData } from "@/lib/shot-list-service"
 import { sortShotListRows } from "@/lib/shot-list-order"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
-import { ShotListSceneDebug } from "@/components/shot-list-scene-debug"
 
 interface ShotListProps {
   sceneId?: string
@@ -273,9 +272,6 @@ export function ShotListComponent({
     return (
       <Card>
         <CardContent className="py-8">
-          {sceneId ? (
-            <ShotListSceneDebug sceneId={sceneId} uiRenderCount={0} refreshKey={refreshKey} />
-          ) : null}
           <div className="flex items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
@@ -286,13 +282,6 @@ export function ShotListComponent({
 
   return (
     <div className="space-y-4">
-      {sceneId ? (
-        <ShotListSceneDebug
-          sceneId={sceneId}
-          uiRenderCount={shots.length}
-          refreshKey={refreshKey}
-        />
-      ) : null}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Shot List</h3>
