@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Loader2, RefreshCw, Undo2, Pencil, ArrowLeft } from "lucide-react"
+import { Loader2, RefreshCw, Undo2, Pencil, ArrowLeft, Sparkles } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ShotListService } from "@/lib/shot-list-service"
 import { StoryboardsService } from "@/lib/storyboards-service"
@@ -29,6 +29,7 @@ import {
   type SyncPreviewItem,
   type SyncUndoEntry,
 } from "@/lib/scene-shot-sync"
+import type { AISyncPlan } from "@/lib/scene-sync-ai"
 
 type SceneSyncControlsProps = {
   sceneId: string
@@ -165,6 +166,8 @@ export function SceneSyncControls({
   const [preview, setPreview] = useState<SyncPreview | null>(null)
   const [pendingDirection, setPendingDirection] = useState<SyncDirection | null>(null)
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [aiPlan, setAiPlan] = useState<AISyncPlan | null>(null)
+  const [usedAiMatching, setUsedAiMatching] = useState(false)
 
   useEffect(() => {
     setUndoCount(loadUndoStack(sceneId).length)
@@ -184,6 +187,8 @@ export function SceneSyncControls({
     setPreview(null)
     setPendingDirection(null)
     setSelectedKeys(new Set())
+    setAiPlan(null)
+    setUsedAiMatching(false)
   }
 
   const runPreview = useCallback(async (direction: SyncDirection) => {
@@ -193,13 +198,43 @@ export function SceneSyncControls({
         ShotListService.getShotListsByScene(sceneId),
         StoryboardsService.getStoryboardsByScene(sceneId),
       ])
-      const nextPreview = previewSceneSync(direction, shots, storyboards)
+
+      let plan: AISyncPlan | null = null
+      let aiUsed = false
+
+      try {
+        const aiRes = await fetch("/api/scene-sync/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ direction, shots, storyboards }),
+        })
+        const aiData = await aiRes.json()
+        if (aiRes.ok && aiData.plan?.operations?.length) {
+          plan = aiData.plan as AISyncPlan
+          aiUsed = true
+        } else if (!aiRes.ok && !aiData.fallback) {
+          console.warn("[sync] AI unavailable:", aiData.error)
+        }
+      } catch (aiError) {
+        console.warn("[sync] AI request failed, using shot-number matching:", aiError)
+      }
+
+      const nextPreview = previewSceneSync(direction, shots, storyboards, plan)
       const keys = new Set([...nextPreview.creates, ...nextPreview.updates].map((item) => item.key))
       setPreview(nextPreview)
+      setAiPlan(plan)
+      setUsedAiMatching(aiUsed)
       setSelectedKeys(keys)
       setPendingDirection(direction)
       setDialogMode("review")
       setPreviewOpen(true)
+
+      if (!aiUsed) {
+        toast({
+          title: "Using basic matching",
+          description: "AI matching unavailable — matched by shot number and links. You can still review before applying.",
+        })
+      }
     } catch (error) {
       console.error("Sync preview failed:", error)
       toast({
@@ -237,6 +272,7 @@ export function SceneSyncControls({
         shots,
         storyboards,
         includeKeys: selectedKeys,
+        aiPlan,
       })
       const stack = pushUndoEntry(sceneId, undoEntry)
       setUndoCount(stack.length)
@@ -380,6 +416,18 @@ export function SceneSyncControls({
 
           {preview ? (
             <div className="space-y-4 text-sm">
+              {usedAiMatching ? (
+                <div className="flex items-start gap-2 rounded-md border border-violet-500/25 bg-violet-500/5 p-3">
+                  <Sparkles className="h-4 w-4 text-violet-500 mt-0.5 flex-shrink-0" />
+                  <div className="space-y-1">
+                    <p className="font-medium text-sm">AI-assisted matching</p>
+                    <p className="text-xs text-muted-foreground">
+                      {preview.aiSummary ||
+                        "Shots were matched by dialogue, action, and description — not just shot numbers."}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
               <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-1">
                 {nothingToApply ? (
                   <p className="font-medium">Already in sync — nothing would change.</p>

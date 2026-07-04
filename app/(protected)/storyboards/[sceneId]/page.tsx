@@ -56,6 +56,50 @@ const aiModels = {
   image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
+/** Pull dialogue / action lines out of a screenplay-formatted script selection */
+function parseScriptSelection(text: string): { dialogue?: string; action?: string } {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return {}
+
+  const isSceneHeading = (line: string) => /^(INT\.|EXT\.|INT\/EXT\.|I\/E\.)/i.test(line)
+  const isCharacterCue = (line: string) =>
+    !isSceneHeading(line) &&
+    line.length <= 40 &&
+    /^[A-Z][A-Z0-9 '.\-()]+$/.test(line)
+
+  const dialogueLines: string[] = []
+  const actionLines: string[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+    if (isCharacterCue(line)) {
+      i += 1
+      while (i < lines.length && !isCharacterCue(lines[i]) && !isSceneHeading(lines[i])) {
+        const content = lines[i]
+        if (content.startsWith('(') && content.endsWith(')')) {
+          actionLines.push(content.slice(1, -1).trim())
+        } else {
+          dialogueLines.push(content)
+        }
+        i += 1
+      }
+      continue
+    }
+    if (line.startsWith('(') && line.endsWith(')')) {
+      actionLines.push(line.slice(1, -1).trim())
+    } else {
+      actionLines.push(line)
+    }
+    i += 1
+  }
+
+  return {
+    dialogue: dialogueLines.length > 0 ? dialogueLines.join('\n') : undefined,
+    action: actionLines.length > 0 ? actionLines.join('\n') : undefined,
+  }
+}
+
 export default function SceneStoryboardsPage() {
   
   const params = useParams()
@@ -1642,17 +1686,21 @@ export default function SceneStoryboardsPage() {
       const nextShotNumber = getNextShotNumber()
       console.log("🎬 Next available shot number:", nextShotNumber)
       console.log("🎬 Current storyboards in scene:", storyboards.map(sb => ({ id: sb.id, shot_number: sb.shot_number, title: sb.title })))
+
+      const { dialogue: parsedDialogue, action: parsedAction } = parseScriptSelection(textToUse)
+      const previewText = parsedDialogue || parsedAction || textToUse
       
       // Prepare the storyboard data
       const storyboardData = {
-        title: `Shot ${nextShotNumber}: ${textToUse.substring(0, 30)}${textToUse.length > 30 ? '...' : ''}`,
-        description: textToUse,
+        title: `Shot ${nextShotNumber}: ${previewText.substring(0, 30)}${previewText.length > 30 ? '...' : ''}`,
+        description: parsedAction || parsedDialogue || textToUse,
         scene_number: 1, // Default scene number (legacy field, now using scene_id)
         shot_number: nextShotNumber,
         shot_type: shotDetails.shotType,
         camera_angle: shotDetails.cameraAngle,
         movement: shotDetails.movement,
-        action: textToUse,
+        dialogue: parsedDialogue,
+        action: parsedAction || (!parsedDialogue ? textToUse : undefined),
         visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
         character_id: shotDetails.characterId || null,
@@ -2056,7 +2104,9 @@ export default function SceneStoryboardsPage() {
 
   const filteredStoryboards = storyboards.filter(storyboard => {
     const matchesSearch = storyboard.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         storyboard.description.toLowerCase().includes(searchTerm.toLowerCase())
+                         storyboard.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (storyboard.dialogue?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false) ||
+                         (storyboard.action?.toLowerCase().includes(searchTerm.toLowerCase()) ?? false)
     const matchesFilter = filterStatus === "all" || 
                          (filterStatus === "ai" && storyboard.ai_generated) ||
                          (filterStatus === "manual" && !storyboard.ai_generated) ||
@@ -2157,10 +2207,14 @@ export default function SceneStoryboardsPage() {
         }`}
         title={segment.isUsed ? `Shot ${segment.shotNumber}` : 'Available for new shot'}
         onClick={() => {
-          if (segment.isUsed) {
+          if (segment.isUsed && segment.shotNumber != null) {
+            const sb = storyboards.find((s) => s.shot_number === segment.shotNumber)
+            const dialogue =
+              sb?.dialogue?.trim() ||
+              (sb?.description ? parseScriptSelection(sb.description).dialogue : undefined)
             toast({
-              title: `Shot ${segment.shotNumber}`,
-              description: "This text has already been used for a shot",
+              title: `Shot ${segment.shotNumber}${sb?.title ? `: ${sb.title}` : ''}`,
+              description: dialogue || sb?.description?.substring(0, 200) || "This text has already been used for a shot",
             })
           }
         }}
@@ -3236,11 +3290,19 @@ export default function SceneStoryboardsPage() {
                 </span>
               </div>
               <div className="flex flex-wrap gap-2">
-                {filteredStoryboards.map((storyboard, index) => (
-                  <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border flex-shrink-0">
+                {filteredStoryboards.map((storyboard, index) => {
+                  const hasDialogueInShot =
+                    Boolean(storyboard.dialogue?.trim()) ||
+                    Boolean(parseScriptSelection(storyboard.description || '').dialogue)
+                  return (
+                  <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border flex-shrink-0 inline-flex items-center gap-1">
                     {index + 1}. Shot {storyboard.shot_number || 1}
+                    {hasDialogueInShot ? (
+                      <MessageSquare className="h-3 w-3 text-amber-500" aria-label="Has dialogue" />
+                    ) : null}
                   </span>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -4098,7 +4160,14 @@ export default function SceneStoryboardsPage() {
 
         {/* Storyboards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-          {filteredStoryboards.map((storyboard, index) => (
+          {filteredStoryboards.map((storyboard, index) => {
+            const dialogueText =
+              storyboard.dialogue?.trim() ||
+              parseScriptSelection(storyboard.description || '').dialogue ||
+              ''
+            const hasDialogue = dialogueText.length > 0
+
+            return (
             <Card key={storyboard.id} className="cinema-card hover:neon-glow transition-all duration-300">
               <CardHeader className="p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-2">
@@ -4259,9 +4328,33 @@ export default function SceneStoryboardsPage() {
                 )}
                 
                 <div className="space-y-2">
-                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 break-words">
-                    {storyboard.description}
-                  </p>
+                  {storyboard.description?.trim() ? (
+                    <p className="text-xs sm:text-sm text-muted-foreground line-clamp-3 break-words whitespace-pre-wrap">
+                      {storyboard.description}
+                    </p>
+                  ) : null}
+
+                  {hasDialogue ? (
+                    <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2.5">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <MessageSquare className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                        <span className="text-xs font-medium text-amber-700 dark:text-amber-300">Dialogue</span>
+                      </div>
+                      <p className="text-xs sm:text-sm italic text-foreground whitespace-pre-wrap line-clamp-5">
+                        {dialogueText}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {storyboard.action?.trim() &&
+                  storyboard.action.trim() !== storyboard.description?.trim() ? (
+                    <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Action</p>
+                      <p className="text-xs sm:text-sm text-foreground whitespace-pre-wrap line-clamp-4">
+                        {storyboard.action}
+                      </p>
+                    </div>
+                  ) : null}
                   
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline" className="text-xs flex-shrink-0">
@@ -4270,6 +4363,12 @@ export default function SceneStoryboardsPage() {
                     <Badge variant="outline" className="text-xs flex-shrink-0">
                       {storyboard.camera_angle}
                     </Badge>
+                    {hasDialogue ? (
+                      <Badge className="text-xs bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30 flex-shrink-0">
+                        <MessageSquare className="h-3 w-3 sm:mr-1" />
+                        <span className="hidden sm:inline">Dialogue</span>
+                      </Badge>
+                    ) : null}
                     {storyboard.image_url && (
                       <Badge className="text-xs bg-green-500/20 text-green-500 border-green-500/30 flex-shrink-0">
                         <ImageIcon className="h-3 w-3 sm:mr-1" />
@@ -4421,7 +4520,8 @@ export default function SceneStoryboardsPage() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            )
+          })}
         </div>
 
         {filteredStoryboards.length === 0 && !isLoadingStoryboards && (

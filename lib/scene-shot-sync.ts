@@ -2,6 +2,11 @@ import type { ShotList, CreateShotListData } from './shot-list-service'
 import type { Storyboard, CreateStoryboardData } from './storyboards-service'
 import { ShotListService } from './shot-list-service'
 import { StoryboardsService } from './storyboards-service'
+import type { AISyncPlan } from './scene-sync-ai'
+import {
+  normalizeAIShotListFields,
+  normalizeAIStoryboardFields,
+} from './scene-sync-ai'
 
 export type SyncDirection = 'storyboards-to-shotlist' | 'shotlist-to-storyboards'
 
@@ -29,6 +34,8 @@ export type SyncPreview = {
   direction: SyncDirection
   shotListCount: number
   storyboardCount: number
+  aiAssisted?: boolean
+  aiSummary?: string
   creates: SyncPreviewItem[]
   updates: SyncPreviewItem[]
   unchanged: SyncPreviewItem[]
@@ -46,39 +53,18 @@ export type SyncUndoEntry = {
 type MatchedPair = {
   shot?: ShotList
   storyboard?: Storyboard
-  matchType: 'link' | 'shot_number' | 'shot_only' | 'storyboard_only'
+  matchType: 'link' | 'shot_number' | 'ai' | 'shot_only' | 'storyboard_only'
+  aiReason?: string
+  aiConfidence?: number
+  shotUpdates?: Partial<CreateShotListData>
+  storyboardUpdates?: Partial<CreateStoryboardData>
 }
 
-const SHOT_TYPE_TO_STORYBOARD: Record<string, string> = {
-  'two-shot': 'medium',
-  'over-the-shoulder': 'medium',
-  'point-of-view': 'wide',
-  establishing: 'wide',
-  insert: 'close',
-  cutaway: 'close',
-}
-
-const STORYBOARD_SHOT_TYPES = new Set(['wide', 'medium', 'close', 'extreme-close'])
-const STORYBOARD_ANGLES = new Set(['eye-level', 'high-angle', 'low-angle', 'dutch-angle'])
-const STORYBOARD_MOVEMENTS = new Set(['static', 'panning', 'tilting', 'tracking', 'zooming'])
-
-export function mapShotTypeToStoryboard(shotType: string): string {
-  if (STORYBOARD_SHOT_TYPES.has(shotType)) return shotType
-  return SHOT_TYPE_TO_STORYBOARD[shotType] ?? 'wide'
-}
-
-export function mapCameraAngleToStoryboard(angle: string): string {
-  if (STORYBOARD_ANGLES.has(angle)) return angle
-  if (angle === 'bird-eye') return 'high-angle'
-  if (angle === 'worm-eye') return 'low-angle'
-  return 'eye-level'
-}
-
-export function mapMovementToStoryboard(movement: string): string {
-  if (STORYBOARD_MOVEMENTS.has(movement)) return movement
-  if (movement === 'dolly') return 'tracking'
-  return 'static'
-}
+import {
+  mapCameraAngleToStoryboard,
+  mapMovementToStoryboard,
+  mapShotTypeToStoryboard,
+} from './scene-shot-field-map'
 
 function matchPairs(shots: ShotList[], storyboards: Storyboard[]): MatchedPair[] {
   const storyboardById = new Map(storyboards.map((sb) => [sb.id, sb]))
@@ -120,6 +106,99 @@ function matchPairs(shots: ShotList[], storyboards: Storyboard[]): MatchedPair[]
   }
 
   return pairs
+}
+
+function resolveFromAIPlan(
+  direction: SyncDirection,
+  shots: ShotList[],
+  storyboards: Storyboard[],
+  plan: AISyncPlan
+): MatchedPair[] {
+  const shotById = new Map(shots.map((s) => [s.id, s]))
+  const sbById = new Map(storyboards.map((sb) => [sb.id, sb]))
+  const usedShots = new Set<string>()
+  const usedSbs = new Set<string>()
+  const pairs: MatchedPair[] = []
+
+  for (const op of plan.operations) {
+    if (op.type === 'update') {
+      const shot = shotById.get(op.shotId)
+      const storyboard = sbById.get(op.storyboardId)
+      if (!shot || !storyboard) continue
+      usedShots.add(shot.id)
+      usedSbs.add(storyboard.id)
+      pairs.push({
+        shot,
+        storyboard,
+        matchType: 'ai',
+        aiReason: op.reason,
+        aiConfidence: op.confidence,
+        shotUpdates:
+          direction === 'storyboards-to-shotlist'
+            ? normalizeAIShotListFields(op.fields)
+            : undefined,
+        storyboardUpdates:
+          direction === 'shotlist-to-storyboards'
+            ? normalizeAIStoryboardFields(op.fields)
+            : undefined,
+      })
+    } else if (op.type === 'create_shot') {
+      const storyboard = sbById.get(op.storyboardId)
+      if (!storyboard) continue
+      usedSbs.add(storyboard.id)
+      pairs.push({
+        storyboard,
+        matchType: 'storyboard_only',
+        aiReason: op.reason,
+        aiConfidence: op.confidence,
+        shotUpdates: normalizeAIShotListFields(op.fields),
+      })
+    } else if (op.type === 'create_storyboard') {
+      const shot = shotById.get(op.shotId)
+      if (!shot) continue
+      usedShots.add(shot.id)
+      pairs.push({
+        shot,
+        matchType: 'shot_only',
+        aiReason: op.reason,
+        aiConfidence: op.confidence,
+        storyboardUpdates: normalizeAIStoryboardFields(op.fields),
+      })
+    }
+  }
+
+  for (const shot of shots) {
+    if (!usedShots.has(shot.id)) {
+      pairs.push({ shot, matchType: 'shot_only' })
+    }
+  }
+  for (const storyboard of storyboards) {
+    if (!usedSbs.has(storyboard.id)) {
+      pairs.push({ storyboard, matchType: 'storyboard_only' })
+    }
+  }
+
+  return pairs
+}
+
+function resolveSyncPairs(
+  shots: ShotList[],
+  storyboards: Storyboard[],
+  direction: SyncDirection,
+  aiPlan?: AISyncPlan | null
+): MatchedPair[] {
+  if (aiPlan?.operations?.length) {
+    return resolveFromAIPlan(direction, shots, storyboards, aiPlan)
+  }
+  return matchPairs(shots, storyboards)
+}
+
+function matchDetail(pair: MatchedPair, fallback: string): string {
+  if (pair.aiReason) {
+    const pct = pair.aiConfidence != null ? ` (${Math.round(pair.aiConfidence * 100)}%)` : ''
+    return `AI match${pct}: ${pair.aiReason}`
+  }
+  return fallback
 }
 
 function displayValue(value: unknown): string {
@@ -205,16 +284,57 @@ function pairCreateFromShotKey(shot: ShotList): string {
   return `create-shot:${shot.id}`
 }
 
+function storyboardToShotUpdates(
+  storyboard: Storyboard,
+  overrides?: Partial<CreateShotListData>
+): Partial<CreateShotListData> {
+  return {
+    shot_number: storyboard.shot_number,
+    shot_type: storyboard.shot_type,
+    camera_angle: storyboard.camera_angle,
+    movement: storyboard.movement,
+    description: storyboard.description || storyboard.title,
+    action: storyboard.action ?? undefined,
+    dialogue: storyboard.dialogue ?? undefined,
+    visual_notes: storyboard.visual_notes ?? undefined,
+    sequence_order: storyboard.sequence_order ?? storyboard.shot_number,
+    storyboard_id: storyboard.id,
+    ...overrides,
+  }
+}
+
+function shotToStoryboardUpdates(
+  shot: ShotList,
+  overrides?: Partial<CreateStoryboardData>
+): Partial<CreateStoryboardData> {
+  const base: Partial<CreateStoryboardData> = {
+    title: shot.description || `Shot ${shot.shot_number}`,
+    description: shot.description || shot.action || '',
+    shot_number: shot.shot_number,
+    shot_type: mapShotTypeToStoryboard(shot.shot_type),
+    camera_angle: mapCameraAngleToStoryboard(shot.camera_angle),
+    movement: mapMovementToStoryboard(shot.movement),
+    dialogue: shot.dialogue ?? undefined,
+    action: shot.action ?? undefined,
+    visual_notes: shot.visual_notes ?? undefined,
+    sequence_order: shot.sequence_order ?? shot.shot_number,
+  }
+  return { ...base, ...overrides }
+}
+
 export function previewSceneSync(
   direction: SyncDirection,
   shots: ShotList[],
-  storyboards: Storyboard[]
+  storyboards: Storyboard[],
+  aiPlan?: AISyncPlan | null
 ): SyncPreview {
-  const pairs = matchPairs(shots, storyboards)
+  const pairs = resolveSyncPairs(shots, storyboards, direction, aiPlan)
   const preview: SyncPreview = {
     direction,
     shotListCount: shots.length,
     storyboardCount: storyboards.length,
+    aiAssisted: Boolean(aiPlan?.operations?.length),
+    aiSummary: aiPlan?.summary,
     creates: [],
     updates: [],
     unchanged: [],
@@ -224,13 +344,13 @@ export function previewSceneSync(
   if (direction === 'storyboards-to-shotlist') {
     for (const pair of pairs) {
       if (pair.storyboard && pair.shot) {
-        const next = storyboardToShotUpdates(pair.storyboard)
+        const next = storyboardToShotUpdates(pair.storyboard, pair.shotUpdates)
         preview.updates.push({
           key: pairUpdateKey(pair.shot, pair.storyboard),
           kind: 'update',
-          shotNumber: pair.storyboard.shot_number,
+          shotNumber: next.shot_number ?? pair.storyboard.shot_number,
           label: storyboardLabel(pair.storyboard),
-          detail: 'Update matching shot list entry',
+          detail: matchDetail(pair, 'Update matching shot list entry'),
           target: 'shotlist',
           shotId: pair.shot.id,
           storyboardId: pair.storyboard.id,
@@ -244,13 +364,13 @@ export function previewSceneSync(
           ),
         })
       } else if (pair.storyboard) {
-        const next = storyboardToShotUpdates(pair.storyboard)
+        const next = storyboardToShotUpdates(pair.storyboard, pair.shotUpdates)
         preview.creates.push({
           key: pairCreateFromStoryboardKey(pair.storyboard),
           kind: 'create',
-          shotNumber: pair.storyboard.shot_number,
+          shotNumber: next.shot_number ?? pair.storyboard.shot_number,
           label: storyboardLabel(pair.storyboard),
-          detail: 'New shot list entry linked to this storyboard',
+          detail: matchDetail(pair, 'New shot list entry linked to this storyboard'),
           target: 'shotlist',
           storyboardId: pair.storyboard.id,
           createFields: buildCreateFields(shotPreviewFields(next)),
@@ -270,14 +390,17 @@ export function previewSceneSync(
   } else {
     for (const pair of pairs) {
       if (pair.shot && pair.storyboard) {
-        const next = shotToStoryboardUpdates(pair.shot)
+        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
         const hasImage = Boolean(pair.storyboard.image_url)
         preview.updates.push({
           key: pairUpdateKey(pair.shot, pair.storyboard),
           kind: 'update',
-          shotNumber: pair.shot.shot_number,
+          shotNumber: next.shot_number ?? pair.shot.shot_number,
           label: shotLabel(pair.shot),
-          detail: hasImage ? 'Image preserved on storyboard' : 'Update matching storyboard',
+          detail: matchDetail(
+            pair,
+            hasImage ? 'Image preserved on storyboard' : 'Update matching storyboard'
+          ),
           target: 'storyboard',
           shotId: pair.shot.id,
           storyboardId: pair.storyboard.id,
@@ -291,13 +414,13 @@ export function previewSceneSync(
           ),
         })
       } else if (pair.shot) {
-        const next = shotToStoryboardUpdates(pair.shot)
+        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
         preview.creates.push({
           key: pairCreateFromShotKey(pair.shot),
           kind: 'create',
-          shotNumber: pair.shot.shot_number,
+          shotNumber: next.shot_number ?? pair.shot.shot_number,
           label: shotLabel(pair.shot),
-          detail: 'New draft storyboard (no image)',
+          detail: matchDetail(pair, 'New draft storyboard (no image)'),
           target: 'storyboard',
           shotId: pair.shot.id,
           createFields: buildCreateFields(storyboardPreviewFields(next)),
@@ -322,36 +445,6 @@ export function previewSceneSync(
   return preview
 }
 
-function storyboardToShotUpdates(storyboard: Storyboard): Partial<CreateShotListData> {
-  return {
-    shot_number: storyboard.shot_number,
-    shot_type: storyboard.shot_type,
-    camera_angle: storyboard.camera_angle,
-    movement: storyboard.movement,
-    description: storyboard.description || storyboard.title,
-    action: storyboard.action ?? undefined,
-    dialogue: storyboard.dialogue ?? undefined,
-    visual_notes: storyboard.visual_notes ?? undefined,
-    sequence_order: storyboard.sequence_order ?? storyboard.shot_number,
-    storyboard_id: storyboard.id,
-  }
-}
-
-function shotToStoryboardUpdates(shot: ShotList): Partial<CreateStoryboardData> {
-  return {
-    title: shot.description || `Shot ${shot.shot_number}`,
-    description: shot.description || shot.action || '',
-    shot_number: shot.shot_number,
-    shot_type: mapShotTypeToStoryboard(shot.shot_type),
-    camera_angle: mapCameraAngleToStoryboard(shot.camera_angle),
-    movement: mapMovementToStoryboard(shot.movement),
-    dialogue: shot.dialogue ?? undefined,
-    action: shot.action ?? undefined,
-    visual_notes: shot.visual_notes ?? undefined,
-    sequence_order: shot.sequence_order ?? shot.shot_number,
-  }
-}
-
 export async function applySceneSync(options: {
   direction: SyncDirection
   sceneId: string
@@ -360,9 +453,11 @@ export async function applySceneSync(options: {
   shots: ShotList[]
   storyboards: Storyboard[]
   includeKeys?: Set<string>
+  aiPlan?: AISyncPlan | null
 }): Promise<SyncUndoEntry> {
-  const { direction, sceneId, projectId, sceneNumber = 1, shots, storyboards, includeKeys } = options
-  const pairs = matchPairs(shots, storyboards)
+  const { direction, sceneId, projectId, sceneNumber = 1, shots, storyboards, includeKeys, aiPlan } =
+    options
+  const pairs = resolveSyncPairs(shots, storyboards, direction, aiPlan)
   const undo: SyncUndoEntry = {
     direction,
     createdShotIds: [],
@@ -379,14 +474,17 @@ export async function applySceneSync(options: {
         const key = pairUpdateKey(pair.shot, pair.storyboard)
         if (!shouldApply(key)) continue
         undo.updatedShots.push({ id: pair.shot.id, before: { ...pair.shot } })
-        await ShotListService.updateShotList(pair.shot.id, storyboardToShotUpdates(pair.storyboard))
+        await ShotListService.updateShotList(
+          pair.shot.id,
+          storyboardToShotUpdates(pair.storyboard, pair.shotUpdates)
+        )
       } else if (pair.storyboard) {
         const key = pairCreateFromStoryboardKey(pair.storyboard)
         if (!shouldApply(key)) continue
         const created = await ShotListService.createShotList({
           scene_id: sceneId,
           project_id: projectId,
-          ...storyboardToShotUpdates(pair.storyboard),
+          ...storyboardToShotUpdates(pair.storyboard, pair.shotUpdates),
           status: 'planned',
         })
         undo.createdShotIds.push(created.id)
@@ -398,7 +496,10 @@ export async function applySceneSync(options: {
         const key = pairUpdateKey(pair.shot, pair.storyboard)
         if (!shouldApply(key)) continue
         undo.updatedStoryboards.push({ id: pair.storyboard.id, before: { ...pair.storyboard } })
-        await StoryboardsService.updateStoryboard(pair.storyboard.id, shotToStoryboardUpdates(pair.shot))
+        await StoryboardsService.updateStoryboard(
+          pair.storyboard.id,
+          shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
+        )
         if (pair.shot.storyboard_id !== pair.storyboard.id) {
           undo.updatedShots.push({ id: pair.shot.id, before: { ...pair.shot } })
           await ShotListService.updateShotList(pair.shot.id, { storyboard_id: pair.storyboard.id })
@@ -411,7 +512,7 @@ export async function applySceneSync(options: {
           project_id: projectId,
           scene_number: sceneNumber,
           status: 'draft',
-          ...shotToStoryboardUpdates(pair.shot),
+          ...shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates),
         } as CreateStoryboardData)
         undo.createdStoryboardIds.push(created.id)
         undo.updatedShots.push({ id: pair.shot.id, before: { ...pair.shot } })
