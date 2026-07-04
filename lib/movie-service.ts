@@ -1,5 +1,6 @@
 import { getSupabaseClient } from './supabase'
 import { Database } from './supabase'
+import { getErrorMessage, withRetry } from './fetch-retry'
 
 export type Movie = Database['public']['Tables']['projects']['Row'] & {
   project_type: 'movie'
@@ -15,48 +16,95 @@ export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Ins
   project_status?: string
 }
 
+const moviesInflight = new Map<string, Promise<Movie[]>>()
+
 export class MovieService {
-  static async getMovies(): Promise<Movie[]> {
-    console.log('🎬 MovieService.getMovies() - Starting...')
-    
-    try {
-      // Get the current user
+  static async getMovies(userId?: string): Promise<Movie[]> {
+    let resolvedUserId = userId
+    if (!resolvedUserId) {
       const { data: { user } } = await getSupabaseClient().auth.getUser()
-      if (!user) {
-        throw new Error('User not authenticated')
-      }
-
-      console.log('🎬 MovieService.getMovies() - Making Supabase query...')
-      
-      // Make the Supabase query directly without race condition
-      const { data, error } = await getSupabaseClient()
-        .from('projects')
-        .select('*')
-        .eq('project_type', 'movie')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false })
-      
-      console.log('🎬 MovieService.getMovies() - Query completed, data:', data?.length || 0, 'rows')
-      
-      if (error) {
-        console.error('🎬 MovieService.getMovies() - Supabase error:', error)
-        throw error
-      }
-
-      // Transform the data to ensure writer and cowriters fields exist
-      const movies = (data || []).map(movie => ({
-        ...movie,
-        writer: movie.writer || null,
-        cowriters: movie.cowriters || []
-      })) as Movie[]
-
-      console.log('🎬 MovieService.getMovies() - Successfully processed', movies.length, 'movies')
-      return movies
-      
-    } catch (error) {
-      console.error('🎬 MovieService.getMovies() - Error in getMovies:', error)
-      throw error
+      if (!user) throw new Error('User not authenticated')
+      resolvedUserId = user.id
     }
+
+    const existing = moviesInflight.get(resolvedUserId)
+    if (existing) {
+      console.log('🎬 MovieService.getMovies() - Reusing in-flight request')
+      return existing
+    }
+
+    const promise = MovieService.fetchMoviesForUser(resolvedUserId).finally(() => {
+      moviesInflight.delete(resolvedUserId!)
+    })
+
+    moviesInflight.set(resolvedUserId, promise)
+    return promise
+  }
+
+  private static async fetchMoviesForUser(resolvedUserId: string): Promise<Movie[]> {
+    const t0 = Date.now()
+    console.log('🎬 MovieService.getMovies() - Starting fetch...')
+
+    // Browser → Supabase direct fetch fails intermittently (TypeError: Load failed).
+    // Route through our API so the server talks to Supabase instead.
+    if (typeof window !== 'undefined') {
+      const movies = await withRetry(
+        'MovieService.getMovies (API)',
+        async () => {
+          const tFetch = Date.now()
+          const response = await fetch('/api/movies', { credentials: 'include' })
+          const fetchMs = Date.now() - tFetch
+
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}))
+            throw new Error(body.error || `Movies API HTTP ${response.status}`)
+          }
+
+          const body = await response.json()
+          const cacheTag = body.meta?.cached ? " (server cache)" : body.meta?.serviceRole ? " (service role)" : ""
+          console.log(
+            `🎬 MovieService.getMovies() - API ${fetchMs}ms, auth ${body.meta?.authMs ?? '?'}ms, query ${body.meta?.queryMs ?? '?'}ms${cacheTag}, rows:`,
+            body.movies?.length ?? 0,
+          )
+          return (body.movies || []) as Movie[]
+        },
+        { retries: 3, baseDelayMs: 1000 },
+      )
+
+      console.log(`🎬 MovieService.getMovies() - Done in ${Date.now() - t0}ms (${movies.length} movies)`)
+      return movies
+    }
+
+    const movies = await withRetry(
+      'MovieService.getMovies (server)',
+      async () => {
+        const tQuery = Date.now()
+        const { data, error } = await getSupabaseClient()
+          .from('projects')
+          .select('*')
+          .eq('project_type', 'movie')
+          .eq('user_id', resolvedUserId)
+          .order('created_at', { ascending: false })
+
+        const queryMs = Date.now() - tQuery
+        console.log(`🎬 MovieService.getMovies() - Query ${queryMs}ms, rows:`, data?.length ?? 0)
+
+        if (error) {
+          console.error('🎬 MovieService.getMovies() - Supabase error:', error)
+          throw error
+        }
+
+        return (data || []).map((movie) => ({
+          ...movie,
+          writer: movie.writer || null,
+          cowriters: movie.cowriters || [],
+        })) as Movie[]
+      },
+      { retries: 3, baseDelayMs: 1000 },
+    )
+
+    console.log(`🎬 MovieService.getMovies() - Done in ${Date.now() - t0}ms (${movies.length} movies)`)
+    return movies
   }
 
   static async createMovie(movieData: CreateMovieData): Promise<Movie> {
@@ -127,7 +175,6 @@ export class MovieService {
 
     console.log('🎬 MovieService.getMovieById - Checking access for project:', id, 'user:', user.id, 'email:', user.email)
 
-    // First check if user owns the project
     const { data: ownedProject, error: ownedError } = await getSupabaseClient()
       .from('projects')
       .select('*')
@@ -143,8 +190,6 @@ export class MovieService {
 
     console.log('🔍 MovieService.getMovieById - Not owner, checking for shared access...')
 
-    // If not owned, check if user has shared access
-    // Check both user_id and email matches
     const { data: shares, error: shareError } = await getSupabaseClient()
       .from('project_shares')
       .select('*')
@@ -154,7 +199,6 @@ export class MovieService {
     console.log('🔍 MovieService.getMovieById - Shares found:', shares?.length || 0, 'error:', shareError)
 
     if (!shareError && shares && shares.length > 0) {
-      // Find a share that matches the user
       const matchingShare = shares.find(share => 
         (share.shared_with_user_id === user.id) || 
         (share.shared_with_email && share.shared_with_email.toLowerCase() === user.email?.toLowerCase())
@@ -163,13 +207,11 @@ export class MovieService {
       if (matchingShare) {
         console.log('✅ MovieService.getMovieById - Found matching share:', matchingShare.id)
         
-        // Check if expired
         if (matchingShare.deadline && new Date(matchingShare.deadline) < new Date()) {
           console.log('❌ MovieService.getMovieById - Share has expired')
           return null
         }
 
-        // User has shared access, fetch the project
         const { data: sharedProject, error: projectError } = await getSupabaseClient()
           .from('projects')
           .select('*')
@@ -188,7 +230,6 @@ export class MovieService {
       }
     }
 
-    // No access found
     console.log('❌ MovieService.getMovieById - No access found for project')
     return null
   }

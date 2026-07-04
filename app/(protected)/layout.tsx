@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, Suspense, useMemo, useState } from 'react';
+import { useEffect, Suspense, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { getSupabaseClient } from '@/lib/supabase';
@@ -10,7 +10,6 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const supabase = useMemo(() => getSupabaseClient(), []);
-  const [accessLoading, setAccessLoading] = useState(false);
 
   // Allow public access to casting pages (the page component will handle access control)
   const isCastingPage = pathname?.startsWith('/casting/');
@@ -27,7 +26,6 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
 
     let cancelled = false;
     (async () => {
-      setAccessLoading(true);
       const { data: row, error } = await supabase
         .from('users')
         .select('login_disabled, access_expires_at, blocked_routes')
@@ -35,7 +33,6 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
         .maybeSingle();
 
       if (cancelled) return;
-      setAccessLoading(false);
 
       if (error || !row) return;
 
@@ -73,10 +70,6 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
     return null; // waiting for redirect
   }
 
-  if (accessLoading) {
-    return <div className="grid min-h-screen place-items-center"><p>Checking access…</p></div>;
-  }
-  
   return <>{children}</>;
 }
 

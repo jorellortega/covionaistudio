@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -55,6 +55,17 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { IdeaImagesService } from "@/lib/idea-images-service"
 import { MovieIdeasService } from "@/lib/movie-ideas-service"
 import { AssetService } from "@/lib/asset-service"
+import {
+  createLoadDebug,
+  startPhase,
+  endPhase,
+  failPhase,
+  addNote,
+  elapsedSincePageLoad,
+  formatMs,
+  type LoadDebugSnapshot,
+} from "@/lib/load-debug"
+import { getErrorMessage, isRetryableFetchError, withRetry } from "@/lib/fetch-retry"
 
 const statusColors = {
   "Pre-Production": "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -63,11 +74,39 @@ const statusColors = {
   "Distribution": "bg-green-500/20 text-green-400 border-green-500/30",
 }
 
+const MOVIES_CACHE_KEY = "cinema_movies_v1"
+const MOVIES_CACHE_TTL_MS = 30 * 60 * 1000
+
+function readMoviesCache(userId: string): Movie[] | null {
+  try {
+    const raw = localStorage.getItem(MOVIES_CACHE_KEY) ?? sessionStorage.getItem(MOVIES_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { userId: string; at: number; movies: Movie[] }
+    if (parsed.userId !== userId || Date.now() - parsed.at > MOVIES_CACHE_TTL_MS) return null
+    return parsed.movies
+  } catch {
+    return null
+  }
+}
+
+function writeMoviesCache(userId: string, movies: Movie[]) {
+  try {
+    const payload = JSON.stringify({ userId, at: Date.now(), movies })
+    localStorage.setItem(MOVIES_CACHE_KEY, payload)
+    sessionStorage.setItem(MOVIES_CACHE_KEY, payload)
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [sharedMovies, setSharedMovies] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingCovers, setLoadingCovers] = useState(false)
   const [loadingShared, setLoadingShared] = useState(false)
+  const [loadDebug, setLoadDebug] = useState<LoadDebugSnapshot>(() => createLoadDebug())
+  const loadRunRef = useRef(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [selectedProjectStatus, setSelectedProjectStatus] = useState("active")
@@ -109,48 +148,99 @@ export default function MoviesPage() {
   const [cowriterInput, setCowriterInput] = useState("")
   
   const { toast } = useToast()
-  const { user, userId, ready } = useAuthReady()
+  const { user, userId, ready, session } = useAuthReady()
 
-  console.log('🎬 Movies Page - Render - User state:', user ? `Logged in as ${user.user_metadata?.name || user.email}` : 'No user')
-  console.log('🎬 Movies Page - Render - Auth ready:', ready)
-  console.log('🎬 Movies Page - Render - Loading movies:', loading)
-  console.log('🎬 Movies Page - Render - Movies count:', movies.length)
+  const refreshLoadDebug = useCallback((snapshot: LoadDebugSnapshot) => {
+    setLoadDebug({
+      pageLoadAt: snapshot.pageLoadAt,
+      phases: [...snapshot.phases],
+      notes: [...snapshot.notes],
+    })
+  }, [])
+
+  const LoadDebugPanel = ({ compact = false }: { compact?: boolean }) => (
+    <div className={`${compact ? "mt-4" : "mt-6"} p-4 bg-muted/80 border border-border rounded-lg text-xs font-mono space-y-3 max-w-xl w-full`}>
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-semibold text-sm font-sans">Load Debug</p>
+        <span className="text-muted-foreground">{formatMs(elapsedSincePageLoad(loadDebug))} total</span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground font-sans">
+        <p>Auth ready: {ready ? "yes" : "no"}</p>
+        <p>User: {user?.email || "—"}</p>
+        <p>Loading movies: {loading ? "yes" : "no"}</p>
+        <p>Loading covers: {loadingCovers ? "yes" : "no"}</p>
+        <p>Movies: {movies.length}</p>
+        <p>Run #{loadRunRef.current || "—"}</p>
+      </div>
+      <div className="space-y-1">
+        <p className="font-semibold font-sans">Phases</p>
+        {loadDebug.phases.length === 0 ? (
+          <p className="text-muted-foreground">Waiting to start…</p>
+        ) : (
+          loadDebug.phases.map((phase, i) => (
+            <div key={`${phase.name}-${i}`} className="flex justify-between gap-2">
+              <span className={phase.status === "running" ? "text-primary" : phase.status === "error" ? "text-destructive" : ""}>
+                {phase.status === "running" ? "▶ " : phase.status === "done" ? "✓ " : phase.status === "error" ? "✗ " : "○ "}
+                {phase.name}
+                {phase.detail ? ` — ${phase.detail}` : ""}
+              </span>
+              <span className="text-muted-foreground shrink-0">{formatMs(phase.ms ?? (phase.status === "running" && phase.startedAt ? Date.now() - phase.startedAt : undefined))}</span>
+            </div>
+          ))
+        )}
+      </div>
+      {loadDebug.notes.length > 0 && (
+        <div className="space-y-1 max-h-32 overflow-y-auto">
+          <p className="font-semibold font-sans">Notes</p>
+          {loadDebug.notes.slice(-8).map((note, i) => (
+            <p key={i} className="text-muted-foreground break-all">{note}</p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 
   useEffect(() => {
-    if (!ready) return
-    
-    console.log('🎬 Movies Page - useEffect triggered - Starting loadMovies...')
-    
-    // Test Supabase connection first
-    const testConnection = async () => {
-      try {
-        console.log('🎬 Movies Page - Testing Supabase connection...')
-        const { data, error } = await getSupabaseClient().from('projects').select('count').limit(1)
-        if (error) {
-          console.error('🎬 Movies Page - Supabase connection test failed:', error)
-        } else {
-          console.log('🎬 Movies Page - Supabase connection test successful')
-        }
-      } catch (err) {
-        console.error('🎬 Movies Page - Supabase connection test exception:', err)
+    if (!ready || !userId || !session?.access_token) return
+
+    // Show cached movies immediately (before fetch)
+    const cached = readMoviesCache(userId)
+    if (cached?.length) {
+      setMovies(cached)
+      setLoading(false)
+    }
+
+    const runId = ++loadRunRef.current
+    const snapshot = createLoadDebug()
+    addNote(snapshot, `useEffect run #${runId} started`)
+    refreshLoadDebug(snapshot)
+
+    let cancelled = false
+
+    const run = async () => {
+      await loadMovies(userId, snapshot, runId, () => cancelled)
+      if (!cancelled) {
+        void loadSharedMovies(snapshot, () => cancelled)
       }
     }
-    
-    testConnection()
-    
-    console.log('🎬 Movies Page - Calling loadMovies()...')
-    loadMovies()
-    loadSharedMovies()
+
+    // Defer one frame so auth/layout remount doesn't abort the first fetch
+    const frame = requestAnimationFrame(() => {
+      if (!cancelled) void run()
+    })
 
     return () => {
-      console.log('🎬 Movies Page - useEffect cleanup')
+      cancelled = true
+      cancelAnimationFrame(frame)
+      addNote(snapshot, `useEffect run #${runId} cancelled (cleanup)`)
+      refreshLoadDebug(snapshot)
     }
-  }, [ready])
+  }, [ready, userId, session?.access_token])
 
-  // Load AI settings
+  // Load AI settings after movies (avoid competing Supabase requests on first paint)
   useEffect(() => {
     const loadAISettings = async () => {
-      if (!ready) return
+      if (!ready || loading) return
       
       try {
         const settings = await AISettingsService.getSystemSettings()
@@ -184,7 +274,7 @@ export default function MoviesPage() {
     }
 
     loadAISettings()
-  }, [ready, userId])
+  }, [ready, loading, userId])
 
   // Get current images tab AI setting
   const getImagesTabSetting = () => {
@@ -215,171 +305,199 @@ export default function MoviesPage() {
   }, [aiSettingsLoaded, aiSettings])
   */
 
-  const loadMovies = async () => {
-    console.log('🎬 Movies Page - loadMovies() - Starting...')
-    
-    if (!userId) {
-      console.log('🎬 Movies Page - No userId, skipping loadMovies')
-      setLoading(false)
-      return
-    }
-    
-    try {
-      console.log('🎬 Movies Page - Setting loading to true...')
-      setLoading(true)
-      
-      console.log('🎬 Movies Page - Calling MovieService.getMovies()...')
-      const startTime = Date.now()
-      
-      const moviesData = await MovieService.getMovies()
-      
-      const endTime = Date.now()
-      console.log(`🎬 Movies Page - MovieService.getMovies() completed in ${endTime - startTime}ms`)
-      console.log('🎬 Movies Page - Received movies data:', moviesData.length, 'movies')
-      
-      setMovies(moviesData)
-      console.log('🎬 Movies Page - Movies state updated successfully')
-      
-      // Fetch cover images for each movie (treatment_id is now directly on the movie object!)
-      const coverImageMap: Record<string, string> = {}
-      
-      for (const movie of moviesData) {
-        try {
-          // 0. First check if movie already has a thumbnail set - if so, use it and skip all lookups
-          const hasExistingThumbnail = movie.thumbnail && 
-                                      movie.thumbnail.trim() && 
-                                      movie.thumbnail !== "/placeholder.svg?height=300&width=200"
-          
-          if (hasExistingThumbnail) {
-            coverImageMap[movie.id] = movie.thumbnail
-            console.log(`🖼️ Movies Page - Using existing thumbnail for movie ${movie.id} (${movie.name})`)
-            continue // Skip to next movie - no need to check assets or ideas
-          }
-          
-          // 1. Check treatment for cover image (if treatment_id exists, get cover from treatment)
-          if (movie.treatment_id) {
-            try {
-              const treatment = await TreatmentsService.getTreatment(movie.treatment_id)
-              if (treatment?.cover_image_url) {
-                coverImageMap[movie.id] = treatment.cover_image_url
-                console.log(`🖼️ Movies Page - Found cover image from treatment for movie ${movie.id}`)
-              }
-            } catch (error) {
-              console.error(`❌ Movies Page - Error fetching treatment for movie ${movie.id}:`, error)
-            }
-          }
-          
-          // 2. If no treatment cover, check assets - prioritize actual covers (is_default_cover = true)
-          if (!coverImageMap[movie.id]) {
-            try {
-              // Get cover image assets - returns sorted with default covers first
-              const coverAssets = await AssetService.getCoverImageAssets(movie.id)
-              
-              if (coverAssets.length > 0) {
-                // Prioritize actual covers (is_default_cover = true) over regular images
-                const defaultCover = coverAssets.find(a => a.is_default_cover)
-                if (defaultCover) {
-                  coverImageMap[movie.id] = defaultCover.content_url!
-                  console.log(`🖼️ Movies Page - Found default cover asset for movie ${movie.id}`)
-                } else {
-                  // Fallback to most recent image only if no actual covers exist
-                  coverImageMap[movie.id] = coverAssets[0].content_url!
-                  console.log(`🖼️ Movies Page - Found fallback image asset for movie ${movie.id} (no covers found)`)
-                }
-              }
-            } catch (assetError) {
-              console.error(`❌ Movies Page - Error fetching assets for movie ${movie.id}:`, assetError)
-            }
-          }
-          
-          // 3. If still no cover, check ideas (match by title) - final fallback
-          if (!coverImageMap[movie.id]) {
-            try {
-              const ideas = await MovieIdeasService.getUserIdeas(userId)
-              const matchingIdea = ideas.find(idea => 
-                idea.title.toLowerCase().trim() === movie.name.toLowerCase().trim()
-              )
-              
-              if (matchingIdea) {
-                const ideaImages = await IdeaImagesService.getIdeaImages(matchingIdea.id)
-                // Filter for image files (jpg, jpeg, png, gif, webp, svg)
-                const imageFiles = ideaImages.filter(img => 
-                  img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i)
-                )
-                
-                if (imageFiles.length > 0) {
-                  // Get the first (most recent) image
-                  coverImageMap[movie.id] = imageFiles[0].image_url
-                  console.log(`🖼️ Movies Page - Found cover image from idea for movie ${movie.id}`)
-                }
-              }
-            } catch (ideaError) {
-              console.error(`❌ Movies Page - Error fetching idea images for movie ${movie.id}:`, ideaError)
-            }
-          }
-          
-        } catch (error) {
-          console.error(`❌ Movies Page - Error processing movie ${movie.id} (${movie.name}):`, error)
-          // Continue with other movies even if one fails
+  const loadMovieCovers = async (
+    moviesData: Movie[],
+    uid: string,
+    snapshot: LoadDebugSnapshot,
+    isCancelled: () => boolean,
+  ) => {
+    const coverPhase = startPhase(snapshot, "Cover images", `${moviesData.length} movies`)
+    refreshLoadDebug(snapshot)
+    setLoadingCovers(true)
+
+    const coverImageMap: Record<string, string> = {}
+    let ideasCache: Awaited<ReturnType<typeof MovieIdeasService.getUserIdeas>> | null = null
+
+    for (const movie of moviesData) {
+      if (isCancelled()) break
+
+      try {
+        const hasExistingThumbnail =
+          movie.thumbnail &&
+          movie.thumbnail.trim() &&
+          movie.thumbnail !== "/placeholder.svg?height=300&width=200"
+
+        if (hasExistingThumbnail) {
+          coverImageMap[movie.id] = movie.thumbnail
+          continue
         }
+
+        if (movie.treatment_id) {
+          try {
+            const treatment = await TreatmentsService.getTreatment(movie.treatment_id)
+            if (treatment?.cover_image_url) {
+              coverImageMap[movie.id] = treatment.cover_image_url
+              continue
+            }
+          } catch (error) {
+            console.error(`Cover: treatment fetch failed for ${movie.id}`, error)
+          }
+        }
+
+        if (!coverImageMap[movie.id]) {
+          try {
+            const coverAssets = await AssetService.getCoverImageAssets(movie.id)
+            if (coverAssets.length > 0) {
+              const defaultCover = coverAssets.find((a) => a.is_default_cover)
+              coverImageMap[movie.id] = (defaultCover || coverAssets[0]).content_url!
+              continue
+            }
+          } catch (assetError) {
+            console.error(`Cover: assets fetch failed for ${movie.id}`, assetError)
+          }
+        }
+
+        if (!coverImageMap[movie.id]) {
+          try {
+            if (!ideasCache) {
+              const ideasPhase = startPhase(snapshot, "Fetch all ideas (once)")
+              refreshLoadDebug(snapshot)
+              ideasCache = await MovieIdeasService.getUserIdeas(uid)
+              endPhase(ideasPhase, `${ideasCache.length} ideas`)
+              refreshLoadDebug(snapshot)
+            }
+            const matchingIdea = ideasCache.find(
+              (idea) => idea.title.toLowerCase().trim() === movie.name.toLowerCase().trim(),
+            )
+            if (matchingIdea) {
+              const ideaImages = await IdeaImagesService.getIdeaImages(matchingIdea.id)
+              const imageFiles = ideaImages.filter((img) =>
+                img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i),
+              )
+              if (imageFiles.length > 0) {
+                coverImageMap[movie.id] = imageFiles[0].image_url
+              }
+            }
+          } catch (ideaError) {
+            console.error(`Cover: idea fetch failed for ${movie.id}`, ideaError)
+          }
+        }
+      } catch (error) {
+        console.error(`Cover: failed for ${movie.id}`, error)
       }
-      
-      console.log(`🖼️ Movies Page - Cover images map:`, coverImageMap)
+    }
+
+    if (!isCancelled()) {
       setMovieCoverImages(coverImageMap)
-      
-      // Show success message
-      if (moviesData.length > 0) {
-        toast({
-          title: "Movies Loaded Successfully",
-          description: `Found ${moviesData.length} movie project(s)`,
-        })
+      endPhase(coverPhase, `${Object.keys(coverImageMap).length} covers`)
+      addNote(snapshot, "Cover images done")
+      refreshLoadDebug(snapshot)
+    }
+    setLoadingCovers(false)
+  }
+
+  const loadMovies = async (
+    uid: string,
+    snapshot: LoadDebugSnapshot,
+    runId: number,
+    isCancelled: () => boolean,
+  ) => {
+    if (isCancelled() || loadRunRef.current !== runId) return
+
+    try {
+      const cached = readMoviesCache(uid)
+      if (cached?.length) {
+        setMovies(cached)
+        setLoading(false)
+        addNote(snapshot, `Showing ${cached.length} cached movies while refreshing`)
+        refreshLoadDebug(snapshot)
+      } else {
+        setLoading(true)
       }
-      
+
+      const moviesPhase = startPhase(snapshot, "Fetch movies (API)")
+      refreshLoadDebug(snapshot)
+
+      const moviesData = await MovieService.getMovies(uid)
+
+      if (isCancelled() || loadRunRef.current !== runId) {
+        addNote(snapshot, `Run #${runId} stale after movies fetch — skipped`)
+        refreshLoadDebug(snapshot)
+        return
+      }
+
+      endPhase(moviesPhase, `${moviesData.length} movies`)
+      addNote(snapshot, "Movies fetched — showing page")
+      refreshLoadDebug(snapshot)
+
+      setMovies(moviesData)
+      writeMoviesCache(uid, moviesData)
+      setLoading(false)
+
+      void loadMovieCovers(moviesData, uid, snapshot, isCancelled)
     } catch (error) {
-      console.error('🎬 Movies Page - Error loading movies:', error)
-      
-      // Show user-friendly error message
-      const errorMessage = error instanceof Error ? error.message : 'Failed to load movies'
-      
+      if (isCancelled() || loadRunRef.current !== runId) {
+        addNote(snapshot, `Run #${runId} error ignored (stale): ${getErrorMessage(error)}`)
+        refreshLoadDebug(snapshot)
+        return
+      }
+      console.error("Movies Page - Error loading movies:", error)
+      const running = snapshot.phases.find((p) => p.status === "running")
+      if (running) {
+        failPhase(running, getErrorMessage(error))
+      }
+      addNote(
+        snapshot,
+        isRetryableFetchError(error) ? "Network error — try Retry" : getErrorMessage(error),
+      )
+      refreshLoadDebug(snapshot)
       toast({
         title: "Error Loading Movies",
-        description: `Unable to load movies: ${errorMessage}. Please try refreshing the page.`,
+        description: getErrorMessage(error),
         variant: "destructive",
       })
-      
-      // Set empty array to prevent infinite loading
       setMovies([])
-      console.log('🎬 Movies Page - Set empty movies array due to error')
-    } finally {
-      console.log('🎬 Movies Page - Setting loading to false...')
       setLoading(false)
-      console.log('🎬 Movies Page - loadMovies() completed')
     }
   }
 
-  const loadSharedMovies = async () => {
-    if (!userId) return
-    
+  const loadSharedMovies = async (snapshot: LoadDebugSnapshot, isCancelled: () => boolean) => {
+    if (!userId || isCancelled()) return
+
+    const phase = startPhase(snapshot, "Shared movies")
+    refreshLoadDebug(snapshot)
+
     try {
       setLoadingShared(true)
-      const response = await fetch('/api/project-shares/shared-with-me')
+      const response = await withRetry(
+        "shared-movies",
+        () => fetch("/api/project-shares/shared-with-me"),
+        { retries: 2, baseDelayMs: 600 },
+      )
       const data = await response.json()
-      
+
       if (data.success) {
-        // Filter to only movie projects
-        const movieProjects = (data.projects || []).filter((p: any) => 
-          p.project_type === 'movie'
-        )
+        const movieProjects = (data.projects || []).filter((p: any) => p.project_type === "movie")
         setSharedMovies(movieProjects)
-        // treatment_id is now directly on the movie object, no need to load separately!
+        endPhase(phase, `${movieProjects.length} shared`)
       } else {
-        console.error('Error loading shared movies:', data.error)
+        failPhase(phase, data.error || "API error")
       }
     } catch (error: any) {
-      console.error('Error loading shared movies:', error)
+      failPhase(phase, error?.message || "Failed")
     } finally {
       setLoadingShared(false)
+      refreshLoadDebug(snapshot)
     }
+  }
+
+  const retryLoad = () => {
+    if (!userId) return
+    const snapshot = createLoadDebug()
+    const runId = ++loadRunRef.current
+    addNote(snapshot, `Manual retry #${runId}`)
+    refreshLoadDebug(snapshot)
+    void loadMovies(userId, snapshot, runId, () => false)
   }
 
   const handleAcceptShareKey = async () => {
@@ -1081,22 +1199,14 @@ export default function MoviesPage() {
             <span className="text-lg">Loading movies...</span>
             <div className="text-sm text-muted-foreground text-center">
               <p>Loading your movie projects...</p>
+              {loadDebug.phases.find((p) => p.status === "running") && (
+                <p className="text-primary mt-1">
+                  Current: {loadDebug.phases.find((p) => p.status === "running")?.name}
+                </p>
+              )}
             </div>
-            <div className="mt-4 p-3 bg-muted rounded-lg text-xs">
-              <p><strong>Debug Info:</strong></p>
-              <p>User: {user ? user.user_metadata?.name || user.email : 'Not authenticated'}</p>
-              <p>Auth Ready: {ready ? 'True' : 'False'}</p>
-              <p>Loading Movies: {loading ? 'True' : 'False'}</p>
-              <p>Movies Count: {movies.length}</p>
-            </div>
-            <Button 
-              onClick={() => {
-                console.log('🎬 Movies Page - Manual retry clicked')
-                loadMovies()
-              }}
-              variant="outline"
-              className="mt-4"
-            >
+            <LoadDebugPanel compact />
+            <Button onClick={retryLoad} variant="outline" className="mt-2">
               <Loader2 className="h-4 w-4 mr-2" />
               Retry Loading
             </Button>
@@ -2262,6 +2372,9 @@ export default function MoviesPage() {
           </div>
         )}
       </main>
+      <div className="fixed bottom-4 right-4 z-50 max-w-md opacity-90 hover:opacity-100 transition-opacity">
+        <LoadDebugPanel compact />
+      </div>
     </div>
   )
 }
