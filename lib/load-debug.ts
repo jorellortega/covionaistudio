@@ -25,6 +25,7 @@ export function startPhase(snapshot: LoadDebugSnapshot, name: string, detail?: s
     detail,
   }
   snapshot.phases.push(phase)
+  console.log(`🎬 [load] ▶ ${name}${detail ? ` — ${detail}` : ""}`)
   return phase
 }
 
@@ -33,6 +34,9 @@ export function endPhase(phase: LoadDebugPhase, detail?: string) {
   phase.endedAt = Date.now()
   if (phase.startedAt) phase.ms = phase.endedAt - phase.startedAt
   if (detail) phase.detail = detail
+  console.log(
+    `🎬 [load] ✓ ${phase.name} (${formatMs(phase.ms)})${detail ? ` — ${detail}` : ""}`,
+  )
 }
 
 export function failPhase(phase: LoadDebugPhase, detail: string) {
@@ -40,10 +44,13 @@ export function failPhase(phase: LoadDebugPhase, detail: string) {
   phase.endedAt = Date.now()
   if (phase.startedAt) phase.ms = phase.endedAt - phase.startedAt
   phase.detail = detail
+  console.log(`🎬 [load] ✗ ${phase.name} (${formatMs(phase.ms)}) — ${detail}`)
 }
 
 export function addNote(snapshot: LoadDebugSnapshot, note: string) {
-  snapshot.notes.push(`${Date.now() - snapshot.pageLoadAt}ms: ${note}`)
+  const elapsed = Date.now() - snapshot.pageLoadAt
+  snapshot.notes.push(`${elapsed}ms: ${note}`)
+  console.log(`🎬 [load] ${formatMs(elapsed)}: ${note}`)
 }
 
 export function elapsedSincePageLoad(snapshot: LoadDebugSnapshot) {

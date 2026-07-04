@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -61,8 +61,6 @@ import {
   endPhase,
   failPhase,
   addNote,
-  elapsedSincePageLoad,
-  formatMs,
   type LoadDebugSnapshot,
 } from "@/lib/load-debug"
 import { getErrorMessage, isRetryableFetchError, withRetry } from "@/lib/fetch-retry"
@@ -103,9 +101,7 @@ export default function MoviesPage() {
   const [movies, setMovies] = useState<Movie[]>([])
   const [sharedMovies, setSharedMovies] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [loadingCovers, setLoadingCovers] = useState(false)
   const [loadingShared, setLoadingShared] = useState(false)
-  const [loadDebug, setLoadDebug] = useState<LoadDebugSnapshot>(() => createLoadDebug())
   const loadRunRef = useRef(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
@@ -150,56 +146,6 @@ export default function MoviesPage() {
   const { toast } = useToast()
   const { user, userId, ready, session } = useAuthReady()
 
-  const refreshLoadDebug = useCallback((snapshot: LoadDebugSnapshot) => {
-    setLoadDebug({
-      pageLoadAt: snapshot.pageLoadAt,
-      phases: [...snapshot.phases],
-      notes: [...snapshot.notes],
-    })
-  }, [])
-
-  const LoadDebugPanel = ({ compact = false }: { compact?: boolean }) => (
-    <div className={`${compact ? "mt-4" : "mt-6"} p-4 bg-muted/80 border border-border rounded-lg text-xs font-mono space-y-3 max-w-xl w-full`}>
-      <div className="flex items-center justify-between gap-2">
-        <p className="font-semibold text-sm font-sans">Load Debug</p>
-        <span className="text-muted-foreground">{formatMs(elapsedSincePageLoad(loadDebug))} total</span>
-      </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground font-sans">
-        <p>Auth ready: {ready ? "yes" : "no"}</p>
-        <p>User: {user?.email || "—"}</p>
-        <p>Loading movies: {loading ? "yes" : "no"}</p>
-        <p>Loading covers: {loadingCovers ? "yes" : "no"}</p>
-        <p>Movies: {movies.length}</p>
-        <p>Run #{loadRunRef.current || "—"}</p>
-      </div>
-      <div className="space-y-1">
-        <p className="font-semibold font-sans">Phases</p>
-        {loadDebug.phases.length === 0 ? (
-          <p className="text-muted-foreground">Waiting to start…</p>
-        ) : (
-          loadDebug.phases.map((phase, i) => (
-            <div key={`${phase.name}-${i}`} className="flex justify-between gap-2">
-              <span className={phase.status === "running" ? "text-primary" : phase.status === "error" ? "text-destructive" : ""}>
-                {phase.status === "running" ? "▶ " : phase.status === "done" ? "✓ " : phase.status === "error" ? "✗ " : "○ "}
-                {phase.name}
-                {phase.detail ? ` — ${phase.detail}` : ""}
-              </span>
-              <span className="text-muted-foreground shrink-0">{formatMs(phase.ms ?? (phase.status === "running" && phase.startedAt ? Date.now() - phase.startedAt : undefined))}</span>
-            </div>
-          ))
-        )}
-      </div>
-      {loadDebug.notes.length > 0 && (
-        <div className="space-y-1 max-h-32 overflow-y-auto">
-          <p className="font-semibold font-sans">Notes</p>
-          {loadDebug.notes.slice(-8).map((note, i) => (
-            <p key={i} className="text-muted-foreground break-all">{note}</p>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-
   useEffect(() => {
     if (!ready || !userId || !session?.access_token) return
 
@@ -213,7 +159,6 @@ export default function MoviesPage() {
     const runId = ++loadRunRef.current
     const snapshot = createLoadDebug()
     addNote(snapshot, `useEffect run #${runId} started`)
-    refreshLoadDebug(snapshot)
 
     let cancelled = false
 
@@ -233,7 +178,6 @@ export default function MoviesPage() {
       cancelled = true
       cancelAnimationFrame(frame)
       addNote(snapshot, `useEffect run #${runId} cancelled (cleanup)`)
-      refreshLoadDebug(snapshot)
     }
   }, [ready, userId, session?.access_token])
 
@@ -312,8 +256,6 @@ export default function MoviesPage() {
     isCancelled: () => boolean,
   ) => {
     const coverPhase = startPhase(snapshot, "Cover images", `${moviesData.length} movies`)
-    refreshLoadDebug(snapshot)
-    setLoadingCovers(true)
 
     const coverImageMap: Record<string, string> = {}
     let ideasCache: Awaited<ReturnType<typeof MovieIdeasService.getUserIdeas>> | null = null
@@ -361,10 +303,8 @@ export default function MoviesPage() {
           try {
             if (!ideasCache) {
               const ideasPhase = startPhase(snapshot, "Fetch all ideas (once)")
-              refreshLoadDebug(snapshot)
               ideasCache = await MovieIdeasService.getUserIdeas(uid)
               endPhase(ideasPhase, `${ideasCache.length} ideas`)
-              refreshLoadDebug(snapshot)
             }
             const matchingIdea = ideasCache.find(
               (idea) => idea.title.toLowerCase().trim() === movie.name.toLowerCase().trim(),
@@ -391,9 +331,7 @@ export default function MoviesPage() {
       setMovieCoverImages(coverImageMap)
       endPhase(coverPhase, `${Object.keys(coverImageMap).length} covers`)
       addNote(snapshot, "Cover images done")
-      refreshLoadDebug(snapshot)
     }
-    setLoadingCovers(false)
   }
 
   const loadMovies = async (
@@ -410,25 +348,21 @@ export default function MoviesPage() {
         setMovies(cached)
         setLoading(false)
         addNote(snapshot, `Showing ${cached.length} cached movies while refreshing`)
-        refreshLoadDebug(snapshot)
       } else {
         setLoading(true)
       }
 
       const moviesPhase = startPhase(snapshot, "Fetch movies (API)")
-      refreshLoadDebug(snapshot)
 
       const moviesData = await MovieService.getMovies(uid)
 
       if (isCancelled() || loadRunRef.current !== runId) {
         addNote(snapshot, `Run #${runId} stale after movies fetch — skipped`)
-        refreshLoadDebug(snapshot)
         return
       }
 
       endPhase(moviesPhase, `${moviesData.length} movies`)
       addNote(snapshot, "Movies fetched — showing page")
-      refreshLoadDebug(snapshot)
 
       setMovies(moviesData)
       writeMoviesCache(uid, moviesData)
@@ -438,7 +372,6 @@ export default function MoviesPage() {
     } catch (error) {
       if (isCancelled() || loadRunRef.current !== runId) {
         addNote(snapshot, `Run #${runId} error ignored (stale): ${getErrorMessage(error)}`)
-        refreshLoadDebug(snapshot)
         return
       }
       console.error("Movies Page - Error loading movies:", error)
@@ -450,7 +383,6 @@ export default function MoviesPage() {
         snapshot,
         isRetryableFetchError(error) ? "Network error — try Retry" : getErrorMessage(error),
       )
-      refreshLoadDebug(snapshot)
       toast({
         title: "Error Loading Movies",
         description: getErrorMessage(error),
@@ -465,7 +397,6 @@ export default function MoviesPage() {
     if (!userId || isCancelled()) return
 
     const phase = startPhase(snapshot, "Shared movies")
-    refreshLoadDebug(snapshot)
 
     try {
       setLoadingShared(true)
@@ -487,7 +418,6 @@ export default function MoviesPage() {
       failPhase(phase, error?.message || "Failed")
     } finally {
       setLoadingShared(false)
-      refreshLoadDebug(snapshot)
     }
   }
 
@@ -496,7 +426,6 @@ export default function MoviesPage() {
     const snapshot = createLoadDebug()
     const runId = ++loadRunRef.current
     addNote(snapshot, `Manual retry #${runId}`)
-    refreshLoadDebug(snapshot)
     void loadMovies(userId, snapshot, runId, () => false)
   }
 
@@ -1199,13 +1128,7 @@ export default function MoviesPage() {
             <span className="text-lg">Loading movies...</span>
             <div className="text-sm text-muted-foreground text-center">
               <p>Loading your movie projects...</p>
-              {loadDebug.phases.find((p) => p.status === "running") && (
-                <p className="text-primary mt-1">
-                  Current: {loadDebug.phases.find((p) => p.status === "running")?.name}
-                </p>
-              )}
             </div>
-            <LoadDebugPanel compact />
             <Button onClick={retryLoad} variant="outline" className="mt-2">
               <Loader2 className="h-4 w-4 mr-2" />
               Retry Loading
@@ -2372,9 +2295,6 @@ export default function MoviesPage() {
           </div>
         )}
       </main>
-      <div className="fixed bottom-4 right-4 z-50 max-w-md opacity-90 hover:opacity-100 transition-opacity">
-        <LoadDebugPanel compact />
-      </div>
     </div>
   )
 }
