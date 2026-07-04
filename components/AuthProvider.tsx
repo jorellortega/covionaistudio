@@ -1,11 +1,11 @@
 'use client';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { Session, User, AuthChangeEvent } from '@supabase/supabase-js';
+import type { Session, AuthChangeEvent } from '@supabase/supabase-js';
 import { getSupabaseClient } from '@/lib/supabase';
 
 type Ctx = {
   session: Session | null;
-  user: User | null;
+  user: Session['user'] | null;
   userId: string | null;
   loading: boolean;
 };
@@ -13,38 +13,59 @@ type Ctx = {
 const AuthCtx = createContext<Ctx>({ session: null, user: null, userId: null, loading: true });
 export const useAuth = () => useContext(AuthCtx);
 
+const SESSION_INIT_TIMEOUT_MS = 6_000;
+
 export default function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = useMemo(() => getSupabaseClient(), []);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const cleanupRef = useRef<(() => void) | null>(null);
+  const initDoneRef = useRef(false);
 
   useEffect(() => {
-    console.log('[AuthProvider] mount');
-    let alive = true; // prevents setState after unmount
+    let alive = true;
 
-    (async () => {
-      console.log('🚀 Initializing auth…');
-      const { data, error } = await supabase.auth.getSession();
-      if (error) console.error('[getSession] error:', error);
-      if (!alive) return;
-      console.log('📡 Initial session result:', data.session ? 'present' : 'none');
-      setSession(data.session ?? null);
+    const finishLoading = () => {
+      if (!alive || initDoneRef.current) return;
+      initDoneRef.current = true;
       setLoading(false);
+    };
 
-      const { data: sub } = supabase.auth.onAuthStateChange((ev: AuthChangeEvent, s) => {
+    const timeout = setTimeout(() => {
+      console.warn('[AuthProvider] session init timed out — continuing without block');
+      finishLoading();
+    }, SESSION_INIT_TIMEOUT_MS);
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((ev: AuthChangeEvent, s) => {
+      if (!alive) return;
+      console.log('🔔 onAuthStateChange:', ev);
+      setSession(s ?? null);
+      finishLoading();
+    });
+
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
         if (!alive) return;
-        console.log('🔔 onAuthStateChange:', ev);
-        if (ev !== 'INITIAL_SESSION') setSession(s ?? null);
+        if (error) console.error('[getSession] error:', error);
+        console.log('📡 Initial session result:', data.session ? 'present' : 'none');
+        setSession(data.session ?? null);
+        finishLoading();
+      })
+      .catch((err) => {
+        if (!alive) return;
+        console.error('[getSession] failed:', err);
+        finishLoading();
+      })
+      .finally(() => {
+        clearTimeout(timeout);
       });
-      cleanupRef.current = () => sub.subscription.unsubscribe();
-    })();
 
     return () => {
-      console.log('[AuthProvider] unmount');
       alive = false;
-      cleanupRef.current?.();
-      cleanupRef.current = null;
+      clearTimeout(timeout);
+      subscription.unsubscribe();
     };
   }, [supabase]);
 
@@ -55,7 +76,7 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       userId: session?.user?.id ?? null,
       loading,
     }),
-    [session, loading]
+    [session, loading],
   );
 
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;

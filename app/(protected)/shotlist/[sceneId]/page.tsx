@@ -38,6 +38,7 @@ import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
+import { ShotListComponent } from "@/components/shot-list"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 
@@ -56,7 +57,7 @@ const aiModels = {
   image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
 }
 
-export default function SceneStoryboardsPage() {
+export default function SceneShotListPage() {
   
   const params = useParams()
   const router = useRouter()
@@ -184,6 +185,7 @@ export default function SceneStoryboardsPage() {
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [sceneScript, setSceneScript] = useState<string>("")
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
+  const [syncRefreshKey, setSyncRefreshKey] = useState(0)
   const sceneNumberForSync = useMemo(() => {
     if (sceneInfo?.scene_number) return sceneInfo.scene_number
     const raw = sceneInfo?.metadata?.sceneNumber
@@ -207,6 +209,8 @@ export default function SceneStoryboardsPage() {
   const [locations, setLocations] = useState<Location[]>([])
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [shots, setShots] = useState<any[]>([])
+  const [isCreatingAllStoryboards, setIsCreatingAllStoryboards] = useState(false)
   const [formData, setFormData] = useState<CreateStoryboardData>({
     title: "",
     description: "",
@@ -609,7 +613,6 @@ export default function SceneStoryboardsPage() {
 
   useEffect(() => {
     if (ready && userId && sceneId) {
-      fetchStoryboards()
       fetchSceneInfo()
       loadStoryboardsWithTextRanges()
       // Note: loadSavedPrompts() will be called when sceneInfo loads with project_id
@@ -1973,6 +1976,171 @@ export default function SceneStoryboardsPage() {
     return candidate
   }
 
+  // Helper function to create a storyboard from a shot (extracted for reuse)
+  const createStoryboardFromShot = async (shot: any) => {
+    // Parse scene number from metadata
+    let sceneNumber = 1
+    if (sceneInfo?.metadata?.sceneNumber) {
+      const parsed = typeof sceneInfo.metadata.sceneNumber === 'string' 
+        ? parseInt(sceneInfo.metadata.sceneNumber) 
+        : sceneInfo.metadata.sceneNumber
+      sceneNumber = isNaN(parsed) ? 1 : parsed
+    }
+    
+    // Map shot types to valid storyboard values
+    const mapShotType = (shotType: string): string => {
+      const oldValidTypes = ['wide', 'medium', 'close', 'extreme-close']
+      if (oldValidTypes.includes(shotType)) return shotType
+      if (['two-shot', 'over-the-shoulder'].includes(shotType)) return 'medium'
+      if (['point-of-view', 'establishing'].includes(shotType)) return 'wide'
+      if (['insert', 'cutaway'].includes(shotType)) return 'close'
+      return 'wide'
+    }
+    
+    // Map camera angles to valid storyboard values
+    const mapCameraAngle = (angle: string): string => {
+      const oldValidAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle']
+      if (oldValidAngles.includes(angle)) return angle
+      if (angle === 'bird-eye') return 'high-angle'
+      if (angle === 'worm-eye') return 'low-angle'
+      return 'eye-level'
+    }
+    
+    // Map movement to valid storyboard values
+    const mapMovement = (movement: string): string => {
+      const oldValidMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming']
+      if (oldValidMovements.includes(movement)) return movement
+      if (movement === 'dolly') return 'tracking'
+      if (['crane', 'handheld', 'steadicam'].includes(movement)) return 'static'
+      return 'static'
+    }
+    
+    // Try to preserve the shot's original shot_number, with retry logic for conflicts
+    const preferredShotNumber = shot.shot_number || 1
+    let attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+    let attempts = 0
+    const maxAttempts = 10
+    
+    while (attempts < maxAttempts) {
+      try {
+        // For retries, fetch fresh storyboards and recalculate available shot number
+        if (attempts > 0) {
+          attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
+        }
+        
+        // Create storyboard from shot list data
+        const storyboardData: CreateStoryboardData = {
+          title: shot.description || `Shot ${attemptShotNumber}`,
+          description: shot.description || shot.action || '',
+          scene_number: sceneNumber,
+          shot_number: attemptShotNumber,
+          shot_type: mapShotType(shot.shot_type),
+          camera_angle: mapCameraAngle(shot.camera_angle),
+          movement: mapMovement(shot.movement),
+          dialogue: shot.dialogue || undefined,
+          action: shot.action || undefined,
+          visual_notes: shot.visual_notes || undefined,
+          scene_id: sceneId,
+          project_id: sceneInfo?.project_id || undefined,
+          sequence_order: shot.sequence_order || attemptShotNumber,
+          status: 'draft',
+        }
+        
+        const newStoryboard = await StoryboardsService.createStoryboard(storyboardData)
+        
+        // Refresh storyboards list after creation
+        await fetchStoryboards()
+        
+        return { success: true, shotNumber: attemptShotNumber, preferredShotNumber }
+      } catch (error: any) {
+        attempts++
+        
+        // Check if it's a 409 conflict error (shot number already taken)
+        const isConflictError = error?.code === '23505' || 
+                              error?.error?.code === '23505' ||
+                              error?.message?.includes('unique') ||
+                              error?.error?.message?.includes('unique') ||
+                              (error?.status === 409 || error?.error?.status === 409)
+        
+        if (isConflictError && attempts < maxAttempts) {
+          // Shot number conflict - try next available number
+          attemptShotNumber = getNextShotNumber()
+          continue
+        }
+        
+        // Not a conflict error or max attempts reached - return error
+        console.error('Error creating storyboard from shot list:', error)
+        return { 
+          success: false, 
+          error: error?.message || error?.error?.message || 'Failed to create storyboard from shot list.',
+          shotNumber: shot.shot_number 
+        }
+      }
+    }
+    
+    return { success: false, error: 'Max attempts reached', shotNumber: shot.shot_number }
+  }
+
+  // Create storyboards for all shots
+  const handleCreateAllStoryboards = async () => {
+    if (!shots || shots.length === 0) {
+      toast({
+        title: "No Shots Found",
+        description: "There are no shots to create storyboards for.",
+        variant: "destructive",
+      })
+      return
+    }
+    
+    try {
+      setIsCreatingAllStoryboards(true)
+      
+      let successCount = 0
+      let errorCount = 0
+      const errors: string[] = []
+      
+      // Process shots sequentially to avoid conflicts
+      for (const shot of shots) {
+        const result = await createStoryboardFromShot(shot)
+        if (result.success) {
+          successCount++
+          // Small delay between creations to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100))
+        } else {
+          errorCount++
+          errors.push(`Shot ${shot.shot_number}: ${result.error || 'Unknown error'}`)
+        }
+      }
+      
+      // Refresh storyboards list one final time
+      await fetchStoryboards()
+      
+      // Show summary toast
+      if (errorCount === 0) {
+        toast({
+          title: "Success!",
+          description: `Successfully created ${successCount} storyboard${successCount !== 1 ? 's' : ''} from all shots.`,
+        })
+      } else {
+        toast({
+          title: "Partially Complete",
+          description: `Created ${successCount} storyboard${successCount !== 1 ? 's' : ''}, but ${errorCount} failed. Check console for details.`,
+          variant: "destructive",
+        })
+        console.error('Errors creating storyboards:', errors)
+      }
+    } catch (error) {
+      console.error('Error creating all storyboards:', error)
+      toast({
+        title: "Error",
+        description: "Failed to create storyboards. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCreatingAllStoryboards(false)
+    }
+  }
+
   const resetForm = () => {
     setFormData({
       title: "",
@@ -2170,6 +2338,29 @@ export default function SceneStoryboardsPage() {
     ))
   }
   
+  // Function to get user profile with API keys
+  const getUserProfile = async () => {
+    if (!userId) return null
+    
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      
+      if (error) {
+        console.error('Error fetching user profile:', error)
+        return null
+      }
+      
+      return data
+    } catch (error) {
+      console.error('Error in getUserProfile:', error)
+      return null
+    }
+  }
+
   // Function to get the appropriate API key for the selected service
   const getApiKeyForService = (service: string) => {
     if (!userProfile) return null
@@ -2438,13 +2629,14 @@ export default function SceneStoryboardsPage() {
             </span>
           </nav>
           <div className="flex flex-col items-start gap-2 sm:items-end sm:flex-shrink-0">
-            <SceneViewSwitcher sceneId={sceneId} activeView="storyboards" />
+            <SceneViewSwitcher sceneId={sceneId} activeView="shotlist" />
             <SceneSyncControls
               sceneId={sceneId}
               projectId={sceneInfo?.project_id}
               sceneNumber={sceneNumberForSync}
-              primaryDirection="storyboards-to-shotlist"
+              primaryDirection="shotlist-to-storyboards"
               onSynced={() => {
+                setSyncRefreshKey((key) => key + 1)
                 void fetchStoryboards()
               }}
             />
@@ -2487,7 +2679,7 @@ export default function SceneStoryboardsPage() {
                   onClick={() => {
                     if (currentSceneIndex > 0) {
                       const prevScene = allScenes[currentSceneIndex - 1]
-                      router.push(`/storyboards/${prevScene.id}`)
+                      router.push(`/shotlist/${prevScene.id}`)
                     }
                   }}
                   disabled={currentSceneIndex <= 0}
@@ -2500,7 +2692,7 @@ export default function SceneStoryboardsPage() {
                 <Select
                   value={sceneId}
                   onValueChange={(value) => {
-                    router.push(`/storyboards/${value}`)
+                    router.push(`/shotlist/${value}`)
                   }}
                 >
                   <SelectTrigger className="w-full sm:w-[200px] lg:w-[250px] border-primary/30 text-xs sm:text-sm">
@@ -2548,7 +2740,7 @@ export default function SceneStoryboardsPage() {
                   onClick={() => {
                     if (currentSceneIndex >= 0 && currentSceneIndex < allScenes.length - 1) {
                       const nextScene = allScenes[currentSceneIndex + 1]
-                      router.push(`/storyboards/${nextScene.id}`)
+                      router.push(`/shotlist/${nextScene.id}`)
                     }
                   }}
                   disabled={currentSceneIndex < 0 || currentSceneIndex >= allScenes.length - 1}
@@ -3172,1465 +3364,29 @@ export default function SceneStoryboardsPage() {
           ) : null}
         </div>
 
-
-
-        {/* Storyboards Section */}
-        <div className="mb-6 sm:mb-8">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
-            <h2 className="text-xl sm:text-2xl font-bold">Storyboards</h2>
-            <div className="flex gap-2 w-full sm:w-auto">
-              <Button 
-                onClick={() => setShowCreateForm(true)}
-                className="gradient-button neon-glow text-white w-full sm:w-auto text-xs sm:text-sm"
-              >
-                <Plus className="sm:mr-2 h-4 w-4" />
-                <span className="hidden sm:inline">New Storyboard</span>
-                <span className="sm:hidden">New</span>
-              </Button>
-            </div>
-          </div>
-
-          {/* Search and Filter Controls */}
-          <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-4 sm:mb-6">
-            <div className="flex-1 min-w-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
-                <Input
-                  placeholder="Search storyboards..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 text-xs sm:text-sm"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2 w-full sm:w-auto">
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-full sm:w-[140px] text-xs sm:text-sm">
-                  <Filter className="h-4 w-4 sm:mr-2" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Shots</SelectItem>
-                  <SelectItem value="ai">AI Generated</SelectItem>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="in-progress">In Progress</SelectItem>
-                  <SelectItem value="review">Review</SelectItem>
-                  <SelectItem value="approved">Approved</SelectItem>
-                  <SelectItem value="rejected">Rejected</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Sequence Overview */}
-          {filteredStoryboards.length > 0 && (
-            <div className="mb-4 sm:mb-6 p-3 sm:p-4 bg-muted/50 rounded-lg border overflow-x-hidden">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
-                <span className="text-xs sm:text-sm font-medium break-words">
-                  {sceneInfo?.scene_number ? `Scene ${sceneInfo.scene_number} - ` : ''}Shot Sequence:
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {filteredStoryboards.length} total shots
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {filteredStoryboards.map((storyboard, index) => (
-                  <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border flex-shrink-0">
-                    {index + 1}. Shot {storyboard.shot_number || 1}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Create Form */}
-        {showCreateForm && (
-          <Card className="mb-6 sm:mb-8">
-            <CardHeader className="p-4 sm:p-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
-                <FileText className="h-5 w-5 flex-shrink-0" />
-                <span className="hidden sm:inline">Create New Storyboard for {sceneInfo?.name || "Loading Scene..."}</span>
-                <span className="sm:hidden">New Storyboard</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm break-words">
-                Fill in the details below. Use AI assistance for text and image generation.
+        {/* Shot List Section */}
+        <div className="mt-8 sm:mt-12">
+          <Card>
+            <CardHeader>
+              <CardTitle>Shot List</CardTitle>
+              <CardDescription>
+                Break down this scene into individual shots with detailed technical specifications
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
-
-              {/* Basic Info */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="title">Title *</Label>
-                  <Input
-                    id="title"
-                    value={formData.title}
-                    onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="Shot title"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="shot_number">Shot Number</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Use decimals to insert between shots: 1.2, 2.5, etc.
-                  </p>
-                  <div className="flex gap-2">
-                    <Input
-                      id="shot_number"
-                      type="number"
-                      value={formData.shot_number || ""}
-                      onChange={(e) => {
-                        const value = parseFloat(e.target.value) || 0
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: value,
-                          sequence_order: value // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      min="0.1"
-                      step="0.1"
-                      placeholder="1.2 for between shots 1 and 2"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const nextShot = getNextShotNumber()
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: nextShot,
-                          sequence_order: nextShot // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      title="Auto-fill next shot number"
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="sequence_order">Sequence Order (for positioning)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Use decimals to insert between shots: 2.5 goes between shots 2 and 3
-                  </p>
-                  <Input
-                    id="sequence_order"
-                    type="number"
-                    value={formData.sequence_order || ""}
-                    onChange={(e) => setFormData(prev => ({ ...prev, sequence_order: parseFloat(e.target.value) || 0 }))}
-                    min="0.1"
-                    step="0.1"
-                    placeholder="1.5 for between shots 1 and 2"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="description">Description *</Label>
-                <Textarea
-                  id="description"
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Shot description"
-                  rows={3}
-                />
-              </div>
-
-              {/* Technical Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div>
-                  <Label htmlFor="shot_type">Shot Type</Label>
-                  <Select value={formData.shot_type} onValueChange={(value) => setFormData(prev => ({ ...prev, shot_type: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="wide">Wide Shot</SelectItem>
-                      <SelectItem value="medium">Medium Shot</SelectItem>
-                      <SelectItem value="close">Close Up</SelectItem>
-                      <SelectItem value="extreme-close">Extreme Close Up</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="camera_angle">Camera Angle</Label>
-                  <Select value={formData.camera_angle} onValueChange={(value) => setFormData(prev => ({ ...prev, camera_angle: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="eye-level">Eye Level</SelectItem>
-                      <SelectItem value="high-angle">High Angle</SelectItem>
-                      <SelectItem value="low-angle">Low Angle</SelectItem>
-                      <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="movement">Camera Movement</Label>
-                  <Select value={formData.movement} onValueChange={(value) => setFormData(prev => ({ ...prev, movement: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="static">Static</SelectItem>
-                      <SelectItem value="panning">Panning</SelectItem>
-                      <SelectItem value="tilting">Tilting</SelectItem>
-                      <SelectItem value="tracking">Tracking</SelectItem>
-                      <SelectItem value="zooming">Zooming</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Character Selector */}
-              {characters.length > 0 && (
-                <div>
-                  <Label htmlFor="character_id">Character (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to automatically include their details when generating images
-                  </p>
-                  <Select 
-                    value={formData.character_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="character_id">
-                      <SelectValue placeholder="Select a character..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No character selected</span>
-                      </SelectItem>
-                      {characters.map((char) => (
-                        <SelectItem key={char.id} value={char.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{char.name}</span>
-                            {char.archetype && (
-                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* Location Selector */}
-              {locations.length > 0 && (
-                <div>
-                  <Label htmlFor="location_id">Location (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a location to automatically include location details when generating images
-                  </p>
-                  <Select 
-                    value={formData.location_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="location_id">
-                      <SelectValue placeholder="Select a location..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No location selected</span>
-                      </SelectItem>
-                      {locations.map((loc) => (
-                        <SelectItem key={loc.id} value={loc.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{loc.name}</span>
-                            {loc.type && (
-                              <span className="text-xs text-muted-foreground">{loc.type}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* Status Field */}
-              <div>
-                <Label htmlFor="status">Status</Label>
-                <Select value={formData.status || "draft"} onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as any }))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="in-progress">In Progress</SelectItem>
-                    <SelectItem value="review">Review</SelectItem>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Content Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="dialogue" className="text-xs sm:text-sm">Dialogue</Label>
-                  <Textarea
-                    id="dialogue"
-                    value={formData.dialogue}
-                    onChange={(e) => setFormData(prev => ({ ...prev, dialogue: e.target.value }))}
-                    placeholder="Character dialogue or narration"
-                    rows={3}
-                    className="text-xs sm:text-sm"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="action" className="text-xs sm:text-sm">Action</Label>
-                  <Textarea
-                    id="action"
-                    value={formData.action}
-                    onChange={(e) => setFormData(prev => ({ ...prev, action: e.target.value }))}
-                    placeholder="What happens in this shot"
-                    rows={3}
-                    className="text-xs sm:text-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="visual_notes" className="text-xs sm:text-sm">Visual Notes</Label>
-                <Textarea
-                  id="visual_notes"
-                  value={formData.visual_notes}
-                  onChange={(e) => setFormData(prev => ({ ...prev, visual_notes: e.target.value }))}
-                  placeholder="Lighting, color, mood, special effects"
-                  rows={3}
-                  className="text-xs sm:text-sm"
-                />
-              </div>
-
-              {/* Form Actions */}
-              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowCreateForm(false)
-                    resetForm()
-                  }}
-                  className="w-full sm:w-auto text-xs sm:text-sm"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateStoryboard}
-                  disabled={isCreating}
-                  className="gradient-button neon-glow text-white w-full sm:w-auto text-xs sm:text-sm"
-                >
-                  {isCreating ? "Creating..." : "Create Storyboard"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Edit Storyboard Form */}
-        {showEditForm && editingStoryboard && (
-          <Card className="mb-6 sm:mb-8">
-            <CardHeader className="p-4 sm:p-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
-                <Edit className="h-5 w-5 flex-shrink-0" />
-                <span className="hidden sm:inline">Edit Storyboard: {editingStoryboard.title}</span>
-                <span className="sm:hidden">Edit Storyboard</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm break-words">
-                Update the storyboard details below. Use AI assistance for image generation.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
-              {/* Basic Info */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-title">Title *</Label>
-                  <Input
-                    id="edit-title"
-                    value={formData.title}
-                    onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="Shot title"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-shot_number">Shot Number</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Use decimals to insert between shots: 1.2, 2.5, etc.
-                  </p>
-                  <div className="flex gap-2">
-                    <Input
-                      id="edit-shot_number"
-                      type="number"
-                      value={formData.shot_number}
-                      onChange={(e) => {
-                        const value = parseFloat(e.target.value) || 0
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: value,
-                          sequence_order: value // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      min="0.1"
-                      step="0.1"
-                      placeholder="1.2 for between shots 1 and 2"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const nextShot = getNextShotNumber()
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: nextShot,
-                          sequence_order: nextShot // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      title="Auto-fill next shot number"
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="edit-sequence_order">Sequence Order (for positioning)</Label>
-                <p className="text-sm text-muted-foreground mb-2">
-                  Use decimals to insert between shots: 2.5 goes between shots 2 and 3
-                </p>
-                <Input
-                  id="edit-sequence_order"
-                  type="number"
-                  value={formData.sequence_order || ""}
-                  onChange={(e) => setFormData(prev => ({ ...prev, sequence_order: parseFloat(e.target.value) || 0 }))}
-                  min="0.1"
-                  step="0.1"
-                  placeholder="1.5 for between shots 1 and 2"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="edit-description">Description *</Label>
-                <Textarea
-                  id="edit-description"
-                  value={formData.description}
-                  onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-                  placeholder="Shot description"
-                  rows={3}
-                />
-              </div>
-
-              {/* Technical Details */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div>
-                  <Label htmlFor="edit-shot_type">Shot Type</Label>
-                  <Select value={formData.shot_type} onValueChange={(value) => setFormData(prev => ({ ...prev, shot_type: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="wide">Wide Shot</SelectItem>
-                      <SelectItem value="medium">Medium Shot</SelectItem>
-                      <SelectItem value="close">Close Up</SelectItem>
-                      <SelectItem value="extreme-close">Extreme Close Up</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="edit-camera_angle">Camera Angle</Label>
-                  <Select value={formData.camera_angle} onValueChange={(value) => setFormData(prev => ({ ...prev, camera_angle: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="eye-level">Eye Level</SelectItem>
-                      <SelectItem value="high-angle">High Angle</SelectItem>
-                      <SelectItem value="low-angle">Low Angle</SelectItem>
-                      <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="edit-movement">Camera Movement</Label>
-                  <Select value={formData.movement} onValueChange={(value) => setFormData(prev => ({ ...prev, movement: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="static">Static</SelectItem>
-                      <SelectItem value="panning">Panning</SelectItem>
-                      <SelectItem value="tilting">Tilting</SelectItem>
-                      <SelectItem value="tracking">Tracking</SelectItem>
-                      <SelectItem value="zooming">Zooming</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* Character Selector */}
-              {characters.length > 0 && (
-                <div>
-                  <Label htmlFor="edit-character_id">Character (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to automatically include their details when generating images
-                  </p>
-                  <Select 
-                    value={formData.character_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="edit-character_id">
-                      <SelectValue placeholder="Select a character..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No character selected</span>
-                      </SelectItem>
-                      {characters.map((char) => (
-                        <SelectItem key={char.id} value={char.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{char.name}</span>
-                            {char.archetype && (
-                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* Location Selector */}
-              {locations.length > 0 && (
-                <div>
-                  <Label htmlFor="edit-location_id">Location (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a location to automatically include location details when generating images
-                  </p>
-                  <Select 
-                    value={formData.location_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="edit-location_id">
-                      <SelectValue placeholder="Select a location..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No location selected</span>
-                      </SelectItem>
-                      {locations.map((loc) => (
-                        <SelectItem key={loc.id} value={loc.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{loc.name}</span>
-                            {loc.type && (
-                              <span className="text-xs text-muted-foreground">{loc.type}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {/* Status Field */}
-              <div>
-                <Label htmlFor="edit-status">Status</Label>
-                <Select value={formData.status || "draft"} onValueChange={(value) => setFormData(prev => ({ ...prev, status: value as any }))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">Draft</SelectItem>
-                    <SelectItem value="in-progress">In Progress</SelectItem>
-                    <SelectItem value="review">Review</SelectItem>
-                    <SelectItem value="approved">Approved</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Content Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-dialogue">Dialogue</Label>
-                  <Textarea
-                    id="edit-dialogue"
-                    value={formData.dialogue}
-                    onChange={(e) => setFormData(prev => ({ ...prev, dialogue: e.target.value }))}
-                    placeholder="Character dialogue or narration"
-                    rows={3}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-action">Action</Label>
-                  <Textarea
-                    id="edit-action"
-                    value={formData.action}
-                    onChange={(e) => setFormData(prev => ({ ...prev, action: e.target.value }))}
-                    placeholder="What happens in this shot"
-                    rows={3}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <Label htmlFor="edit-visual_notes">Visual Notes</Label>
-                <Textarea
-                  id="edit-visual_notes"
-                  value={formData.visual_notes}
-                  onChange={(e) => setFormData(prev => ({ ...prev, visual_notes: e.target.value }))}
-                  placeholder="Lighting, color, mood, special effects"
-                  rows={3}
-                />
-              </div>
-
-              {/* AI Image Generation Section */}
-              <div className="border border-border/30 rounded-lg p-4 bg-muted/20">
-                <div className="flex items-center gap-2 mb-3">
-                  <Sparkles className="h-4 w-4 text-purple-500" />
-                  <h3 className="text-sm font-medium">AI Image Generation</h3>
-                </div>
-                
-                <div className="space-y-3">
-                  <div>
-                    <Label htmlFor="ai-image-prompt">Image Prompt</Label>
-                    
-                    {/* Saved Prompts Dropdown */}
-                    <div className="mb-3">
-                      <div className="text-xs text-muted-foreground mb-2">
-                        Saved Prompts: {savedPrompts.length} found for this movie
-                        {sceneInfo?.project_id && (
-                          <span className="ml-2 text-blue-400">
-                            (Project: {sceneInfo.project_id})
-                          </span>
-                        )}
-                      </div>
-                      {savedPrompts.length > 0 ? (
-                        <>
-                          <Label htmlFor="saved-prompt-select" className="text-xs text-muted-foreground mb-2 block">
-                            Use Saved Prompt
-                          </Label>
-                        <Select onValueChange={(promptId) => {
-                          const selectedPrompt = savedPrompts.find(p => p.id === promptId)
-                          
-                          if (selectedPrompt) {
-                            if (hidePromptText) {
-                              // Insert just the prompt name when hiding text
-                              setAiImagePrompt(selectedPrompt.title)
-                            } else {
-                              // Insert the full prompt when showing text
-                              setAiImagePrompt(selectedPrompt.prompt)
-                            }
-                            // Always store the full prompt text for AI generation
-                            setAiImagePromptFull(selectedPrompt.prompt)
-                            toast({
-                              title: "Prompt Loaded",
-                              description: `Loaded: ${selectedPrompt.title}`,
-                            })
-                          }
-                        }}>
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Select a saved prompt..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {savedPrompts.map((prompt) => (
-                              <SelectItem key={prompt.id} value={prompt.id}>
-                                <div className="flex items-center justify-between w-full">
-                                  <span className="truncate">{prompt.title}</span>
-                                  <Badge variant="secondary" className="ml-2 text-xs">
-                                    {prompt.useCount || 0} uses
-                                  </Badge>
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        </>
-                      ) : (
-                        <div className="text-xs text-muted-foreground">
-                          No saved prompts found. Create some in the Visual Dev page first.
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            const shotInfo = `${formData.shot_type} shot, ${formData.camera_angle} angle`
-                            setAiImagePrompt(prev => {
-                              if (prev.trim()) {
-                                return `${prev}, ${shotInfo}`
-                              }
-                              return shotInfo
-                            })
-                          }}
-                          className="text-xs h-7 px-2 bg-blue-500/10 text-blue-500 border-blue-500/20 hover:bg-blue-500/20"
-                          title="Insert shot type and camera angle"
-                        >
-                          <Film className="h-3 w-3 mr-1" />
-                          Insert Shot Details
-                        </Button>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor="exact-prompt-toggle" className="text-xs text-muted-foreground">
-                          Use exact prompt
-                        </Label>
-                        <input
-                          id="exact-prompt-toggle"
-                          type="checkbox"
-                          checked={useExactPrompt}
-                          onChange={(e) => setUseExactPrompt(e.target.checked)}
-                          className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                        />
-                      </div>
-                    </div>
-                    
-                    {/* Optional Character Details and Master Prompt Options */}
-                    {editingStoryboard?.character_id && (
-                      <div className="flex flex-col gap-2 pt-2 border-t border-border/30">
-                        <div className="text-xs text-muted-foreground mb-1">Optional Enhancements:</div>
-                        <div className="flex flex-wrap gap-4">
-                          <div className="flex items-center gap-2">
-                            <input
-                              id="include-character-details"
-                              type="checkbox"
-                              checked={includeCharacterDetails}
-                              onChange={(e) => setIncludeCharacterDetails(e.target.checked)}
-                              className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                            />
-                            <Label htmlFor="include-character-details" className="text-xs text-muted-foreground cursor-pointer">
-                              Include Character Details
-                            </Label>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <input
-                              id="include-master-prompt"
-                              type="checkbox"
-                              checked={includeMasterPrompt}
-                              onChange={(e) => setIncludeMasterPrompt(e.target.checked)}
-                              className="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500"
-                            />
-                            <Label htmlFor="include-master-prompt" className="text-xs text-muted-foreground cursor-pointer">
-                              Include Master Prompt
-                            </Label>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {hidePromptText && aiImagePromptFull ? (
-                      <div className="space-y-2">
-                        <div className="text-sm text-blue-500 font-medium">
-                          {savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title}
-                        </div>
-                        <Textarea
-                          id="ai-image-prompt"
-                          value={aiImagePrompt.replace(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title || '', '')}
-                          onChange={(e) => setAiImagePrompt(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title + ' ' + e.target.value)}
-                          placeholder="Type additional text here..."
-                          rows={2}
-                          className="text-sm"
-                        />
-                      </div>
-                    ) : (
-                      <Textarea
-                        id="ai-image-prompt"
-                        value={aiImagePrompt}
-                        onChange={(e) => setAiImagePrompt(e.target.value)}
-                        placeholder="Describe the visual style, composition, lighting, and mood for this shot..."
-                        rows={2}
-                        className="text-sm"
-                      />
-                    )}
-                  </div>
-                  
-                  {/* AI Service Selection - Only show if not locked */}
-                  {!aiSettings.find(setting => setting.tab_type === 'images')?.is_locked && (
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1">
-                        <Label htmlFor="ai-service-select">AI Service</Label>
-                        <Select value={selectedAIService} onValueChange={setSelectedAIService}>
-                          <SelectTrigger className="bg-input border-border">
-                            <SelectValue placeholder="Select AI model" />
-                          </SelectTrigger>
-                          <SelectContent className="cinema-card border-border">
-                            {aiModels.image.map((model) => {
-                              const availability = checkModelAvailability(model)
-                              return (
-                                <SelectItem key={model} value={mapModelToService(model)} disabled={!availability.isReady}>
-                                  <div className="flex items-center justify-between w-full">
-                                    <span>{model}</span>
-                                    <Badge 
-                                      variant={availability.isReady ? "default" : "secondary"} 
-                                      className="text-xs ml-2"
-                                    >
-                                      {availability.statusText}
-                                    </Badge>
-                                  </div>
-                                </SelectItem>
-                              )
-                            })}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      
-                      <div className="flex items-end">
-                        <Button
-                          onClick={() => generateShotImage(editingStoryboard.id, aiImagePrompt)}
-                          disabled={isGeneratingShotImage || !aiImagePrompt.trim()}
-                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
-                          size="sm"
-                        >
-                          {isGeneratingShotImage ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generating...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              Generate Image
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Show locked model info if images tab is locked */}
-                  {aiSettings.find(setting => setting.tab_type === 'images')?.is_locked && (
-                    <div className="p-3 bg-green-500/10 rounded-lg border border-green-500/20">
-                      <p className="text-sm text-green-600 flex items-center gap-2">
-                        <CheckCircle className="h-4 w-4" />
-                        AI model configured
-                      </p>
-                      <div className="flex items-end mt-3">
-                        <Button
-                          onClick={() => generateShotImage(editingStoryboard.id, aiImagePrompt)}
-                          disabled={isGeneratingShotImage || !aiImagePrompt.trim()}
-                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
-                          size="sm"
-                        >
-                          {isGeneratingShotImage ? (
-                            <>
-                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                              Generating...
-                            </>
-                          ) : (
-                            <>
-                              <Sparkles className="h-4 w-4 mr-2" />
-                              Generate Image
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                  
-                  <p className="text-xs text-muted-foreground">
-                    💡 Tip: Be specific about camera angle, lighting, mood, and visual style. The AI will create a cinematic storyboard image based on your description.
-                  </p>
-                </div>
-              </div>
-
-              {/* Reference Image Edit — opens in dialog */}
-              <div className="border border-violet-500/20 rounded-lg p-4 bg-violet-500/5">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium flex items-center gap-2">
-                      <Wand2 className="h-4 w-4 text-violet-500" />
-                      Reference Image Edit
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Edit the current shot image using your locked model and optional project references.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="gap-2 border-violet-500/30 text-violet-600 hover:bg-violet-500/10 shrink-0"
-                    onClick={() => openReferenceEditDialog(editingStoryboard)}
-                  >
-                    <Wand2 className="h-4 w-4" />
-                    Edit Image
-                  </Button>
-                </div>
-              </div>
-
-              {/* Form Actions */}
-              <div className="flex gap-2 justify-end">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowEditForm(false)
-                    setEditingStoryboard(null)
-                    closeReferenceEditDialog()
-                    resetForm()
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleUpdateStoryboard}
-                  disabled={isUpdating}
-                  className="gradient-button neon-glow text-white"
-                >
-                  {isUpdating ? "Updating..." : "Update Storyboard"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Storyboards Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-          {filteredStoryboards.map((storyboard, index) => (
-            <Card key={storyboard.id} className="cinema-card hover:neon-glow transition-all duration-300">
-              <CardHeader className="p-4 sm:p-6">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <div className="flex items-center justify-center w-8 h-8 bg-primary text-primary-foreground rounded-full text-xs sm:text-sm font-bold flex-shrink-0">
-                      {index + 1}
-                    </div>
-                    <CardTitle className="text-base sm:text-lg break-words">{storyboard.title}</CardTitle>
-                  </div>
-                  <Badge
-                    variant="secondary"
-                    className="bg-blue-500/20 text-blue-500 border-blue-500/30 text-xs flex-shrink-0"
-                  >
-                    Shot
-                  </Badge>
-                </div>
-                <CardDescription className="flex items-center gap-2 flex-wrap">
-                  <span className="bg-muted px-2 py-1 rounded text-xs font-mono">
-                    Shot {storyboard.shot_number || 1}
-                  </span>
-                  {sceneInfo?.scene_number && (
-                    <span className="bg-blue-500/20 text-blue-500 px-2 py-1 rounded text-xs font-mono border border-blue-500/30">
-                      Scene {sceneInfo.scene_number}
-                    </span>
-                  )}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Badge
-                        variant="secondary"
-                        className={`px-2 py-1 text-xs font-mono border cursor-pointer hover:opacity-80 transition-opacity flex items-center gap-1 ${getStatusBadgeStyle(storyboard.status || 'draft')}`}
-                      >
-                        {getStatusDisplayText(storyboard.status || 'draft')}
-                        <ChevronDown className="h-3 w-3" />
-                      </Badge>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-40">
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'draft')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-gray-500"></div>
-                          Draft
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'in-progress')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                          In Progress
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'review')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                          Review
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'approved')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                          Approved
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'rejected')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                          Rejected
-                        </div>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem 
-                        onClick={() => handleStatusUpdate(storyboard.id, 'completed')}
-                        className="cursor-pointer"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                          Completed
-                        </div>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4 p-4 sm:p-6">
-                {storyboard.image_url ? (
-                  <div className="relative h-40 sm:h-48 bg-muted rounded-lg overflow-hidden group">
-                    <img
-                      src={storyboard.image_url}
-                      alt={storyboard.title}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        title="Link a different project image"
-                        onClick={() => openLinkImageDialog(storyboard)}
-                      >
-                        <Link2 className="h-4 w-4 mr-2" />
-                        Link
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            const response = await fetch(storyboard.image_url!)
-                            const blob = await response.blob()
-                            const url = window.URL.createObjectURL(blob)
-                            const a = document.createElement('a')
-                            a.href = url
-                            a.download = `${storyboard.title || 'storyboard'}-${storyboard.id}.${blob.type.split('/')[1] || 'png'}`
-                            document.body.appendChild(a)
-                            a.click()
-                            window.URL.revokeObjectURL(url)
-                            document.body.removeChild(a)
-                            toast({
-                              title: "Download Started",
-                              description: "Image download has started.",
-                            })
-                          } catch (error) {
-                            toast({
-                              title: "Download Failed",
-                              description: "Failed to download image. Please try again.",
-                              variant: "destructive",
-                            })
-                          }
-                        }}
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Download
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => openLinkImageDialog(storyboard)}
-                    className="flex h-40 sm:h-48 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 hover:bg-muted/50 hover:border-primary/40 transition-colors"
-                  >
-                    <Link2 className="h-7 w-7 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Link existing image</span>
-                    <span className="text-xs text-muted-foreground px-4 text-center">
-                      Browse images from characters, locations, and project assets
-                    </span>
-                  </button>
-                )}
-                
-                <div className="space-y-2">
-                  <p className="text-xs sm:text-sm text-muted-foreground line-clamp-2 break-words">
-                    {storyboard.description}
-                  </p>
-                  
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="outline" className="text-xs flex-shrink-0">
-                      {storyboard.shot_type}
-                    </Badge>
-                    <Badge variant="outline" className="text-xs flex-shrink-0">
-                      {storyboard.camera_angle}
-                    </Badge>
-                    {storyboard.image_url && (
-                      <Badge className="text-xs bg-green-500/20 text-green-500 border-green-500/30 flex-shrink-0">
-                        <ImageIcon className="h-3 w-3 sm:mr-1" />
-                        <span className="hidden sm:inline">Has Image</span>
-                        <span className="sm:hidden">Image</span>
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-muted-foreground">
-                  <span className="break-words">Updated {new Date(storyboard.updated_at).toLocaleDateString()}</span>
-                  <div className="flex gap-1 flex-wrap">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 flex-shrink-0">
-                      <Eye className="h-4 w-4" />
-                    </Button>
-                    
-                    {/* Link existing project image */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 hover:text-violet-500 flex-shrink-0"
-                      title="Link existing project image"
-                      onClick={() => openLinkImageDialog(storyboard)}
-                    >
-                      <Link2 className="h-4 w-4" />
-                    </Button>
-
-                    {/* Quick AI Image Generation Button */}
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
-                      title="Generate AI Image"
-                      onClick={() => {
-                        // Set the editing storyboard and show edit form with AI focus
-                        closeReferenceEditDialog()
-                        setEditingStoryboard(storyboard)
-                        setFormData({
-                          title: storyboard.title,
-                          description: storyboard.description,
-                          scene_number: storyboard.scene_number,
-                          shot_number: storyboard.shot_number || 1,
-                          shot_type: storyboard.shot_type,
-                          camera_angle: storyboard.camera_angle,
-                          movement: storyboard.movement,
-                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
-                          status: storyboard.status || "draft",
-                          character_id: storyboard.character_id || null,
-                          location_id: storyboard.location_id || null,
-                          dialogue: storyboard.dialogue || "",
-                          action: storyboard.action || "",
-                          visual_notes: storyboard.visual_notes || "",
-                          image_url: storyboard.image_url || "",
-                          project_id: storyboard.project_id || "",
-                          scene_id: sceneId
-                        })
-                        // Pre-fill AI prompt with shot details
-                        const autoPrompt = `${storyboard.shot_type} shot, ${storyboard.camera_angle} angle, ${storyboard.movement} camera, ${storyboard.description}`
-                        setAiImagePrompt(autoPrompt)
-                        setShowEditForm(true)
-                        // Scroll to AI section after form opens
-                        setTimeout(() => {
-                          const aiSection = document.querySelector('[id="ai-image-prompt"]')
-                          if (aiSection) {
-                            aiSection.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          }
-                        }, 100)
-                      }}
-                    >
-                      <Sparkles className="h-4 w-4" />
-                    </Button>
-
-                    {/* Secondary reference-based image edit */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 flex-shrink-0 hover:text-violet-500"
-                      title="Edit image from reference"
-                      onClick={() => {
-                        setShowEditForm(false)
-                        setEditingStoryboard(null)
-                        openReferenceEditDialog(storyboard)
-                      }}
-                    >
-                      <Wand2 className="h-4 w-4" />
-                    </Button>
-                    
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-8 w-8 p-0 hover:text-blue-600"
-                      onClick={() => {
-                        closeReferenceEditDialog()
-                        setEditingStoryboard(storyboard)
-                        setFormData({
-                          title: storyboard.title,
-                          description: storyboard.description,
-                          scene_number: storyboard.scene_number,
-                          shot_number: storyboard.shot_number || 1,
-                          shot_type: storyboard.shot_type,
-                          camera_angle: storyboard.camera_angle,
-                          movement: storyboard.movement,
-                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
-                          status: storyboard.status || "draft",
-                          character_id: storyboard.character_id || null,
-                          location_id: storyboard.location_id || null,
-                          dialogue: storyboard.dialogue || "",
-                          action: storyboard.action || "",
-                          visual_notes: storyboard.visual_notes || "",
-                          image_url: storyboard.image_url || "",
-                          project_id: storyboard.project_id || "",
-                          scene_id: sceneId
-                        })
-                        // Preserve the current AI service selection
-                        // Don't reset selectedAIService here
-                        setShowEditForm(true)
-                      }}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
-                      className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-                      onClick={async () => {
-                        try {
-                          await StoryboardsService.deleteStoryboard(storyboard.id)
-                          setStoryboards(prev => prev.filter(sb => sb.id !== storyboard.id))
-                          toast({
-                            title: "Success",
-                            description: "Storyboard deleted successfully"
-                          })
-                        } catch (error) {
-                          console.error("Error deleting storyboard:", error)
-                          toast({
-                            title: "Error",
-                            description: "Failed to delete storyboard",
-                            variant: "destructive"
-                          })
-                        }
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {filteredStoryboards.length === 0 && !isLoadingStoryboards && (
-          <div className="text-center py-8 sm:py-12 px-4">
-            <div className="text-muted-foreground mb-4">
-              <FileText className="h-10 w-10 sm:h-12 sm:w-12 mx-auto mb-4" />
-              <h3 className="text-base sm:text-lg font-medium mb-2 break-words">No storyboards for this scene</h3>
-              <p className="text-xs sm:text-sm break-words">
-                {searchTerm || filterStatus !== "all" 
-                  ? "Try adjusting your search or filters" 
-                  : "Get started by creating your first storyboard for this scene"
-                }
-              </p>
-            </div>
-            {!searchTerm && filterStatus === "all" && (
-              <Button 
-                onClick={() => setShowCreateForm(true)}
-                className="gradient-button neon-glow text-white text-xs sm:text-sm w-full sm:w-auto"
-              >
-                <Plus className="sm:mr-2 h-4 w-4" />
-                Create Storyboard
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Link Existing Project Image */}
-      <Dialog
-        open={linkImageDialogOpen}
-        onOpenChange={(open) => {
-          setLinkImageDialogOpen(open)
-          if (!open) {
-            setLinkingStoryboard(null)
-            setSelectedLinkAssetId(null)
-            setLinkImageSearch("")
-          }
-        }}
-      >
-        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
-          <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg sm:text-xl">Link Existing Image</DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm">
-              {linkingStoryboard
-                ? `Choose an image you've already generated for Shot ${linkingStoryboard.shot_number}${linkingStoryboard.title ? ` · ${linkingStoryboard.title}` : ""}.`
-                : "Choose a project image to use on this storyboard shot."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="link-image-search">Search</Label>
-              <Input
-                id="link-image-search"
-                value={linkImageSearch}
-                onChange={(e) => setLinkImageSearch(e.target.value)}
-                placeholder="Search by title, character, or location…"
-                className="bg-input border-border"
+            <CardContent>
+              <ShotListComponent
+                sceneId={sceneId}
+                projectId={sceneInfo?.project_id}
+                refreshKey={syncRefreshKey}
+                onShotsChange={(loadedShots) => {
+                  setShots(loadedShots)
+                }}
               />
-            </div>
+            </CardContent>
+          </Card>
+        </div>
 
-            {isLoadingProjectAssets ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading project images…
-              </div>
-            ) : filteredLinkImageGroups.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  {projectImageAssets.length === 0
-                    ? "No images in this project yet. Generate some on the Characters or Locations pages first."
-                    : "No images match your search."}
-                </p>
-                {projectImageAssets.length === 0 && sceneInfo?.project_id && (
-                  <div className="flex flex-wrap justify-center gap-2 pt-2">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/characters?movie=${sceneInfo.project_id}`}>Characters</Link>
-                    </Button>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/locations?movie=${sceneInfo.project_id}`}>Locations</Link>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
-                {filteredLinkImageGroups.map((group) => (
-                  <div key={group.label} className="space-y-2">
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                      {group.label}
-                    </p>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                      {group.assets.map((asset) => (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedLinkAssetId((prev) =>
-                              prev === asset.id ? null : asset.id,
-                            )
-                          }
-                          className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                            selectedLinkAssetId === asset.id
-                              ? "border-primary ring-2 ring-primary/40"
-                              : "border-border hover:border-primary/50"
-                          }`}
-                          title={`${getProjectAssetSourceLabel(asset, locations, characters)} — ${asset.title}`}
-                        >
-                          <img
-                            src={asset.content_url!}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {selectedLinkAssetId && (
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-2 flex gap-3 items-center">
-                <div className="w-16 h-16 rounded overflow-hidden flex-shrink-0">
-                  <img
-                    src={projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.content_url || ""}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground line-clamp-3">
-                  {projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.title}
-                </p>
-              </div>
-            )}
-          </div>
-
-          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-            <Button
-              variant="outline"
-              onClick={() => setLinkImageDialogOpen(false)}
-              disabled={isLinkingImage}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => void handleLinkExistingImageToShot()}
-              disabled={isLinkingImage || !selectedLinkAssetId || !linkingStoryboard}
-              className="gap-2"
-            >
-              {isLinkingImage ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Linking…
-                </>
-              ) : (
-                <>
-                  <Link2 className="h-4 w-4" />
-                  Link to Shot
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reference image edit dialog */}
-      <Dialog
-        open={referenceEditDialogOpen}
-        onOpenChange={(open) => {
-          if (!open && !isGeneratingReferenceEdit) closeReferenceEditDialog()
-        }}
-      >
-        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
-          <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
-              <Wand2 className="h-5 w-5 text-violet-500" />
-              Edit Image
-            </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm">
-              {referenceEditStoryboard
-                ? `Reference edit for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
-                : "Edit this storyboard shot using a reference image."}
-            </DialogDescription>
-          </DialogHeader>
-
-          {referenceEditStoryboard && (
-            <>
-              {referenceEditStoryboard.image_url && (
-                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                  <img
-                    src={referenceEditStoryboard.image_url}
-                    alt={referenceEditStoryboard.title}
-                    className="w-full h-full max-h-40 object-contain"
-                  />
-                </div>
-              )}
-              {renderStoryboardReferenceEdit(
-                referenceEditStoryboard,
-                "reference-edit-dialog",
-                true,
-              )}
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      </div>
     </div>
   )
-  
-  // Debug logging after render
-  console.log("🎬 Component render completed successfully!")
 }

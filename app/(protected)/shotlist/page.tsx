@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { FileText, Film, Loader2, ArrowLeft } from "lucide-react"
+import { FileText, Film, Loader2, ArrowLeft, List } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -15,7 +15,7 @@ import { useAuthReady } from "@/components/auth-hooks"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
 
-export default function StoryboardsPage() {
+export default function ShotListPage() {
   const { session, loading: authLoading } = useAuth()
   const { toast } = useToast()
   const router = useRouter()
@@ -50,21 +50,17 @@ export default function StoryboardsPage() {
 
     setLoading(true)
     try {
-      // Load movie
       const movieData = await MovieService.getMovieById(movieId)
       setMovie(movieData)
 
-      // Get timeline for the movie
       const timeline = await TimelineService.getTimelineForMovie(movieId)
       if (timeline) {
-        // Load scenes from timeline
         const scenesData = await TimelineService.getScenesForTimeline(timeline.id)
         setScenes(scenesData)
         
-        // If there's only one scene, auto-select it
         if (scenesData.length === 1) {
           setSelectedSceneId(scenesData[0].id)
-          router.push(`/storyboards/${scenesData[0].id}`)
+          router.push(`/shotlist/${scenesData[0].id}`)
         }
       }
     } catch (error) {
@@ -81,7 +77,7 @@ export default function StoryboardsPage() {
 
   const handleSceneSelect = (sceneId: string) => {
     if (sceneId) {
-      router.push(`/storyboards/${sceneId}`)
+      router.push(`/shotlist/${sceneId}`)
     }
   }
 
@@ -96,7 +92,7 @@ export default function StoryboardsPage() {
         <div className="container mx-auto px-4 py-8">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Loading storyboards...
+            Loading shot list...
           </div>
         </div>
       </div>
@@ -114,8 +110,8 @@ export default function StoryboardsPage() {
           </Button>
           
           <div className="flex items-center gap-3 mb-2">
-            <Film className="h-6 w-6 text-primary" />
-            <h1 className="text-3xl font-bold">Storyboards</h1>
+            <List className="h-6 w-6 text-primary" />
+            <h1 className="text-3xl font-bold">Shot List</h1>
           </div>
           {movie && (
             <p className="text-muted-foreground">
@@ -128,7 +124,7 @@ export default function StoryboardsPage() {
           <CardHeader>
             <CardTitle>Select a Scene</CardTitle>
             <CardDescription>
-              Choose a scene to view and manage its storyboards
+              Choose a scene to view and manage its shot list
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -167,7 +163,7 @@ export default function StoryboardsPage() {
                   </Select>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Select a scene from the dropdown above to view and manage its storyboards.
+                  Select a scene from the dropdown above to view and manage its shot list.
                 </p>
               </div>
             )}

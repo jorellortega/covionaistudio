@@ -46,6 +46,7 @@ interface ShotListProps {
   screenplaySceneId?: string
   storyboardId?: string
   projectId?: string
+  refreshKey?: number
   onShotsChange?: (shots: ShotList[]) => void
   onCreateStoryboard?: (shot: ShotList) => void | Promise<void>
   showCreateStoryboardButton?: boolean
@@ -56,6 +57,7 @@ export function ShotListComponent({
   screenplaySceneId,
   storyboardId,
   projectId,
+  refreshKey,
   onShotsChange,
   onCreateStoryboard,
   showCreateStoryboardButton = false,
@@ -78,7 +80,7 @@ export function ShotListComponent({
   // Load shot lists
   useEffect(() => {
     loadShotLists()
-  }, [sceneId, screenplaySceneId, storyboardId])
+  }, [sceneId, screenplaySceneId, storyboardId, refreshKey])
 
   const loadShotLists = async () => {
     try {

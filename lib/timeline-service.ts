@@ -39,26 +39,12 @@ export type SceneWithMetadata = Scene & {
 export class TimelineService {
   static async ensureAuthenticated() {
     const { data: { session }, error } = await getSupabaseClient().auth.getSession()
-    if (error || !session) {
+    if (error || !session?.user) {
       console.error('Session error:', error)
       throw new Error('Authentication required')
     }
-    
-    console.log('Session found:', { 
-      user_id: session.user.id, 
-      expires_at: session.expires_at,
-      access_token_length: session.access_token?.length || 0
-    })
-    
-    // Refresh session if needed
-    const { data: { user } } = await getSupabaseClient().auth.getUser()
-    if (!user) {
-      console.error('User not found in session')
-      throw new Error('User not authenticated')
-    }
-    
-    console.log('User authenticated successfully:', user.id)
-    return user
+
+    return session.user
   }
 
   static async getTimelineForMovie(movieId: string): Promise<Timeline | null> {

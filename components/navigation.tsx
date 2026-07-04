@@ -26,6 +26,7 @@ import {
   Mic,
   Type,
   Video,
+  List,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -62,6 +63,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Movies", href: "/movies", icon: Film },
       { name: "Timeline", href: "/timeline", icon: Play },
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
+      { name: "Shot List", href: "/shotlist", icon: List },
       { name: "Cinema Production", href: "/cinema-production", icon: Video },
       { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },
       { name: "Call Sheet", href: "/call-sheet", icon: FileText },

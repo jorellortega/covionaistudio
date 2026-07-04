@@ -43,6 +43,7 @@ import {
   Share2,
   Shield,
   ScrollText,
+  List,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -2247,6 +2248,16 @@ export default function MoviesPage() {
                     >
                       <Film className="mr-2 h-3.5 w-3.5" />
                       Storyboards
+                    </Button>
+                  </Link>
+                  <Link href={`/shotlist?movie=${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-teal-500/30 bg-transparent hover:bg-teal-500/10 text-teal-400 hover:text-teal-300 text-xs h-8"
+                    >
+                      <List className="mr-2 h-3.5 w-3.5" />
+                      Shot List
                     </Button>
                   </Link>
                   <Link href={`/locations?movie=${movie.id}`}>

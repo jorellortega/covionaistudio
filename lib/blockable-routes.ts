@@ -52,6 +52,7 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'Productions', path: '/timeline', label: 'Timeline' },
   { group: 'Productions', path: '/timeline-scene', label: 'Timeline scene' },
   { group: 'Productions', path: '/storyboards', label: 'Storyboards' },
+  { group: 'Productions', path: '/shotlist', label: 'Shot list' },
   { group: 'Productions', path: '/characters', label: 'Characters' },
   { group: 'Productions', path: '/locations', label: 'Locations' },
   { group: 'Productions', path: '/assets', label: 'Assets' },

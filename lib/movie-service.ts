@@ -1,6 +1,7 @@
 import { getSupabaseClient } from './supabase'
 import { Database } from './supabase'
 import { getErrorMessage, withRetry } from './fetch-retry'
+import { requireSessionUser } from './auth-session'
 
 export type Movie = Database['public']['Tables']['projects']['Row'] & {
   project_type: 'movie'
@@ -22,8 +23,7 @@ export class MovieService {
   static async getMovies(userId?: string): Promise<Movie[]> {
     let resolvedUserId = userId
     if (!resolvedUserId) {
-      const { data: { user } } = await getSupabaseClient().auth.getUser()
-      if (!user) throw new Error('User not authenticated')
+      const user = await requireSessionUser()
       resolvedUserId = user.id
     }
 
@@ -109,11 +109,7 @@ export class MovieService {
 
   static async createMovie(movieData: CreateMovieData): Promise<Movie> {
     try {
-      const { data: { user } } = await getSupabaseClient().auth.getUser()
-      
-      if (!user) {
-        throw new Error('User not authenticated')
-      }
+      const user = await requireSessionUser()
 
       const { data, error } = await getSupabaseClient()
         .from('projects')
@@ -168,10 +164,7 @@ export class MovieService {
   }
 
   static async getMovieById(id: string): Promise<Movie | null> {
-    const { data: { user } } = await getSupabaseClient().auth.getUser()
-    if (!user) {
-      throw new Error('User not authenticated')
-    }
+    const user = await requireSessionUser()
 
     console.log('🎬 MovieService.getMovieById - Checking access for project:', id, 'user:', user.id, 'email:', user.email)
 

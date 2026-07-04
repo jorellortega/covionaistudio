@@ -40,7 +40,7 @@ export default function Header() {
           .from('users')
           .select('name')
           .eq('id', userId)
-          .single()
+          .maybeSingle()
 
         if (error) {
           console.error('Error fetching user name:', error)
