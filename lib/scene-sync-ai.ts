@@ -122,8 +122,9 @@ export function buildSceneSyncPrompt(
 
 Direction: ${direction}
 - Match by narrative content (dialogue, action, description), NOT only shot_number.
-- Prefer existing storyboard_id links when content still aligns.
+- Prefer existing storyboard_id links when content still aligns — those pairings are mandatory.
 - One shot list row pairs with at most one storyboard.
+- CRITICAL: Matched pairs must share the SOURCE shot_number. When syncing storyboards→shot list, every target fields.shot_number MUST equal that storyboard's shot_number. When syncing shot list→storyboards, every target fields.shot_number MUST equal that shot list row's shot_number. Same for sequence_order.
 - Preserve dialogue in a dedicated "dialogue" field when present.
 - Put stage direction / blocking in "action", summary in "description" (shot list) or "title"+"description" (storyboard).
 - Do NOT delete anything. Unmatched source items become create operations.
@@ -189,9 +190,8 @@ export function normalizeAIShotListFields(fields: Record<string, unknown>): Part
     shot_type: asString(fields.shot_type),
     camera_angle: asString(fields.camera_angle),
     movement: asString(fields.movement),
-    shot_number: asNumber(fields.shot_number),
-    sequence_order: asNumber(fields.sequence_order),
     visual_notes: asString(fields.visual_notes),
+    // shot_number / sequence_order always come from the source storyboard — never AI
   }
 }
 
@@ -208,8 +208,7 @@ export function normalizeAIStoryboardFields(fields: Record<string, unknown>): Pa
     shot_type: shotType ? mapShotTypeToStoryboard(shotType) : undefined,
     camera_angle: cameraAngle ? mapCameraAngleToStoryboard(cameraAngle) : undefined,
     movement: movement ? mapMovementToStoryboard(movement) : undefined,
-    shot_number: asNumber(fields.shot_number),
-    sequence_order: asNumber(fields.sequence_order),
+    // shot_number / sequence_order always come from the source shot list — never AI
   }
 }
 
@@ -229,6 +228,8 @@ export function parseAISyncPlan(raw: string, direction: SyncDirection): AISyncPl
   if (!Array.isArray(obj.operations)) return null
 
   const operations: AISyncOperation[] = []
+  const usedShotIds = new Set<string>()
+  const usedStoryboardIds = new Set<string>()
 
   for (const op of obj.operations) {
     if (!op || typeof op !== 'object') continue
@@ -242,10 +243,15 @@ export function parseAISyncPlan(raw: string, direction: SyncDirection): AISyncPl
         : {}
 
     if (type === 'update' && asString(row.shotId) && asString(row.storyboardId)) {
+      const shotId = asString(row.shotId)!
+      const storyboardId = asString(row.storyboardId)!
+      if (usedShotIds.has(shotId) || usedStoryboardIds.has(storyboardId)) continue
+      usedShotIds.add(shotId)
+      usedStoryboardIds.add(storyboardId)
       operations.push({
         type: 'update',
-        shotId: asString(row.shotId)!,
-        storyboardId: asString(row.storyboardId)!,
+        shotId,
+        storyboardId,
         confidence,
         reason,
         fields,
@@ -255,9 +261,12 @@ export function parseAISyncPlan(raw: string, direction: SyncDirection): AISyncPl
       direction === 'storyboards-to-shotlist' &&
       asString(row.storyboardId)
     ) {
+      const storyboardId = asString(row.storyboardId)!
+      if (usedStoryboardIds.has(storyboardId)) continue
+      usedStoryboardIds.add(storyboardId)
       operations.push({
         type: 'create_shot',
-        storyboardId: asString(row.storyboardId)!,
+        storyboardId,
         confidence,
         reason,
         fields,
@@ -267,9 +276,12 @@ export function parseAISyncPlan(raw: string, direction: SyncDirection): AISyncPl
       direction === 'shotlist-to-storyboards' &&
       asString(row.shotId)
     ) {
+      const shotId = asString(row.shotId)!
+      if (usedShotIds.has(shotId)) continue
+      usedShotIds.add(shotId)
       operations.push({
         type: 'create_storyboard',
-        shotId: asString(row.shotId)!,
+        shotId,
         confidence,
         reason,
         fields,

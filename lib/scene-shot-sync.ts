@@ -120,18 +120,43 @@ function resolveFromAIPlan(
   const usedSbs = new Set<string>()
   const pairs: MatchedPair[] = []
 
+  // Always honor existing storyboard_id links first (strongest signal)
+  for (const shot of shots) {
+    if (!shot.storyboard_id || !sbById.has(shot.storyboard_id)) continue
+    const storyboard = sbById.get(shot.storyboard_id)!
+    if (usedShots.has(shot.id) || usedSbs.has(storyboard.id)) continue
+    usedShots.add(shot.id)
+    usedSbs.add(storyboard.id)
+    pairs.push({
+      shot,
+      storyboard,
+      matchType: 'link',
+      aiReason:
+        shot.shot_number !== storyboard.shot_number
+          ? `Linked pair — renumber shot list ${shot.shot_number} → ${storyboard.shot_number}`
+          : 'Existing storyboard link',
+    })
+  }
+
   for (const op of plan.operations) {
     if (op.type === 'update') {
+      if (usedShots.has(op.shotId) || usedSbs.has(op.storyboardId)) continue
       const shot = shotById.get(op.shotId)
       const storyboard = sbById.get(op.storyboardId)
       if (!shot || !storyboard) continue
       usedShots.add(shot.id)
       usedSbs.add(storyboard.id)
+      const renumberNote =
+        direction === 'storyboards-to-shotlist' && shot.shot_number !== storyboard.shot_number
+          ? ` — renumber ${shot.shot_number} → ${storyboard.shot_number}`
+          : direction === 'shotlist-to-storyboards' && shot.shot_number !== storyboard.shot_number
+          ? ` — renumber ${storyboard.shot_number} → ${shot.shot_number}`
+          : ''
       pairs.push({
         shot,
         storyboard,
         matchType: 'ai',
-        aiReason: op.reason,
+        aiReason: `${op.reason}${renumberNote}`,
         aiConfidence: op.confidence,
         shotUpdates:
           direction === 'storyboards-to-shotlist'
@@ -143,6 +168,7 @@ function resolveFromAIPlan(
             : undefined,
       })
     } else if (op.type === 'create_shot') {
+      if (usedSbs.has(op.storyboardId)) continue
       const storyboard = sbById.get(op.storyboardId)
       if (!storyboard) continue
       usedSbs.add(storyboard.id)
@@ -154,6 +180,7 @@ function resolveFromAIPlan(
         shotUpdates: normalizeAIShotListFields(op.fields),
       })
     } else if (op.type === 'create_storyboard') {
+      if (usedShots.has(op.shotId)) continue
       const shot = shotById.get(op.shotId)
       if (!shot) continue
       usedShots.add(shot.id)
@@ -165,6 +192,23 @@ function resolveFromAIPlan(
         storyboardUpdates: normalizeAIStoryboardFields(op.fields),
       })
     }
+  }
+
+  // Same shot_number pairs AI missed (content may differ but numbers align)
+  for (const shot of shots) {
+    if (usedShots.has(shot.id)) continue
+    const storyboard = storyboards.find(
+      (sb) => !usedSbs.has(sb.id) && sb.shot_number === shot.shot_number
+    )
+    if (!storyboard) continue
+    usedShots.add(shot.id)
+    usedSbs.add(storyboard.id)
+    pairs.push({
+      shot,
+      storyboard,
+      matchType: 'shot_number',
+      aiReason: 'Same shot number',
+    })
   }
 
   for (const shot of shots) {
@@ -288,8 +332,7 @@ function storyboardToShotUpdates(
   storyboard: Storyboard,
   overrides?: Partial<CreateShotListData>
 ): Partial<CreateShotListData> {
-  return {
-    shot_number: storyboard.shot_number,
+  const content: Partial<CreateShotListData> = {
     shot_type: storyboard.shot_type,
     camera_angle: storyboard.camera_angle,
     movement: storyboard.movement,
@@ -297,9 +340,13 @@ function storyboardToShotUpdates(
     action: storyboard.action ?? undefined,
     dialogue: storyboard.dialogue ?? undefined,
     visual_notes: storyboard.visual_notes ?? undefined,
+    ...overrides,
+  }
+  return {
+    ...content,
+    shot_number: storyboard.shot_number,
     sequence_order: storyboard.sequence_order ?? storyboard.shot_number,
     storyboard_id: storyboard.id,
-    ...overrides,
   }
 }
 
@@ -307,19 +354,22 @@ function shotToStoryboardUpdates(
   shot: ShotList,
   overrides?: Partial<CreateStoryboardData>
 ): Partial<CreateStoryboardData> {
-  const base: Partial<CreateStoryboardData> = {
+  const content: Partial<CreateStoryboardData> = {
     title: shot.description || `Shot ${shot.shot_number}`,
     description: shot.description || shot.action || '',
-    shot_number: shot.shot_number,
     shot_type: mapShotTypeToStoryboard(shot.shot_type),
     camera_angle: mapCameraAngleToStoryboard(shot.camera_angle),
     movement: mapMovementToStoryboard(shot.movement),
     dialogue: shot.dialogue ?? undefined,
     action: shot.action ?? undefined,
     visual_notes: shot.visual_notes ?? undefined,
+    ...overrides,
+  }
+  return {
+    ...content,
+    shot_number: shot.shot_number,
     sequence_order: shot.sequence_order ?? shot.shot_number,
   }
-  return { ...base, ...overrides }
 }
 
 export function previewSceneSync(
