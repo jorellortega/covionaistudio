@@ -40,6 +40,9 @@ import {
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { ShotListService, type ShotList, type CreateShotListData } from "@/lib/shot-list-service"
+import { sortShotListRows } from "@/lib/shot-list-order"
+import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
+import { ShotListSceneDebug } from "@/components/shot-list-scene-debug"
 
 interface ShotListProps {
   sceneId?: string
@@ -77,10 +80,30 @@ export function ShotListComponent({
     status: 'planned',
   })
 
-  // Load shot lists
+  // Load shot lists (+ refresh when sync applied on another page)
   useEffect(() => {
     loadShotLists()
   }, [sceneId, screenplaySceneId, storyboardId, refreshKey])
+
+  useEffect(() => {
+    if (!sceneId) return
+
+    const reload = (event: Event) => {
+      const detail = (event as CustomEvent<{ sceneId?: string }>).detail
+      if (!detail?.sceneId || detail.sceneId !== sceneId) return
+      console.log("[shot-list] reloading after scene sync", sceneId)
+      void loadShotLists()
+    }
+
+    window.addEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
+
+    const syncKey = `scene-sync-applied:${sceneId}`
+    if (sessionStorage.getItem(syncKey)) {
+      void loadShotLists()
+    }
+
+    return () => window.removeEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
+  }, [sceneId])
 
   const loadShotLists = async () => {
     try {
@@ -88,19 +111,23 @@ export function ShotListComponent({
       let loadedShots: ShotList[] = []
 
       if (sceneId) {
-        loadedShots = await ShotListService.getShotListsByScene(sceneId)
+        const display = await ShotListService.getShotListsForSceneDisplay(sceneId)
+        loadedShots = display.shots
+        console.log("[shot-list] loaded", {
+          sceneId,
+          sceneRows: display.sceneRowCount,
+          displayRows: display.shots.length,
+          linkedOrphans: display.linkedOrphanCount,
+          storyboardsCovered: display.storyboardsCovered,
+          shotNumbers: display.shots.map((s) => s.shot_number),
+        })
       } else if (screenplaySceneId) {
         loadedShots = await ShotListService.getShotListsByScreenplayScene(screenplaySceneId)
       } else if (storyboardId) {
         loadedShots = await ShotListService.getShotListsByStoryboard(storyboardId)
       }
 
-      const sortedShots = loadedShots.sort((a, b) => {
-        const orderA = Number(a.sequence_order ?? a.shot_number)
-        const orderB = Number(b.sequence_order ?? b.shot_number)
-        if (orderA !== orderB) return orderA - orderB
-        return Number(a.shot_number) - Number(b.shot_number)
-      })
+      const sortedShots = sortShotListRows(loadedShots)
       setShots(sortedShots)
       onShotsChange?.(sortedShots)
     } catch (error) {
@@ -242,10 +269,13 @@ export function ShotListComponent({
     }
   }
 
-  if (loading) {
+  if (loading && shots.length === 0) {
     return (
       <Card>
         <CardContent className="py-8">
+          {sceneId ? (
+            <ShotListSceneDebug sceneId={sceneId} uiRenderCount={0} refreshKey={refreshKey} />
+          ) : null}
           <div className="flex items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
@@ -256,13 +286,23 @@ export function ShotListComponent({
 
   return (
     <div className="space-y-4">
+      {sceneId ? (
+        <ShotListSceneDebug
+          sceneId={sceneId}
+          uiRenderCount={shots.length}
+          refreshKey={refreshKey}
+        />
+      ) : null}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Shot List</h3>
           <p className="text-sm text-muted-foreground">
-            Break down this scene into individual shots
+            {shots.length > 0
+              ? `${shots.length} shot${shots.length === 1 ? "" : "s"} shown · numbers: ${shots.map((s) => s.shot_number).join(", ")}`
+              : "Break down this scene into individual shots"}
           </p>
         </div>
+        {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
         <Button onClick={() => handleOpenDialog()} size="sm">
           <Plus className="h-4 w-4 mr-2" />
           Add Shot

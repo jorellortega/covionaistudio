@@ -40,6 +40,8 @@ import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
+import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
+import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -662,6 +664,17 @@ export default function SceneStoryboardsPage() {
       loadUserPreferences()
     }
   }, [ready, userId, sceneId])
+
+  useEffect(() => {
+    if (!sceneId) return
+    const reload = (event: Event) => {
+      const detail = (event as CustomEvent<{ sceneId?: string }>).detail
+      if (!detail?.sceneId || detail.sceneId !== sceneId) return
+      void fetchStoryboards()
+    }
+    window.addEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
+    return () => window.removeEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
+  }, [sceneId])
 
   // Fetch script after sceneInfo is loaded (to get screenplay_content)
   useEffect(() => {
@@ -4172,9 +4185,12 @@ export default function SceneStoryboardsPage() {
               <CardHeader className="p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <div className="flex items-center justify-center w-8 h-8 bg-primary text-primary-foreground rounded-full text-xs sm:text-sm font-bold flex-shrink-0">
-                      {index + 1}
-                    </div>
+                    <StoryboardShotNumberPopover
+                      storyboard={storyboard}
+                      storyboards={storyboards}
+                      sceneId={sceneId}
+                      onChanged={fetchStoryboards}
+                    />
                     <CardTitle className="text-base sm:text-lg break-words">{storyboard.title}</CardTitle>
                   </div>
                   <Badge

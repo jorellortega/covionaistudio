@@ -18,10 +18,12 @@ import {
   applySceneSync,
   loadSceneSyncData,
   loadUndoStack,
+  notifySceneSyncApplied,
   popUndoEntry,
   previewSceneSync,
   pushUndoEntry,
   undoSceneSync,
+  verifySceneShotListCoverage,
   type SyncDirection,
   type SyncFieldChange,
   type SyncPreview,
@@ -196,28 +198,31 @@ export function SceneSyncControls({
   const runPreview = useCallback(async (direction: SyncDirection) => {
     setLoading(true)
     try {
-      const syncData = await loadSceneSyncData(sceneId)
-      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount } = syncData
+      const syncData = await loadSceneSyncData(sceneId, projectId)
+      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount, characterNamesById } = syncData
       setPendingSyncData(syncData)
 
       let plan: AISyncPlan | null = null
       let aiUsed = false
 
-      try {
-        const aiRes = await fetch("/api/scene-sync/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ direction, shots, storyboards }),
-        })
-        const aiData = await aiRes.json()
-        if (aiRes.ok && aiData.plan?.operations?.length) {
-          plan = aiData.plan as AISyncPlan
-          aiUsed = true
-        } else if (!aiRes.ok && !aiData.fallback) {
-          console.warn("[scene-sync] AI unavailable:", aiData.error)
+      // Storyboards → shot list copies fields directly — AI pairing/fields not used
+      if (direction === "shotlist-to-storyboards") {
+        try {
+          const aiRes = await fetch("/api/scene-sync/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ direction, shots, storyboards }),
+          })
+          const aiData = await aiRes.json()
+          if (aiRes.ok && aiData.plan?.operations?.length) {
+            plan = aiData.plan as AISyncPlan
+            aiUsed = true
+          } else if (!aiRes.ok && !aiData.fallback) {
+            console.warn("[scene-sync] AI unavailable:", aiData.error)
+          }
+        } catch (aiError) {
+          console.warn("[scene-sync] AI request failed, using deterministic matching:", aiError)
         }
-      } catch (aiError) {
-        console.warn("[scene-sync] AI request failed, using deterministic matching:", aiError)
       }
 
       const nextPreview = previewSceneSync(direction, shots, storyboards, plan, {
@@ -225,6 +230,7 @@ export function SceneSyncControls({
         sceneShotCount,
         linkedOrphanCount,
         sceneShots,
+        characterNamesById,
       })
       const keys = new Set([...nextPreview.creates, ...nextPreview.updates].map((item) => item.key))
       setPreview(nextPreview)
@@ -251,10 +257,16 @@ export function SceneSyncControls({
           title: "Found hidden shot list rows",
           description: `${linkedOrphanCount} shot${linkedOrphanCount === 1 ? "" : "s"} linked to storyboards but not on this scene — will re-attach.`,
         })
+      } else if (direction === "storyboards-to-shotlist") {
+        toast({
+          title: "Direct copy from storyboards",
+          description:
+            "Each Shot # badge copies verbatim to the same shot list row. Grid order will be aligned after apply.",
+        })
       } else if (!aiUsed) {
         toast({
-          title: "Using scene-order matching",
-          description: "Matched by links, shot numbers, and scene order. Review before applying.",
+          title: "Using shot-number matching",
+          description: "Matched by links and shot numbers. Review before applying.",
         })
       }
     } catch (error) {
@@ -291,10 +303,11 @@ export function SceneSyncControls({
         return
       }
 
-      const { shots, storyboards, sceneShotCount } = pendingSyncData
+      const { shots, storyboards, sceneShots, sceneShotCount, characterNamesById } = pendingSyncData
       console.log("[scene-sync] applying with cached data", {
         storyboards: storyboards.length,
         shots: shots.length,
+        sceneShots: sceneShots.length,
         sceneShotCount,
         selected: selectedCount,
       })
@@ -305,12 +318,21 @@ export function SceneSyncControls({
         projectId,
         sceneNumber,
         shots,
+        sceneShots,
         storyboards,
         includeKeys: selectedKeys,
         aiPlan,
+        characterNamesById,
       })
       const stack = pushUndoEntry(sceneId, undoEntry)
       setUndoCount(stack.length)
+
+      const verified =
+        pendingDirection === "storyboards-to-shotlist"
+          ? await verifySceneShotListCoverage(sceneId, storyboards)
+          : null
+
+      notifySceneSyncApplied(sceneId)
       setPreviewOpen(false)
       resetDialog()
       onSynced?.()
@@ -322,22 +344,22 @@ export function SceneSyncControls({
       ).length
       const expectedTotal =
         pendingDirection === "storyboards-to-shotlist"
-          ? sceneShotCount + created + reattached
+          ? verified?.sceneRowCount ?? sceneShotCount
           : undefined
 
       console.log("[scene-sync] apply complete", {
         created,
         updated,
         reattached,
-        expectedShotListTotal: expectedTotal,
+        verified,
         createdShotIds: undoEntry.createdShotIds,
       })
 
       toast({
         title: "Sync complete",
         description:
-          expectedTotal != null
-            ? `Updated ${updated}${created > 0 ? `, added ${created} new` : ""}${reattached > 0 ? `, re-attached ${reattached}` : ""}. Shot list should now show ${expectedTotal} entries — refresh the shot list page.`
+          expectedTotal != null && verified
+            ? `Updated ${updated}${created > 0 ? `, added ${created} new` : ""}${reattached > 0 ? `, re-attached ${reattached}` : ""}. Shot list now has ${verified.sceneRowCount} rows, ${verified.storyboardsCovered}/${storyboards.length} storyboards linked.${verified.missingStoryboardIds.length > 0 ? " Some storyboards may still need another sync." : ""}`
             : `Applied ${selectedCount} change${selectedCount === 1 ? "" : "s"}. Nothing was deleted.`,
       })
     } catch (error) {
@@ -474,7 +496,7 @@ export function SceneSyncControls({
             <DialogDescription>
               {pendingDirection ? directionLabel(pendingDirection) : ""}
               {preview
-                ? ` — ${preview.shotListCount} visible on shot list · ${preview.storyboardCount} storyboards`
+                ? ` — ${preview.shotListCount} rows on shot list · ${preview.storyboardsLinked ?? preview.debug?.storyboardsOnScene ?? "?"} / ${preview.storyboardCount} storyboards linked`
                 : ""}
               {preview?.debug?.storyboardsOnScene != null &&
               preview.debug.storyboardsOnScene !== preview.storyboardCount ? (
@@ -482,7 +504,7 @@ export function SceneSyncControls({
                   {" "}
                   · {preview.storyboardCount - preview.debug.storyboardsOnScene} storyboard
                   {preview.storyboardCount - preview.debug.storyboardsOnScene === 1 ? "" : "s"} not
-                  on shot list yet
+                  linked on shot list
                 </span>
               ) : null}
               {preview?.debug?.linkedOrphanCount
