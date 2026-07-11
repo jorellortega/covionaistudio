@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
 import { Button } from "@/components/ui/button"
@@ -46,6 +46,8 @@ import {
   getProjectAssetSourceLabel,
   referenceUrlToFile,
 } from "@/lib/project-image-linking"
+
+const MAX_LINKED_REFERENCE_IMAGES = 5
 
 export default function CharactersPage() {
   const { toast } = useToast()
@@ -261,7 +263,7 @@ export default function CharactersPage() {
   const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
-  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
+  const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
   
   // Description editing state
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null)
@@ -369,6 +371,23 @@ export default function CharactersPage() {
     }
     loadAssets()
   }, [selectedCharacterId, toast])
+
+  const prevCharacterIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedCharacterId) {
+      setImagePrompt("")
+      prevCharacterIdRef.current = null
+      return
+    }
+    if (prevCharacterIdRef.current === selectedCharacterId) return
+    prevCharacterIdRef.current = selectedCharacterId
+    const ch = characters.find((c) => c.id === selectedCharacterId)
+    if (!ch) return
+    setImagePrompt(
+      ch.description?.trim() ||
+        `Portrait of ${ch.name}, cinematic lighting, professional character design, high quality`,
+    )
+  }, [selectedCharacterId, characters])
 
   // Load project-wide image assets for linking
   useEffect(() => {
@@ -556,7 +575,7 @@ export default function CharactersPage() {
     config: ReturnType<typeof requireLockedImageConfig>,
     options?: {
       referenceFile?: File
-      styleReferenceFile?: File
+      styleReferenceFiles?: File[]
       width?: number
       height?: number
     },
@@ -574,8 +593,8 @@ export default function CharactersPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
-      if (options.styleReferenceFile) {
-        formData.append("styleFile", options.styleReferenceFile)
+      for (const styleFile of options.styleReferenceFiles ?? []) {
+        formData.append("styleFiles", styleFile)
       }
       if (config.service === "runway") {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
@@ -627,7 +646,7 @@ export default function CharactersPage() {
     referenceAsset: Asset,
     model: string,
     service: string,
-    styleAssetId?: string | null,
+    styleAssetIds?: string[],
   ) => {
     const now = new Date()
     const dateStr = now.toLocaleDateString()
@@ -647,7 +666,8 @@ export default function CharactersPage() {
         character_name: character.name,
         shot_label: shotLabel,
         reference_asset_id: referenceAsset.id,
-        style_asset_id: styleAssetId ?? undefined,
+        style_asset_id: styleAssetIds?.[0],
+        style_asset_ids: styleAssetIds,
       },
       metadata: {
         character_name: character.name,
@@ -656,7 +676,8 @@ export default function CharactersPage() {
         service,
         shot_label: shotLabel,
         reference_asset_id: referenceAsset.id,
-        style_asset_id: styleAssetId ?? undefined,
+        style_asset_id: styleAssetIds?.[0],
+        style_asset_ids: styleAssetIds,
       },
     }
     const savedAsset = await AssetService.createAsset(assetData)
@@ -671,7 +692,8 @@ export default function CharactersPage() {
     options?: {
       promptOverride?: string
       referenceFile?: File
-      styleReferenceFile?: File
+      styleReferenceFiles?: File[]
+      styleAssetIds?: string[]
     },
   ) => {
     if (!selectedCharacterId || !userId || !ready || !referenceAsset.content_url) {
@@ -696,7 +718,7 @@ export default function CharactersPage() {
             `character-ref-${referenceAsset.id}.png`,
           ))
         : undefined,
-      styleReferenceFile: config.supportsReference ? options?.styleReferenceFile : undefined,
+      styleReferenceFiles: config.supportsReference ? options?.styleReferenceFiles : undefined,
     })
 
     if (!response.ok) {
@@ -718,7 +740,7 @@ export default function CharactersPage() {
       referenceAsset,
       config.apiModel,
       config.service,
-      inlineStyleLinkAssetId,
+      options?.styleAssetIds,
     )
   }
 
@@ -742,7 +764,24 @@ export default function CharactersPage() {
   }
 
   const clearInlineStyleLink = () => {
-    setInlineStyleLinkAssetId(null)
+    setInlineStyleLinkAssetIds([])
+  }
+
+  const toggleInlineStyleLinkAsset = (assetId: string) => {
+    setInlineStyleLinkAssetIds((prev) => {
+      if (prev.includes(assetId)) {
+        return prev.filter((id) => id !== assetId)
+      }
+      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+        toast({
+          title: "Maximum references reached",
+          description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
+          variant: "destructive",
+        })
+        return prev
+      }
+      return [...prev, assetId]
+    })
   }
 
   const handleGenerateInlineCustomShot = async () => {
@@ -766,13 +805,15 @@ export default function CharactersPage() {
     const shotLabel =
       direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
 
-    let styleReferenceFile: File | undefined
-    if (inlineStyleLinkAssetId) {
-      const styleAsset = findStyleLinkAsset(inlineStyleLinkAssetId)
+    let styleReferenceFiles: File[] = []
+    for (const assetId of inlineStyleLinkAssetIds) {
+      const styleAsset = findStyleLinkAsset(assetId)
       if (styleAsset?.content_url) {
-        styleReferenceFile = await referenceUrlToFile(
-          styleAsset.content_url,
-          `style-ref-${styleAsset.id}.png`,
+        styleReferenceFiles.push(
+          await referenceUrlToFile(
+            styleAsset.content_url,
+            `style-ref-${styleAsset.id}.png`,
+          ),
         )
       }
     }
@@ -783,7 +824,8 @@ export default function CharactersPage() {
       await generateCharacterShotFromReference(referenceAsset, shotLabel, {
         promptOverride: buildCustomCharacterEditPrompt(direction, selectedChar.name),
         referenceFile: inlineShotReferenceFile ?? undefined,
-        styleReferenceFile,
+        styleReferenceFiles,
+        styleAssetIds: inlineStyleLinkAssetIds,
       })
       setInlineCustomShotPrompt("")
       clearInlineShotReference()
@@ -3008,12 +3050,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         const characterDetails = details.join(', ')
 
         if (characterDetails) {
-          enhancedPrompt = `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality.`
+          enhancedPrompt = `${imagePrompt}. Character details: ${characterDetails}. Cinematic portrait, professional photography, high quality, no text, no typography, no captions, no labels, no watermark.`
         } else {
-          enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+          enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality, no text, no typography, no captions, no labels, no watermark.`
         }
       } else {
-        enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality.`
+        enhancedPrompt = `${imagePrompt}. Cinematic portrait, professional photography, high quality, no text, no typography, no captions, no labels, no watermark.`
       }
 
       // Check for locked image model
@@ -3195,86 +3237,89 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       if (selectedChar.archetype) characterDetails.push(`Archetype: ${selectedChar.archetype}`)
       
       // Build a comprehensive prompt
-      let autoPrompt = "A professional character portrait"
-      
-      // Add visual characteristics first (most important for image generation)
-      const visualTraits: string[] = []
-      if (selectedChar.height) visualTraits.push(selectedChar.height)
-      if (selectedChar.build) visualTraits.push(selectedChar.build)
-      if (selectedChar.skin_tone) visualTraits.push(selectedChar.skin_tone)
-      // Include ethnicity in visual traits for better representation
-      if (selectedChar.ethnicity) visualTraits.push(selectedChar.ethnicity)
-      if (selectedChar.eye_color) visualTraits.push(`${selectedChar.eye_color} eyes`)
-      if (selectedChar.hair_color_current) visualTraits.push(`${selectedChar.hair_color_current} hair`)
-      if (selectedChar.hair_length) visualTraits.push(selectedChar.hair_length)
-      if (selectedChar.face_shape) visualTraits.push(selectedChar.face_shape)
-      if (selectedChar.usual_clothing_style) visualTraits.push(selectedChar.usual_clothing_style)
-      
-      if (visualTraits.length > 0) {
-        autoPrompt += ` featuring ${visualTraits.join(', ')}`
-      }
-      
-      // Add archetype if it's generic enough
-      if (selectedChar.archetype && 
-          !selectedChar.archetype.toLowerCase().includes('villain') && 
-          !selectedChar.archetype.toLowerCase().includes('antagonist') &&
-          !selectedChar.archetype.toLowerCase().includes('killer') &&
-          !selectedChar.archetype.toLowerCase().includes('murder')) {
-        autoPrompt += `, ${selectedChar.archetype.toLowerCase()} character type`
-      }
-      
-      // Add additional context from description if available
-      if (selectedChar.description && selectedChar.description.length < 200) {
-        autoPrompt += `. ${selectedChar.description}`
-      }
-      
-      // Add occupation/role context if available
-      if (selectedChar.occupation) {
-        autoPrompt += `. ${selectedChar.occupation}`
-      }
-      
-      // Include nationality if ethnicity isn't already in visual traits
-      if (selectedChar.nationality && !selectedChar.ethnicity) {
-        autoPrompt += `. ${selectedChar.nationality}`
-      }
-      
-      // Add comprehensive character details as context (if not already included)
-      // This ensures all character information influences the generation
-      if (characterDetails.length > 0) {
-        // Filter out details already explicitly mentioned in the prompt
-        const alreadyMentioned = new Set([
-          selectedChar.name?.toLowerCase(),
-          selectedChar.age?.toString(),
-          selectedChar.gender?.toLowerCase(),
-          selectedChar.species?.toLowerCase(),
-          selectedChar.height?.toLowerCase(),
-          selectedChar.build?.toLowerCase(),
-          selectedChar.skin_tone?.toLowerCase(),
-          selectedChar.eye_color?.toLowerCase(),
-          selectedChar.hair_color_current?.toLowerCase(),
-          selectedChar.archetype?.toLowerCase(),
-          selectedChar.description?.toLowerCase(),
-          selectedChar.occupation?.toLowerCase(),
-          selectedChar.ethnicity?.toLowerCase(),
-          selectedChar.nationality?.toLowerCase(),
-        ])
-        
-        const additionalDetails = characterDetails
-          .filter(detail => {
-            // Check if this detail is already mentioned
-            const detailLower = detail.toLowerCase()
-            return !Array.from(alreadyMentioned).some(mentioned => 
-              mentioned && detailLower.includes(mentioned)
-            )
-          })
-          .slice(0, 3) // Limit to top 3 additional details to avoid prompt bloat
-        
-        if (additionalDetails.length > 0) {
-          autoPrompt += `. Additional context: ${additionalDetails.join(', ')}`
+      let autoPrompt: string
+
+      if (imagePrompt.trim()) {
+        autoPrompt = `${imagePrompt.trim()}. Cinematic lighting, professional photography, photorealistic portrait, high quality, detailed, no text, no typography, no captions, no labels, no watermark`
+      } else {
+        autoPrompt = "A professional character portrait"
+
+        // Add visual characteristics first (most important for image generation)
+        const visualTraits: string[] = []
+        if (selectedChar.height) visualTraits.push(selectedChar.height)
+        if (selectedChar.build) visualTraits.push(selectedChar.build)
+        if (selectedChar.skin_tone) visualTraits.push(selectedChar.skin_tone)
+        // Include ethnicity in visual traits for better representation
+        if (selectedChar.ethnicity) visualTraits.push(selectedChar.ethnicity)
+        if (selectedChar.eye_color) visualTraits.push(`${selectedChar.eye_color} eyes`)
+        if (selectedChar.hair_color_current) visualTraits.push(`${selectedChar.hair_color_current} hair`)
+        if (selectedChar.hair_length) visualTraits.push(selectedChar.hair_length)
+        if (selectedChar.face_shape) visualTraits.push(selectedChar.face_shape)
+        if (selectedChar.usual_clothing_style) visualTraits.push(selectedChar.usual_clothing_style)
+
+        if (visualTraits.length > 0) {
+          autoPrompt += ` featuring ${visualTraits.join(', ')}`
         }
+
+        // Add archetype if it's generic enough
+        if (selectedChar.archetype &&
+            !selectedChar.archetype.toLowerCase().includes('villain') &&
+            !selectedChar.archetype.toLowerCase().includes('antagonist') &&
+            !selectedChar.archetype.toLowerCase().includes('killer') &&
+            !selectedChar.archetype.toLowerCase().includes('murder')) {
+          autoPrompt += `, ${selectedChar.archetype.toLowerCase()} character type`
+        }
+
+        // Add additional context from description if available
+        if (selectedChar.description && selectedChar.description.length < 200) {
+          autoPrompt += `. ${selectedChar.description}`
+        }
+
+        // Add occupation/role context if available
+        if (selectedChar.occupation) {
+          autoPrompt += `. ${selectedChar.occupation}`
+        }
+
+        // Include nationality if ethnicity isn't already in visual traits
+        if (selectedChar.nationality && !selectedChar.ethnicity) {
+          autoPrompt += `. ${selectedChar.nationality}`
+        }
+
+        // Add comprehensive character details as context (if not already included)
+        if (characterDetails.length > 0) {
+          const alreadyMentioned = new Set([
+            selectedChar.name?.toLowerCase(),
+            selectedChar.age?.toString(),
+            selectedChar.gender?.toLowerCase(),
+            selectedChar.species?.toLowerCase(),
+            selectedChar.height?.toLowerCase(),
+            selectedChar.build?.toLowerCase(),
+            selectedChar.skin_tone?.toLowerCase(),
+            selectedChar.eye_color?.toLowerCase(),
+            selectedChar.hair_color_current?.toLowerCase(),
+            selectedChar.archetype?.toLowerCase(),
+            selectedChar.description?.toLowerCase(),
+            selectedChar.occupation?.toLowerCase(),
+            selectedChar.ethnicity?.toLowerCase(),
+            selectedChar.nationality?.toLowerCase(),
+          ])
+
+          const additionalDetails = characterDetails
+            .filter(detail => {
+              const detailLower = detail.toLowerCase()
+              return !Array.from(alreadyMentioned).some(mentioned =>
+                mentioned && detailLower.includes(mentioned)
+              )
+            })
+            .slice(0, 3)
+
+          if (additionalDetails.length > 0) {
+            autoPrompt += `. Additional context: ${additionalDetails.join(', ')}`
+          }
+        }
+
+        autoPrompt += ". Cinematic lighting, professional photography, photorealistic portrait, high quality, detailed, no text, no typography, no captions, no labels, no watermark"
       }
-      
-      autoPrompt += ". Cinematic lighting, professional photography, character design reference, high quality, detailed, realistic portrait style"
 
       // Use the locked model from settings
       const lockedDisplay = migrateGPTImageDisplayLabel(
@@ -3502,54 +3547,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                         <div className="space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <Label className="text-xs sm:text-sm font-medium">Assets</Label>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={handleQuickGenerateCharacterImage}
-                                disabled={isGeneratingQuickImage || !selectedCharacterId || !aiSettingsLoaded}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                                title="Quick generate using system locked AI model"
-                              >
-                                {isGeneratingQuickImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Quick Generate</span>
-                                    <span className="sm:hidden">Quick</span>
-                                  </>
-                                )}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  setIsGenerateImageDialogOpen(true)
-                                  setSelectedMasterPromptForImage("") // Reset selection when opening dialog
-                                  setIncludeCharacterDetails(true) // Reset to default
-                                }}
-                                disabled={isGeneratingImage || isGeneratingQuickImage}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                              >
-                                {isGeneratingImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <ImageIcon className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Generate Image</span>
-                                    <span className="sm:hidden">Generate</span>
-                                  </>
-                                )}
-                              </Button>
+                            <div className="flex items-center gap-2 flex-wrap sm:justify-end">
                               <input
                                 id="character-asset-upload"
                                 type="file"
@@ -3582,6 +3580,71 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               </Button>
                             </div>
                           </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="inline-image-prompt" className="text-xs sm:text-sm font-medium">
+                              Image Prompt
+                            </Label>
+                            <Textarea
+                              id="inline-image-prompt"
+                              value={imagePrompt}
+                              onChange={(e) => setImagePrompt(e.target.value)}
+                              placeholder="e.g., a large black crow perched on a fence post, cinematic lighting, detailed feathers"
+                              className="bg-input border-border min-h-[80px] text-xs sm:text-sm"
+                            />
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={handleQuickGenerateCharacterImage}
+                                disabled={isGeneratingQuickImage || !selectedCharacterId || !aiSettingsLoaded || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                                title="Generate using your prompt and the locked AI model"
+                              >
+                                {isGeneratingQuickImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Quick Generate</span>
+                                    <span className="sm:hidden">Quick</span>
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setIsGenerateImageDialogOpen(true)
+                                  setSelectedMasterPromptForImage("")
+                                  setIncludeCharacterDetails(true)
+                                }}
+                                disabled={isGeneratingImage || isGeneratingQuickImage || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isGeneratingImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ImageIcon className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Generate Image</span>
+                                    <span className="sm:hidden">Generate</span>
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Enter your prompt, then click Quick Generate. Generate Image opens advanced options.
+                            </p>
+                          </div>
                           
                           {isLoadingAssets ? (
                             <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground py-4">
@@ -3590,7 +3653,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                             </div>
                           ) : characterAssets.length === 0 ? (
                             <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words">
-                              No assets uploaded yet. Generate or upload images, videos, or files to help build up this character.
+                              No assets yet. Enter a prompt and click Quick Generate below.
                             </div>
                           ) : (() => {
                             const imageAssets = characterAssets.filter(a => a.content_type === 'image' && a.content_url)
@@ -3743,7 +3806,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                       <p className="text-xs text-muted-foreground">
                                         Edit images using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
                                         {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
-                                          ? " Describe changes below and optionally link another project image as a second reference."
+                                          ? " Describe changes below and optionally link up to 5 project images as additional references."
                                           : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
                                       </p>
                                       {!characterAssets.some((a) => a.content_type === "video" && a.content_url) && (
@@ -3836,8 +3899,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                           </Label>
                                         </div>
                                         <p className="text-xs text-muted-foreground">
-                                          Adds another image as a second reference — pick another shot of this character,
-                                          or images from locations and other characters. Your description above is the only prompt.
+                                          Adds more images as references — pick other shots of this character,
+                                          or images from locations and other characters. Select up to {MAX_LINKED_REFERENCE_IMAGES}.
+                                          Your description above is the only prompt.
                                         </p>
                                         {isLoadingProjectAssets ? (
                                           <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -3861,13 +3925,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                       key={asset.id}
                                                       type="button"
                                                       disabled={isGeneratingShot}
-                                                      onClick={() =>
-                                                        setInlineStyleLinkAssetId((prev) =>
-                                                          prev === asset.id ? null : asset.id,
-                                                        )
-                                                      }
+                                                      onClick={() => toggleInlineStyleLinkAsset(asset.id)}
                                                       className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                                                        inlineStyleLinkAssetId === asset.id
+                                                        inlineStyleLinkAssetIds.includes(asset.id)
                                                           ? "border-violet-500 ring-2 ring-violet-500/40"
                                                           : "border-border hover:border-violet-500/50"
                                                       }`}
@@ -3885,15 +3945,10 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                             ))}
                                           </div>
                                         )}
-                                        {inlineStyleLinkAssetId ? (
-                                          <div className="flex items-center gap-2">
+                                        {inlineStyleLinkAssetIds.length > 0 ? (
+                                          <div className="flex items-center gap-2 flex-wrap">
                                             <p className="text-xs text-violet-400">
-                                              Linked as an additional reference image
-                                              {(() => {
-                                                const linked = findStyleLinkAsset(inlineStyleLinkAssetId)
-                                                if (!linked) return "."
-                                                return ` (${getProjectAssetSourceLabel(linked, projectLocations, projectCharacters)}).`
-                                              })()}
+                                              {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
                                             </p>
                                             <Button
                                               type="button"
@@ -3903,7 +3958,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                               disabled={isGeneratingShot}
                                               onClick={clearInlineStyleLink}
                                             >
-                                              Clear
+                                              Clear all
                                             </Button>
                                           </div>
                                         ) : null}

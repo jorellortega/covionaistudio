@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
 import { Button } from "@/components/ui/button"
@@ -191,6 +191,8 @@ function buildLinkedAssetGroups(
   return groups
 }
 
+const MAX_LINKED_REFERENCE_IMAGES = 5
+
 function normalizeLockedImageModel(
   displayName: string,
   options?: { withReferenceImage?: boolean },
@@ -304,7 +306,7 @@ export default function LocationsPage() {
   const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
-  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
+  const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
   const [isGenerateVideoDialogOpen, setIsGenerateVideoDialogOpen] = useState(false)
   const [videoMotionPrompt, setVideoMotionPrompt] = useState("")
   const [videoDuration, setVideoDuration] = useState<5 | 10>(5)
@@ -435,6 +437,24 @@ export default function LocationsPage() {
     }
     loadAssets()
   }, [selectedLocationId, toast])
+
+  const prevLocationIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedLocationId) {
+      setImagePrompt("")
+      prevLocationIdRef.current = null
+      return
+    }
+    if (prevLocationIdRef.current === selectedLocationId) return
+    prevLocationIdRef.current = selectedLocationId
+    const loc = locations.find((l) => l.id === selectedLocationId)
+    if (!loc) return
+    const suggested =
+      loc.visual_description?.trim() ||
+      loc.description?.trim() ||
+      `Cinematic establishing shot of ${loc.name}, atmospheric lighting, professional location photography, high quality`
+    setImagePrompt(suggested)
+  }, [selectedLocationId, locations])
 
   // Load all project image assets (characters, other locations, etc.)
   useEffect(() => {
@@ -743,91 +763,25 @@ export default function LocationsPage() {
       return
     }
 
+    if (!imagePrompt.trim()) {
+      toast({
+        title: "Enter a prompt",
+        description: "Describe the location image you want to generate.",
+        variant: "destructive",
+      })
+      return
+    }
+
     try {
       setIsGeneratingQuickImage(true)
 
-      // Build comprehensive location description for prompt
-      let imagePrompt = `Cinematic location: "${selectedLoc.name}"`
-      
-      // Add type if available
-      if (selectedLoc.type) {
-        imagePrompt += `, ${selectedLoc.type}`
-      }
-      
-      // Add visual description if available (limit to first 200 chars)
-      if (selectedLoc.visual_description && selectedLoc.visual_description.trim()) {
-        let visualDesc = selectedLoc.visual_description
-          .replace(/\*\*/g, '') // Remove markdown
-          .replace(/\*/g, '')
-          .replace(/\n/g, ' ') // Remove newlines
-          .replace(/\s+/g, ' ') // Remove extra spaces
-          .trim()
-        
-        if (visualDesc.length > 200) {
-          const firstSentence = visualDesc.split(/[.!?]/)[0]
-          visualDesc = (firstSentence && firstSentence.length > 0 && firstSentence.length < 200) 
-            ? firstSentence 
-            : visualDesc.substring(0, 200)
-        }
-        
-        if (visualDesc) {
-          imagePrompt += `. ${visualDesc}`
-        }
-      } else if (selectedLoc.description && selectedLoc.description.trim()) {
-        // Fallback to description if no visual description
-        let desc = selectedLoc.description
-          .replace(/\*\*/g, '')
-          .replace(/\*/g, '')
-          .replace(/\n/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-        
-        if (desc.length > 200) {
-          const firstSentence = desc.split(/[.!?]/)[0]
-          desc = (firstSentence && firstSentence.length > 0 && firstSentence.length < 200) 
-            ? firstSentence 
-            : desc.substring(0, 200)
-        }
-        
-        if (desc) {
-          imagePrompt += `. ${desc}`
-        }
-      }
-      
-      // Add atmosphere and mood if available
-      if (selectedLoc.atmosphere) {
-        imagePrompt += `, ${selectedLoc.atmosphere} atmosphere`
-      }
-      if (selectedLoc.mood) {
-        imagePrompt += `, ${selectedLoc.mood} mood`
-      }
-      
-      // Add time of day if available
-      if (selectedLoc.time_of_day && selectedLoc.time_of_day.length > 0) {
-        imagePrompt += `, ${selectedLoc.time_of_day[0]} lighting`
-      }
-      
-      // Add address context if available
-      if (selectedLoc.city || selectedLoc.country) {
-        const locationContext = [selectedLoc.city, selectedLoc.country].filter(Boolean).join(', ')
-        if (locationContext) {
-          imagePrompt += `, located in ${locationContext}`
-        }
-      }
-      
-      // Add style descriptors
-      imagePrompt += `. Professional cinematic photography, high quality, detailed, atmospheric, dramatic lighting`
-      
-      // Limit prompt length (DALL-E 3 has 1000 character limit)
-      if (imagePrompt.length > 900) {
-        imagePrompt = imagePrompt.substring(0, 900) + "..."
-      }
+      const finalPrompt = `${imagePrompt.trim()}. Professional cinematic photography, high quality, detailed, atmospheric, dramatic lighting, no text, no typography, no captions, no labels, no watermark`
 
       // Use the locked model from settings
       const config = requireLockedImageConfig()
 
       const requestBody = {
-        prompt: imagePrompt,
+        prompt: finalPrompt.length > 990 ? `${finalPrompt.slice(0, 987)}...` : finalPrompt,
         service: config.service,
         apiKey: 'configured',
         userId: userId,
@@ -867,7 +821,7 @@ export default function LocationsPage() {
           content_type: 'image' as const,
           content: '',
           content_url: imageUrlToUse,
-          prompt: imagePrompt,
+          prompt: imagePrompt.trim(),
           model: config.lockedModel,
           generation_settings: {
             service: config.service,
@@ -976,12 +930,12 @@ export default function LocationsPage() {
         const locationDetails = details.join(', ')
 
         if (locationDetails) {
-          enhancedPrompt = `${imagePrompt}. Location details: ${locationDetails}. Cinematic location photography, professional, high quality.`
+          enhancedPrompt = `${imagePrompt}. Location details: ${locationDetails}. Cinematic location photography, professional, high quality, no text, no typography, no captions, no labels, no watermark.`
         } else {
-          enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality.`
+          enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality, no text, no typography, no captions, no labels, no watermark.`
         }
       } else {
-        enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality.`
+        enhancedPrompt = `${imagePrompt}. Cinematic location photography, professional, high quality, no text, no typography, no captions, no labels, no watermark.`
       }
 
       // Use locked image model from AI Settings
@@ -1176,7 +1130,7 @@ export default function LocationsPage() {
     config: ReturnType<typeof requireLockedImageConfig>,
     options?: {
       referenceFile?: File
-      styleReferenceFile?: File
+      styleReferenceFiles?: File[]
       width?: number
       height?: number
     },
@@ -1194,8 +1148,8 @@ export default function LocationsPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
-      if (options.styleReferenceFile) {
-        formData.append("styleFile", options.styleReferenceFile)
+      for (const styleFile of options.styleReferenceFiles ?? []) {
+        formData.append("styleFiles", styleFile)
       }
       if (config.service === "runway") {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
@@ -1399,6 +1353,7 @@ export default function LocationsPage() {
     referenceAsset: Asset,
     model: string,
     service: string,
+    styleAssetIds?: string[],
   ) => {
     const now = new Date()
     const dateStr = now.toLocaleDateString()
@@ -1418,6 +1373,8 @@ export default function LocationsPage() {
         location_name: loc.name,
         shot_preset: shotPreset,
         reference_asset_id: referenceAsset.id,
+        style_asset_id: styleAssetIds?.[0],
+        style_asset_ids: styleAssetIds,
       },
       metadata: {
         location_name: loc.name,
@@ -1426,6 +1383,8 @@ export default function LocationsPage() {
         service,
         shot_preset: shotPreset,
         reference_asset_id: referenceAsset.id,
+        style_asset_id: styleAssetIds?.[0],
+        style_asset_ids: styleAssetIds,
       },
     }
     const savedAsset = await AssetService.createAsset(assetData)
@@ -1899,7 +1858,8 @@ export default function LocationsPage() {
       customPrompt?: string
       promptOverride?: string
       referenceFile?: File
-      styleReferenceFile?: File
+      styleReferenceFiles?: File[]
+      styleAssetIds?: string[]
     },
   ) => {
     if (!selectedLocationId || !userId || !ready || !referenceAsset.content_url) {
@@ -1925,7 +1885,7 @@ export default function LocationsPage() {
             `location-ref-${referenceAsset.id}.png`,
           ))
         : undefined,
-      styleReferenceFile: config.supportsReference ? options?.styleReferenceFile : undefined,
+      styleReferenceFiles: config.supportsReference ? options?.styleReferenceFiles : undefined,
     })
 
     if (!response.ok) {
@@ -1947,6 +1907,7 @@ export default function LocationsPage() {
       referenceAsset,
       config.apiModel,
       config.service,
+      options?.styleAssetIds,
     )
   }
 
@@ -2139,7 +2100,24 @@ export default function LocationsPage() {
   }
 
   const clearInlineStyleLink = () => {
-    setInlineStyleLinkAssetId(null)
+    setInlineStyleLinkAssetIds([])
+  }
+
+  const toggleInlineStyleLinkAsset = (assetId: string) => {
+    setInlineStyleLinkAssetIds((prev) => {
+      if (prev.includes(assetId)) {
+        return prev.filter((id) => id !== assetId)
+      }
+      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+        toast({
+          title: "Maximum references reached",
+          description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
+          variant: "destructive",
+        })
+        return prev
+      }
+      return [...prev, assetId]
+    })
   }
 
   const handleGenerateInlineCustomShot = async () => {
@@ -2163,13 +2141,15 @@ export default function LocationsPage() {
     const shotLabel =
       direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
 
-    let styleReferenceFile: File | undefined
-    if (inlineStyleLinkAssetId) {
-      const styleAsset = projectImageAssets.find((a) => a.id === inlineStyleLinkAssetId)
+    let styleReferenceFiles: File[] = []
+    for (const assetId of inlineStyleLinkAssetIds) {
+      const styleAsset = projectImageAssets.find((a) => a.id === assetId)
       if (styleAsset?.content_url) {
-        styleReferenceFile = await referenceUrlToFile(
-          styleAsset.content_url,
-          `style-ref-${styleAsset.id}.png`,
+        styleReferenceFiles.push(
+          await referenceUrlToFile(
+            styleAsset.content_url,
+            `style-ref-${styleAsset.id}.png`,
+          ),
         )
       }
     }
@@ -2180,7 +2160,8 @@ export default function LocationsPage() {
       await generateLocationShotFromReference(referenceAsset, shotLabel, {
         promptOverride: buildCustomLocationShotPrompt(direction, selectedLoc),
         referenceFile: inlineShotReferenceFile ?? undefined,
-        styleReferenceFile,
+        styleReferenceFiles,
+        styleAssetIds: inlineStyleLinkAssetIds,
       })
       setInlineCustomShotPrompt("")
       clearInlineShotReference()
@@ -2598,7 +2579,7 @@ export default function LocationsPage() {
                         <div className="space-y-3">
                           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                             <Label className="text-xs sm:text-sm font-medium">Assets</Label>
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 flex-wrap sm:justify-end">
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -2608,49 +2589,6 @@ export default function LocationsPage() {
                                 <ExternalLink className="h-4 w-4" />
                                 <span className="hidden sm:inline">View Full Page</span>
                                 <span className="sm:hidden">View</span>
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={handleQuickGenerateLocationImage}
-                                disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                                title="Quick generate using system locked AI model"
-                              >
-                                {isGeneratingQuickImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Quick Generate</span>
-                                    <span className="sm:hidden">Quick</span>
-                                  </>
-                                )}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setIsGenerateImageDialogOpen(true)}
-                                disabled={isGeneratingImage || isGeneratingQuickImage}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                              >
-                                {isGeneratingImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <ImageIcon className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Generate Image</span>
-                                    <span className="sm:hidden">Generate</span>
-                                  </>
-                                )}
                               </Button>
                               <input
                                 id="location-asset-upload"
@@ -2684,6 +2622,67 @@ export default function LocationsPage() {
                               </Button>
                             </div>
                           </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="inline-location-image-prompt" className="text-xs sm:text-sm font-medium">
+                              Image Prompt
+                            </Label>
+                            <Textarea
+                              id="inline-location-image-prompt"
+                              value={imagePrompt}
+                              onChange={(e) => setImagePrompt(e.target.value)}
+                              placeholder="e.g., misty riverbank at dawn, wide establishing shot, cinematic atmosphere"
+                              className="bg-input border-border min-h-[80px] text-xs sm:text-sm"
+                            />
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={handleQuickGenerateLocationImage}
+                                disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                                title="Generate using your prompt and the locked AI model"
+                              >
+                                {isGeneratingQuickImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Quick Generate</span>
+                                    <span className="sm:hidden">Quick</span>
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setIsGenerateImageDialogOpen(true)}
+                                disabled={isGeneratingImage || isGeneratingQuickImage || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isGeneratingImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ImageIcon className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Generate Image</span>
+                                    <span className="sm:hidden">Generate</span>
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Enter your prompt, then click Quick Generate. Generate Image opens advanced options.
+                            </p>
+                          </div>
                           
                           {isLoadingAssets ? (
                             <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground py-4">
@@ -2692,7 +2691,7 @@ export default function LocationsPage() {
                             </div>
                           ) : locationAssets.length === 0 ? (
                             <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words">
-                              No assets uploaded yet. Generate or upload images, videos, or files to help build up this location.
+                              No assets yet. Enter a prompt and click Quick Generate below.
                             </div>
                           ) : (() => {
                             const imageAssets = locationAssets.filter(a => a.content_type === 'image' && a.content_url)
@@ -2996,7 +2995,7 @@ export default function LocationsPage() {
                                             </Label>
                                           </div>
                                           <p className="text-xs text-muted-foreground">
-                                            Adds another image from your project as a second reference — characters, other locations, covers, etc. Your description above is the only prompt.
+                                            Adds more images from your project as references — characters, other locations, covers, etc. Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
                                           </p>
                                           {isLoadingProjectAssets ? (
                                             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -3016,13 +3015,9 @@ export default function LocationsPage() {
                                                         key={asset.id}
                                                         type="button"
                                                         disabled={isGeneratingShot}
-                                                        onClick={() =>
-                                                          setInlineStyleLinkAssetId((prev) =>
-                                                            prev === asset.id ? null : asset.id,
-                                                          )
-                                                        }
+                                                        onClick={() => toggleInlineStyleLinkAsset(asset.id)}
                                                         className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                                                          inlineStyleLinkAssetId === asset.id
+                                                          inlineStyleLinkAssetIds.includes(asset.id)
                                                             ? "border-violet-500 ring-2 ring-violet-500/40"
                                                             : "border-border hover:border-violet-500/50"
                                                         }`}
@@ -3040,17 +3035,10 @@ export default function LocationsPage() {
                                               ))}
                                             </div>
                                           )}
-                                          {inlineStyleLinkAssetId ? (
-                                            <div className="flex items-center gap-2">
+                                          {inlineStyleLinkAssetIds.length > 0 ? (
+                                            <div className="flex items-center gap-2 flex-wrap">
                                               <p className="text-xs text-violet-400">
-                                                Linked as an additional reference image
-                                                {(() => {
-                                                  const linked = projectImageAssets.find(
-                                                    (a) => a.id === inlineStyleLinkAssetId,
-                                                  )
-                                                  if (!linked) return "."
-                                                  return ` (${getProjectAssetSourceLabel(linked, locations, projectCharacters)}).`
-                                                })()}
+                                                {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
                                               </p>
                                               <Button
                                                 type="button"
@@ -3060,7 +3048,7 @@ export default function LocationsPage() {
                                                 disabled={isGeneratingShot}
                                                 onClick={clearInlineStyleLink}
                                               >
-                                                Clear
+                                                Clear all
                                               </Button>
                                             </div>
                                           ) : null}

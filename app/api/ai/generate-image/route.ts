@@ -9,6 +9,17 @@ import {
   normalizeRunwayRatio,
 } from '@/lib/runway-reference'
 
+function collectStyleReferenceFiles(formData: FormData): File[] {
+  const files = formData
+    .getAll('styleFiles')
+    .filter((entry): entry is File => entry instanceof File && entry.size > 0)
+  const legacy = formData.get('styleFile')
+  if (legacy instanceof File && legacy.size > 0) {
+    return [legacy, ...files]
+  }
+  return files
+}
+
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
   try {
@@ -156,7 +167,7 @@ export async function POST(request: NextRequest) {
     // Handle both JSON and FormData requests
     let body: any
     let file: File | null = null
-    let styleFile: File | null = null
+    let styleReferenceFiles: File[] = []
     
     const contentType = request.headers.get('content-type') || ''
     
@@ -174,8 +185,14 @@ export async function POST(request: NextRequest) {
         seed: formData.get('seed') ? parseInt(formData.get('seed') as string) : undefined,
       }
       file = formData.get('file') as File
-      styleFile = formData.get('styleFile') as File
-      console.log('FormData request received with file:', file?.name, styleFile?.name ? `+ style: ${styleFile.name}` : '')
+      styleReferenceFiles = collectStyleReferenceFiles(formData)
+      console.log(
+        'FormData request received with file:',
+        file?.name,
+        styleReferenceFiles.length > 0
+          ? `+ ${styleReferenceFiles.length} style ref(s)`
+          : '',
+      )
     } else {
       // Handle JSON request
       body = await request.json()
@@ -375,7 +392,8 @@ export async function POST(request: NextRequest) {
     const imageModelForRequest = model || 'dall-e-3'
     if (file && isGPTImage2ApiModel(imageModelForRequest)) {
       console.log('🖼️ API ROUTE - GPT Image 2 edit with reference file(s)')
-      const additionalFiles = styleFile && styleFile.size > 0 ? [styleFile] : undefined
+      const additionalFiles =
+        styleReferenceFiles.length > 0 ? styleReferenceFiles.slice(0, 5) : undefined
       const editResponse = await OpenAIService.editImageWithReference({
         prompt,
         model: imageModelForRequest,
@@ -559,7 +577,7 @@ export async function POST(request: NextRequest) {
         let requestBody: any
         
         const additionalRefFiles =
-          styleFile && styleFile.size > 0 ? [styleFile] : undefined
+          styleReferenceFiles.length > 0 ? styleReferenceFiles : undefined
 
         if (model === 'gen4_image_turbo') {
           if (!file) {
