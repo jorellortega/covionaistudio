@@ -5287,20 +5287,9 @@ export default function CinemaProductionPage() {
                             {fileRequirement === 'hedra-avatar' && (
                               <div className="space-y-4 rounded-lg border p-3 bg-muted/20">
                                 <p className="text-xs text-muted-foreground">
-                                  Uses the storyboard portrait + saved or session audio. Lip-sync works best with a clear face in frame.
+                                  Uses the shot image above + saved or session audio. Lip-sync works best with a clear face in frame.
                                 </p>
-                                {storyboard.image_url ? (
-                                  <div className="relative">
-                                    <img
-                                      src={storyboard.image_url}
-                                      alt=""
-                                      className="w-full max-h-48 object-contain rounded-md border bg-background"
-                                    />
-                                    <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
-                                      Storyboard portrait
-                                    </div>
-                                  </div>
-                                ) : (
+                                {!storyboard.image_url && (
                                   <p className="text-sm text-amber-600">
                                     Add a storyboard image with a visible face before generating.
                                   </p>
@@ -5352,7 +5341,7 @@ export default function CinemaProductionPage() {
                                           />
                                         )
                                       })()}
-                                      </div>
+                                    </div>
                                     )
                                   })()}
                                 </div>
