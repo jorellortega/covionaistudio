@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from "react"
 import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
@@ -34,6 +34,9 @@ import {
   Zap,
   Trash2,
   Sparkles,
+  Wand2,
+  Images,
+  Link2,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ImageSizeBadge } from "@/components/image-size-badge"
@@ -50,11 +53,69 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { LocationsService, type Location } from "@/lib/locations-service"
 import { ProjectVoicesService, type ProjectVoice } from "@/lib/project-voices-service"
 import {
   findHedraCharacter3ModelId,
   runHedraAvatarPipeline,
 } from "@/lib/hedra-avatar-client"
+import {
+  DEFAULT_CINEMATIC_IMAGE_HEIGHT,
+  DEFAULT_CINEMATIC_IMAGE_WIDTH,
+  displayModelSupportsReferenceImage,
+  mapDisplayModelToService,
+  migrateGPTImageDisplayLabel,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
+import {
+  buildLinkedAssetGroups,
+  getProjectAssetSourceLabel,
+  referenceUrlToFile,
+} from "@/lib/project-image-linking"
+
+const MAX_LINKED_REFERENCE_IMAGES = 5
+
+const VIDEO_FRAME_PRESETS = [
+  {
+    id: "start",
+    label: "Start of action",
+    directive: "the very beginning of the action, subject just starting to move",
+  },
+  {
+    id: "mid",
+    label: "Mid-action",
+    directive: "the peak of the action with clear subject motion",
+  },
+  {
+    id: "end",
+    label: "End of action",
+    directive: "the end of the action, subject completing the movement",
+  },
+  {
+    id: "closer",
+    label: "Closer framing",
+    directive: "tighter closer framing on the main subject, same moment",
+  },
+  {
+    id: "wider",
+    label: "Wider framing",
+    directive: "wider establishing framing of the same scene and subjects",
+  },
+  {
+    id: "alt-angle",
+    label: "Alternate angle",
+    directive: "a slightly different camera angle of the same moment and subjects",
+  },
+] as const
+
+type FrameApplyTarget = "shot" | "video" | "start" | "end" | "library"
+
+type ShotReferenceFrame = {
+  id: string
+  url: string
+  label: string
+  createdAt: number
+}
 
 type VideoModel = 
   | "Kling T2V" 
@@ -456,6 +517,28 @@ export default function CinemaProductionPage() {
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
   const [promptAssistLoadingId, setPromptAssistLoadingId] = useState<string | null>(null)
   const [audioPromptAssistLoadingId, setAudioPromptAssistLoadingId] = useState<string | null>(null)
+
+  // Image edit + frame refs for video generation
+  const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
+  const [framesDialogOpen, setFramesDialogOpen] = useState(false)
+  const [imageToolsStoryboard, setImageToolsStoryboard] = useState<Storyboard | null>(null)
+  const [imageEditPrompt, setImageEditPrompt] = useState("")
+  const [imageEditUploading, setImageEditUploading] = useState(false)
+  const [imageEditProgress, setImageEditProgress] = useState("")
+  const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
+  const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
+  const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
+  const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
+  const [projectLocations, setProjectLocations] = useState<Location[]>([])
+  const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
+  const [framePresetId, setFramePresetId] = useState<string>(VIDEO_FRAME_PRESETS[0].id)
+  const [frameCustomDirection, setFrameCustomDirection] = useState("")
+  const [frameApplyTarget, setFrameApplyTarget] = useState<FrameApplyTarget>("video")
+  const [frameGenerating, setFrameGenerating] = useState(false)
+  const [frameProgress, setFrameProgress] = useState("")
+  const [shotReferenceFrames, setShotReferenceFrames] = useState<Map<string, ShotReferenceFrame[]>>(
+    new Map(),
+  )
   
   // Toggle between image and video in detail view (per storyboard)
   const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
@@ -619,6 +702,38 @@ export default function CinemaProductionPage() {
     }
   }, [selectedProjectId, ready])
 
+  // Project images + locations for Edit Image linking (same as storyboards)
+  useEffect(() => {
+    const loadLinkableAssets = async () => {
+      if (!selectedProjectId || !ready || !userId) {
+        setProjectImageAssets([])
+        setProjectLocations([])
+        return
+      }
+      setIsLoadingProjectAssets(true)
+      try {
+        const [assets, locs] = await Promise.all([
+          AssetService.getAssetsForProject(selectedProjectId),
+          LocationsService.getLocations(selectedProjectId),
+        ])
+        setProjectImageAssets(assets.filter((a) => a.content_type === "image" && a.content_url))
+        setProjectLocations(locs)
+      } catch (error) {
+        console.error("Error loading project assets for image edit:", error)
+        setProjectImageAssets([])
+        setProjectLocations([])
+      } finally {
+        setIsLoadingProjectAssets(false)
+      }
+    }
+    void loadLinkableAssets()
+  }, [selectedProjectId, ready, userId])
+
+  const linkedProjectImageGroups = useMemo(
+    () => buildLinkedAssetGroups(projectImageAssets, projectLocations, projectCharacters),
+    [projectImageAssets, projectLocations, projectCharacters],
+  )
+
   useEffect(() => {
     if (selectedSceneId && ready) {
       loadStoryboards()
@@ -696,9 +811,11 @@ export default function CinemaProductionPage() {
       try {
         const settings = await AISettingsService.getSystemSettings()
         const audioSetting = await AISettingsService.getOrCreateDefaultTabSetting('audio')
-        const finalSetting = settings.find(s => s.tab_type === 'audio') || audioSetting
+        const imagesSetting = await AISettingsService.getOrCreateDefaultTabSetting('images')
+        const finalAudio = settings.find(s => s.tab_type === 'audio') || audioSetting
+        const finalImages = settings.find(s => s.tab_type === 'images') || imagesSetting
         
-        setAiSettings([finalSetting])
+        setAiSettings([finalAudio, finalImages])
         setAiSettingsLoaded(true)
         
         // Load user API keys from users table
@@ -1356,7 +1473,7 @@ export default function CinemaProductionPage() {
       await applyDialogueText(storyboard, prompt)
       toast({
         title: 'Prompt Assist ready',
-        description: 'Filled dialogue text from shot details for TTS.',
+        description: 'Filled dialogue with tone/delivery tags for ElevenLabs TTS.',
       })
     } catch (error) {
       const fallback =
@@ -1409,6 +1526,391 @@ export default function CinemaProductionPage() {
       return fallback
     } finally {
       setAudioPromptAssistLoadingId(null)
+    }
+  }
+
+  const getLockedImageModelLabel = () => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (imagesSetting?.is_locked && imagesSetting.locked_model) {
+      return migrateGPTImageDisplayLabel(imagesSetting.locked_model)
+    }
+    return null
+  }
+
+  const normalizeLockedImageModel = (
+    displayName: string,
+    options?: { withReferenceImage?: boolean },
+  ): string => {
+    const lower = displayName.toLowerCase()
+    if (lower.includes("runway")) {
+      return options?.withReferenceImage ? "gen4_image_turbo" : "gen4_image"
+    }
+    return normalizeDisplayModelToApiId(displayName)
+  }
+
+  const getLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const imagesSetting = aiSettings.find((s) => s.tab_type === "images")
+    if (!imagesSetting?.is_locked || !imagesSetting.locked_model) {
+      return null
+    }
+    const lockedModel = imagesSetting.locked_model
+    return {
+      lockedModel,
+      service: mapDisplayModelToService(lockedModel),
+      apiModel: normalizeLockedImageModel(lockedModel, options),
+      supportsReference: displayModelSupportsReferenceImage(lockedModel),
+    }
+  }
+
+  const requireLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const config = getLockedImageConfig(options)
+    if (!config) {
+      throw new Error("Please lock an image model in AI Settings first.")
+    }
+    return config
+  }
+
+  const requestLockedImageGeneration = async (
+    prompt: string,
+    config: NonNullable<ReturnType<typeof getLockedImageConfig>>,
+    options?: {
+      referenceFile?: File
+      styleReferenceFiles?: File[]
+      width?: number
+      height?: number
+    },
+  ) => {
+    const width = options?.width ?? (config.service === "runway" ? 1280 : DEFAULT_CINEMATIC_IMAGE_WIDTH)
+    const height = options?.height ?? (config.service === "runway" ? 720 : DEFAULT_CINEMATIC_IMAGE_HEIGHT)
+
+    if (config.supportsReference && options?.referenceFile) {
+      const formData = new FormData()
+      formData.append("prompt", prompt)
+      formData.append("model", config.apiModel)
+      formData.append("service", config.service)
+      formData.append("width", String(width))
+      formData.append("height", String(height))
+      formData.append("apiKey", "configured")
+      formData.append("userId", userId!)
+      formData.append("file", options.referenceFile)
+      for (const styleFile of options.styleReferenceFiles ?? []) {
+        formData.append("styleFiles", styleFile)
+      }
+      if (config.service === "runway") {
+        formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
+      }
+      return fetch("/api/ai/generate-image", { method: "POST", body: formData })
+    }
+
+    return fetch("/api/ai/generate-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        service: config.service,
+        apiKey: "configured",
+        userId,
+        model: config.apiModel,
+        width,
+        height,
+        autoSaveToBucket: true,
+      }),
+    })
+  }
+
+  const getImageGenerationErrorMessage = (error: unknown, fallback: string) => {
+    if (!(error instanceof Error)) return fallback
+    if (error.message.includes("API key")) {
+      return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
+    }
+    return error.message
+  }
+
+  const clearImageEditReference = () => {
+    if (imageEditReferencePreview) URL.revokeObjectURL(imageEditReferencePreview)
+    setImageEditReferenceFile(null)
+    setImageEditReferencePreview(null)
+  }
+
+  const clearImageEditStyleLinks = () => {
+    setImageEditStyleLinkAssetIds([])
+  }
+
+  const toggleImageEditStyleLink = (assetId: string) => {
+    setImageEditStyleLinkAssetIds((prev) => {
+      if (prev.includes(assetId)) return prev.filter((id) => id !== assetId)
+      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+        toast({
+          title: "Maximum references reached",
+          description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
+          variant: "destructive",
+        })
+        return prev
+      }
+      return [...prev, assetId]
+    })
+  }
+
+  const openImageEditDialog = (storyboard: Storyboard) => {
+    setImageToolsStoryboard(storyboard)
+    setImageEditPrompt("")
+    clearImageEditReference()
+    clearImageEditStyleLinks()
+    setImageEditDialogOpen(true)
+  }
+
+  const openFramesDialog = (storyboard: Storyboard) => {
+    setImageToolsStoryboard(storyboard)
+    setFramePresetId(VIDEO_FRAME_PRESETS[0].id)
+    setFrameCustomDirection("")
+    setFrameApplyTarget("video")
+    setFramesDialogOpen(true)
+  }
+
+  const addShotReferenceFrame = (storyboardId: string, frame: ShotReferenceFrame) => {
+    setShotReferenceFrames((prev) => {
+      const next = new Map(prev)
+      const list = next.get(storyboardId) || []
+      if (list.some((f) => f.url === frame.url)) return prev
+      next.set(storyboardId, [frame, ...list].slice(0, 12))
+      return next
+    })
+  }
+
+  const applyGeneratedFrame = async (
+    storyboard: Storyboard,
+    imageUrl: string,
+    label: string,
+    target: FrameApplyTarget,
+  ) => {
+    addShotReferenceFrame(storyboard.id, {
+      id: crypto.randomUUID(),
+      url: imageUrl,
+      label,
+      createdAt: Date.now(),
+    })
+
+    if (target === "library") return
+
+    if (target === "shot") {
+      const updated = await StoryboardsService.updateStoryboardImage(storyboard.id, imageUrl)
+      setStoryboards((prev) => prev.map((sb) => (sb.id === storyboard.id ? updated : sb)))
+      return
+    }
+
+    if (target === "video") {
+      const file = await referenceUrlToFile(
+        imageUrl,
+        `video-ref-shot-${storyboard.shot_number}.png`,
+      )
+      updateStoryboardGeneration(storyboard.id, {
+        uploadedFile: file,
+        filePreview: imageUrl,
+      })
+      return
+    }
+
+    if (target === "start") {
+      updateStoryboardGeneration(storyboard.id, {
+        startFrameImageUrl: imageUrl,
+        startFramePreview: imageUrl,
+        startFrame: null,
+      })
+      return
+    }
+
+    if (target === "end") {
+      updateStoryboardGeneration(storyboard.id, {
+        endFrameImageUrl: imageUrl,
+        endFramePreview: imageUrl,
+        endFrame: null,
+      })
+    }
+  }
+
+  const handleCinemaImageEdit = async () => {
+    const storyboard = imageToolsStoryboard
+    const direction = imageEditPrompt.trim()
+    if (!storyboard || !userId) return
+    if (!direction) {
+      toast({
+        title: "Describe your edit",
+        description: 'e.g. "warmer lighting" or "add mist in the background".',
+        variant: "destructive",
+      })
+      return
+    }
+    if (!imageEditReferenceFile && !storyboard.image_url) {
+      toast({
+        title: "Reference required",
+        description: "This shot needs an image, or upload a reference to edit from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setImageEditUploading(true)
+    setImageEditProgress("Editing image...")
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      let prompt = direction
+      if (storyboard.title) prompt += ` Shot: ${storyboard.title}.`
+      prompt = prompt.slice(0, 990)
+
+      const styleReferenceFiles: File[] = []
+      for (const assetId of imageEditStyleLinkAssetIds) {
+        const styleAsset = projectImageAssets.find((a) => a.id === assetId)
+        if (styleAsset?.content_url) {
+          styleReferenceFiles.push(
+            await referenceUrlToFile(
+              styleAsset.content_url,
+              `style-ref-${styleAsset.id}.png`,
+            ),
+          )
+        }
+      }
+
+      let referenceFile: File | undefined
+      if (config.supportsReference) {
+        referenceFile =
+          imageEditReferenceFile ??
+          (await referenceUrlToFile(
+            storyboard.image_url!,
+            `cinema-edit-${storyboard.id}.png`,
+          ))
+      }
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile,
+        styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to edit image")
+      }
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to edit image")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const updated = await StoryboardsService.updateStoryboardImage(
+        storyboard.id,
+        imageUrlToUse,
+      )
+      setStoryboards((prev) => prev.map((sb) => (sb.id === storyboard.id ? updated : sb)))
+
+      const file = await referenceUrlToFile(
+        imageUrlToUse,
+        `video-ref-shot-${storyboard.shot_number}.png`,
+      )
+      updateStoryboardGeneration(storyboard.id, {
+        uploadedFile: file,
+        filePreview: imageUrlToUse,
+      })
+      addShotReferenceFrame(storyboard.id, {
+        id: crypto.randomUUID(),
+        url: imageUrlToUse,
+        label: "Edited shot",
+        createdAt: Date.now(),
+      })
+
+      setImageEditDialogOpen(false)
+      clearImageEditReference()
+      clearImageEditStyleLinks()
+      setImageEditPrompt("")
+      toast({
+        title: "Image edited",
+        description: "The storyboard shot image was updated with your edit.",
+      })
+    } catch (error) {
+      toast({
+        title: "Edit failed",
+        description: getImageGenerationErrorMessage(error, "Could not edit the image."),
+        variant: "destructive",
+      })
+    } finally {
+      setImageEditUploading(false)
+      setImageEditProgress("")
+    }
+  }
+
+  const handleGenerateVideoFrame = async () => {
+    const storyboard = imageToolsStoryboard
+    if (!storyboard || !userId) return
+    if (!storyboard.image_url) {
+      toast({
+        title: "Shot image required",
+        description: "Generate or link a storyboard image first, then make frames from it.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const preset = VIDEO_FRAME_PRESETS.find((p) => p.id === framePresetId)
+    const direction =
+      frameCustomDirection.trim() ||
+      preset?.directive ||
+      "a useful alternate frame of this shot for video generation"
+
+    setFrameGenerating(true)
+    setFrameProgress("Generating frame...")
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      const actionBit = storyboard.action?.trim()
+        ? ` Action happening: ${storyboard.action.trim()}.`
+        : ""
+      const prompt =
+        `Give me ${direction} of this image. Keep the same scene, subjects, lighting, and world — only change framing/moment as requested.${actionBit} Photoreal cinematic still, no text.`.slice(
+          0,
+          990,
+        )
+
+      const referenceFile = await referenceUrlToFile(
+        storyboard.image_url,
+        `frame-ref-${storyboard.id}.png`,
+      )
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile: config.supportsReference ? referenceFile : undefined,
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to generate frame")
+      }
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to generate frame")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const label = preset?.label || "Custom frame"
+      await applyGeneratedFrame(storyboard, imageUrlToUse, label, frameApplyTarget)
+
+      const targetLabel =
+        frameApplyTarget === "shot"
+          ? "updated the shot image"
+          : frameApplyTarget === "video"
+            ? "set as the video reference image"
+            : frameApplyTarget === "start"
+              ? "set as start frame"
+              : frameApplyTarget === "end"
+                ? "set as end frame"
+                : "saved to this shot’s frame library"
+
+      toast({
+        title: "Frame ready",
+        description: `${label} generated and ${targetLabel}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Frame generation failed",
+        description: getImageGenerationErrorMessage(error, "Could not generate frame."),
+        variant: "destructive",
+      })
+    } finally {
+      setFrameGenerating(false)
+      setFrameProgress("")
     }
   }
 
@@ -4369,6 +4871,7 @@ export default function CinemaProductionPage() {
                             {/* Display Image or Video based on toggle */}
                             {currentViewMode === 'image' ? (
                               storyboard.image_url ? (
+                                <div className="space-y-2">
                                 <div
                                   className="relative w-full bg-muted rounded-lg overflow-hidden border cursor-zoom-in group"
                                   onClick={() => {
@@ -4399,12 +4902,81 @@ export default function CinemaProductionPage() {
                                     </span>
                                   </div>
                                 </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="gap-1.5"
+                                    onClick={() => openImageEditDialog(storyboard)}
+                                  >
+                                    <Wand2 className="h-3.5 w-3.5" />
+                                    Edit Image
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="gap-1.5"
+                                    onClick={() => openFramesDialog(storyboard)}
+                                  >
+                                    <Images className="h-3.5 w-3.5" />
+                                    Make Frames
+                                  </Button>
+                                </div>
+                                {(shotReferenceFrames.get(storyboard.id) || []).length > 0 && (
+                                  <div className="space-y-1.5">
+                                    <p className="text-xs text-muted-foreground">
+                                      Frame library — click to use as video reference
+                                    </p>
+                                    <div className="flex gap-2 overflow-x-auto pb-1">
+                                      {(shotReferenceFrames.get(storyboard.id) || []).map((frame) => (
+                                        <button
+                                          key={frame.id}
+                                          type="button"
+                                          className="relative shrink-0 rounded border overflow-hidden hover:ring-2 hover:ring-primary"
+                                          title={`${frame.label} — use for video`}
+                                          onClick={() =>
+                                            void applyGeneratedFrame(
+                                              storyboard,
+                                              frame.url,
+                                              frame.label,
+                                              "video",
+                                            ).then(() =>
+                                              toast({
+                                                title: "Video reference set",
+                                                description: `Using “${frame.label}” for Generate Video.`,
+                                              }),
+                                            )
+                                          }
+                                        >
+                                          <img
+                                            src={frame.url}
+                                            alt={frame.label}
+                                            className="h-16 w-24 object-cover"
+                                          />
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                </div>
                               ) : (
-                                <div className="py-12 text-center bg-muted rounded-lg">
+                                <div className="py-12 text-center bg-muted rounded-lg space-y-3">
                                   <ImageIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
                                   <p className="text-muted-foreground">
                                     No image available for this storyboard.
                                   </p>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="gap-1.5"
+                                    onClick={() => openImageEditDialog(storyboard)}
+                                  >
+                                    <Wand2 className="h-3.5 w-3.5" />
+                                    Edit from upload
+                                  </Button>
                                 </div>
                               )
                             ) : (
@@ -5443,7 +6015,8 @@ export default function CinemaProductionPage() {
                                 </div>
                               </div>
                               <p className="text-xs text-muted-foreground">
-                                Prompt Assist fills spoken lines from shot dialogue, action, and character.
+                                Prompt Assist fills the spoken line plus tone tags (e.g. [tired][softly])
+                                from shot action, dialogue, and the image.
                               </p>
                               <SessionAudioClipList
                                 clips={getSessionClipsForStoryboard(storyboard.id, "dialogue")}
@@ -5554,6 +6127,431 @@ export default function CinemaProductionPage() {
               <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Image — matches storyboards reference edit dialog */}
+      <Dialog
+        open={imageEditDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !imageEditUploading) {
+            setImageEditDialogOpen(false)
+            setImageToolsStoryboard(null)
+            clearImageEditReference()
+            clearImageEditStyleLinks()
+            setImageEditPrompt("")
+          }
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
+              <Wand2 className="h-5 w-5 text-violet-500" />
+              Edit Image
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {imageToolsStoryboard
+                ? `Reference edit for Shot ${imageToolsStoryboard.shot_number}${imageToolsStoryboard.title ? ` · ${imageToolsStoryboard.title}` : ""}.`
+                : "Edit this storyboard shot using a reference image."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {imageToolsStoryboard && (
+            <div className="space-y-3">
+              {imageToolsStoryboard.image_url && (
+                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                  <img
+                    src={imageToolsStoryboard.image_url}
+                    alt={imageToolsStoryboard.title}
+                    className="w-full h-full max-h-40 object-contain"
+                  />
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
+                {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                  ? " Describe changes below and optionally link another project image as a second reference."
+                  : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+              </p>
+
+              {imageEditUploading && imageEditProgress ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {imageEditProgress}
+                </p>
+              ) : null}
+
+              <div className="space-y-2">
+                <Label htmlFor="cinema-image-edit-prompt" className="text-xs sm:text-sm">
+                  Describe your edit
+                </Label>
+                <Textarea
+                  id="cinema-image-edit-prompt"
+                  value={imageEditPrompt}
+                  onChange={(e) => setImageEditPrompt(e.target.value)}
+                  placeholder='e.g., warmer lighting, wider framing, add rain, closer on the character'
+                  className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
+                  disabled={imageEditUploading}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="cinema-image-edit-ref" className="text-xs text-muted-foreground">
+                  Primary reference (optional)
+                </Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    id="cinema-image-edit-ref"
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    disabled={imageEditUploading}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      if (imageEditReferencePreview) URL.revokeObjectURL(imageEditReferencePreview)
+                      setImageEditReferenceFile(file)
+                      setImageEditReferencePreview(URL.createObjectURL(file))
+                      e.target.value = ""
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    disabled={imageEditUploading}
+                    onClick={() => document.getElementById("cinema-image-edit-ref")?.click()}
+                  >
+                    <Upload className="h-4 w-4" />
+                    Upload reference
+                  </Button>
+                  {imageEditReferencePreview ? (
+                    <>
+                      <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                        <img
+                          src={imageEditReferencePreview}
+                          alt="Uploaded reference"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        disabled={imageEditUploading}
+                        onClick={clearImageEditReference}
+                        title="Remove uploaded reference"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : null}
+                  {!imageEditReferencePreview && imageToolsStoryboard.image_url ? (
+                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
+                      <img
+                        src={imageToolsStoryboard.image_url}
+                        alt="Current shot"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {imageEditReferenceFile
+                    ? "Using your uploaded image as the primary reference."
+                    : imageToolsStoryboard.image_url
+                      ? "Uses the current shot image if you don't upload one."
+                      : "Upload a reference or link an image to this shot first."}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  <Label className="text-xs text-muted-foreground">
+                    Link existing image (optional)
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Adds more images as references from characters, locations, or project assets.
+                  Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
+                </p>
+                {isLoadingProjectAssets ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading project assets…
+                  </div>
+                ) : linkedProjectImageGroups.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-1">
+                    No other images in this project yet. Generate character or location images to link here.
+                  </p>
+                ) : (
+                  <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+                    {linkedProjectImageGroups.map((group) => (
+                      <div key={group.label} className="space-y-1.5">
+                        <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                          {group.label}
+                        </p>
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                          {group.assets.map((asset) => (
+                            <button
+                              key={asset.id}
+                              type="button"
+                              disabled={imageEditUploading}
+                              onClick={() => toggleImageEditStyleLink(asset.id)}
+                              className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                                imageEditStyleLinkAssetIds.includes(asset.id)
+                                  ? "border-violet-500 ring-2 ring-violet-500/40"
+                                  : "border-border hover:border-violet-500/50"
+                              }`}
+                              title={`${getProjectAssetSourceLabel(asset, projectLocations, projectCharacters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                            >
+                              <img
+                                src={asset.content_url!}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {imageEditStyleLinkAssetIds.length > 0 ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-xs text-violet-400">
+                      {imageEditStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as
+                      additional references
+                    </p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      disabled={imageEditUploading}
+                      onClick={clearImageEditStyleLinks}
+                    >
+                      Clear all
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
+
+              <Button
+                size="sm"
+                onClick={() => void handleCinemaImageEdit()}
+                disabled={
+                  imageEditUploading ||
+                  !imageEditPrompt.trim() ||
+                  !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
+                  (!imageEditReferenceFile && !imageToolsStoryboard.image_url)
+                }
+                className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
+              >
+                {imageEditUploading && imageEditPrompt.trim() ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Editing...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="h-4 w-4" />
+                    Edit Image
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Make Frames for video references */}
+      <Dialog
+        open={framesDialogOpen}
+        onOpenChange={(open) => {
+          setFramesDialogOpen(open)
+          if (!open) setImageToolsStoryboard(null)
+        }}
+      >
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Make Frames</DialogTitle>
+            <DialogDescription>
+              Generate alternate stills from this shot for video start/end frames or as the image
+              used when generating video.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {imageToolsStoryboard?.image_url ? (
+              <img
+                src={imageToolsStoryboard.image_url}
+                alt=""
+                className="w-full max-h-36 object-contain rounded-md border bg-muted"
+              />
+            ) : (
+              <p className="text-sm text-amber-600">
+                This shot needs an image before you can generate frames.
+              </p>
+            )}
+            <div>
+              <Label>Frame type</Label>
+              <Select value={framePresetId} onValueChange={setFramePresetId}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {VIDEO_FRAME_PRESETS.map((preset) => (
+                    <SelectItem key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="cinema-frame-direction">Extra direction (optional)</Label>
+              <Textarea
+                id="cinema-frame-direction"
+                value={frameCustomDirection}
+                onChange={(e) => setFrameCustomDirection(e.target.value)}
+                placeholder="e.g. crow wings mid-beat, further left in frame"
+                rows={2}
+                disabled={frameGenerating}
+              />
+            </div>
+            <div>
+              <Label>Apply generated frame to</Label>
+              <Select
+                value={frameApplyTarget}
+                onValueChange={(v) => setFrameApplyTarget(v as FrameApplyTarget)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="video">Video reference (I2V image)</SelectItem>
+                  <SelectItem value="start">Start frame (frame-to-frame)</SelectItem>
+                  <SelectItem value="end">End frame (frame-to-frame)</SelectItem>
+                  <SelectItem value="shot">Update shot image</SelectItem>
+                  <SelectItem value="library">Frame library only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {frameGenerating && frameProgress ? (
+              <p className="text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {frameProgress}
+              </p>
+            ) : null}
+            <Button
+              className="w-full"
+              disabled={frameGenerating || !imageToolsStoryboard?.image_url}
+              onClick={() => void handleGenerateVideoFrame()}
+            >
+              {frameGenerating ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <Images className="h-4 w-4 mr-2" />
+                  Generate Frame
+                </>
+              )}
+            </Button>
+            {imageToolsStoryboard &&
+              (shotReferenceFrames.get(imageToolsStoryboard.id) || []).length > 0 && (
+                <div className="space-y-2 pt-2 border-t">
+                  <p className="text-xs font-medium">This shot’s frames</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(shotReferenceFrames.get(imageToolsStoryboard.id) || []).map((frame) => (
+                      <div key={frame.id} className="rounded border overflow-hidden space-y-1">
+                        <img
+                          src={frame.url}
+                          alt={frame.label}
+                          className="w-full h-24 object-cover"
+                        />
+                        <div className="px-2 pb-2 space-y-1">
+                          <p className="text-[11px] text-muted-foreground truncate">
+                            {frame.label}
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="h-7 text-[11px] px-2"
+                              onClick={() =>
+                                void applyGeneratedFrame(
+                                  imageToolsStoryboard,
+                                  frame.url,
+                                  frame.label,
+                                  "video",
+                                ).then(() =>
+                                  toast({
+                                    title: "Video reference set",
+                                    description: `Using “${frame.label}”.`,
+                                  }),
+                                )
+                              }
+                            >
+                              Video
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-[11px] px-2"
+                              onClick={() =>
+                                void applyGeneratedFrame(
+                                  imageToolsStoryboard,
+                                  frame.url,
+                                  frame.label,
+                                  "start",
+                                ).then(() =>
+                                  toast({
+                                    title: "Start frame set",
+                                    description: `Using “${frame.label}”.`,
+                                  }),
+                                )
+                              }
+                            >
+                              Start
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-[11px] px-2"
+                              onClick={() =>
+                                void applyGeneratedFrame(
+                                  imageToolsStoryboard,
+                                  frame.url,
+                                  frame.label,
+                                  "end",
+                                ).then(() =>
+                                  toast({
+                                    title: "End frame set",
+                                    description: `Using “${frame.label}”.`,
+                                  }),
+                                )
+                              }
+                            >
+                              End
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+          </div>
         </DialogContent>
       </Dialog>
 

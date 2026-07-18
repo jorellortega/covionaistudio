@@ -50,9 +50,16 @@ interface GenerateVideoRequest {
 interface GenerateAudioRequest {
   prompt: string
   type: string
-  model: string
+  model?: string
   apiKey: string
   voiceId?: string
+  voiceSettings?: {
+    stability?: number
+    similarity_boost?: number
+    style?: number
+    speed?: number
+    use_speaker_boost?: boolean
+  }
 }
 
 // OpenAI Service (ChatGPT, DALL-E)
@@ -835,35 +842,63 @@ export class ElevenLabsService {
       // Use the voice from the request or default to Rachel
       const voiceId = request.voiceId || "21m00Tcm4TlvDq8ikWAM"
       console.log('🎤 Using voice ID:', voiceId)
-      
-      const requestBody = {
-        text: request.prompt,
-        model_id: "eleven_monolingual_v1",
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.5,
-          style: 0.0,
-          use_speaker_boost: true,
-        },
+
+      const hasAudioTags = /\[[^\]]+\]/.test(request.prompt || '')
+      // eleven_v3 understands [whispering]/[tired]/etc. delivery tags from Prompt Assist
+      const preferredModel =
+        request.model || (hasAudioTags ? 'eleven_v3' : 'eleven_multilingual_v2')
+      const fallbackModel = 'eleven_multilingual_v2'
+
+      const voice_settings = {
+        stability: request.voiceSettings?.stability ?? (hasAudioTags ? 0.35 : 0.5),
+        similarity_boost: request.voiceSettings?.similarity_boost ?? 0.75,
+        style: request.voiceSettings?.style ?? (hasAudioTags ? 0.35 : 0.0),
+        use_speaker_boost: request.voiceSettings?.use_speaker_boost ?? true,
+        ...(request.voiceSettings?.speed != null
+          ? { speed: request.voiceSettings.speed }
+          : {}),
       }
 
-      console.log('📤 ElevenLabs TTS request:', {
-        textLength: request.prompt?.length ?? 0,
-        model_id: requestBody.model_id,
-      })
-      
-      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'xi-api-key': request.apiKey,
-        },
-        body: JSON.stringify(requestBody),
-      })
+      const tryModel = async (modelId: string) => {
+        const requestBody = {
+          text: request.prompt,
+          model_id: modelId,
+          voice_settings,
+        }
+        console.log('📤 ElevenLabs TTS request:', {
+          textLength: request.prompt?.length ?? 0,
+          model_id: requestBody.model_id,
+          hasAudioTags,
+        })
+        return fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'xi-api-key': request.apiKey,
+          },
+          body: JSON.stringify(requestBody),
+        })
+      }
 
+      let response = await tryModel(preferredModel)
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+        const unsupported =
+          errorText.includes('unsupported_model') ||
+          errorText.includes('deprecated') ||
+          response.status === 400
+        if (unsupported && preferredModel !== fallbackModel) {
+          console.warn(
+            `⚠️ ElevenLabs model ${preferredModel} failed; falling back to ${fallbackModel}`,
+          )
+          response = await tryModel(fallbackModel)
+          if (!response.ok) {
+            const fallbackError = await response.text()
+            throw new Error(`ElevenLabs API error (${response.status}): ${fallbackError}`)
+          }
+        } else {
+          throw new Error(`ElevenLabs API error (${response.status}): ${errorText}`)
+        }
       }
       
       // For audio, we need to handle the binary response
@@ -1118,7 +1153,7 @@ export class ElevenLabsService {
         },
         body: JSON.stringify({
           text: "test",
-          model_id: "eleven_monolingual_v1",
+          model_id: "eleven_multilingual_v2",
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.5,
@@ -1190,7 +1225,7 @@ export class ElevenLabsService {
         },
         body: JSON.stringify({
           text: previewText,
-          model_id: "eleven_monolingual_v1",
+          model_id: "eleven_multilingual_v2",
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.5,

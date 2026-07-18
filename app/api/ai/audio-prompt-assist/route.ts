@@ -21,15 +21,58 @@ type AudioPromptAssistBody = {
   userId?: string | null
 }
 
+function inferDialogueToneTags(body: AudioPromptAssistBody): string {
+  const blob = [
+    body.action,
+    body.dialogue,
+    body.description,
+    body.visualNotes,
+    body.title,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  const tags: string[] = []
+  if (/\b(whisper|murmur|mutter|quiet|softly|under\s*breath)\b/.test(blob)) {
+    tags.push('[whispering]')
+  }
+  if (/\b(shout|yell|scream|bark|roar)\b/.test(blob)) {
+    tags.push('[angry]')
+  }
+  if (/\b(sad|grief|cry|tear|mourn|heartbroken)\b/.test(blob)) {
+    tags.push('[sad]')
+  }
+  if (/\b(laugh|chuckle|joke|amused)\b/.test(blob)) {
+    tags.push('[laughs]')
+  }
+  if (/\b(tired|weary|exhausted|another day|worn)\b/.test(blob)) {
+    tags.push('[tired]')
+  }
+  if (/\b(fear|afraid|scared|terrified|nervous)\b/.test(blob)) {
+    tags.push('[nervous]')
+  }
+  if (/\b(urgent|panic|hurry|rush)\b/.test(blob)) {
+    tags.push('[urgent]')
+  }
+  if (tags.length === 0) tags.push('[thoughtful]')
+  return tags.slice(0, 2).join('')
+}
+
 function buildFallbackPrompt(body: AudioPromptAssistBody, kind: AudioKind): string {
   if (kind === 'dialogue') {
-    const spoken = body.dialogue?.trim() || body.action?.trim()
-    if (spoken) return spoken
-    const bits = [
-      body.characterName ? `${body.characterName} speaks` : 'A character speaks',
-      body.description?.trim() || body.title?.trim() || 'in this shot',
-    ]
-    return bits.join(' ')
+    const spoken =
+      body.dialogue?.trim() ||
+      // Strip obvious "He says ..." wrappers from action when present
+      body.action?.trim()?.replace(/^(he|she|they)\s+says?\s+['"]?/i, '').replace(/['"]\s*to\s+himself\.?$/i, '').trim() ||
+      null
+    const line =
+      spoken ||
+      [
+        body.characterName ? `${body.characterName} speaks` : 'A character speaks',
+        body.description?.trim() || body.title?.trim() || 'in this shot',
+      ].join(' ')
+    return `${inferDialogueToneTags(body)} ${line}`.trim()
   }
 
   const parts: string[] = []
@@ -104,7 +147,7 @@ export async function POST(request: NextRequest) {
       body.characterName ? `Character: ${body.characterName}` : null,
       body.locationName ? `Location: ${body.locationName}` : null,
       body.imageUrl
-        ? 'A reference still image is attached for visual/audio context.'
+        ? 'A reference still image is attached for visual/emotional context.'
         : 'No reference image is attached.',
     ]
       .filter(Boolean)
@@ -112,13 +155,18 @@ export async function POST(request: NextRequest) {
 
     const system =
       kind === 'dialogue'
-        ? `You write spoken dialogue lines for text-to-speech (ElevenLabs).
+        ? `You write ElevenLabs text-to-speech input for a film character line.
 Rules:
-- Return ONLY the words the character should say, no quotes, no markdown, no stage directions, no labels.
-- Prefer the provided Dialogue field when present; polish lightly for natural speech if needed.
-- If no dialogue exists, invent a short, in-character line that fits the shot (1–3 sentences max).
-- Do not invent other characters speaking unless dialogue already includes them.
-- No sound-effect onomatopoeia, no parentheticals like (whispering).`
+- Return ONLY the TTS input string — no markdown, no quotes, no labels like "Dialogue:".
+- Infer tone/delivery from Action, Description, Visual notes, Character, and the image (if attached).
+- ALWAYS include 1–2 ElevenLabs audio tags for delivery BEFORE the spoken words, e.g. [whispering], [tired], [sad], [angry], [nervous], [urgent], [softly], [thoughtful], [laughs], [sighs].
+- After the tags, put ONLY the words the character should speak (what the audience hears).
+- Prefer the Dialogue field for the spoken words when present; extract the quoted line from Action if needed (e.g. He says "Another day..." → Another day...).
+- Shape the spoken line with punctuation/pacing that matches the tone (ellipses, short fragments, emphasis).
+- Keep spoken words to 1–3 short sentences.
+- Do NOT invent other characters speaking unless dialogue already includes them.
+- Do NOT write stage directions as spoken words (no "he says quietly").
+Example: [tired][softly] Another day...`
         : `You write concise prompts for AI sound-effect generation (ElevenLabs Sound Effects).
 Rules:
 - Return ONLY the final sound-effect prompt text, no quotes, no markdown, no preamble.
@@ -136,7 +184,7 @@ Rules:
         type: 'text',
         text:
           kind === 'dialogue'
-            ? `Write spoken dialogue for TTS from these shot details:\n\n${detailLines}`
+            ? `Write ElevenLabs TTS input (audio tags + spoken line) from these shot details. Choose tone that fits the moment:\n\n${detailLines}`
             : `Write one production-ready sound-effect prompt from these shot details:\n\n${detailLines}`,
       },
     ]
@@ -156,8 +204,8 @@ Rules:
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        temperature: kind === 'dialogue' ? 0.5 : 0.4,
-        max_tokens: kind === 'dialogue' ? 200 : 180,
+        temperature: kind === 'dialogue' ? 0.55 : 0.4,
+        max_tokens: kind === 'dialogue' ? 220 : 180,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userContent },
@@ -188,9 +236,15 @@ Rules:
       })
     }
 
+    // Ensure dialogue output has at least one tone tag when the model forgot
+    let promptOut = generated
+    if (kind === 'dialogue' && !/\[[^\]]+\]/.test(promptOut)) {
+      promptOut = `${inferDialogueToneTags(body)} ${promptOut}`.trim()
+    }
+
     return NextResponse.json({
       success: true,
-      prompt: generated.slice(0, kind === 'dialogue' ? 1200 : 500),
+      prompt: promptOut.slice(0, kind === 'dialogue' ? 1200 : 500),
       source: 'ai',
     })
   } catch (error) {
