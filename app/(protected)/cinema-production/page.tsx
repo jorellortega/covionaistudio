@@ -35,6 +35,7 @@ import {
   Trash2
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ImageSizeBadge } from "@/components/image-size-badge"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
@@ -4145,6 +4146,7 @@ export default function CinemaProductionPage() {
                                       e.currentTarget.style.display = 'none'
                                     }}
                                   />
+                                  <ImageSizeBadge src={storyboard.image_url} />
                                   <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/20">
                                     <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
                                       View full image
@@ -5231,12 +5233,13 @@ export default function CinemaProductionPage() {
             </DialogTitle>
           </DialogHeader>
           {fullImageUrl ? (
-            <div className="flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
+            <div className="relative flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
               <img
                 src={fullImageUrl}
                 alt={fullImageTitle || "Storyboard image"}
                 className="max-h-full max-w-full h-full w-auto object-contain"
               />
+              <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
             </div>
           ) : null}
         </DialogContent>

@@ -41,6 +41,7 @@ import Link from "next/link"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
+import { ImageSizeBadge } from "@/components/image-size-badge"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
@@ -4398,6 +4399,7 @@ export default function SceneStoryboardsPage() {
                         </span>
                       </div>
                     </button>
+                    <ImageSizeBadge src={storyboard.image_url} />
                     <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button
                         variant="secondary"
@@ -4867,12 +4869,13 @@ export default function SceneStoryboardsPage() {
             </DialogTitle>
           </DialogHeader>
           {fullImageUrl ? (
-            <div className="flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
+            <div className="relative flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
               <img
                 src={fullImageUrl}
                 alt={fullImageTitle || "Storyboard image"}
                 className="max-h-full max-w-full w-auto h-auto object-contain"
               />
+              <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
             </div>
           ) : null}
         </DialogContent>
