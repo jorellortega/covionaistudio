@@ -21,29 +21,34 @@ type VideoPromptAssistBody = {
 
 function buildFallbackPrompt(body: VideoPromptAssistBody): string {
   const parts: string[] = []
+  const movement = body.movement?.trim().toLowerCase() || ''
   const camera = [
     body.shotType ? `${body.shotType} shot` : null,
     body.cameraAngle ? `${body.cameraAngle} angle` : null,
-    body.movement
-      ? body.movement.toLowerCase() === 'static'
-        ? 'static locked-off camera'
+    movement
+      ? movement === 'static'
+        ? 'locked-off static camera (subject still moves in frame)'
         : `${body.movement} camera movement`
       : null,
   ].filter(Boolean)
 
   if (camera.length) parts.push(camera.join(', '))
   if (body.description?.trim()) parts.push(body.description.trim())
-  if (body.action?.trim()) parts.push(`Action: ${body.action.trim()}`)
+  if (body.action?.trim()) {
+    parts.push(`Primary subject motion: ${body.action.trim()} — clearly animate this action throughout the clip`)
+  }
   if (body.dialogue?.trim()) parts.push(`Dialogue/performance: ${body.dialogue.trim()}`)
   if (body.visualNotes?.trim()) parts.push(`Visual notes: ${body.visualNotes.trim()}`)
   if (body.characterName) parts.push(`Featuring: ${body.characterName}`)
   if (body.locationName) parts.push(`Location: ${body.locationName}`)
   if (body.imageUrl) {
     parts.push(
-      'Animate from the attached reference image — preserve the same composition, subject, lighting, and environment while adding natural cinematic motion',
+      'Animate from the attached reference image — keep the same composition, subject, lighting, and environment while adding clear natural subject motion',
     )
   }
-  parts.push('Photoreal cinematic look, smooth motion, no text, no captions, no watermark')
+  parts.push(
+    'Visible continuous motion of the main subject, photoreal cinematic look, no freeze-frame, no text, no captions, no watermark',
+  )
   return parts.join('. ')
 }
 
@@ -89,15 +94,23 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    const isStaticCamera = (body.movement || '').trim().toLowerCase() === 'static'
+
     const detailLines = [
       body.shotNumber != null ? `Shot number: ${body.shotNumber}` : null,
       body.sceneNumber != null ? `Scene number: ${body.sceneNumber}` : null,
       body.title ? `Title: ${body.title}` : null,
       body.shotType ? `Shot type: ${body.shotType}` : null,
       body.cameraAngle ? `Camera angle: ${body.cameraAngle}` : null,
-      body.movement ? `Camera movement: ${body.movement}` : null,
+      body.movement
+        ? isStaticCamera
+          ? 'Camera movement: static (LOCKED CAMERA ONLY — do NOT freeze the subject; the subject must still move)'
+          : `Camera movement: ${body.movement}`
+        : null,
       body.description ? `Description: ${body.description}` : null,
-      body.action ? `Action: ${body.action}` : null,
+      body.action
+        ? `Action (MUST be clearly animated as subject motion): ${body.action}`
+        : 'Action: not specified — invent believable subject motion from the image (breathing, wingbeats, wind, walking, etc.)',
       body.dialogue ? `Dialogue: ${body.dialogue}` : null,
       body.visualNotes ? `Visual notes: ${body.visualNotes}` : null,
       body.characterName ? `Character: ${body.characterName}` : null,
@@ -114,9 +127,11 @@ export async function POST(request: NextRequest) {
 Rules:
 - Return ONLY the final prompt text, no quotes, no markdown, no preamble.
 - Keep it under 450 characters when possible, max 700.
-- When a reference image is attached, LOOK at it carefully and ground the prompt in what is actually visible (subject appearance, wardrobe, environment, lighting, composition). Do not invent major elements that are not in the image or shot details.
-- For image-to-video: preserve the existing frame — describe camera movement and subtle natural motion only; do not ask to redesign the scene.
-- Include shot type, camera angle, and movement from the shot details when provided.
+- When a reference image is attached, LOOK at it carefully and ground the prompt in what is actually visible. Do not invent major elements that are not in the image or shot details.
+- CRITICAL: "static" / locked-off camera means the CAMERA does not move. It does NOT mean a freeze-frame. The subject and environment must still have clear continuous motion.
+- Prioritize the Action field as the main animation (e.g. if action is "the crow flies", describe wingbeats, forward flight path, body banking — not a still crow).
+- Preserve composition/subject/lighting from the still; animate motion within that frame.
+- Explicitly forbid frozen/static subjects. Prefer verbs like flaps, flies, glides, walks, breathes, turns.
 - No on-screen text, logos, or watermarks.`
 
     const userContent: Array<
@@ -126,8 +141,8 @@ Rules:
       {
         type: 'text',
         text: body.imageUrl?.trim()
-          ? `Write one production-ready image-to-video prompt. Study the attached reference image and combine it with these shot details:\n\n${detailLines}\n\nDescribe motion and camera behavior that fit this exact still.`
-          : `Write one production-ready video prompt from these shot details (no reference image):\n\n${detailLines}`,
+          ? `Write one production-ready image-to-video prompt. Study the attached reference image and combine it with these shot details:\n\n${detailLines}\n\nFocus on clear subject motion matching the Action. If camera is static, keep the camera locked but animate the subject strongly.`
+          : `Write one production-ready video prompt from these shot details (no reference image):\n\n${detailLines}\n\nFocus on clear subject motion matching the Action.`,
       },
     ]
 
