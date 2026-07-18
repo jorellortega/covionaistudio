@@ -24,6 +24,8 @@ import {
   mapDisplayModelToService,
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
+  DEFAULT_CINEMATIC_IMAGE_WIDTH,
+  DEFAULT_CINEMATIC_IMAGE_HEIGHT,
 } from "@/lib/image-model-utils"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AssetService, type Asset } from "@/lib/asset-service"
@@ -38,6 +40,7 @@ import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
+import { ImageSizeBadge } from "@/components/image-size-badge"
 
 const LOCATION_SHOT_PRESETS = [
   "Establishing Shot",
@@ -786,8 +789,8 @@ export default function LocationsPage() {
         apiKey: 'configured',
         userId: userId,
         model: config.apiModel,
-        width: 1024,
-        height: 1024,
+        width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
+        height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
         autoSaveToBucket: true,
       }
 
@@ -1135,8 +1138,8 @@ export default function LocationsPage() {
       height?: number
     },
   ) => {
-    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
-    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+    const width = options?.width ?? (config.service === "runway" ? 1280 : DEFAULT_CINEMATIC_IMAGE_WIDTH)
+    const height = options?.height ?? (config.service === "runway" ? 720 : DEFAULT_CINEMATIC_IMAGE_HEIGHT)
 
     if (config.supportsReference && options?.referenceFile) {
       const formData = new FormData()
@@ -2725,6 +2728,7 @@ export default function LocationsPage() {
                                                   alt={asset.title}
                                                   className="w-full h-full object-cover object-center pointer-events-none"
                                                 />
+                                                <ImageSizeBadge src={asset.content_url} />
                                                 <div 
                                                   className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 pointer-events-none"
                                                 >
@@ -4136,6 +4140,7 @@ export default function LocationsPage() {
                   alt={viewingImage.title}
                   className="w-full h-auto max-h-[70vh] object-contain mx-auto"
                 />
+                <ImageSizeBadge src={viewingImage.content_url} className="bottom-3 left-3 text-[11px] px-2 py-1" />
               </div>
             )}
           </div>

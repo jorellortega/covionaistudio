@@ -32,7 +32,8 @@ import {
   Volume2,
   Music,
   Zap,
-  Trash2
+  Trash2,
+  Sparkles,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ImageSizeBadge } from "@/components/image-size-badge"
@@ -282,6 +283,8 @@ function SoundEffectGenerator({
   onSaveNameChange,
   onRemoveClip,
   savingClipId,
+  onPromptAssist,
+  promptAssistLoading,
 }: { 
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -296,6 +299,8 @@ function SoundEffectGenerator({
   onSaveNameChange: (clipId: string, name: string) => void
   onRemoveClip?: (clipId: string) => void
   savingClipId?: string | null
+  onPromptAssist?: () => Promise<string | null>
+  promptAssistLoading?: boolean
 }) {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState<number | undefined>(undefined)
@@ -310,6 +315,32 @@ function SoundEffectGenerator({
         onChange={(e) => setPrompt(e.target.value)}
         rows={2}
       />
+      {onPromptAssist && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="gap-1.5"
+            disabled={promptAssistLoading || isGenerating}
+            onClick={async () => {
+              const assisted = await onPromptAssist()
+              if (assisted?.trim()) setPrompt(assisted.trim())
+            }}
+            title="Build a sound-effect prompt from shot details and reference image"
+          >
+            {promptAssistLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            Prompt Assist
+          </Button>
+          <p className="text-xs text-muted-foreground self-center">
+            Uses shot action, notes, and image when available.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div>
           <Label className="text-xs">Duration (seconds, optional)</Label>
@@ -423,6 +454,8 @@ export default function CinemaProductionPage() {
   const [selectedStoryboardForVideos, setSelectedStoryboardForVideos] = useState<string | null>(null)
   const [selectedVideoUrl, setSelectedVideoUrl] = useState<string | null>(null)
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
+  const [promptAssistLoadingId, setPromptAssistLoadingId] = useState<string | null>(null)
+  const [audioPromptAssistLoadingId, setAudioPromptAssistLoadingId] = useState<string | null>(null)
   
   // Toggle between image and video in detail view (per storyboard)
   const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
@@ -1159,13 +1192,224 @@ export default function CinemaProductionPage() {
 
   const buildPromptFromStoryboard = (storyboard: Storyboard): string => {
     const parts: string[] = []
-    
-    if (storyboard.description) parts.push(storyboard.description)
-    if (storyboard.action) parts.push(`Action: ${storyboard.action}`)
-    if (storyboard.visual_notes) parts.push(`Visual: ${storyboard.visual_notes}`)
-    if (storyboard.dialogue) parts.push(`Dialogue: ${storyboard.dialogue}`)
-    
-    return parts.join('. ') || `Shot ${storyboard.shot_number}: ${storyboard.shot_type} ${storyboard.camera_angle} ${storyboard.movement}`
+
+    const camera = [
+      storyboard.shot_type ? `${storyboard.shot_type} shot` : null,
+      storyboard.camera_angle ? `${storyboard.camera_angle} angle` : null,
+      storyboard.movement
+        ? storyboard.movement.toLowerCase() === 'static'
+          ? 'static camera'
+          : `${storyboard.movement} camera movement`
+        : null,
+    ].filter(Boolean)
+    if (camera.length) parts.push(camera.join(', '))
+
+    if (storyboard.description?.trim()) parts.push(storyboard.description.trim())
+    if (storyboard.action?.trim()) parts.push(`Action: ${storyboard.action.trim()}`)
+    if (storyboard.visual_notes?.trim()) parts.push(`Visual: ${storyboard.visual_notes.trim()}`)
+    if (storyboard.dialogue?.trim()) parts.push(`Dialogue: ${storyboard.dialogue.trim()}`)
+
+    const character = storyboard.character_id
+      ? projectCharacters.find((c) => c.id === storyboard.character_id)
+      : null
+    if (character?.name) parts.push(`Character: ${character.name}`)
+
+    return (
+      parts.join('. ') ||
+      `Shot ${storyboard.shot_number}: ${storyboard.shot_type} ${storyboard.camera_angle} ${storyboard.movement}`
+    )
+  }
+
+  const handlePromptAssist = async (storyboard: Storyboard) => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    const character = storyboard.character_id
+      ? projectCharacters.find((c) => c.id === storyboard.character_id)
+      : null
+    const imageUrl =
+      generation?.filePreview ||
+      generation?.startFramePreview ||
+      generation?.startFrameImageUrl ||
+      storyboard.image_url ||
+      null
+
+    setPromptAssistLoadingId(storyboard.id)
+    try {
+      const response = await fetch('/api/ai/video-prompt-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: storyboard.title,
+          description: storyboard.description,
+          action: storyboard.action,
+          dialogue: storyboard.dialogue,
+          visualNotes: storyboard.visual_notes,
+          shotType: storyboard.shot_type,
+          cameraAngle: storyboard.camera_angle,
+          movement: storyboard.movement,
+          shotNumber: storyboard.shot_number,
+          sceneNumber: storyboard.scene_number,
+          characterName: character?.name ?? null,
+          imageUrl,
+          videoModel: generation?.model || null,
+          userId,
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.prompt) {
+        throw new Error(data.error || 'Failed to generate prompt')
+      }
+
+      updateStoryboardGeneration(storyboard.id, { prompt: data.prompt })
+      toast({
+        title: 'Prompt Assist ready',
+        description: imageUrl
+          ? 'Built a video prompt from shot details + reference image.'
+          : 'Built a video prompt from shot details. Add/upload an image for stronger I2V prompts.',
+      })
+    } catch (error) {
+      // Local fallback if API fails
+      const fallback = buildPromptFromStoryboard(storyboard)
+      const withImage = storyboard.image_url
+        ? `${fallback}. Animate from the attached reference image — keep composition and lighting, add natural cinematic motion. No text overlays.`
+        : `${fallback}. Photoreal cinematic motion, no text overlays.`
+      updateStoryboardGeneration(storyboard.id, { prompt: withImage })
+      toast({
+        title: 'Used shot details',
+        description:
+          error instanceof Error
+            ? `${error.message} — filled prompt from storyboard fields.`
+            : 'Filled prompt from storyboard fields.',
+      })
+    } finally {
+      setPromptAssistLoadingId(null)
+    }
+  }
+
+  const buildAudioAssistPayload = (storyboard: Storyboard, kind: 'dialogue' | 'sound-effect') => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    const character = storyboard.character_id
+      ? projectCharacters.find((c) => c.id === storyboard.character_id)
+      : null
+    const imageUrl =
+      generation?.filePreview ||
+      generation?.startFramePreview ||
+      generation?.startFrameImageUrl ||
+      storyboard.image_url ||
+      null
+
+    return {
+      kind,
+      title: storyboard.title,
+      description: storyboard.description,
+      action: storyboard.action,
+      dialogue: storyboard.dialogue,
+      visualNotes: storyboard.visual_notes,
+      shotType: storyboard.shot_type,
+      cameraAngle: storyboard.camera_angle,
+      movement: storyboard.movement,
+      shotNumber: storyboard.shot_number,
+      sceneNumber: storyboard.scene_number,
+      characterName: character?.name ?? null,
+      imageUrl,
+      userId,
+    }
+  }
+
+  const fetchAudioPromptAssist = async (
+    storyboard: Storyboard,
+    kind: 'dialogue' | 'sound-effect',
+  ): Promise<string> => {
+    const response = await fetch('/api/ai/audio-prompt-assist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildAudioAssistPayload(storyboard, kind)),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data.prompt) {
+      throw new Error(data.error || 'Failed to generate audio prompt')
+    }
+    return String(data.prompt)
+  }
+
+  const applyDialogueText = async (storyboard: Storyboard, text: string) => {
+    const trimmed = text.trim()
+    setStoryboards((prev) =>
+      prev.map((sb) => (sb.id === storyboard.id ? { ...sb, action: trimmed || null } : sb)),
+    )
+    try {
+      const supabase = getSupabaseClient()
+      await supabase
+        .from('storyboards')
+        .update({ action: trimmed || null })
+        .eq('id', storyboard.id)
+    } catch (error) {
+      console.error('Error saving assisted dialogue:', error)
+    }
+  }
+
+  const handleDialoguePromptAssist = async (storyboard: Storyboard) => {
+    const loadingKey = `${storyboard.id}-dialogue`
+    setAudioPromptAssistLoadingId(loadingKey)
+    try {
+      const prompt = await fetchAudioPromptAssist(storyboard, 'dialogue')
+      await applyDialogueText(storyboard, prompt)
+      toast({
+        title: 'Prompt Assist ready',
+        description: 'Filled dialogue text from shot details for TTS.',
+      })
+    } catch (error) {
+      const fallback =
+        storyboard.dialogue?.trim() ||
+        storyboard.action?.trim() ||
+        buildPromptFromStoryboard(storyboard)
+      await applyDialogueText(storyboard, fallback)
+      toast({
+        title: 'Used shot details',
+        description:
+          error instanceof Error
+            ? `${error.message} — filled dialogue from storyboard fields.`
+            : 'Filled dialogue from storyboard fields.',
+      })
+    } finally {
+      setAudioPromptAssistLoadingId(null)
+    }
+  }
+
+  const handleSoundEffectPromptAssist = async (
+    storyboard: Storyboard,
+  ): Promise<string | null> => {
+    const loadingKey = `${storyboard.id}-sound-effect`
+    setAudioPromptAssistLoadingId(loadingKey)
+    try {
+      const prompt = await fetchAudioPromptAssist(storyboard, 'sound-effect')
+      toast({
+        title: 'Prompt Assist ready',
+        description: storyboard.image_url
+          ? 'Built a sound-effect prompt from shot details + reference image.'
+          : 'Built a sound-effect prompt from shot details.',
+      })
+      return prompt
+    } catch (error) {
+      const parts = [
+        storyboard.action?.trim(),
+        storyboard.description?.trim(),
+        storyboard.visual_notes?.trim(),
+      ].filter(Boolean)
+      const fallback =
+        parts.join('. ') ||
+        `Cinematic ambience for shot ${storyboard.shot_number}`
+      toast({
+        title: 'Used shot details',
+        description:
+          error instanceof Error
+            ? `${error.message} — filled sound-effect prompt from storyboard fields.`
+            : 'Filled sound-effect prompt from storyboard fields.',
+      })
+      return fallback
+    } finally {
+      setAudioPromptAssistLoadingId(null)
+    }
   }
 
   const handleDownloadVideo = async (videoUrl: string, storyboard: Storyboard) => {
@@ -1295,6 +1539,71 @@ export default function CinemaProductionPage() {
         description: error instanceof Error ? error.message : "Failed to save video. Please try again.",
         variant: "destructive",
       })
+    }
+  }
+
+  const switchDetailToVideo = (storyboardId: string) => {
+    setDetailViewMode((prev) => {
+      const next = new Map(prev)
+      next.set(storyboardId, "video")
+      return next
+    })
+  }
+
+  /** Persist a freshly generated video so it survives refresh / Fast Refresh. */
+  const autoSaveGeneratedVideo = async (
+    videoUrl: string,
+    storyboard: Storyboard,
+    meta?: {
+      model?: string | null
+      prompt?: string | null
+      duration?: string
+      resolution?: string
+    },
+  ) => {
+    if (!userId || !videoUrl) return
+
+    try {
+      const fileName = `${storyboard.title || "storyboard"}-shot-${storyboard.shot_number}`
+      const bucketResponse = await fetch("/api/ai/download-and-store-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoUrl, fileName, userId }),
+      })
+      const bucketResult = await bucketResponse.json()
+      const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
+
+      const dbResponse = await fetch("/api/storyboard-videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storyboardId: storyboard.id,
+          videoUrl: savedVideoUrl,
+          videoName: fileName,
+          generationModel: meta?.model || null,
+          generationPrompt: meta?.prompt || null,
+          metadata: {
+            duration: meta?.duration,
+            resolution: meta?.resolution,
+          },
+          isDefault: false,
+        }),
+      })
+
+      if (dbResponse.ok) {
+        await loadStoryboardVideos(storyboard.id)
+        updateStoryboardGeneration(storyboard.id, {
+          generatedVideoUrl: savedVideoUrl,
+          generationStatus: "Saved",
+        })
+        console.log("✅ Auto-saved generated video to database")
+      } else if (savedVideoUrl) {
+        updateStoryboardGeneration(storyboard.id, {
+          generatedVideoUrl: savedVideoUrl,
+        })
+      }
+    } catch (error) {
+      console.warn("Failed to auto-save generated video:", error)
     }
   }
 
@@ -2319,9 +2628,10 @@ export default function CinemaProductionPage() {
                           generatedVideoUrl: videoUrl,
                           generationStatus: "Completed"
                         })
+                        switchDetailToVideo(storyboard.id)
                         toast({
                           title: "Success",
-                          description: "Video generated successfully!",
+                          description: "Video generated successfully — switched to Video view.",
                         })
                         return
                       }
@@ -2457,6 +2767,7 @@ export default function CinemaProductionPage() {
                       generatedVideoUrl: videoUrl,
                       generationStatus: "Completed"
                     })
+                    switchDetailToVideo(storyboard.id)
                     
                     // Auto-save generated video to database
                     try {
@@ -3049,63 +3360,23 @@ export default function CinemaProductionPage() {
                         generatedVideoUrl: videoUrl || null,
                         generationStatus: videoUrl ? "Completed" : "Processing - check back soon"
                       })
+                      switchDetailToVideo(storyboard.id)
                       
                       // Auto-save generated video to database
-                      if (videoUrl && userId) {
-                        try {
-                          const generation = storyboardGenerations.get(storyboard.id)
-                          if (generation) {
-                            const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
-                            
-                            // First save to bucket
-                            const bucketResponse = await fetch('/api/ai/download-and-store-video', {
-                              method: 'POST',
-                              headers: {
-                                'Content-Type': 'application/json',
-                              },
-                              body: JSON.stringify({
-                                videoUrl,
-                                fileName,
-                                userId,
-                              }),
-                            })
-                            
-                            const bucketResult = await bucketResponse.json()
-                            const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
-                            
-                            // Then save to database
-                            const dbResponse = await fetch('/api/storyboard-videos', {
-                              method: 'POST',
-                              headers: {
-                                'Content-Type': 'application/json',
-                              },
-                              body: JSON.stringify({
-                                storyboardId: storyboard.id,
-                                videoUrl: savedVideoUrl,
-                                videoName: fileName,
-                                generationModel: generation.model || null,
-                                generationPrompt: generation.prompt || null,
-                                metadata: {
-                                  duration: generation.duration,
-                                  resolution: generation.resolution,
-                                },
-                                isDefault: false,
-                              }),
-                            })
-                            
-                            if (dbResponse.ok) {
-                              await loadStoryboardVideos(storyboard.id)
-                              console.log('✅ Auto-saved Kling/Veo video to database')
-                            }
-                          }
-                        } catch (error) {
-                          console.warn('Failed to auto-save Kling/Veo video to database:', error)
-                        }
+                      if (videoUrl) {
+                        await autoSaveGeneratedVideo(videoUrl, storyboard, {
+                          model: generation.model,
+                          prompt: generation.prompt,
+                          duration: generation.duration,
+                          resolution: generation.resolution,
+                        })
                       }
                       
                       toast({
                         title: "Success",
-                        description: videoUrl ? "Video generated successfully!" : "Video generation completed.",
+                        description: videoUrl
+                          ? "Video generated successfully — switched to Video view."
+                          : "Video generation completed.",
                       })
                       return
                     } else if (jobStatus === 'FAILED' || jobStatus === 'failed' || jobStatus === 'error') {
@@ -3199,63 +3470,21 @@ export default function CinemaProductionPage() {
             generatedVideoUrl: videoUrl || null,
             generationStatus: videoUrl ? "Completed" : "Processing - check back soon"
           })
-          
-          // Auto-save generated video to database
-          if (videoUrl && userId) {
-            try {
-              const generation = storyboardGenerations.get(storyboard.id)
-              if (generation) {
-                const fileName = `${storyboard.title || 'storyboard'}-shot-${storyboard.shot_number}`
-                
-                // First save to bucket
-                const bucketResponse = await fetch('/api/ai/download-and-store-video', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    videoUrl,
-                    fileName,
-                    userId,
-                  }),
-                })
-                
-                const bucketResult = await bucketResponse.json()
-                const savedVideoUrl = bucketResult.supabaseUrl || videoUrl
-                
-                // Then save to database
-                const dbResponse = await fetch('/api/storyboard-videos', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    storyboardId: storyboard.id,
-                    videoUrl: savedVideoUrl,
-                    videoName: fileName,
-                    generationModel: generation.model || null,
-                    generationPrompt: generation.prompt || null,
-                    metadata: {
-                      duration: generation.duration,
-                      resolution: generation.resolution,
-                    },
-                    isDefault: false,
-                  }),
-                })
-                
-                if (dbResponse.ok) {
-                  await loadStoryboardVideos(storyboard.id)
-                  console.log('✅ Auto-saved Kling video to database')
-                }
-              }
-            } catch (error) {
-              console.warn('Failed to auto-save Kling video to database:', error)
-            }
+          switchDetailToVideo(storyboard.id)
+          if (videoUrl) {
+            await autoSaveGeneratedVideo(videoUrl, storyboard, {
+              model: generation.model,
+              prompt: generation.prompt,
+              duration: generation.duration,
+              resolution: generation.resolution,
+            })
           }
           
           toast({
             title: "Success",
-            description: videoUrl ? "Video generated successfully!" : "Video generation started. Check back in a few minutes.",
+            description: videoUrl
+              ? "Video generated successfully — switched to Video view."
+              : "Video generation started. Check back in a few minutes.",
           })
         } else {
           throw new Error(response.error || "Generation failed")
@@ -3313,9 +3542,21 @@ export default function CinemaProductionPage() {
             generatedVideoUrl: videoUrl || null,
             generationStatus: videoUrl ? "Completed" : "Processing - check back soon"
           })
+          // Always show the Video tab — Image was often still selected after generate
+          switchDetailToVideo(storyboard.id)
+          if (videoUrl) {
+            await autoSaveGeneratedVideo(videoUrl, storyboard, {
+              model: generation.model,
+              prompt: generation.prompt,
+              duration: generation.duration,
+              resolution: generation.resolution,
+            })
+          }
           toast({
             title: "Success",
-            description: videoUrl ? "Video generated successfully!" : "Video generation started. Check back in a few minutes.",
+            description: videoUrl
+              ? "Video generated successfully — switched to Video view."
+              : "Video generation started. Check back in a few minutes.",
           })
         } else {
           throw new Error(result.error || "Generation failed")
@@ -4092,7 +4333,12 @@ export default function CinemaProductionPage() {
                           <>
                             {/* Toggle Button */}
                             {storyboard.image_url && hasVideo && (
-                              <div className="flex gap-2 justify-end">
+                              <div className="flex gap-2 justify-end items-center">
+                                {currentViewMode === 'image' && (
+                                  <span className="text-xs text-muted-foreground mr-auto">
+                                    Video ready — click Video to play
+                                  </span>
+                                )}
                                 <Button
                                   size="sm"
                                   variant={currentViewMode === 'image' ? 'default' : 'outline'}
@@ -4393,16 +4639,40 @@ export default function CinemaProductionPage() {
                                       value={generation.prompt}
                                       onChange={(e) => updateStoryboardGeneration(storyboard.id, { prompt: e.target.value })}
                                       placeholder={defaultPrompt}
-                                      rows={3}
+                                      rows={4}
                                     />
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="mt-1"
-                                      onClick={() => updateStoryboardGeneration(storyboard.id, { prompt: defaultPrompt })}
-                                    >
-                                      Use Storyboard Details
-                                    </Button>
+                                    <div className="mt-1 flex flex-wrap gap-2">
+                                      <Button
+                                        variant="default"
+                                        size="sm"
+                                        className="gap-1.5"
+                                        disabled={promptAssistLoadingId === storyboard.id}
+                                        onClick={() => void handlePromptAssist(storyboard)}
+                                        title="Build a video prompt from shot type, angle, movement, action, and the reference image"
+                                      >
+                                        {promptAssistLoadingId === storyboard.id ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Sparkles className="h-3.5 w-3.5" />
+                                        )}
+                                        Prompt Assist
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        disabled={promptAssistLoadingId === storyboard.id}
+                                        onClick={() =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            prompt: defaultPrompt,
+                                          })
+                                        }
+                                      >
+                                        Use Storyboard Details
+                                      </Button>
+                                    </div>
+                                    <p className="mt-1 text-xs text-muted-foreground">
+                                      Prompt Assist inserts shot type, angle, movement, action, and uses your storyboard/uploaded image when available.
+                                    </p>
                                   </div>
 
                                   <div className="grid grid-cols-2 gap-4">
@@ -4523,68 +4793,44 @@ export default function CinemaProductionPage() {
                             )}
 
                             {fileRequirement === 'image' && (
-                              <div>
-                                <Label>Image Source</Label>
-                                {generation.filePreview ? (
-                                  <div className="relative mt-2">
-                                    <img 
-                                      src={generation.filePreview} 
-                                      alt="Preview" 
-                                      className="w-full h-48 object-cover rounded-md"
-                                    />
-                                    <Button
-                                      variant="destructive"
-                                      size="sm"
-                                      className="absolute top-2 right-2"
-                                      onClick={() => handleRemoveFile(storyboard.id, 'file')}
-                                    >
-                                      <X className="h-4 w-4" />
-                                    </Button>
-                                    <div className="mt-2 text-xs text-muted-foreground">
-                                      Using uploaded image
-                                    </div>
-                                  </div>
-                                ) : storyboard.image_url ? (
-                                  <div className="mt-2 space-y-2">
-                                    <div className="relative">
-                                      <img 
-                                        src={storyboard.image_url} 
-                                        alt="Storyboard" 
-                                        className="w-full h-48 object-cover rounded-md border"
-                                      />
-                                      <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
-                                        Using Storyboard Image
-                                      </div>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground">
-                                      Using storyboard image. You can upload a different image if needed.
-                                    </div>
-                                    <div className="mt-2">
-                                      <Input
-                                        type="file"
-                                        accept="image/*"
-                                        onChange={(e) => {
-                                          const file = e.target.files?.[0]
-                                          if (file) handleFileUpload(storyboard.id, file, 'file')
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <div className="mt-2">
-                                    <Input
-                                      type="file"
-                                      accept="image/*"
-                                      onChange={(e) => {
-                                        const file = e.target.files?.[0]
-                                        if (file) handleFileUpload(storyboard.id, file, 'file')
-                                      }}
-                                    />
-                                    <p className="text-xs text-muted-foreground mt-1">
-                                      Upload an image or use a storyboard that has an image
+                              <div className="rounded-md border bg-muted/20 px-3 py-2 space-y-2">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <Label className="text-sm">Image for video</Label>
+                                    <p className="text-xs text-muted-foreground truncate">
+                                      {generation.filePreview
+                                        ? `Override: ${generation.uploadedFile?.name || 'uploaded image'}`
+                                        : storyboard.image_url
+                                          ? 'Using the storyboard image shown above'
+                                          : 'Upload an image to generate'}
                                     </p>
                                   </div>
-                                )}
+                                  {generation.filePreview ? (
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <img
+                                        src={generation.filePreview}
+                                        alt=""
+                                        className="h-10 w-14 rounded object-cover border"
+                                      />
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleRemoveFile(storyboard.id, 'file')}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <Input
+                                  type="file"
+                                  accept="image/*"
+                                  className="text-xs"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0]
+                                    if (file) handleFileUpload(storyboard.id, file, 'file')
+                                  }}
+                                />
                               </div>
                             )}
 
@@ -4616,6 +4862,40 @@ export default function CinemaProductionPage() {
                                   </div>
                                 )}
                               </div>
+                            )}
+
+                            {/* Generate early for simple models — after prompt/settings/image, before frame-to-frame extras */}
+                            {(fileRequirement === 'image' ||
+                              fileRequirement === 'video' ||
+                              fileRequirement === 'none') &&
+                              generation.model !== 'Leonardo Motion 2.0' && (
+                              <>
+                                <Button
+                                  onClick={() => handleGenerateVideo(storyboard)}
+                                  disabled={
+                                    generation.isGenerating ||
+                                    !generation.prompt.trim()
+                                  }
+                                  className="w-full"
+                                >
+                                  {generation.isGenerating ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Play className="h-4 w-4 mr-2" />
+                                      Generate Video
+                                    </>
+                                  )}
+                                </Button>
+                                {generation.generationStatus && (
+                                  <div className="text-sm text-muted-foreground">
+                                    Status: {generation.generationStatus}
+                                  </div>
+                                )}
+                              </>
                             )}
 
                             {fileRequirement === 'start-end-frames' && (
@@ -4886,37 +5166,43 @@ export default function CinemaProductionPage() {
                               </>
                             )}
 
-                            <Button
-                              onClick={() => handleGenerateVideo(storyboard)}
-                              disabled={
-                                generation.isGenerating ||
-                                !generation.prompt.trim() ||
-                                (generation.model === "Hedra Character 3" &&
-                                  (!storyboard.image_url ||
-                                    getAudioOptionsForStoryboard(storyboard.id).length === 0 ||
-                                    !hedraCharacter3ModelId))
-                              }
-                              className="w-full"
-                            >
-                              {generation.isGenerating ? (
-                                <>
-                                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                                  Generating...
-                                </>
-                              ) : (
-                                <>
-                                  <Play className="h-4 w-4 mr-2" />
-                                  {generation.model === "Hedra Character 3"
-                                    ? "Generate Character 3 Video"
-                                    : "Generate Video"}
-                                </>
-                              )}
-                            </Button>
+                            {(fileRequirement === 'hedra-avatar' ||
+                              fileRequirement === 'start-end-frames' ||
+                              generation.model === 'Leonardo Motion 2.0') && (
+                              <>
+                                <Button
+                                  onClick={() => handleGenerateVideo(storyboard)}
+                                  disabled={
+                                    generation.isGenerating ||
+                                    !generation.prompt.trim() ||
+                                    (generation.model === "Hedra Character 3" &&
+                                      (!storyboard.image_url ||
+                                        getAudioOptionsForStoryboard(storyboard.id).length === 0 ||
+                                        !hedraCharacter3ModelId))
+                                  }
+                                  className="w-full"
+                                >
+                                  {generation.isGenerating ? (
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                      Generating...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Play className="h-4 w-4 mr-2" />
+                                      {generation.model === "Hedra Character 3"
+                                        ? "Generate Character 3 Video"
+                                        : "Generate Video"}
+                                    </>
+                                  )}
+                                </Button>
 
-                            {generation.generationStatus && (
-                              <div className="text-sm text-muted-foreground">
-                                Status: {generation.generationStatus}
-                              </div>
+                                {generation.generationStatus && (
+                                  <div className="text-sm text-muted-foreground">
+                                    Status: {generation.generationStatus}
+                                  </div>
+                                )}
+                              </>
                             )}
 
                             {(() => {
@@ -5102,6 +5388,25 @@ export default function CinemaProductionPage() {
                                       </>
                                     )}
                                   </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    className="gap-1.5"
+                                    disabled={
+                                      audioPromptAssistLoadingId === `${storyboard.id}-dialogue` ||
+                                      audioGenerating.get(`${storyboard.id}-dialogue`)
+                                    }
+                                    onClick={() => void handleDialoguePromptAssist(storyboard)}
+                                    title="Build spoken dialogue from shot details for TTS"
+                                  >
+                                    {audioPromptAssistLoadingId === `${storyboard.id}-dialogue` ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <Sparkles className="h-3.5 w-3.5" />
+                                    )}
+                                    Prompt Assist
+                                  </Button>
                                   {storyboard.action && (
                                     <Button
                                       variant="ghost"
@@ -5137,6 +5442,9 @@ export default function CinemaProductionPage() {
                                   )}
                                 </div>
                               </div>
+                              <p className="text-xs text-muted-foreground">
+                                Prompt Assist fills spoken lines from shot dialogue, action, and character.
+                              </p>
                               <SessionAudioClipList
                                 clips={getSessionClipsForStoryboard(storyboard.id, "dialogue")}
                                 getSaveName={(clip) => getAudioSaveNameForClip(storyboard, clip)}
@@ -5202,6 +5510,10 @@ export default function CinemaProductionPage() {
                               userId={userId || undefined}
                               projectId={selectedProjectId || undefined}
                               sceneId={selectedSceneId || undefined}
+                              promptAssistLoading={
+                                audioPromptAssistLoadingId === `${storyboard.id}-sound-effect`
+                              }
+                              onPromptAssist={() => handleSoundEffectPromptAssist(storyboard)}
                             />
                           </div>
                         </div>
