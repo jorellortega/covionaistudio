@@ -629,16 +629,32 @@ export class KlingService {
 
       const response = await fetch(
         `/api/kling/status?taskId=${encodeURIComponent(taskId)}&mode=${encodeURIComponent(mode)}`,
+        { credentials: 'same-origin', cache: 'no-store' },
       )
       const result = await response.json().catch(() => ({}))
+
+      if (attempt === 1 || attempt % 6 === 0 || result.status === 'completed' || result.status === 'failed') {
+        console.log('🎬 [Kling poll]', {
+          attempt,
+          maxAttempts,
+          httpStatus: response.status,
+          status: result.status,
+          taskStatus: result.taskStatus || result.debug?.taskStatus,
+          statusMsg: result.debug?.statusMsg || null,
+          hasUrl: !!result.data?.url,
+        })
+      }
 
       if (result.status === 'completed' && result.data?.url) {
         return { url: result.data.url as string }
       }
-      if (result.status === 'failed' || (!response.ok && response.status >= 500)) {
+      if (result.status === 'failed') {
         throw new Error(result.error || 'Kling video generation failed')
       }
-      // processing / transient errors — keep polling
+      // Keep polling on processing / transient 4xx (stale session edge cases)
+      if (!response.ok && response.status >= 500) {
+        console.warn('🎬 Kling status poll error, will retry:', result.error || response.status)
+      }
     }
 
     throw new Error(

@@ -151,11 +151,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Prepare request body
-    const requestBody: any = {
+    // Newer Kling API requires model_name. Without it, frame-to-frame (image_tail)
+    // jobs can sit in "processing" indefinitely on an implicit legacy default.
+    const modelName =
+      process.env.KLING_IMAGE2VIDEO_MODEL?.trim() ||
+      (imageTailBase64 ? 'kling-v2-6' : 'kling-v2-1')
+
+    const requestBody: Record<string, unknown> = {
+      model_name: modelName,
       prompt: prompt,
       duration: duration.toString(), // Must be string: "5" or "10"
       aspect_ratio: klingAspectRatio,
-      mode: 'pro', // Use pro mode for highest quality
+      // image_tail requires pro mode on current Kling versions
+      mode: 'pro',
     }
 
     // Add images if provided (base64 only, no data URI prefix)
@@ -168,13 +176,17 @@ export async function POST(req: NextRequest) {
       requestBody.image_tail = imageTailBase64
     }
 
-    console.log('🎬 Calling Kling AI API:', { 
-      endpoint, 
-      prompt, 
-      duration, 
+    console.log('🎬 Calling Kling AI API:', {
+      endpoint,
+      model_name: modelName,
+      prompt: prompt.slice(0, 120) + (prompt.length > 120 ? '…' : ''),
+      duration,
       ratio: klingAspectRatio,
+      mode: requestBody.mode,
       hasImage: !!imageBase64,
-      hasImageTail: !!imageTailBase64
+      hasImageTail: !!imageTailBase64,
+      imageBytes: imageBase64 ? Buffer.byteLength(imageBase64, 'utf8') : 0,
+      imageTailBytes: imageTailBase64 ? Buffer.byteLength(imageTailBase64, 'utf8') : 0,
     })
     
     // Step 1: Create task
@@ -245,22 +257,34 @@ export async function POST(req: NextRequest) {
       })
 
       if (!statusResponse.ok) {
-        console.log(`⚠️ Status check failed: ${statusResponse.status}`)
+        const errBody = await statusResponse.text()
+        console.log(`⚠️ Status check failed: ${statusResponse.status}`, errBody.slice(0, 300))
         continue
       }
 
       const statusData = await statusResponse.json()
-      console.log(`🎬 Task status:`, statusData.data?.task_status)
+      const taskStatus = statusData.data?.task_status
+      const statusMsg = statusData.data?.task_status_msg
+      const updatedAt = statusData.data?.updated_at
+      console.log(`🎬 Task status:`, {
+        taskStatus,
+        statusMsg: statusMsg || null,
+        updatedAt: updatedAt || null,
+        code: statusData.code,
+        message: statusData.message,
+        hasVideo: !!statusData.data?.task_result?.videos?.[0]?.url,
+      })
 
-      if (statusData.data?.task_status === 'succeed') {
+      if (taskStatus === 'succeed') {
         videoUrl = statusData.data.task_result?.videos?.[0]?.url
         if (videoUrl) {
           console.log('✅ Video generated successfully!')
           break
         }
-      } else if (statusData.data?.task_status === 'failed') {
-        const errorMsg = statusData.data?.task_status_msg || 'Unknown error'
-        console.error('❌ Video generation failed:', errorMsg)
+        console.warn('⚠️ Kling reported succeed but no video URL in task_result:', JSON.stringify(statusData.data?.task_result)?.slice(0, 500))
+      } else if (taskStatus === 'failed') {
+        const errorMsg = statusMsg || 'Unknown error'
+        console.error('❌ Video generation failed:', errorMsg, JSON.stringify(statusData.data)?.slice(0, 800))
         throw new Error(`Video generation failed: ${errorMsg}`)
       }
     }

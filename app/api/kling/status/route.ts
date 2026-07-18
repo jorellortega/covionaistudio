@@ -18,47 +18,20 @@ function generateKlingToken() {
   return jwt.sign(payload, secretKey, { algorithm: 'HS256' })
 }
 
+/**
+ * Poll Kling task status using server-side Kling credentials.
+ * Intentionally does not require a Supabase user session — long /api/kling/generate
+ * waits often leave the access token stale, which caused 401s on follow-up polls.
+ * Task IDs are opaque Kling IDs and are only returned to the client that created them.
+ */
 export async function GET(req: NextRequest) {
   try {
-    const { createServerClient } = await import('@supabase/ssr')
-    const { cookies } = await import('next/headers')
+    const taskId = req.nextUrl.searchParams.get('taskId')?.trim()
+    const mode =
+      req.nextUrl.searchParams.get('mode') === 'text2video' ? 'text2video' : 'image2video'
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options),
-              )
-            } catch {
-              // ignore
-            }
-          },
-        },
-      },
-    )
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const taskId = req.nextUrl.searchParams.get('taskId')
-    const mode = req.nextUrl.searchParams.get('mode') === 'text2video' ? 'text2video' : 'image2video'
-
-    if (!taskId) {
-      return NextResponse.json({ error: 'taskId is required' }, { status: 400 })
+    if (!taskId || !/^[A-Za-z0-9_-]{8,128}$/.test(taskId)) {
+      return NextResponse.json({ error: 'Valid taskId is required' }, { status: 400 })
     }
 
     const authToken = generateKlingToken()
@@ -73,10 +46,17 @@ export async function GET(req: NextRequest) {
         Authorization: `Bearer ${authToken}`,
         'Content-Type': 'application/json',
       },
+      cache: 'no-store',
     })
 
     if (!statusResponse.ok) {
       const errorText = await statusResponse.text()
+      console.error('🎬 [kling/status] HTTP error', {
+        taskId,
+        mode,
+        httpStatus: statusResponse.status,
+        body: errorText.slice(0, 400),
+      })
       return NextResponse.json(
         { error: `Kling status check failed: ${statusResponse.status}`, details: errorText },
         { status: statusResponse.status },
@@ -85,14 +65,37 @@ export async function GET(req: NextRequest) {
 
     const statusData = await statusResponse.json()
     const taskStatus = statusData.data?.task_status as string | undefined
+    const statusMsg = (statusData.data?.task_status_msg as string | undefined) || null
     const videoUrl = statusData.data?.task_result?.videos?.[0]?.url as string | undefined
+    const createdAt = statusData.data?.created_at
+    const updatedAt = statusData.data?.updated_at
+
+    console.log('🎬 [kling/status]', {
+      taskId,
+      mode,
+      taskStatus,
+      statusMsg,
+      createdAt,
+      updatedAt,
+      hasVideo: !!videoUrl,
+      code: statusData.code,
+      message: statusData.message,
+    })
 
     if (taskStatus === 'succeed' && videoUrl) {
       return NextResponse.json({
         success: true,
         status: 'completed',
         data: { url: videoUrl, taskId },
+        debug: { taskStatus, statusMsg, createdAt, updatedAt },
       })
+    }
+
+    if (taskStatus === 'succeed' && !videoUrl) {
+      console.warn(
+        '🎬 [kling/status] succeed without video URL',
+        JSON.stringify(statusData.data?.task_result)?.slice(0, 600),
+      )
     }
 
     if (taskStatus === 'failed') {
@@ -100,7 +103,8 @@ export async function GET(req: NextRequest) {
         {
           success: false,
           status: 'failed',
-          error: statusData.data?.task_status_msg || 'Kling video generation failed',
+          error: statusMsg || 'Kling video generation failed',
+          debug: { taskStatus, statusMsg, createdAt, updatedAt, raw: statusData.data },
         },
         { status: 500 },
       )
@@ -112,6 +116,14 @@ export async function GET(req: NextRequest) {
       taskId,
       mode,
       taskStatus: taskStatus || 'processing',
+      debug: {
+        taskStatus: taskStatus || 'processing',
+        statusMsg,
+        createdAt,
+        updatedAt,
+        code: statusData.code,
+        message: statusData.message,
+      },
     })
   } catch (error) {
     console.error('🎬 Kling status error:', error)
