@@ -27,7 +27,7 @@ import {
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
 } from "@/lib/image-model-utils"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -291,6 +291,17 @@ export default function SceneStoryboardsPage() {
   const [aiImagePrompt, setAiImagePrompt] = useState("")
   const [aiImagePromptFull, setAiImagePromptFull] = useState("") // Store the actual full prompt text
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
+  const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
+  const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
+  const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
+  const [fullImageTitle, setFullImageTitle] = useState("")
+
+  const openFullImageViewer = (storyboard: Storyboard) => {
+    if (!storyboard.image_url) return
+    setFullImageUrl(storyboard.image_url)
+    setFullImageTitle(storyboard.title || `Shot ${storyboard.shot_number}`)
+    setFullImageViewerOpen(true)
+  }
   const [userProfile, setUserProfile] = useState<any>(null)
   const [useExactPrompt, setUseExactPrompt] = useState(true)
   const [includeCharacterDetails, setIncludeCharacterDetails] = useState(false)
@@ -1018,7 +1029,7 @@ export default function SceneStoryboardsPage() {
       height?: number
     },
   ) => {
-    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
+    const width = options?.width ?? (config.service === "runway" ? 1280 : 1536)
     const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
 
     if (config.supportsReference && options?.referenceFile) {
@@ -2418,7 +2429,9 @@ export default function SceneStoryboardsPage() {
         service: serviceToUse,
         apiKey: apiKey,
         userId: userId,
-        autoSaveToBucket: true
+        autoSaveToBucket: true,
+        width: 1536,
+        height: 1024,
       }
       
       // Add model parameter if we have one (for GPT Image support)
@@ -2492,6 +2505,81 @@ export default function SceneStoryboardsPage() {
       })
     } finally {
       setIsGeneratingShotImage(false)
+    }
+  }
+
+  /** Redo the current shot image at cinematic landscape size (1536×1024). */
+  const regenerateShotAtLandscapeSize = async (storyboard: Storyboard) => {
+    if (!storyboard.image_url || !userId) {
+      toast({
+        title: "No image to redo",
+        description: "This shot needs an existing image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setRegeneratingLandscapeId(storyboard.id)
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      if (!config.supportsReference) {
+        throw new Error("Lock GPT Image 2 or Runway in AI Settings to redo images at landscape size.")
+      }
+
+      const referenceFile = await referenceUrlToFile(
+        storyboard.image_url,
+        `storyboard-landscape-ref-${storyboard.id}.png`,
+      )
+
+      const promptParts = [
+        "Recreate this exact image as a widescreen cinematic landscape frame (1536x1024).",
+        "Keep the same subject, composition, lighting, colors, and style.",
+        "Do not add text, captions, labels, or watermarks.",
+        storyboard.title ? `Shot: ${storyboard.title}.` : "",
+        storyboard.description?.trim() ? storyboard.description.trim() : "",
+      ].filter(Boolean)
+      const prompt = promptParts.join(" ").slice(0, 990)
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile,
+        width: 1536,
+        height: 1024,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to regenerate landscape image")
+      }
+
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to regenerate landscape image")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(
+        storyboard.id,
+        imageUrlToUse,
+      )
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === storyboard.id ? updatedStoryboard : sb)),
+      )
+
+      toast({
+        title: "Landscape image ready",
+        description: "Redid this shot at 1536×1024 widescreen.",
+      })
+    } catch (error) {
+      toast({
+        title: "Landscape redo failed",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not regenerate this image at landscape size.",
+        ),
+        variant: "destructive",
+      })
+    } finally {
+      setRegeneratingLandscapeId(null)
     }
   }
   
@@ -4293,17 +4381,32 @@ export default function SceneStoryboardsPage() {
               <CardContent className="space-y-4 p-4 sm:p-6">
                 {storyboard.image_url ? (
                   <div className="relative h-40 sm:h-48 bg-muted rounded-lg overflow-hidden group">
-                    <img
-                      src={storyboard.image_url}
-                      alt={storyboard.title}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      className="absolute inset-0 z-0 cursor-zoom-in"
+                      title="Click to view full image"
+                      onClick={() => openFullImageViewer(storyboard)}
+                    >
+                      <img
+                        src={storyboard.image_url}
+                        alt={storyboard.title}
+                        className="w-full h-full object-cover transition-opacity group-hover:opacity-95"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/25">
+                        <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
+                          View full image
+                        </span>
+                      </div>
+                    </button>
+                    <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button
                         variant="secondary"
                         size="sm"
                         title="Link a different project image"
-                        onClick={() => openLinkImageDialog(storyboard)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openLinkImageDialog(storyboard)
+                        }}
                       >
                         <Link2 className="h-4 w-4 mr-2" />
                         Link
@@ -4311,7 +4414,8 @@ export default function SceneStoryboardsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={async () => {
+                        onClick={async (e) => {
+                          e.stopPropagation()
                           try {
                             const response = await fetch(storyboard.image_url!)
                             const blob = await response.blob()
@@ -4412,7 +4516,14 @@ export default function SceneStoryboardsPage() {
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-muted-foreground">
                   <span className="break-words">Updated {new Date(storyboard.updated_at).toLocaleDateString()}</span>
                   <div className="flex gap-1 flex-wrap">
-                    <Button variant="ghost" size="sm" className="h-8 w-8 p-0 flex-shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 flex-shrink-0"
+                      title="View full image"
+                      disabled={!storyboard.image_url}
+                      onClick={() => openFullImageViewer(storyboard)}
+                    >
                       <Eye className="h-4 w-4" />
                     </Button>
                     
@@ -4471,6 +4582,28 @@ export default function SceneStoryboardsPage() {
                     >
                       <Sparkles className="h-4 w-4" />
                     </Button>
+
+                    {/* Redo existing image at cinematic landscape size */}
+                    {storyboard.image_url ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 hover:text-emerald-500 flex-shrink-0"
+                        title="Redo same image at 1536×1024 landscape"
+                        disabled={
+                          regeneratingLandscapeId === storyboard.id ||
+                          isGeneratingShotImage ||
+                          isGeneratingReferenceEdit
+                        }
+                        onClick={() => void regenerateShotAtLandscapeSize(storyboard)}
+                      >
+                        {regeneratingLandscapeId === storyboard.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RectangleHorizontal className="h-4 w-4" />
+                        )}
+                      </Button>
+                    ) : null}
 
                     {/* Secondary reference-based image edit */}
                     <Button
@@ -4713,6 +4846,35 @@ export default function SceneStoryboardsPage() {
               )}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Full image viewer */}
+      <Dialog
+        open={fullImageViewerOpen}
+        onOpenChange={(open) => {
+          setFullImageViewerOpen(open)
+          if (!open) {
+            setFullImageUrl(null)
+            setFullImageTitle("")
+          }
+        }}
+      >
+        <DialogContent className="flex flex-col gap-2 p-3 sm:p-4 w-[min(96vw,72rem)] h-[92vh] max-h-[92vh] max-w-[min(96vw,72rem)] sm:max-w-[min(96vw,72rem)] overflow-hidden">
+          <DialogHeader className="shrink-0 px-1 pr-8">
+            <DialogTitle className="truncate text-sm sm:text-base">
+              {fullImageTitle || "Storyboard image"}
+            </DialogTitle>
+          </DialogHeader>
+          {fullImageUrl ? (
+            <div className="flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
+              <img
+                src={fullImageUrl}
+                alt={fullImageTitle || "Storyboard image"}
+                className="max-h-full max-w-full w-auto h-auto object-contain"
+              />
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
 

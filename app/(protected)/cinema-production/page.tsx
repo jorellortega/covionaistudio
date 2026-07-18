@@ -140,6 +140,24 @@ function safeVideoPlay(video: HTMLVideoElement) {
   })
 }
 
+/** Seek slightly into the video so the browser paints a real frame (not a storyboard still). */
+function showVideoFrameThumbnail(video: HTMLVideoElement, time = 0.1) {
+  const seek = () => {
+    try {
+      const duration = video.duration
+      if (Number.isFinite(duration) && duration > 0) {
+        video.currentTime = Math.min(time, duration * 0.1)
+      } else {
+        video.currentTime = time
+      }
+    } catch {
+      /* ignore seek errors on unsupported sources */
+    }
+  }
+  if (video.readyState >= 1) seek()
+  else video.addEventListener("loadedmetadata", seek, { once: true })
+}
+
 interface SessionAudioClip {
   id: string
   type: "dialogue" | "sound-effect"
@@ -386,7 +404,7 @@ export default function CinemaProductionPage() {
   const [loadingScenes, setLoadingScenes] = useState(false)
   const [loadingStoryboards, setLoadingStoryboards] = useState(false)
   const [loadingShots, setLoadingShots] = useState(false)
-  const [viewMode, setViewMode] = useState<'sequence' | 'grid' | 'detail'>('sequence')
+  const [viewMode, setViewMode] = useState<'sequence' | 'grid' | 'detail'>('detail')
   
   // Leonardo API key and motion control
   const [leonardoApiKey, setLeonardoApiKey] = useState<string>("")
@@ -407,6 +425,11 @@ export default function CinemaProductionPage() {
   
   // Toggle between image and video in detail view (per storyboard)
   const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
+
+  // Full-size image viewer
+  const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
+  const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
+  const [fullImageTitle, setFullImageTitle] = useState<string>("")
   
   // Audio generation state
   const [aiSettings, setAiSettings] = useState<any[]>([])
@@ -3599,7 +3622,6 @@ export default function CinemaProductionPage() {
                                     id={`video-${storyboard.id}`}
                                     data-storyboard-id={storyboard.id}
                                     src={generation.generatedVideoUrl!}
-                                    poster={storyboard.image_url || undefined}
                                     className="w-full h-full object-cover"
                                     muted
                                     playsInline
@@ -3658,6 +3680,7 @@ export default function CinemaProductionPage() {
                                     }}
                                     onLoadedMetadata={(e) => {
                                       console.log(`📹 Video loaded: ${storyboard.id}`, e.currentTarget.duration)
+                                      showVideoFrameThumbnail(e.currentTarget)
                                     }}
                                   />
                                   {/* Action buttons overlay */}
@@ -3942,11 +3965,11 @@ export default function CinemaProductionPage() {
                               <div className="relative">
                                 <video 
                                   src={displayVideoUrl} 
-                                  poster={storyboard.image_url || undefined}
                                   controls 
                                   className="w-full rounded-md bg-muted"
                                   preload="metadata"
                                   playsInline
+                                  onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                 />
                                 {hasMultipleVideos && (
                                   <Button
@@ -4099,11 +4122,21 @@ export default function CinemaProductionPage() {
                             {/* Display Image or Video based on toggle */}
                             {currentViewMode === 'image' ? (
                               storyboard.image_url ? (
-                                <div className="relative w-full bg-muted rounded-lg overflow-hidden border">
+                                <div
+                                  className="relative w-full bg-muted rounded-lg overflow-hidden border cursor-zoom-in group"
+                                  onClick={() => {
+                                    setFullImageUrl(storyboard.image_url!)
+                                    setFullImageTitle(
+                                      storyboard.title || `Shot ${storyboard.shot_number}`,
+                                    )
+                                    setFullImageViewerOpen(true)
+                                  }}
+                                  title="Click to view full image"
+                                >
                                   <img
                                     src={storyboard.image_url}
                                     alt={storyboard.title || "Storyboard"}
-                                    className="w-full h-auto max-h-[600px] object-contain mx-auto"
+                                    className="w-full h-auto max-h-[600px] object-contain mx-auto transition-opacity group-hover:opacity-95"
                                     onLoad={() => {
                                       console.log('🎬 Storyboard image loaded successfully:', storyboard.image_url)
                                     }}
@@ -4112,6 +4145,11 @@ export default function CinemaProductionPage() {
                                       e.currentTarget.style.display = 'none'
                                     }}
                                   />
+                                  <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/20">
+                                    <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
+                                      View full image
+                                    </span>
+                                  </div>
                                 </div>
                               ) : (
                                 <div className="py-12 text-center bg-muted rounded-lg">
@@ -4157,12 +4195,12 @@ export default function CinemaProductionPage() {
                                     <div className="relative">
                                       <video 
                                         src={displayVideoUrl}
-                                        poster={storyboard.image_url || undefined}
                                         controls 
                                         preload="metadata"
                                         playsInline
                                         className="w-full rounded-md bg-muted aspect-video object-cover"
                                         key={displayVideoUrl}
+                                        onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                       />
                                       {hasMultipleVideos && (
                                         <Button
@@ -5175,6 +5213,35 @@ export default function CinemaProductionPage() {
         )}
       </div>
 
+      {/* Full Image Viewer — tall vertical lightbox for portrait shots */}
+      <Dialog
+        open={fullImageViewerOpen}
+        onOpenChange={(open) => {
+          setFullImageViewerOpen(open)
+          if (!open) {
+            setFullImageUrl(null)
+            setFullImageTitle("")
+          }
+        }}
+      >
+        <DialogContent className="flex flex-col gap-2 p-3 sm:p-4 w-[min(92vw,28rem)] h-[92vh] max-h-[92vh] max-w-[min(92vw,28rem)] sm:max-w-[min(92vw,28rem)] overflow-hidden">
+          <DialogHeader className="shrink-0 px-1 pr-8">
+            <DialogTitle className="truncate text-sm sm:text-base">
+              {fullImageTitle || "Storyboard image"}
+            </DialogTitle>
+          </DialogHeader>
+          {fullImageUrl ? (
+            <div className="flex-1 min-h-0 w-full rounded-md bg-muted/40 overflow-hidden flex items-center justify-center">
+              <img
+                src={fullImageUrl}
+                alt={fullImageTitle || "Storyboard image"}
+                className="max-h-full max-w-full h-full w-auto object-contain"
+              />
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
       {/* Video Selector Dialog */}
       <Dialog open={videoSelectorOpen} onOpenChange={setVideoSelectorOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
@@ -5227,14 +5294,14 @@ export default function CinemaProductionPage() {
                         <div className="relative">
                           <video
                             src={video.video_url}
-                            poster={storyboard?.image_url || undefined}
                             className="w-full aspect-video object-cover bg-muted"
                             muted
                             preload="metadata"
+                            onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                             onMouseEnter={(e) => safeVideoPlay(e.currentTarget)}
                             onMouseLeave={(e) => {
                               e.currentTarget.pause()
-                              e.currentTarget.currentTime = 0
+                              showVideoFrameThumbnail(e.currentTarget)
                             }}
                           />
                           <div className="absolute top-2 right-2 flex gap-1">
@@ -5297,12 +5364,12 @@ export default function CinemaProductionPage() {
                   <div className="mt-4">
                     <video
                       src={selectedVideoUrl}
-                      poster={storyboard?.image_url || undefined}
                       controls
                       className="w-full rounded-md bg-muted aspect-video object-cover"
                       key={selectedVideoUrl}
                       preload="metadata"
                       playsInline
+                      onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                       onLoadedData={(e) => {
                         safeVideoPlay(e.currentTarget)
                       }}

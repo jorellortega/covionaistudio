@@ -1,4 +1,8 @@
 import { RUNWAY } from '@/lib/runway-config'
+import {
+  DEFAULT_CINEMATIC_IMAGE_SIZE,
+  resolveOpenAIImageSize,
+} from '@/lib/image-model-utils'
 
 // Base interfaces for AI services
 interface AIResponse {
@@ -20,6 +24,7 @@ interface GenerateImageRequest {
   style: string
   model: string
   apiKey: string
+  size?: string
 }
 
 interface EditImageRequest {
@@ -209,6 +214,11 @@ export class OpenAIService {
         console.log("🖼️ IMAGE GENERATION - Model:", request.model)
         console.log("🖼️ IMAGE GENERATION - API Endpoint: /v1/images/generations")
 
+        const size =
+          request.size ||
+          resolveOpenAIImageSize(request.model, undefined, undefined, DEFAULT_CINEMATIC_IMAGE_SIZE)
+        console.log("🖼️ IMAGE GENERATION - Size:", size)
+
         const response = await fetch("https://api.openai.com/v1/images/generations", {
           method: "POST",
           headers: {
@@ -219,7 +229,7 @@ export class OpenAIService {
             model: request.model,
             prompt: `${request.style} style: ${request.prompt}`,
             n: 1,
-            size: "1024x1024",
+            size,
           }),
         })
 
@@ -369,6 +379,9 @@ export class OpenAIService {
         }
       } else {
         // Use Images API for DALL-E models
+        const dalleSize =
+          request.size ||
+          resolveOpenAIImageSize("dall-e-3", undefined, undefined, "1792x1024")
         const response = await fetch('https://api.openai.com/v1/images/generations', {
           method: 'POST',
           headers: {
@@ -378,7 +391,7 @@ export class OpenAIService {
           body: JSON.stringify({
             prompt: `${request.style} style: ${request.prompt}`,
             n: 1,
-            size: "1024x1024",
+            size: dalleSize,
             model: "dall-e-3",
           }),
         })
@@ -438,6 +451,8 @@ export class OpenAIService {
       }
       if (request.size) {
         formData.append("size", request.size)
+      } else {
+        formData.append("size", DEFAULT_CINEMATIC_IMAGE_SIZE)
       }
 
       const response = await fetch("https://api.openai.com/v1/images/edits", {

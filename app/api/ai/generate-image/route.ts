@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
-import { isGPTImageApiModel, isGPTImage2ApiModel } from '@/lib/image-model-utils'
+import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT } from '@/lib/image-model-utils'
 import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
 import {
   buildRunwayReferenceImagesFromFiles,
@@ -203,9 +203,15 @@ export async function POST(request: NextRequest) {
     
     let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true, seed } = body
 
-    // Set default width and height if not provided
-    if (!width) width = 1280
-    if (!height) height = 720
+    // Set default width and height if not provided (cinematic landscape, not square)
+    if (!width) width = DEFAULT_CINEMATIC_IMAGE_WIDTH
+    if (!height) height = DEFAULT_CINEMATIC_IMAGE_HEIGHT
+
+    const resolvedImageSize = resolveOpenAIImageSize(
+      model || 'dall-e-3',
+      width,
+      height,
+    )
 
     if (!prompt || !service || !apiKey) {
       console.error('Missing required fields:', { prompt: !!prompt, service: !!service, apiKey: !!apiKey })
@@ -400,7 +406,7 @@ export async function POST(request: NextRequest) {
         apiKey,
         file,
         additionalFiles,
-        size: '1024x1024',
+        size: resolvedImageSize,
       })
 
       if (!editResponse.success) {
@@ -435,7 +441,8 @@ export async function POST(request: NextRequest) {
           prompt: prompt, // Send only the user's exact prompt
           style: 'cinematic',
           model: imageModel,
-          apiKey
+          apiKey,
+          size: resolvedImageSize,
         })
         
         console.log('Image generation response:', dalleResponse)

@@ -73,6 +73,59 @@ export function isGPTImage2ApiModel(apiModel: string): boolean {
   return apiModel === "gpt-image-2" || apiModel.startsWith("gpt-image-2")
 }
 
+/** Cinematic landscape default — avoid square 1024x1024 for storyboards / production. */
+export const DEFAULT_CINEMATIC_IMAGE_SIZE = "1536x1024"
+export const DEFAULT_CINEMATIC_IMAGE_WIDTH = 1536
+export const DEFAULT_CINEMATIC_IMAGE_HEIGHT = 1024
+
+/**
+ * Resolve OpenAI `size` string from width/height and model.
+ * GPT Image 2: flexible (multiples of 16, etc.) — use WxH or popular presets.
+ * GPT Image 1: 1024x1024 | 1024x1536 | 1536x1024 | auto
+ * DALL-E 3: 1024x1024 | 1792x1024 | 1024x1792
+ */
+export function resolveOpenAIImageSize(
+  apiModel: string,
+  width?: number,
+  height?: number,
+  fallback: string = DEFAULT_CINEMATIC_IMAGE_SIZE,
+): string {
+  const w = width && Number.isFinite(width) ? Math.round(width) : undefined
+  const h = height && Number.isFinite(height) ? Math.round(height) : undefined
+  const requested = w && h ? `${w}x${h}` : fallback
+
+  if (isGPTImage2ApiModel(apiModel)) {
+    return requested
+  }
+
+  if (apiModel === "dall-e-3" || apiModel.startsWith("dall-e")) {
+    if (requested === "1024x1024" || requested === "1792x1024" || requested === "1024x1792") {
+      return requested
+    }
+    // Map cinematic landscape / portrait onto DALL-E 3 sizes
+    if (w && h) {
+      if (w === h) return "1024x1024"
+      return w > h ? "1792x1024" : "1024x1792"
+    }
+    return "1792x1024"
+  }
+
+  // GPT Image 1 / older GPT image models
+  if (
+    requested === "1024x1024" ||
+    requested === "1024x1536" ||
+    requested === "1536x1024" ||
+    requested === "auto"
+  ) {
+    return requested
+  }
+  if (w && h) {
+    if (w === h) return "1024x1024"
+    return w > h ? "1536x1024" : "1024x1536"
+  }
+  return DEFAULT_CINEMATIC_IMAGE_SIZE
+}
+
 export function displayModelSupportsReferenceImage(displayName: string): boolean {
   const lower = displayName.toLowerCase()
   return (
