@@ -115,6 +115,33 @@ type ShotReferenceFrame = {
   url: string
   label: string
   createdAt: number
+  assetId?: string
+}
+
+function shotFramesFromAssets(assets: Asset[]): Map<string, ShotReferenceFrame[]> {
+  const map = new Map<string, ShotReferenceFrame[]>()
+  for (const asset of assets) {
+    const meta = asset.metadata as Record<string, unknown> | undefined
+    if (!meta?.cinema_production_frame || !meta.storyboard_id || !asset.content_url) continue
+    const storyboardId = String(meta.storyboard_id)
+    const frame: ShotReferenceFrame = {
+      id: String(meta.frame_id || asset.id),
+      url: asset.content_url,
+      label: String(meta.frame_label || asset.title || "Frame"),
+      createdAt: Date.parse(asset.created_at) || Date.now(),
+      assetId: asset.id,
+    }
+    const list = map.get(storyboardId) || []
+    if (!list.some((f) => f.url === frame.url || f.id === frame.id)) list.push(frame)
+    map.set(storyboardId, list)
+  }
+  for (const [id, list] of map) {
+    map.set(
+      id,
+      list.sort((a, b) => b.createdAt - a.createdAt).slice(0, 12),
+    )
+  }
+  return map
 }
 
 type VideoModel = 
@@ -516,6 +543,10 @@ export default function CinemaProductionPage() {
   const [selectedVideoUrl, setSelectedVideoUrl] = useState<string | null>(null)
   const [deletingVideoId, setDeletingVideoId] = useState<string | null>(null)
   const [promptAssistLoadingId, setPromptAssistLoadingId] = useState<string | null>(null)
+  /** Up to 2 image URLs selected for Prompt Assist (start, then end). */
+  const [promptAssistImageUrls, setPromptAssistImageUrls] = useState<Map<string, string[]>>(
+    new Map(),
+  )
   const [audioPromptAssistLoadingId, setAudioPromptAssistLoadingId] = useState<string | null>(null)
 
   // Image edit + frame refs for video generation
@@ -547,6 +578,10 @@ export default function CinemaProductionPage() {
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
   const [fullImageTitle, setFullImageTitle] = useState<string>("")
+  const [fullImageLibraryRef, setFullImageLibraryRef] = useState<{
+    storyboardId: string
+    frameId: string
+  } | null>(null)
   
   // Audio generation state
   const [aiSettings, setAiSettings] = useState<any[]>([])
@@ -716,12 +751,15 @@ export default function CinemaProductionPage() {
           AssetService.getAssetsForProject(selectedProjectId),
           LocationsService.getLocations(selectedProjectId),
         ])
-        setProjectImageAssets(assets.filter((a) => a.content_type === "image" && a.content_url))
+        const imageAssets = assets.filter((a) => a.content_type === "image" && a.content_url)
+        setProjectImageAssets(imageAssets)
         setProjectLocations(locs)
+        setShotReferenceFrames(shotFramesFromAssets(imageAssets))
       } catch (error) {
         console.error("Error loading project assets for image edit:", error)
         setProjectImageAssets([])
         setProjectLocations([])
+        setShotReferenceFrames(new Map())
       } finally {
         setIsLoadingProjectAssets(false)
       }
@@ -1337,17 +1375,92 @@ export default function CinemaProductionPage() {
     )
   }
 
+  const getShotImageChoicesForPromptAssist = (
+    storyboard: Storyboard,
+    generation?: ShotGenerationState,
+  ) => {
+    const choices: { key: string; url: string; label: string }[] = []
+    const pushUnique = (key: string, url: string | null | undefined, label: string) => {
+      if (!url || choices.some((c) => c.url === url)) return
+      choices.push({ key, url, label })
+    }
+    pushUnique("shot", storyboard.image_url, "Shot image")
+    pushUnique("video-ref", generation?.filePreview, "Video ref")
+    pushUnique(
+      "start",
+      generation?.startFramePreview || generation?.startFrameImageUrl,
+      "Start frame",
+    )
+    pushUnique(
+      "end",
+      generation?.endFramePreview || generation?.endFrameImageUrl,
+      "End frame",
+    )
+    for (const frame of shotReferenceFrames.get(storyboard.id) || []) {
+      pushUnique(`frame-${frame.id}`, frame.url, frame.label)
+    }
+    return choices
+  }
+
+  const getDefaultPromptAssistUrls = (
+    storyboard: Storyboard,
+    generation?: ShotGenerationState,
+  ): string[] => {
+    const start =
+      generation?.startFramePreview ||
+      generation?.startFrameImageUrl ||
+      null
+    const end =
+      generation?.endFramePreview || generation?.endFrameImageUrl || null
+    if (start && end && start !== end) return [start, end]
+    if (start) return [start]
+    if (generation?.filePreview) return [generation.filePreview]
+    if (storyboard.image_url) return [storyboard.image_url]
+    return []
+  }
+
+  const getPromptAssistSelectedUrls = (
+    storyboard: Storyboard,
+    generation?: ShotGenerationState,
+  ): string[] => {
+    const selected = promptAssistImageUrls.get(storyboard.id)
+    if (selected && selected.length > 0) return selected.slice(0, 2)
+    return getDefaultPromptAssistUrls(storyboard, generation)
+  }
+
+  const togglePromptAssistImage = (storyboardId: string, url: string) => {
+    setPromptAssistImageUrls((prev) => {
+      const next = new Map(prev)
+      const storyboard = storyboards.find((s) => s.id === storyboardId)
+      const generation = storyboardGenerations.get(storyboardId)
+      const current =
+        next.get(storyboardId) ||
+        (storyboard
+          ? getDefaultPromptAssistUrls(storyboard, generation)
+          : [])
+
+      if (current.includes(url)) {
+        const filtered = current.filter((u) => u !== url)
+        next.set(storyboardId, filtered)
+        return next
+      }
+      if (current.length >= 2) {
+        next.set(storyboardId, [current[0], url])
+      } else {
+        next.set(storyboardId, [...current, url])
+      }
+      return next
+    })
+  }
+
   const handlePromptAssist = async (storyboard: Storyboard) => {
     const generation = storyboardGenerations.get(storyboard.id)
     const character = storyboard.character_id
       ? projectCharacters.find((c) => c.id === storyboard.character_id)
       : null
-    const imageUrl =
-      generation?.filePreview ||
-      generation?.startFramePreview ||
-      generation?.startFrameImageUrl ||
-      storyboard.image_url ||
-      null
+    const selectedUrls = getPromptAssistSelectedUrls(storyboard, generation)
+    const startImageUrl = selectedUrls[0] || null
+    const endImageUrl = selectedUrls[1] || null
 
     setPromptAssistLoadingId(storyboard.id)
     try {
@@ -1366,7 +1479,9 @@ export default function CinemaProductionPage() {
           shotNumber: storyboard.shot_number,
           sceneNumber: storyboard.scene_number,
           characterName: character?.name ?? null,
-          imageUrl,
+          imageUrl: startImageUrl,
+          startImageUrl,
+          endImageUrl,
           videoModel: generation?.model || null,
           userId,
         }),
@@ -1380,16 +1495,20 @@ export default function CinemaProductionPage() {
       updateStoryboardGeneration(storyboard.id, { prompt: data.prompt })
       toast({
         title: 'Prompt Assist ready',
-        description: imageUrl
-          ? 'Built a video prompt from shot details + reference image.'
-          : 'Built a video prompt from shot details. Add/upload an image for stronger I2V prompts.',
+        description: endImageUrl
+          ? 'Built a frame-to-frame prompt from your selected start + end images.'
+          : startImageUrl
+            ? 'Built a video prompt from shot details + selected image.'
+            : 'Built a video prompt from shot details. Select a frame image for stronger I2V prompts.',
       })
     } catch (error) {
       // Local fallback if API fails
       const fallback = buildPromptFromStoryboard(storyboard)
-      const withImage = storyboard.image_url
-        ? `${fallback}. Animate from the attached reference image — keep composition and lighting, add natural cinematic motion. No text overlays.`
-        : `${fallback}. Photoreal cinematic motion, no text overlays.`
+      const withImage = endImageUrl
+        ? `${fallback}. Interpolate from the start frame to the end frame with continuous natural motion. No text overlays.`
+        : startImageUrl || storyboard.image_url
+          ? `${fallback}. Animate from the attached reference image — keep composition and lighting, add natural cinematic motion. No text overlays.`
+          : `${fallback}. Photoreal cinematic motion, no text overlays.`
       updateStoryboardGeneration(storyboard.id, { prompt: withImage })
       toast({
         title: 'Used shot details',
@@ -1671,10 +1790,94 @@ export default function CinemaProductionPage() {
     setShotReferenceFrames((prev) => {
       const next = new Map(prev)
       const list = next.get(storyboardId) || []
-      if (list.some((f) => f.url === frame.url)) return prev
+      if (list.some((f) => f.url === frame.url || f.id === frame.id)) return prev
       next.set(storyboardId, [frame, ...list].slice(0, 12))
       return next
     })
+  }
+
+  const persistShotReferenceFrame = async (
+    storyboard: Storyboard,
+    frame: Omit<ShotReferenceFrame, "id" | "createdAt"> & {
+      id?: string
+      createdAt?: number
+    },
+  ) => {
+    const id = frame.id || crypto.randomUUID()
+    const createdAt = frame.createdAt || Date.now()
+    const optimistic: ShotReferenceFrame = {
+      id,
+      url: frame.url,
+      label: frame.label,
+      createdAt,
+      assetId: frame.assetId,
+    }
+    addShotReferenceFrame(storyboard.id, optimistic)
+
+    if (!selectedProjectId || frame.assetId) return
+
+    try {
+      const asset = await AssetService.createAsset({
+        project_id: selectedProjectId,
+        scene_id: storyboard.scene_id || selectedSceneId || null,
+        title: `Shot ${storyboard.shot_number} · ${frame.label}`,
+        content_type: "image",
+        content_url: frame.url,
+        metadata: {
+          cinema_production_frame: true,
+          storyboard_id: storyboard.id,
+          frame_label: frame.label,
+          frame_id: id,
+          bypassSceneValidation: true,
+        },
+      })
+      setShotReferenceFrames((prev) => {
+        const next = new Map(prev)
+        const list = (next.get(storyboard.id) || []).map((f) =>
+          f.id === id ? { ...f, assetId: asset.id } : f,
+        )
+        next.set(storyboard.id, list)
+        return next
+      })
+      setProjectImageAssets((prev) =>
+        prev.some((a) => a.id === asset.id) ? prev : [asset, ...prev],
+      )
+    } catch (error) {
+      console.error("Failed to save frame asset:", error)
+    }
+  }
+
+  const removeShotReferenceFrame = (storyboardId: string, frameId: string) => {
+    let assetIdToDelete: string | undefined
+    setShotReferenceFrames((prev) => {
+      const next = new Map(prev)
+      const existing = next.get(storyboardId) || []
+      assetIdToDelete = existing.find((f) => f.id === frameId)?.assetId
+      const list = existing.filter((f) => f.id !== frameId)
+      if (list.length) next.set(storyboardId, list)
+      else next.delete(storyboardId)
+      return next
+    })
+    if (assetIdToDelete) {
+      void AssetService.deleteAsset(assetIdToDelete).catch((error) => {
+        console.error("Failed to delete frame asset:", error)
+      })
+      setProjectImageAssets((prev) => prev.filter((a) => a.id !== assetIdToDelete))
+    }
+  }
+
+  const openFrameViewer = (storyboardId: string, frame: ShotReferenceFrame) => {
+    setFullImageUrl(frame.url)
+    setFullImageTitle(frame.label)
+    setFullImageLibraryRef({ storyboardId, frameId: frame.id })
+    setFullImageViewerOpen(true)
+  }
+
+  const closeFullImageViewer = () => {
+    setFullImageViewerOpen(false)
+    setFullImageUrl(null)
+    setFullImageTitle("")
+    setFullImageLibraryRef(null)
   }
 
   const applyGeneratedFrame = async (
@@ -1683,11 +1886,9 @@ export default function CinemaProductionPage() {
     label: string,
     target: FrameApplyTarget,
   ) => {
-    addShotReferenceFrame(storyboard.id, {
-      id: crypto.randomUUID(),
+    await persistShotReferenceFrame(storyboard, {
       url: imageUrl,
       label,
-      createdAt: Date.now(),
     })
 
     if (target === "library") return
@@ -1808,11 +2009,9 @@ export default function CinemaProductionPage() {
         uploadedFile: file,
         filePreview: imageUrlToUse,
       })
-      addShotReferenceFrame(storyboard.id, {
-        id: crypto.randomUUID(),
+      await persistShotReferenceFrame(storyboard, {
         url: imageUrlToUse,
         label: "Edited shot",
-        createdAt: Date.now(),
       })
 
       setImageEditDialogOpen(false)
@@ -1848,8 +2047,9 @@ export default function CinemaProductionPage() {
     }
 
     const preset = VIDEO_FRAME_PRESETS.find((p) => p.id === framePresetId)
+    const customDirection = frameCustomDirection.trim()
     const direction =
-      frameCustomDirection.trim() ||
+      customDirection ||
       preset?.directive ||
       "a useful alternate frame of this shot for video generation"
 
@@ -1857,14 +2057,17 @@ export default function CinemaProductionPage() {
     setFrameProgress("Generating frame...")
     try {
       const config = requireLockedImageConfig({ withReferenceImage: true })
-      const actionBit = storyboard.action?.trim()
-        ? ` Action happening: ${storyboard.action.trim()}.`
-        : ""
-      const prompt =
-        `Give me ${direction} of this image. Keep the same scene, subjects, lighting, and world — only change framing/moment as requested.${actionBit} Photoreal cinematic still, no text.`.slice(
-          0,
-          990,
-        )
+      // Custom directions often ask to remove/change subjects (e.g. "show just the cave").
+      // Do not force "keep subjects" or append shot action in that case — it cancels the edit.
+      const prompt = (
+        customDirection
+          ? `Edit this reference image: ${customDirection}. Keep the same location, lighting, time of day, and overall world. Follow the edit instruction fully — including removing or changing subjects if requested. Photoreal cinematic still, no text, no watermark.`
+          : `Create ${direction} of this reference image. Keep the same scene, subjects, lighting, and world — only change framing or action moment as requested.${
+              storyboard.action?.trim()
+                ? ` Action context: ${storyboard.action.trim()}.`
+                : ""
+            } Photoreal cinematic still, no text, no watermark.`
+      ).slice(0, 990)
 
       const referenceFile = await referenceUrlToFile(
         storyboard.image_url,
@@ -1884,7 +2087,9 @@ export default function CinemaProductionPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const label = preset?.label || "Custom frame"
+      const label = customDirection
+        ? customDirection.slice(0, 48)
+        : preset?.label || "Custom frame"
       await applyGeneratedFrame(storyboard, imageUrlToUse, label, frameApplyTarget)
 
       const targetLabel =
@@ -2665,28 +2870,33 @@ export default function CinemaProductionPage() {
     }
     
     if (fileRequirement === 'start-end-frames') {
-      // For Kling/Veo frame-to-frame, start frame is required, end frame is optional
-      const isKlingVeoFrameToFrame = generation.model === "Kling 2.1 Pro (Frame-to-Frame)" || 
-                                     generation.model === "Veo 3.1 (Frame-to-Frame)" || 
-                                     generation.model === "Veo 3.1 Fast (Frame-to-Frame)"
-      
+      // Leonardo/Veo path: start required (file, URL, or storyboard image); end optional
+      const isKlingVeoFrameToFrame =
+        generation.model === "Kling 2.1 Pro (Frame-to-Frame)" ||
+        generation.model === "Veo 3.1 (Frame-to-Frame)" ||
+        generation.model === "Veo 3.1 Fast (Frame-to-Frame)"
+
+      const hasStart =
+        !!(generation.startFrame || generation.startFrameImageUrl || storyboard.image_url)
+      const hasEnd = !!(generation.endFrame || generation.endFrameImageUrl)
+
       if (isKlingVeoFrameToFrame) {
-        // Start frame required (can be from file or image URL)
-        if (!generation.startFrame && !generation.startFrameImageUrl && !storyboard.image_url) {
+        if (!hasStart) {
           toast({
             title: "Missing Start Frame",
             description: `${generation.model} requires at least a start frame. End frame is optional.`,
-            variant: "destructive"
+            variant: "destructive",
           })
           return
         }
       } else {
-        // For other models, both frames required
-        if (!generation.startFrame || !generation.endFrame) {
+        // Native Kling I2V Extended: both start + end (file or linked URL from Make Frames)
+        if (!hasStart || !hasEnd) {
           toast({
             title: "Missing Frames",
-            description: `${generation.model} requires both start and end frames.`,
-            variant: "destructive"
+            description:
+              "Kling I2V Extended needs a start and end frame. Use Make Frames → Start / End, or upload both.",
+            variant: "destructive",
           })
           return
         }
@@ -3940,28 +4150,75 @@ export default function CinemaProductionPage() {
         // Handle Kling models
         // Convert storyboard image_url to File if no uploaded file
         let imageFile: File | undefined = generation.uploadedFile || undefined
-        
-        if (!imageFile && storyboard.image_url && (generation.model === "Kling I2V" || generation.model === "Kling I2V Extended")) {
+        let startFrameFile: File | undefined = generation.startFrame || undefined
+        let endFrameFile: File | undefined = generation.endFrame || undefined
+
+        const urlToFrameFile = async (url: string, name: string) => {
+          const imageResponse = await fetch(url)
+          if (!imageResponse.ok) {
+            throw new Error(`Failed to load ${name}`)
+          }
+          const imageBlob = await imageResponse.blob()
+          return new File([imageBlob], name, { type: imageBlob.type || "image/jpeg" })
+        }
+
+        if (
+          !imageFile &&
+          storyboard.image_url &&
+          generation.model === "Kling I2V"
+        ) {
           try {
-            updateStoryboardGeneration(storyboard.id, { generationStatus: "Loading storyboard image..." })
-            const imageResponse = await fetch(storyboard.image_url)
-            if (imageResponse.ok) {
-              const imageBlob = await imageResponse.blob()
-              imageFile = new File([imageBlob], 'storyboard-image.jpg', { type: imageBlob.type || 'image/jpeg' })
-              console.log('✅ [KLING] Using storyboard image_url')
-            }
+            updateStoryboardGeneration(storyboard.id, {
+              generationStatus: "Loading storyboard image...",
+            })
+            imageFile = await urlToFrameFile(
+              storyboard.image_url,
+              "storyboard-image.jpg",
+            )
+            console.log("✅ [KLING] Using storyboard image_url")
           } catch (error) {
-            console.error('Error loading storyboard image:', error)
+            console.error("Error loading storyboard image:", error)
           }
         }
-        
+
+        if (generation.model === "Kling I2V Extended") {
+          try {
+            if (!startFrameFile) {
+              const startUrl =
+                generation.startFrameImageUrl || storyboard.image_url || null
+              if (startUrl) {
+                updateStoryboardGeneration(storyboard.id, {
+                  generationStatus: "Loading start frame...",
+                })
+                startFrameFile = await urlToFrameFile(startUrl, "kling-start-frame.jpg")
+              }
+            }
+            if (!endFrameFile && generation.endFrameImageUrl) {
+              updateStoryboardGeneration(storyboard.id, {
+                generationStatus: "Loading end frame...",
+              })
+              endFrameFile = await urlToFrameFile(
+                generation.endFrameImageUrl,
+                "kling-end-frame.jpg",
+              )
+            }
+          } catch (error) {
+            console.error("Error loading Kling frames:", error)
+            throw error
+          }
+        }
+
+        updateStoryboardGeneration(storyboard.id, {
+          generationStatus: "Kling is rendering — frame-to-frame can take several minutes...",
+        })
+
         const response = await KlingService.generateVideo({
           prompt: generation.prompt,
           duration: generation.duration,
           model: generation.model,
           file: imageFile,
-          startFrame: generation.startFrame || undefined,
-          endFrame: generation.endFrame || undefined,
+          startFrame: startFrameFile,
+          endFrame: endFrameFile,
           resolution: generation.resolution,
         })
 
@@ -4879,6 +5136,7 @@ export default function CinemaProductionPage() {
                                     setFullImageTitle(
                                       storyboard.title || `Shot ${storyboard.shot_number}`,
                                     )
+                                    setFullImageLibraryRef(null)
                                     setFullImageViewerOpen(true)
                                   }}
                                   title="Click to view full image"
@@ -4902,64 +5160,6 @@ export default function CinemaProductionPage() {
                                     </span>
                                   </div>
                                 </div>
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="gap-1.5"
-                                    onClick={() => openImageEditDialog(storyboard)}
-                                  >
-                                    <Wand2 className="h-3.5 w-3.5" />
-                                    Edit Image
-                                  </Button>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="gap-1.5"
-                                    onClick={() => openFramesDialog(storyboard)}
-                                  >
-                                    <Images className="h-3.5 w-3.5" />
-                                    Make Frames
-                                  </Button>
-                                </div>
-                                {(shotReferenceFrames.get(storyboard.id) || []).length > 0 && (
-                                  <div className="space-y-1.5">
-                                    <p className="text-xs text-muted-foreground">
-                                      Frame library — click to use as video reference
-                                    </p>
-                                    <div className="flex gap-2 overflow-x-auto pb-1">
-                                      {(shotReferenceFrames.get(storyboard.id) || []).map((frame) => (
-                                        <button
-                                          key={frame.id}
-                                          type="button"
-                                          className="relative shrink-0 rounded border overflow-hidden hover:ring-2 hover:ring-primary"
-                                          title={`${frame.label} — use for video`}
-                                          onClick={() =>
-                                            void applyGeneratedFrame(
-                                              storyboard,
-                                              frame.url,
-                                              frame.label,
-                                              "video",
-                                            ).then(() =>
-                                              toast({
-                                                title: "Video reference set",
-                                                description: `Using “${frame.label}” for Generate Video.`,
-                                              }),
-                                            )
-                                          }
-                                        >
-                                          <img
-                                            src={frame.url}
-                                            alt={frame.label}
-                                            className="h-16 w-24 object-cover"
-                                          />
-                                        </button>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
                                 </div>
                               ) : (
                                 <div className="py-12 text-center bg-muted rounded-lg space-y-3">
@@ -4967,16 +5167,6 @@ export default function CinemaProductionPage() {
                                   <p className="text-muted-foreground">
                                     No image available for this storyboard.
                                   </p>
-                                  <Button
-                                    type="button"
-                                    size="sm"
-                                    variant="outline"
-                                    className="gap-1.5"
-                                    onClick={() => openImageEditDialog(storyboard)}
-                                  >
-                                    <Wand2 className="h-3.5 w-3.5" />
-                                    Edit from upload
-                                  </Button>
                                 </div>
                               )
                             ) : (
@@ -5071,6 +5261,85 @@ export default function CinemaProductionPage() {
                           </>
                         )
                       })()}
+
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => openImageEditDialog(storyboard)}
+                          >
+                            <Wand2 className="h-3.5 w-3.5" />
+                            Edit Image
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => openFramesDialog(storyboard)}
+                          >
+                            <Images className="h-3.5 w-3.5" />
+                            Make Frames
+                            {(shotReferenceFrames.get(storyboard.id) || []).length > 0
+                              ? ` (${(shotReferenceFrames.get(storyboard.id) || []).length})`
+                              : ""}
+                          </Button>
+                        </div>
+                        {(shotReferenceFrames.get(storyboard.id) || []).length > 0 && (
+                          <div className="space-y-1.5 rounded-md border bg-muted/20 p-2">
+                            <p className="text-xs font-medium">
+                              Frame library
+                            </p>
+                            <p className="text-[11px] text-muted-foreground">
+                              Click to view · trash to delete · assign from Make Frames
+                            </p>
+                            <div className="flex gap-2 overflow-x-auto pb-1">
+                              {(shotReferenceFrames.get(storyboard.id) || []).map((frame) => (
+                                <div
+                                  key={frame.id}
+                                  className="relative shrink-0 rounded border overflow-hidden bg-background"
+                                >
+                                  <button
+                                    type="button"
+                                    className="block hover:opacity-90"
+                                    title={`${frame.label} — click to view`}
+                                    onClick={() => openFrameViewer(storyboard.id, frame)}
+                                  >
+                                    <img
+                                      src={frame.url}
+                                      alt={frame.label}
+                                      className="h-20 w-28 object-cover"
+                                    />
+                                    <span className="block px-1.5 py-0.5 text-[10px] text-muted-foreground truncate max-w-[7rem]">
+                                      {frame.label}
+                                    </span>
+                                  </button>
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    variant="destructive"
+                                    className="absolute top-1 right-1 h-6 w-6 opacity-90"
+                                    title="Delete frame"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      removeShotReferenceFrame(storyboard.id, frame.id)
+                                      toast({
+                                        title: "Frame removed",
+                                        description: `Deleted “${frame.label}” from this shot’s library.`,
+                                      })
+                                    }}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
 
                       {/* Storyboard Details */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
@@ -5220,7 +5489,7 @@ export default function CinemaProductionPage() {
                                         className="gap-1.5"
                                         disabled={promptAssistLoadingId === storyboard.id}
                                         onClick={() => void handlePromptAssist(storyboard)}
-                                        title="Build a video prompt from shot type, angle, movement, action, and the reference image"
+                                        title="Build a video prompt from shot type, angle, movement, action, and selected frame image(s)"
                                       >
                                         {promptAssistLoadingId === storyboard.id ? (
                                           <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -5242,9 +5511,71 @@ export default function CinemaProductionPage() {
                                         Use Storyboard Details
                                       </Button>
                                     </div>
-                                    <p className="mt-1 text-xs text-muted-foreground">
-                                      Prompt Assist inserts shot type, angle, movement, action, and uses your storyboard/uploaded image when available.
-                                    </p>
+                                    {(() => {
+                                      const assistChoices = getShotImageChoicesForPromptAssist(
+                                        storyboard,
+                                        generation,
+                                      )
+                                      const selectedAssist =
+                                        getPromptAssistSelectedUrls(storyboard, generation)
+                                      if (assistChoices.length === 0) {
+                                        return (
+                                          <p className="mt-1 text-xs text-muted-foreground">
+                                            Prompt Assist uses shot details. Add a shot image or frames to ground it visually.
+                                          </p>
+                                        )
+                                      }
+                                      return (
+                                        <div className="mt-2 space-y-1.5">
+                                          <p className="text-xs text-muted-foreground">
+                                            Select 1 image for I2V, or 2 for frame-to-frame (1st = start, 2nd = end). Click to toggle.
+                                          </p>
+                                          <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                            {assistChoices.map((choice) => {
+                                              const order =
+                                                selectedAssist.indexOf(choice.url) + 1
+                                              const selected = order > 0
+                                              return (
+                                                <button
+                                                  key={choice.key}
+                                                  type="button"
+                                                  title={
+                                                    selected
+                                                      ? `${choice.label} — selected as ${order === 1 ? "start" : "end"}`
+                                                      : `Use ${choice.label}`
+                                                  }
+                                                  onClick={() =>
+                                                    togglePromptAssistImage(
+                                                      storyboard.id,
+                                                      choice.url,
+                                                    )
+                                                  }
+                                                  className={`relative shrink-0 rounded border overflow-hidden w-[4.5rem] text-left transition ${
+                                                    selected
+                                                      ? "ring-2 ring-primary border-primary"
+                                                      : "hover:opacity-90 border-border"
+                                                  }`}
+                                                >
+                                                  <img
+                                                    src={choice.url}
+                                                    alt={choice.label}
+                                                    className="h-14 w-full object-cover"
+                                                  />
+                                                  <span className="block px-1 py-0.5 text-[9px] truncate bg-background/95">
+                                                    {choice.label}
+                                                  </span>
+                                                  {selected && (
+                                                    <span className="absolute top-0.5 left-0.5 rounded bg-primary text-primary-foreground text-[9px] px-1 leading-4">
+                                                      {order === 1 ? "Start" : "End"}
+                                                    </span>
+                                                  )}
+                                                </button>
+                                              )
+                                            })}
+                                          </div>
+                                        </div>
+                                      )
+                                    })()}
                                   </div>
 
                                   <div className="grid grid-cols-2 gap-4">
@@ -5499,158 +5830,180 @@ export default function CinemaProductionPage() {
                                   </>
                                 )}
 
-                                <div className="grid grid-cols-2 gap-4">
-                                  <div>
-                                    <Label>Start Frame (Required)</Label>
-                                    {generation.startFramePreview || generation.startFrameImageUrl ? (
-                                      <div className="relative mt-2">
-                                        <img 
-                                          src={generation.startFramePreview || generation.startFrameImageUrl || ''} 
-                                          alt="Start Frame" 
-                                          className="w-full h-48 object-cover rounded-md"
-                                        />
-                                        <Button
-                                          variant="destructive"
-                                          size="sm"
-                                          className="absolute top-2 right-2"
-                                          onClick={() => updateStoryboardGeneration(storyboard.id, { 
-                                            startFrame: null, 
-                                            startFramePreview: null,
-                                            startFrameImageUrl: null
-                                          })}
-                                        >
-                                          <X className="h-4 w-4" />
-                                        </Button>
-                                        {generation.startFrameImageUrl && (
-                                          <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
-                                            From Storyboard
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="mt-2 space-y-2">
-                                        <Input
-                                          type="file"
-                                          accept="image/*"
-                                          onChange={(e) => {
-                                            const file = e.target.files?.[0]
-                                            if (file) handleFileUpload(storyboard.id, file, 'startFrame')
-                                          }}
-                                        />
-                                        {/* Link to storyboard images */}
-                                        {storyboards.length > 0 && (
-                                          <Select
-                                            value=""
-                                            onValueChange={(storyboardId) => {
-                                              const selectedStoryboard = storyboards.find(s => s.id === storyboardId)
-                                              if (selectedStoryboard?.image_url) {
-                                                updateStoryboardGeneration(storyboard.id, { 
-                                                  startFrameImageUrl: selectedStoryboard.image_url,
-                                                  startFramePreview: selectedStoryboard.image_url
-                                                })
-                                              }
-                                            }}
-                                          >
-                                            <SelectTrigger>
-                                              <SelectValue placeholder="Or select from storyboard images..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                              {/* Show current shot first with special label */}
-                                              {storyboard.image_url && (
-                                                <SelectItem key={storyboard.id} value={storyboard.id}>
-                                                  This shot (Shot {storyboard.shot_number}: {storyboard.title || 'Untitled'})
-                                                </SelectItem>
-                                              )}
-                                              {/* Then show other storyboards */}
-                                              {storyboards
-                                                .filter(s => s.image_url && s.id !== storyboard.id)
-                                                .map((sb) => (
-                                                  <SelectItem key={sb.id} value={sb.id}>
-                                                    Shot {sb.shot_number}: {sb.title || 'Untitled'}
-                                                  </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                          </Select>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                  {([
+                                    {
+                                      kind: "start" as const,
+                                      label: "Start Frame (Required)",
+                                      preview:
+                                        generation.startFramePreview ||
+                                        generation.startFrameImageUrl ||
+                                        null,
+                                      clear: () =>
+                                        updateStoryboardGeneration(storyboard.id, {
+                                          startFrame: null,
+                                          startFramePreview: null,
+                                          startFrameImageUrl: null,
+                                        }),
+                                      setUrl: (url: string) =>
+                                        updateStoryboardGeneration(storyboard.id, {
+                                          startFrameImageUrl: url,
+                                          startFramePreview: url,
+                                          startFrame: null,
+                                        }),
+                                      onFile: (file: File) =>
+                                        handleFileUpload(storyboard.id, file, "startFrame"),
+                                    },
+                                    {
+                                      kind: "end" as const,
+                                      label:
+                                        generation.model === "Kling I2V Extended"
+                                          ? "End Frame (Required)"
+                                          : "End Frame (Optional)",
+                                      preview:
+                                        generation.endFramePreview ||
+                                        generation.endFrameImageUrl ||
+                                        null,
+                                      clear: () =>
+                                        updateStoryboardGeneration(storyboard.id, {
+                                          endFrame: null,
+                                          endFramePreview: null,
+                                          endFrameImageUrl: null,
+                                        }),
+                                      setUrl: (url: string) =>
+                                        updateStoryboardGeneration(storyboard.id, {
+                                          endFrameImageUrl: url,
+                                          endFramePreview: url,
+                                          endFrame: null,
+                                        }),
+                                      onFile: (file: File) =>
+                                        handleFileUpload(storyboard.id, file, "endFrame"),
+                                    },
+                                  ]).map((slot) => {
+                                    const libraryFrames =
+                                      shotReferenceFrames.get(storyboard.id) || []
+                                    const videoRefUrl =
+                                      generation.filePreview &&
+                                      generation.filePreview !== storyboard.image_url
+                                        ? generation.filePreview
+                                        : null
 
-                                  <div>
-                                    <Label>End Frame (Optional)</Label>
-                                    {generation.endFramePreview || generation.endFrameImageUrl ? (
-                                      <div className="relative mt-2">
-                                        <img 
-                                          src={generation.endFramePreview || generation.endFrameImageUrl || ''} 
-                                          alt="End Frame" 
-                                          className="w-full h-48 object-cover rounded-md"
-                                        />
-                                        <Button
-                                          variant="destructive"
-                                          size="sm"
-                                          className="absolute top-2 right-2"
-                                          onClick={() => updateStoryboardGeneration(storyboard.id, { 
-                                            endFrame: null, 
-                                            endFramePreview: null,
-                                            endFrameImageUrl: null
-                                          })}
-                                        >
-                                          <X className="h-4 w-4" />
-                                        </Button>
-                                        {generation.endFrameImageUrl && (
-                                          <div className="absolute top-2 left-2 bg-primary/80 text-primary-foreground text-xs px-2 py-1 rounded">
-                                            From Storyboard
+                                    const shotImageChoices: {
+                                      key: string
+                                      url: string
+                                      label: string
+                                    }[] = []
+                                    if (storyboard.image_url) {
+                                      shotImageChoices.push({
+                                        key: "shot",
+                                        url: storyboard.image_url,
+                                        label: "Shot image",
+                                      })
+                                    }
+                                    if (videoRefUrl) {
+                                      shotImageChoices.push({
+                                        key: "video-ref",
+                                        url: videoRefUrl,
+                                        label: "Video ref",
+                                      })
+                                    }
+                                    for (const frame of libraryFrames) {
+                                      if (
+                                        shotImageChoices.some((c) => c.url === frame.url)
+                                      ) {
+                                        continue
+                                      }
+                                      shotImageChoices.push({
+                                        key: `frame-${frame.id}`,
+                                        url: frame.url,
+                                        label: frame.label,
+                                      })
+                                    }
+
+                                    const isSelected = (url: string) =>
+                                      !!slot.preview &&
+                                      (slot.preview === url ||
+                                        slot.preview.split("?")[0] === url.split("?")[0])
+
+                                    return (
+                                      <div key={slot.kind} className="space-y-2">
+                                        <Label>{slot.label}</Label>
+                                        {slot.preview ? (
+                                          <div className="relative">
+                                            <img
+                                              src={slot.preview}
+                                              alt={slot.label}
+                                              className="w-full h-40 object-cover rounded-md border"
+                                            />
+                                            <Button
+                                              variant="destructive"
+                                              size="sm"
+                                              className="absolute top-2 right-2"
+                                              onClick={slot.clear}
+                                            >
+                                              <X className="h-4 w-4" />
+                                            </Button>
+                                          </div>
+                                        ) : (
+                                          <div className="h-40 rounded-md border border-dashed bg-muted/20 flex items-center justify-center text-xs text-muted-foreground px-3 text-center">
+                                            Click an image below
                                           </div>
                                         )}
-                                      </div>
-                                    ) : (
-                                      <div className="mt-2 space-y-2">
+
+                                        <p className="text-[11px] text-muted-foreground">
+                                          Images for this shot — click to set as {slot.kind} frame
+                                        </p>
+                                        {shotImageChoices.length > 0 ? (
+                                          <div className="grid grid-cols-3 gap-1.5">
+                                            {shotImageChoices.map((choice) => {
+                                              const selected = isSelected(choice.url)
+                                              return (
+                                                <button
+                                                  key={choice.key}
+                                                  type="button"
+                                                  title={choice.label}
+                                                  onClick={() => slot.setUrl(choice.url)}
+                                                  className={`relative rounded border overflow-hidden text-left transition ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                                    selected
+                                                      ? "ring-2 ring-primary border-primary"
+                                                      : "hover:opacity-90 border-border"
+                                                  }`}
+                                                >
+                                                  <img
+                                                    src={choice.url}
+                                                    alt={choice.label}
+                                                    className="h-20 w-full object-cover"
+                                                  />
+                                                  <span className="block px-1 py-0.5 text-[10px] truncate bg-background/90">
+                                                    {choice.label}
+                                                  </span>
+                                                  {selected && (
+                                                    <span className="absolute top-1 left-1 rounded bg-primary text-primary-foreground text-[9px] px-1.5 py-0.5">
+                                                      Selected
+                                                    </span>
+                                                  )}
+                                                </button>
+                                              )
+                                            })}
+                                          </div>
+                                        ) : (
+                                          <p className="text-xs text-muted-foreground">
+                                            No shot images yet. Generate a storyboard image or make frames first.
+                                          </p>
+                                        )}
+
                                         <Input
                                           type="file"
                                           accept="image/*"
+                                          className="text-xs"
                                           onChange={(e) => {
                                             const file = e.target.files?.[0]
-                                            if (file) handleFileUpload(storyboard.id, file, 'endFrame')
+                                            if (file) slot.onFile(file)
                                           }}
                                         />
-                                        {/* Link to storyboard images */}
-                                        {storyboards.length > 0 && (
-                                          <Select
-                                            value=""
-                                            onValueChange={(storyboardId) => {
-                                              const selectedStoryboard = storyboards.find(s => s.id === storyboardId)
-                                              if (selectedStoryboard?.image_url) {
-                                                updateStoryboardGeneration(storyboard.id, { 
-                                                  endFrameImageUrl: selectedStoryboard.image_url,
-                                                  endFramePreview: selectedStoryboard.image_url
-                                                })
-                                              }
-                                            }}
-                                          >
-                                            <SelectTrigger>
-                                              <SelectValue placeholder="Or select from storyboard images..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                              {/* Show current shot first with special label */}
-                                              {storyboard.image_url && (
-                                                <SelectItem key={storyboard.id} value={storyboard.id}>
-                                                  This shot (Shot {storyboard.shot_number}: {storyboard.title || 'Untitled'})
-                                                </SelectItem>
-                                              )}
-                                              {/* Then show other storyboards */}
-                                              {storyboards
-                                                .filter(s => s.image_url && s.id !== storyboard.id)
-                                                .map((sb) => (
-                                                  <SelectItem key={sb.id} value={sb.id}>
-                                                    Shot {sb.shot_number}: {sb.title || 'Untitled'}
-                                                  </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                          </Select>
-                                        )}
                                       </div>
-                                    )}
-                                  </div>
+                                    )
+                                  })}
                                 </div>
                               </>
                             )}
@@ -6089,18 +6442,18 @@ export default function CinemaProductionPage() {
         )}
       </div>
 
-      {/* Full Image Viewer — tall vertical lightbox for portrait shots */}
+      {/* Full Image Viewer — sits above other dialogs (e.g. Make Frames) */}
       <Dialog
         open={fullImageViewerOpen}
         onOpenChange={(open) => {
-          setFullImageViewerOpen(open)
-          if (!open) {
-            setFullImageUrl(null)
-            setFullImageTitle("")
-          }
+          if (!open) closeFullImageViewer()
+          else setFullImageViewerOpen(true)
         }}
       >
-        <DialogContent className="flex flex-col gap-2 p-3 sm:p-4 w-[min(92vw,28rem)] h-[92vh] max-h-[92vh] max-w-[min(92vw,28rem)] sm:max-w-[min(92vw,28rem)] overflow-hidden">
+        <DialogContent
+          overlayClassName="z-[100]"
+          className="z-[100] flex flex-col gap-2 p-3 sm:p-4 w-[min(92vw,28rem)] h-[92vh] max-h-[92vh] max-w-[min(92vw,28rem)] sm:max-w-[min(92vw,28rem)] overflow-hidden"
+        >
           <DialogHeader className="shrink-0 px-1 pr-8">
             <DialogTitle className="truncate text-sm sm:text-base">
               {fullImageTitle || "Storyboard image"}
@@ -6114,6 +6467,33 @@ export default function CinemaProductionPage() {
                 className="max-h-full max-w-full h-full w-auto object-contain"
               />
               <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
+            </div>
+          ) : null}
+          {fullImageLibraryRef ? (
+            <div className="shrink-0 flex justify-end pt-1">
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => {
+                  const label = fullImageTitle
+                  removeShotReferenceFrame(
+                    fullImageLibraryRef.storyboardId,
+                    fullImageLibraryRef.frameId,
+                  )
+                  closeFullImageViewer()
+                  toast({
+                    title: "Frame removed",
+                    description: label
+                      ? `Deleted “${label}” from this shot’s library.`
+                      : "Deleted from this shot’s library.",
+                  })
+                }}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete frame
+              </Button>
             </div>
           ) : null}
         </DialogContent>
@@ -6457,14 +6837,29 @@ export default function CinemaProductionPage() {
               (shotReferenceFrames.get(imageToolsStoryboard.id) || []).length > 0 && (
                 <div className="space-y-2 pt-2 border-t">
                   <p className="text-xs font-medium">This shot’s frames</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Click a frame to view full size. Delete ones you don’t need.
+                  </p>
                   <div className="grid grid-cols-2 gap-2">
                     {(shotReferenceFrames.get(imageToolsStoryboard.id) || []).map((frame) => (
                       <div key={frame.id} className="rounded border overflow-hidden space-y-1">
-                        <img
-                          src={frame.url}
-                          alt={frame.label}
-                          className="w-full h-24 object-cover"
-                        />
+                        <button
+                          type="button"
+                          className="relative block w-full group"
+                          title="Click to view full size"
+                          onClick={() => openFrameViewer(imageToolsStoryboard.id, frame)}
+                        >
+                          <img
+                            src={frame.url}
+                            alt={frame.label}
+                            className="w-full h-24 object-cover transition-opacity group-hover:opacity-90"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/30">
+                            <span className="rounded-full bg-black/60 text-white text-[10px] px-2 py-1">
+                              View
+                            </span>
+                          </span>
+                        </button>
                         <div className="px-2 pb-2 space-y-1">
                           <p className="text-[11px] text-muted-foreground truncate">
                             {frame.label}
@@ -6532,6 +6927,23 @@ export default function CinemaProductionPage() {
                               }
                             >
                               End
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 text-[11px] px-2 text-destructive hover:text-destructive"
+                              title="Delete frame"
+                              onClick={() => {
+                                removeShotReferenceFrame(imageToolsStoryboard.id, frame.id)
+                                toast({
+                                  title: "Frame removed",
+                                  description: `Deleted “${frame.label}” from this shot’s library.`,
+                                })
+                              }}
+                            >
+                              <Trash2 className="h-3 w-3 mr-1" />
+                              Delete
                             </Button>
                           </div>
                         </div>

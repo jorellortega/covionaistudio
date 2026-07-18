@@ -615,6 +615,37 @@ export class OpenArtService {
 
 // Kling Service (Video Generation) - Server-side only
 export class KlingService {
+  static async pollTaskUntilComplete(
+    taskId: string,
+    mode: 'image2video' | 'text2video' = 'image2video',
+    options?: { maxAttempts?: number; intervalMs?: number; onProgress?: (attempt: number, max: number) => void },
+  ): Promise<{ url: string }> {
+    const maxAttempts = options?.maxAttempts ?? 120 // ~10 minutes
+    const intervalMs = options?.intervalMs ?? 5000
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      options?.onProgress?.(attempt, maxAttempts)
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+
+      const response = await fetch(
+        `/api/kling/status?taskId=${encodeURIComponent(taskId)}&mode=${encodeURIComponent(mode)}`,
+      )
+      const result = await response.json().catch(() => ({}))
+
+      if (result.status === 'completed' && result.data?.url) {
+        return { url: result.data.url as string }
+      }
+      if (result.status === 'failed' || (!response.ok && response.status >= 500)) {
+        throw new Error(result.error || 'Kling video generation failed')
+      }
+      // processing / transient errors — keep polling
+    }
+
+    throw new Error(
+      'Kling is still processing after 10+ minutes. Check your Kling dashboard — the job may finish later.',
+    )
+  }
+
   static async generateVideo(request: GenerateVideoRequest): Promise<AIResponse> {
     try {
       console.log('🎬 Kling generateVideo called - forwarding to server-side API')
@@ -682,11 +713,35 @@ export class KlingService {
       
       const result = await response.json()
       
-      if (result.success) {
-        return { success: true, data: result.data }
-      } else {
+      if (!result.success) {
         return { success: false, error: result.error || 'Unknown error' }
       }
+
+      // Fast path — finished during short server poll
+      if (result.data?.url || result.data?.video_url) {
+        return { success: true, data: result.data }
+      }
+
+      // Long-running jobs (common for frame-to-frame) — continue on the client
+      const taskId = result.data?.taskId as string | undefined
+      const mode = (result.data?.mode === 'text2video' ? 'text2video' : 'image2video') as
+        | 'image2video'
+        | 'text2video'
+
+      if ((result.processing || result.data?.status === 'processing') && taskId) {
+        console.log('⏳ Kling still processing — client polling task', taskId)
+        const { url } = await this.pollTaskUntilComplete(taskId, mode)
+        return {
+          success: true,
+          data: {
+            ...result.data,
+            url,
+            status: 'completed',
+          },
+        }
+      }
+
+      return { success: true, data: result.data }
     } catch (error) {
       console.error('🎬 Kling video generation error:', error)
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }

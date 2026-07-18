@@ -23,32 +23,24 @@ function collectStyleReferenceFiles(formData: FormData): File[] {
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
   try {
-    const { createServerClient } = await import('@supabase/ssr')
-    const { cookies } = await import('next/headers')
-    
-    // Create server-side Supabase client with proper authentication
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
+    const { createClient } = await import('@supabase/supabase-js')
+
+    // Service role bypasses storage RLS for server-side saves after the API has authenticated the user.
+    // Using the cookie/anon client here fails when the session is stale after long image generations.
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!serviceKey) {
+      throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured')
+    }
+
+    const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      serviceKey,
       {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              )
-            } catch {
-              // The `setAll` method was called from a Server Component.
-              // This can be ignored if you have middleware refreshing
-              // user sessions.
-            }
-          },
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
         },
-      }
+      },
     )
 
     console.log('Downloading image from:', imageUrl.substring(0, 100))
@@ -113,18 +105,6 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
     // Upload to Supabase storage
     const filePath = `${userId}/images/${uniqueFileName}`
     console.log('Uploading to Supabase path:', filePath)
-
-    // Check if bucket exists
-    const { data: bucketData, error: bucketError } = await supabase.storage
-      .from('cinema_files')
-      .list('', { limit: 1 })
-
-    if (bucketError) {
-      console.error('Bucket access error:', bucketError)
-      throw new Error(`Bucket access error: ${bucketError.message}`)
-    }
-
-    console.log('Bucket access successful, proceeding with upload...')
 
     const { data, error } = await supabase.storage
       .from('cinema_files')

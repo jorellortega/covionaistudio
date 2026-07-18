@@ -15,6 +15,8 @@ type VideoPromptAssistBody = {
   characterName?: string | null
   locationName?: string | null
   imageUrl?: string | null
+  startImageUrl?: string | null
+  endImageUrl?: string | null
   videoModel?: string | null
   userId?: string | null
 }
@@ -41,7 +43,14 @@ function buildFallbackPrompt(body: VideoPromptAssistBody): string {
   if (body.visualNotes?.trim()) parts.push(`Visual notes: ${body.visualNotes.trim()}`)
   if (body.characterName) parts.push(`Featuring: ${body.characterName}`)
   if (body.locationName) parts.push(`Location: ${body.locationName}`)
-  if (body.imageUrl) {
+
+  const startUrl = body.startImageUrl?.trim() || body.imageUrl?.trim() || null
+  const endUrl = body.endImageUrl?.trim() || null
+  if (startUrl && endUrl) {
+    parts.push(
+      'Interpolate between the start and end reference frames — begin matching the start still, end matching the end still, with continuous natural motion between them',
+    )
+  } else if (startUrl) {
     parts.push(
       'Animate from the attached reference image — keep the same composition, subject, lighting, and environment while adding clear natural subject motion',
     )
@@ -95,6 +104,9 @@ export async function POST(request: NextRequest) {
     }
 
     const isStaticCamera = (body.movement || '').trim().toLowerCase() === 'static'
+    const startUrl = body.startImageUrl?.trim() || body.imageUrl?.trim() || null
+    const endUrl = body.endImageUrl?.trim() || null
+    const hasPair = !!(startUrl && endUrl)
 
     const detailLines = [
       body.shotNumber != null ? `Shot number: ${body.shotNumber}` : null,
@@ -110,28 +122,31 @@ export async function POST(request: NextRequest) {
       body.description ? `Description: ${body.description}` : null,
       body.action
         ? `Action (MUST be clearly animated as subject motion): ${body.action}`
-        : 'Action: not specified — invent believable subject motion from the image (breathing, wingbeats, wind, walking, etc.)',
+        : 'Action: not specified — invent believable subject motion from the image(s) (breathing, wingbeats, wind, walking, etc.)',
       body.dialogue ? `Dialogue: ${body.dialogue}` : null,
       body.visualNotes ? `Visual notes: ${body.visualNotes}` : null,
       body.characterName ? `Character: ${body.characterName}` : null,
       body.locationName ? `Location: ${body.locationName}` : null,
       body.videoModel ? `Target video model: ${body.videoModel}` : null,
-      body.imageUrl
-        ? 'A reference still image is attached and will be used as the first frame / image-to-video input.'
-        : 'No reference image is attached — write a self-contained text-to-video prompt.',
+      hasPair
+        ? 'Two reference stills are attached: START FRAME first, END FRAME second. Write a frame-to-frame video prompt that begins on the start and finishes on the end.'
+        : startUrl
+          ? 'A reference still image is attached and will be used as the first frame / image-to-video input.'
+          : 'No reference image is attached — write a self-contained text-to-video prompt.',
     ]
       .filter(Boolean)
       .join('\n')
 
-    const system = `You write concise prompts for AI image-to-video generation.
+    const system = `You write concise prompts for AI image-to-video (and frame-to-frame) generation.
 Rules:
 - Return ONLY the final prompt text, no quotes, no markdown, no preamble.
 - Keep it under 450 characters when possible, max 700.
-- When a reference image is attached, LOOK at it carefully and ground the prompt in what is actually visible. Do not invent major elements that are not in the image or shot details.
+- When reference image(s) are attached, LOOK at them carefully and ground the prompt in what is actually visible. Do not invent major elements that are not in the image(s) or shot details.
+- If START and END frames are both attached, describe the transition between them (what changes, how the subject moves from start pose/position to end). Keep identity, wardrobe, lighting, and location consistent across the interpolate.
 - CRITICAL: "static" / locked-off camera means the CAMERA does not move. It does NOT mean a freeze-frame. The subject and environment must still have clear continuous motion.
 - Prioritize the Action field as the main animation (e.g. if action is "the crow flies", describe wingbeats, forward flight path, body banking — not a still crow).
-- Preserve composition/subject/lighting from the still; animate motion within that frame.
-- Explicitly forbid frozen/static subjects. Prefer verbs like flaps, flies, glides, walks, breathes, turns.
+- Preserve composition/subject/lighting from the still(s); animate motion within that world.
+- Explicitly forbid frozen/static subjects. Prefer verbs like flaps, flies, glides, walks, breathes, turns, steps, emerges.
 - No on-screen text, logos, or watermarks.`
 
     const userContent: Array<
@@ -140,16 +155,32 @@ Rules:
     > = [
       {
         type: 'text',
-        text: body.imageUrl?.trim()
-          ? `Write one production-ready image-to-video prompt. Study the attached reference image and combine it with these shot details:\n\n${detailLines}\n\nFocus on clear subject motion matching the Action. If camera is static, keep the camera locked but animate the subject strongly.`
-          : `Write one production-ready video prompt from these shot details (no reference image):\n\n${detailLines}\n\nFocus on clear subject motion matching the Action.`,
+        text: hasPair
+          ? `Write one production-ready frame-to-frame video prompt. Study BOTH attached images (start then end) and combine with these shot details:\n\n${detailLines}\n\nDescribe continuous motion that begins matching the start frame and ends matching the end frame.`
+          : startUrl
+            ? `Write one production-ready image-to-video prompt. Study the attached reference image and combine it with these shot details:\n\n${detailLines}\n\nFocus on clear subject motion matching the Action. If camera is static, keep the camera locked but animate the subject strongly.`
+            : `Write one production-ready video prompt from these shot details (no reference image):\n\n${detailLines}\n\nFocus on clear subject motion matching the Action.`,
       },
     ]
 
-    if (body.imageUrl?.trim()) {
+    if (startUrl) {
+      userContent.push({
+        type: 'text',
+        text: hasPair ? 'START FRAME:' : 'REFERENCE IMAGE:',
+      })
       userContent.push({
         type: 'image_url',
-        image_url: { url: body.imageUrl.trim() },
+        image_url: { url: startUrl },
+      })
+    }
+    if (endUrl) {
+      userContent.push({
+        type: 'text',
+        text: 'END FRAME:',
+      })
+      userContent.push({
+        type: 'image_url',
+        image_url: { url: endUrl },
       })
     }
 

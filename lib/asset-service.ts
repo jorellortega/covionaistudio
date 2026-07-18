@@ -56,8 +56,13 @@ export interface CreateAssetData {
 
 export class AssetService {
   static async ensureAuthenticated() {
-    const { data: { session }, error } = await getSupabaseClient().auth.getSession()
-    if (error || !session) {
+    const supabase = getSupabaseClient()
+    // Prefer getUser() so expired access tokens are refreshed when possible
+    const { data: { user }, error } = await supabase.auth.getUser()
+    if (!error && user) return user
+
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.user) {
       throw new Error('Authentication required')
     }
     return session.user
@@ -134,10 +139,12 @@ export class AssetService {
     }
     
     // Check if there's an existing asset for this scene to determine version
+    // (Skip for cinema-production keyframes — they are standalone library images, not scene thumbnail versions)
     let version = assetData.version || 1  // Use provided version or default to 1
     let parentAssetId: string | undefined = undefined
+    const skipSceneVersioning = assetData.metadata?.cinema_production_frame === true
     
-    if (assetData.scene_id && typeof assetData.scene_id === 'string') {
+    if (!skipSceneVersioning && assetData.scene_id && typeof assetData.scene_id === 'string') {
       const existingAssets = await this.getAssetsForScene(assetData.scene_id)
       if (existingAssets.length > 0) {
         // Find the latest version

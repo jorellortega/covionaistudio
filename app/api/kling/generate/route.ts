@@ -217,29 +217,31 @@ export async function POST(req: NextRequest) {
     }
 
     const taskId = createData.data.task_id
+    const mode = endpoint.includes('image2video') ? 'image2video' : 'text2video'
 
-    // Step 2: Poll for task completion
-    const maxAttempts = 60 // Try for up to 5 minutes (5s intervals)
+    // Short server-side wait so we can return fast completions immediately.
+    // Frame-to-frame often needs longer — client continues polling via /api/kling/status.
+    const maxAttempts = 24 // ~2 minutes at 5s
     let attempts = 0
     let videoUrl: string | null = null
 
-    // Use the same endpoint type for polling
-    const statusEndpoint = endpoint.includes('image2video')
-      ? `https://api-singapore.klingai.com/v1/videos/image2video/${taskId}`
-      : `https://api-singapore.klingai.com/v1/videos/text2video/${taskId}`
+    const statusEndpoint =
+      mode === 'image2video'
+        ? `https://api-singapore.klingai.com/v1/videos/image2video/${taskId}`
+        : `https://api-singapore.klingai.com/v1/videos/text2video/${taskId}`
 
     while (attempts < maxAttempts) {
       attempts++
-      await new Promise(resolve => setTimeout(resolve, 5000)) // Wait 5 seconds
+      await new Promise((resolve) => setTimeout(resolve, 5000))
 
       console.log(`🔄 Polling task status (attempt ${attempts}/${maxAttempts})...`)
-      
+
       const statusResponse = await fetch(statusEndpoint, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${authToken}`,
-          'Content-Type': 'application/json'
-        }
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
       })
 
       if (!statusResponse.ok) {
@@ -264,7 +266,23 @@ export async function POST(req: NextRequest) {
     }
 
     if (!videoUrl) {
-      throw new Error('Video generation timed out after maximum polling attempts')
+      console.log(
+        `⏳ Kling task still processing after ${maxAttempts} polls — returning taskId for client polling`,
+        taskId,
+      )
+      return NextResponse.json({
+        success: true,
+        processing: true,
+        data: {
+          taskId,
+          mode,
+          status: 'processing',
+          model,
+          prompt,
+          duration,
+          ratio,
+        },
+      })
     }
 
     console.log('🎬 Video generation successful! URL:', videoUrl)
@@ -277,8 +295,10 @@ export async function POST(req: NextRequest) {
         prompt: prompt,
         duration: duration,
         ratio: ratio,
-        status: 'completed'
-      }
+        status: 'completed',
+        taskId,
+        mode,
+      },
     })
 
   } catch (error: any) {
