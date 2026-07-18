@@ -43,6 +43,8 @@ import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 
+const MAX_LINKED_REFERENCE_IMAGES = 5
+
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
   project_name?: string
@@ -312,7 +314,7 @@ export default function SceneStoryboardsPage() {
   const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
-  const [inlineStyleLinkAssetId, setInlineStyleLinkAssetId] = useState<string | null>(null)
+  const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
   const [isGeneratingReferenceEdit, setIsGeneratingReferenceEdit] = useState(false)
   const [referenceEditProgress, setReferenceEditProgress] = useState("")
   
@@ -1011,7 +1013,7 @@ export default function SceneStoryboardsPage() {
     config: ReturnType<typeof requireLockedImageConfig>,
     options?: {
       referenceFile?: File
-      styleReferenceFile?: File
+      styleReferenceFiles?: File[]
       width?: number
       height?: number
     },
@@ -1029,8 +1031,8 @@ export default function SceneStoryboardsPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
-      if (options.styleReferenceFile) {
-        formData.append("styleFile", options.styleReferenceFile)
+      for (const styleFile of options.styleReferenceFiles ?? []) {
+        formData.append("styleFiles", styleFile)
       }
       if (config.service === "runway") {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
@@ -1097,7 +1099,24 @@ export default function SceneStoryboardsPage() {
   }
 
   const clearInlineStyleLink = () => {
-    setInlineStyleLinkAssetId(null)
+    setInlineStyleLinkAssetIds([])
+  }
+
+  const toggleInlineStyleLinkAsset = (assetId: string) => {
+    setInlineStyleLinkAssetIds((prev) => {
+      if (prev.includes(assetId)) {
+        return prev.filter((id) => id !== assetId)
+      }
+      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+        toast({
+          title: "Maximum references reached",
+          description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
+          variant: "destructive",
+        })
+        return prev
+      }
+      return [...prev, assetId]
+    })
   }
 
   const clearInlineReferenceEditState = () => {
@@ -1141,13 +1160,15 @@ export default function SceneStoryboardsPage() {
       return
     }
 
-    let styleReferenceFile: File | undefined
-    if (inlineStyleLinkAssetId) {
-      const styleAsset = findStyleLinkAsset(inlineStyleLinkAssetId)
+    const styleReferenceFiles: File[] = []
+    for (const assetId of inlineStyleLinkAssetIds) {
+      const styleAsset = findStyleLinkAsset(assetId)
       if (styleAsset?.content_url) {
-        styleReferenceFile = await referenceUrlToFile(
-          styleAsset.content_url,
-          `style-ref-${styleAsset.id}.png`,
+        styleReferenceFiles.push(
+          await referenceUrlToFile(
+            styleAsset.content_url,
+            `style-ref-${styleAsset.id}.png`,
+          ),
         )
       }
     }
@@ -1170,7 +1191,7 @@ export default function SceneStoryboardsPage() {
 
       const response = await requestLockedImageGeneration(prompt, config, {
         referenceFile,
-        styleReferenceFile: config.supportsReference ? styleReferenceFile : undefined,
+        styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
       })
 
       if (!response.ok) {
@@ -1335,8 +1356,8 @@ export default function SceneStoryboardsPage() {
             </Label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Adds another image as a second reference from characters, locations, or project assets.
-            Your description above is the only prompt.
+            Adds more images as references from characters, locations, or project assets.
+            Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
           </p>
           {isLoadingProjectAssets ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -1360,13 +1381,9 @@ export default function SceneStoryboardsPage() {
                         key={asset.id}
                         type="button"
                         disabled={isGeneratingReferenceEdit}
-                        onClick={() =>
-                          setInlineStyleLinkAssetId((prev) =>
-                            prev === asset.id ? null : asset.id,
-                          )
-                        }
+                        onClick={() => toggleInlineStyleLinkAsset(asset.id)}
                         className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                          inlineStyleLinkAssetId === asset.id
+                          inlineStyleLinkAssetIds.includes(asset.id)
                             ? "border-violet-500 ring-2 ring-violet-500/40"
                             : "border-border hover:border-violet-500/50"
                         }`}
@@ -1384,15 +1401,10 @@ export default function SceneStoryboardsPage() {
               ))}
             </div>
           )}
-          {inlineStyleLinkAssetId ? (
-            <div className="flex items-center gap-2">
+          {inlineStyleLinkAssetIds.length > 0 ? (
+            <div className="flex items-center gap-2 flex-wrap">
               <p className="text-xs text-violet-400">
-                Linked as an additional reference image
-                {(() => {
-                  const linked = findStyleLinkAsset(inlineStyleLinkAssetId)
-                  if (!linked) return "."
-                  return ` (${getProjectAssetSourceLabel(linked, locations, characters)}).`
-                })()}
+                {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
               </p>
               <Button
                 type="button"
@@ -1402,7 +1414,7 @@ export default function SceneStoryboardsPage() {
                 disabled={isGeneratingReferenceEdit}
                 onClick={clearInlineStyleLink}
               >
-                Clear
+                Clear all
               </Button>
             </div>
           ) : null}
