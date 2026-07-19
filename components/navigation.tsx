@@ -83,6 +83,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Create Titles", href: "/create-titles", icon: Type },
       { name: "Projects", href: "/ideas", icon: Lightbulb },
       { name: "Visual Dev", href: "/visdev", icon: Palette },
+      { name: "Prompt Create", href: "/prompt-create", icon: Sparkles },
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
       { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
@@ -96,7 +97,8 @@ const navigationCategories: NavCategory[] = [
       { name: "AI Studio", href: "/ai-studio", icon: Bot },
       { name: "Runway ML", href: "/runwayml", icon: Video },
       { name: "Hedra Testing", href: "/hedra-testing", icon: UserCircle },
-      { name: "Prompts List", href: "/prompts-list", icon: Sparkles },
+      { name: "Prompt Create", href: "/prompt-create", icon: Sparkles },
+      { name: "Prompts List", href: "/prompts-list", icon: List },
     ],
   },
 ]

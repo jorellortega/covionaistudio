@@ -37,6 +37,8 @@ import {
   Wand2,
   Images,
   Link2,
+  Palette,
+  RectangleHorizontal,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ImageSizeBadge } from "@/components/image-size-badge"
@@ -72,6 +74,7 @@ import {
   getProjectAssetSourceLabel,
   referenceUrlToFile,
 } from "@/lib/project-image-linking"
+import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -551,6 +554,7 @@ export default function CinemaProductionPage() {
 
   // Image edit + frame refs for video generation
   const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
+  const [stylizeDialogOpen, setStylizeDialogOpen] = useState(false)
   const [framesDialogOpen, setFramesDialogOpen] = useState(false)
   const [imageToolsStoryboard, setImageToolsStoryboard] = useState<Storyboard | null>(null)
   const [imageEditPrompt, setImageEditPrompt] = useState("")
@@ -562,12 +566,23 @@ export default function CinemaProductionPage() {
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
   const [projectLocations, setProjectLocations] = useState<Location[]>([])
   const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
+  const [savedStylePrompts, setSavedStylePrompts] = useState<SavedPrompt[]>([])
+  const [isLoadingStylePrompts, setIsLoadingStylePrompts] = useState(false)
+  const [stylizePromptId, setStylizePromptId] = useState<string>("")
+  const [stylizeExtraDirection, setStylizeExtraDirection] = useState("")
+  const [stylizeUploading, setStylizeUploading] = useState(false)
+  const [stylizeProgress, setStylizeProgress] = useState("")
+  const [resizingLandscapeId, setResizingLandscapeId] = useState<string | null>(null)
   const [framePresetId, setFramePresetId] = useState<string>(VIDEO_FRAME_PRESETS[0].id)
   const [frameCustomDirection, setFrameCustomDirection] = useState("")
   const [frameApplyTarget, setFrameApplyTarget] = useState<FrameApplyTarget>("video")
   const [frameGenerating, setFrameGenerating] = useState(false)
   const [frameProgress, setFrameProgress] = useState("")
   const [shotReferenceFrames, setShotReferenceFrames] = useState<Map<string, ShotReferenceFrame[]>>(
+    new Map(),
+  )
+  /** Which library image is shown in the main preview (does not change storyboard.image_url). */
+  const [previewImageByStoryboard, setPreviewImageByStoryboard] = useState<Map<string, string>>(
     new Map(),
   )
   
@@ -765,6 +780,44 @@ export default function CinemaProductionPage() {
       }
     }
     void loadLinkableAssets()
+  }, [selectedProjectId, ready, userId])
+
+  // Saved style / image prompts for Stylize
+  useEffect(() => {
+    const loadStylePrompts = async () => {
+      if (!selectedProjectId || !ready || !userId) {
+        setSavedStylePrompts([])
+        return
+      }
+      setIsLoadingStylePrompts(true)
+      try {
+        const dbPrompts = await SavedPromptsService.getSavedPrompts(userId, selectedProjectId)
+        const imagePrompts = dbPrompts.filter((p) => {
+          const isImageType =
+            p.type === "character" ||
+            p.type === "environment" ||
+            p.type === "prop" ||
+            p.type === "color" ||
+            p.type === "lighting" ||
+            p.type === "style" ||
+            p.type === "prompt"
+          return isImageType
+        })
+        // Prefer style prompts first, then the rest by recency (already ordered)
+        imagePrompts.sort((a, b) => {
+          if (a.type === "style" && b.type !== "style") return -1
+          if (b.type === "style" && a.type !== "style") return 1
+          return 0
+        })
+        setSavedStylePrompts(imagePrompts)
+      } catch (error) {
+        console.error("Error loading saved prompts for stylize:", error)
+        setSavedStylePrompts([])
+      } finally {
+        setIsLoadingStylePrompts(false)
+      }
+    }
+    void loadStylePrompts()
   }, [selectedProjectId, ready, userId])
 
   const linkedProjectImageGroups = useMemo(
@@ -1778,6 +1831,13 @@ export default function CinemaProductionPage() {
     setImageEditDialogOpen(true)
   }
 
+  const openStylizeDialog = (storyboard: Storyboard) => {
+    setImageToolsStoryboard(storyboard)
+    setStylizePromptId("")
+    setStylizeExtraDirection("")
+    setStylizeDialogOpen(true)
+  }
+
   const openFramesDialog = (storyboard: Storyboard) => {
     setImageToolsStoryboard(storyboard)
     setFramePresetId(VIDEO_FRAME_PRESETS[0].id)
@@ -1794,6 +1854,52 @@ export default function CinemaProductionPage() {
       next.set(storyboardId, [frame, ...list].slice(0, 12))
       return next
     })
+  }
+
+  const setShotPreviewImage = (storyboardId: string, imageUrl: string) => {
+    setPreviewImageByStoryboard((prev) => {
+      const next = new Map(prev)
+      next.set(storyboardId, imageUrl)
+      return next
+    })
+  }
+
+  const getDisplayedShotImage = (storyboard: Storyboard) =>
+    previewImageByStoryboard.get(storyboard.id) || storyboard.image_url || null
+
+  /** Frame library thumbs including the original shot image when it isn't already saved as a frame. */
+  const getShotLibraryFrames = (storyboard: Storyboard): ShotReferenceFrame[] => {
+    const frames = shotReferenceFrames.get(storyboard.id) || []
+    if (!storyboard.image_url) return frames
+    if (frames.some((f) => f.url === storyboard.image_url)) return frames
+    return [
+      {
+        id: `original-${storyboard.id}`,
+        url: storyboard.image_url,
+        label: "Original",
+        createdAt: 0,
+      },
+      ...frames,
+    ]
+  }
+
+  const promoteFrameToShotImage = async (storyboard: Storyboard, imageUrl: string) => {
+    if (!imageUrl || storyboard.image_url === imageUrl) return
+    try {
+      const updated = await StoryboardsService.updateStoryboardImage(storyboard.id, imageUrl)
+      setStoryboards((prev) => prev.map((sb) => (sb.id === storyboard.id ? updated : sb)))
+      setShotPreviewImage(storyboard.id, imageUrl)
+      toast({
+        title: "Shot image updated",
+        description: "This version is now the main shot image. Other versions stay in the library.",
+      })
+    } catch (error) {
+      toast({
+        title: "Could not set shot image",
+        description: error instanceof Error ? error.message : "Try again.",
+        variant: "destructive",
+      })
+    }
   }
 
   const persistShotReferenceFrame = async (
@@ -1845,6 +1951,16 @@ export default function CinemaProductionPage() {
     } catch (error) {
       console.error("Failed to save frame asset:", error)
     }
+  }
+
+  const ensureOriginalInLibrary = async (storyboard: Storyboard) => {
+    if (!storyboard.image_url) return
+    const frames = shotReferenceFrames.get(storyboard.id) || []
+    if (frames.some((f) => f.url === storyboard.image_url)) return
+    await persistShotReferenceFrame(storyboard, {
+      url: storyboard.image_url,
+      label: "Original",
+    })
   }
 
   const removeShotReferenceFrame = (storyboardId: string, frameId: string) => {
@@ -1995,32 +2111,21 @@ export default function CinemaProductionPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const updated = await StoryboardsService.updateStoryboardImage(
-        storyboard.id,
-        imageUrlToUse,
-      )
-      setStoryboards((prev) => prev.map((sb) => (sb.id === storyboard.id ? updated : sb)))
-
-      const file = await referenceUrlToFile(
-        imageUrlToUse,
-        `video-ref-shot-${storyboard.shot_number}.png`,
-      )
-      updateStoryboardGeneration(storyboard.id, {
-        uploadedFile: file,
-        filePreview: imageUrlToUse,
-      })
+      // Keep the official shot image — save edit to the frame library only
+      await ensureOriginalInLibrary(storyboard)
       await persistShotReferenceFrame(storyboard, {
         url: imageUrlToUse,
         label: "Edited shot",
       })
+      setShotPreviewImage(storyboard.id, imageUrlToUse)
 
       setImageEditDialogOpen(false)
       clearImageEditReference()
       clearImageEditStyleLinks()
       setImageEditPrompt("")
       toast({
-        title: "Image edited",
-        description: "The storyboard shot image was updated with your edit.",
+        title: "Edit saved to library",
+        description: "Original shot kept. Edited version added to the frame library — click a thumb to preview.",
       })
     } catch (error) {
       toast({
@@ -2031,6 +2136,173 @@ export default function CinemaProductionPage() {
     } finally {
       setImageEditUploading(false)
       setImageEditProgress("")
+    }
+  }
+
+  const handleCinemaStylize = async () => {
+    const storyboard = imageToolsStoryboard
+    if (!storyboard || !userId) return
+
+    const selectedPrompt = savedStylePrompts.find((p) => p.id === stylizePromptId)
+    if (!selectedPrompt?.prompt?.trim()) {
+      toast({
+        title: "Select a saved prompt",
+        description: "Pick a style or saved prompt to restyle this shot.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!storyboard.image_url) {
+      toast({
+        title: "Shot image required",
+        description: "This shot needs an image before it can be stylized.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setStylizeUploading(true)
+    setStylizeProgress("Stylizing image...")
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      const extra = stylizeExtraDirection.trim()
+      const prompt = (
+        `Restyle this reference image using the following visual style. ` +
+        `Keep the same subjects, composition, framing, camera angle, and scene content — ` +
+        `only change the art style, look, color treatment, and aesthetic. ` +
+        `Style: ${selectedPrompt.prompt.trim()}.` +
+        (extra ? ` Additional direction: ${extra}.` : "") +
+        ` No text, no watermark.`
+      ).slice(0, 990)
+
+      const referenceFile = await referenceUrlToFile(
+        storyboard.image_url,
+        `cinema-stylize-${storyboard.id}.png`,
+      )
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile: config.supportsReference ? referenceFile : undefined,
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to stylize image")
+      }
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to stylize image")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      // Keep the original shot image — save stylized result to the frame library only
+      await ensureOriginalInLibrary(storyboard)
+      await persistShotReferenceFrame(storyboard, {
+        url: imageUrlToUse,
+        label: `Styled · ${selectedPrompt.title}`.slice(0, 48),
+      })
+      setShotPreviewImage(storyboard.id, imageUrlToUse)
+
+      void SavedPromptsService.incrementUseCount(selectedPrompt.id).catch(() => {})
+
+      setStylizeDialogOpen(false)
+      setStylizePromptId("")
+      setStylizeExtraDirection("")
+      toast({
+        title: "Styled version saved",
+        description: `Original kept. “${selectedPrompt.title}” added to the frame library — click thumbs to compare.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Stylize failed",
+        description: getImageGenerationErrorMessage(error, "Could not stylize the image."),
+        variant: "destructive",
+      })
+    } finally {
+      setStylizeUploading(false)
+      setStylizeProgress("")
+    }
+  }
+
+  /** Redo the current shot image at cinematic landscape size (1536×1024) — same as storyboards. */
+  const regenerateShotAtLandscapeSize = async (storyboard: Storyboard) => {
+    if (!storyboard.image_url || !userId) {
+      toast({
+        title: "No image to resize",
+        description: "This shot needs an existing image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setResizingLandscapeId(storyboard.id)
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      if (!config.supportsReference) {
+        throw new Error(
+          "Lock GPT Image 2 or Runway in AI Settings to resize images to landscape.",
+        )
+      }
+
+      await ensureOriginalInLibrary(storyboard)
+
+      const sourceUrl = getDisplayedShotImage(storyboard) || storyboard.image_url
+      const referenceFile = await referenceUrlToFile(
+        sourceUrl,
+        `cinema-landscape-ref-${storyboard.id}.png`,
+      )
+
+      const promptParts = [
+        "Recreate this exact image as a widescreen cinematic landscape frame (1536x1024).",
+        "Keep the same subject, composition, lighting, colors, and style.",
+        "Do not add text, captions, labels, or watermarks.",
+        storyboard.title ? `Shot: ${storyboard.title}.` : "",
+        storyboard.description?.trim() ? storyboard.description.trim() : "",
+      ].filter(Boolean)
+      const prompt = promptParts.join(" ").slice(0, 990)
+
+      const response = await requestLockedImageGeneration(prompt, config, {
+        referenceFile,
+        width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
+        height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to resize landscape image")
+      }
+
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to resize landscape image")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      await persistShotReferenceFrame(storyboard, {
+        url: imageUrlToUse,
+        label: "Resized 1536×1024",
+      })
+
+      const updated = await StoryboardsService.updateStoryboardImage(
+        storyboard.id,
+        imageUrlToUse,
+      )
+      setStoryboards((prev) => prev.map((sb) => (sb.id === storyboard.id ? updated : sb)))
+      setShotPreviewImage(storyboard.id, imageUrlToUse)
+
+      toast({
+        title: "Landscape resize ready",
+        description: "Shot updated to 1536×1024. Previous version kept in the frame library.",
+      })
+    } catch (error) {
+      toast({
+        title: "Resize failed",
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not resize this image to landscape.",
+        ),
+        variant: "destructive",
+      })
+    } finally {
+      setResizingLandscapeId(null)
     }
   }
 
@@ -5127,12 +5399,14 @@ export default function CinemaProductionPage() {
                             
                             {/* Display Image or Video based on toggle */}
                             {currentViewMode === 'image' ? (
-                              storyboard.image_url ? (
+                              (() => {
+                                const displayImageUrl = getDisplayedShotImage(storyboard)
+                                return displayImageUrl ? (
                                 <div className="space-y-2">
                                 <div
                                   className="relative w-full bg-muted rounded-lg overflow-hidden border cursor-zoom-in group"
                                   onClick={() => {
-                                    setFullImageUrl(storyboard.image_url!)
+                                    setFullImageUrl(displayImageUrl)
                                     setFullImageTitle(
                                       storyboard.title || `Shot ${storyboard.shot_number}`,
                                     )
@@ -5142,18 +5416,24 @@ export default function CinemaProductionPage() {
                                   title="Click to view full image"
                                 >
                                   <img
-                                    src={storyboard.image_url}
+                                    src={displayImageUrl}
                                     alt={storyboard.title || "Storyboard"}
                                     className="w-full h-auto max-h-[600px] object-contain mx-auto transition-opacity group-hover:opacity-95"
                                     onLoad={() => {
-                                      console.log('🎬 Storyboard image loaded successfully:', storyboard.image_url)
+                                      console.log('🎬 Storyboard image loaded successfully:', displayImageUrl)
                                     }}
                                     onError={(e) => {
-                                      console.error('🎬 Failed to load storyboard image:', storyboard.image_url)
+                                      console.error('🎬 Failed to load storyboard image:', displayImageUrl)
                                       e.currentTarget.style.display = 'none'
                                     }}
                                   />
-                                  <ImageSizeBadge src={storyboard.image_url} />
+                                  <ImageSizeBadge src={displayImageUrl} />
+                                  {previewImageByStoryboard.get(storyboard.id) &&
+                                  previewImageByStoryboard.get(storyboard.id) !== storyboard.image_url ? (
+                                    <div className="absolute top-2 left-2 rounded bg-black/70 text-white text-[10px] px-2 py-0.5">
+                                      Library preview
+                                    </div>
+                                  ) : null}
                                   <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/20">
                                     <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
                                       View full image
@@ -5169,6 +5449,7 @@ export default function CinemaProductionPage() {
                                   </p>
                                 </div>
                               )
+                              })()
                             ) : (
                               // Video view
                               (() => {
@@ -5279,53 +5560,120 @@ export default function CinemaProductionPage() {
                             size="sm"
                             variant="outline"
                             className="gap-1.5"
+                            onClick={() => void regenerateShotAtLandscapeSize(storyboard)}
+                            disabled={
+                              !storyboard.image_url ||
+                              resizingLandscapeId === storyboard.id ||
+                              stylizeUploading ||
+                              imageEditUploading
+                            }
+                            title="Redo same image at 1536×1024 landscape"
+                          >
+                            {resizingLandscapeId === storyboard.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <RectangleHorizontal className="h-3.5 w-3.5" />
+                            )}
+                            {resizingLandscapeId === storyboard.id ? "Resizing…" : "Resize"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => openStylizeDialog(storyboard)}
+                            disabled={!storyboard.image_url}
+                            title={
+                              storyboard.image_url
+                                ? "Restyle this shot with a saved prompt"
+                                : "Generate a shot image first"
+                            }
+                          >
+                            <Palette className="h-3.5 w-3.5" />
+                            Stylize
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
                             onClick={() => openFramesDialog(storyboard)}
                           >
                             <Images className="h-3.5 w-3.5" />
                             Make Frames
-                            {(shotReferenceFrames.get(storyboard.id) || []).length > 0
-                              ? ` (${(shotReferenceFrames.get(storyboard.id) || []).length})`
+                            {getShotLibraryFrames(storyboard).length > 0
+                              ? ` (${getShotLibraryFrames(storyboard).length})`
                               : ""}
                           </Button>
                         </div>
-                        {(shotReferenceFrames.get(storyboard.id) || []).length > 0 && (
+                        {getShotLibraryFrames(storyboard).length > 0 && (
                           <div className="space-y-1.5 rounded-md border bg-muted/20 p-2">
                             <p className="text-xs font-medium">
                               Frame library
                             </p>
                             <p className="text-[11px] text-muted-foreground">
-                              Click to view · trash to delete · assign from Make Frames
+                              Click a thumb to preview · originals stay · use Set as shot to replace the main image
                             </p>
                             <div className="flex gap-2 overflow-x-auto pb-1">
-                              {(shotReferenceFrames.get(storyboard.id) || []).map((frame) => (
+                              {getShotLibraryFrames(storyboard).map((frame) => {
+                                const displayUrl = getDisplayedShotImage(storyboard)
+                                const isPreview = displayUrl === frame.url
+                                const isOfficial = storyboard.image_url === frame.url
+                                const isVirtualOriginal = frame.id.startsWith("original-")
+                                return (
                                 <div
                                   key={frame.id}
-                                  className="relative shrink-0 rounded border overflow-hidden bg-background"
+                                  className={`relative shrink-0 rounded border overflow-hidden bg-background ${
+                                    isPreview ? "ring-2 ring-primary border-primary" : ""
+                                  }`}
                                 >
                                   <button
                                     type="button"
                                     className="block hover:opacity-90"
-                                    title={`${frame.label} — click to view`}
-                                    onClick={() => openFrameViewer(storyboard.id, frame)}
+                                    title={`${frame.label} — click to preview in main view`}
+                                    onClick={() => setShotPreviewImage(storyboard.id, frame.url)}
+                                    onDoubleClick={() => openFrameViewer(storyboard.id, frame)}
                                   >
                                     <img
                                       src={frame.url}
                                       alt={frame.label}
-                                      className="h-20 w-28 object-cover"
+                                      className="h-16 w-20 object-cover"
                                     />
-                                    <span className="block px-1.5 py-0.5 text-[10px] text-muted-foreground truncate max-w-[7rem]">
-                                      {frame.label}
+                                    <span className="block px-1.5 py-0.5 text-[10px] text-muted-foreground truncate max-w-[5rem]">
+                                      {isOfficial && frame.label !== "Original" ? `${frame.label} · shot` : frame.label}
                                     </span>
                                   </button>
+                                  {!isOfficial && !isVirtualOriginal && isPreview ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="secondary"
+                                      className="absolute bottom-5 left-0.5 right-0.5 h-5 text-[9px] px-1"
+                                      title="Make this the official shot image"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        void promoteFrameToShotImage(storyboard, frame.url)
+                                      }}
+                                    >
+                                      Set as shot
+                                    </Button>
+                                  ) : null}
+                                  {!isVirtualOriginal ? (
                                   <Button
                                     type="button"
                                     size="icon"
                                     variant="destructive"
-                                    className="absolute top-1 right-1 h-6 w-6 opacity-90"
+                                    className="absolute top-1 right-1 h-5 w-5 opacity-90"
                                     title="Delete frame"
                                     onClick={(e) => {
                                       e.stopPropagation()
                                       removeShotReferenceFrame(storyboard.id, frame.id)
+                                      if (previewImageByStoryboard.get(storyboard.id) === frame.url) {
+                                        setShotPreviewImage(
+                                          storyboard.id,
+                                          storyboard.image_url || "",
+                                        )
+                                      }
                                       toast({
                                         title: "Frame removed",
                                         description: `Deleted “${frame.label}” from this shot’s library.`,
@@ -5334,8 +5682,10 @@ export default function CinemaProductionPage() {
                                   >
                                     <Trash2 className="h-3 w-3" />
                                   </Button>
+                                  ) : null}
                                 </div>
-                              ))}
+                                )
+                              })}
                             </div>
                           </div>
                         )}
@@ -6520,8 +6870,8 @@ export default function CinemaProductionPage() {
             </DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
               {imageToolsStoryboard
-                ? `Reference edit for Shot ${imageToolsStoryboard.shot_number}${imageToolsStoryboard.title ? ` · ${imageToolsStoryboard.title}` : ""}.`
-                : "Edit this storyboard shot using a reference image."}
+                ? `Reference edit for Shot ${imageToolsStoryboard.shot_number}${imageToolsStoryboard.title ? ` · ${imageToolsStoryboard.title}` : ""}. Saves a new version to the frame library — the original shot image is kept.`
+                : "Edit this storyboard shot using a reference image. Saves to the frame library without replacing the original."}
             </DialogDescription>
           </DialogHeader>
 
@@ -6730,6 +7080,146 @@ export default function CinemaProductionPage() {
                   <>
                     <Wand2 className="h-4 w-4" />
                     Edit Image
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Stylize — apply saved style prompt, keep composition */}
+      <Dialog
+        open={stylizeDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !stylizeUploading) {
+            setStylizeDialogOpen(false)
+            setImageToolsStoryboard(null)
+            setStylizePromptId("")
+            setStylizeExtraDirection("")
+          }
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
+              <Palette className="h-5 w-5 text-amber-500" />
+              Stylize Image
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm">
+              {imageToolsStoryboard
+                ? `Restyle Shot ${imageToolsStoryboard.shot_number}${imageToolsStoryboard.title ? ` · ${imageToolsStoryboard.title}` : ""} with a saved prompt. The original shot image is kept — the styled version is saved to the frame library.`
+                : "Restyle with a saved prompt. Original is kept; styled version goes to the frame library."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {imageToolsStoryboard && (
+            <div className="space-y-3">
+              {imageToolsStoryboard.image_url && (
+                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                  <img
+                    src={imageToolsStoryboard.image_url}
+                    alt={imageToolsStoryboard.title}
+                    className="w-full h-full max-h-40 object-contain"
+                  />
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Uses your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
+                {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                  ? " Pick a saved prompt from Visual Dev / Prompts List."
+                  : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+              </p>
+
+              {stylizeUploading && stylizeProgress ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  {stylizeProgress}
+                </p>
+              ) : null}
+
+              <div className="space-y-2">
+                <Label htmlFor="cinema-stylize-prompt" className="text-xs sm:text-sm">
+                  Saved prompt
+                </Label>
+                {isLoadingStylePrompts ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading saved prompts…
+                  </div>
+                ) : savedStylePrompts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-1">
+                    No saved prompts found for this project. Create style prompts in Visual Dev or{" "}
+                    <Link href="/prompts-list" className="text-primary underline underline-offset-2">
+                      Prompts List
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <Select
+                    value={stylizePromptId || undefined}
+                    onValueChange={setStylizePromptId}
+                    disabled={stylizeUploading}
+                  >
+                    <SelectTrigger id="cinema-stylize-prompt" className="bg-input border-border">
+                      <SelectValue placeholder="Select a saved prompt..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {savedStylePrompts.map((prompt) => (
+                        <SelectItem key={prompt.id} value={prompt.id}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="truncate">{prompt.title}</span>
+                            <Badge variant="secondary" className="text-[10px] shrink-0">
+                              {prompt.type}
+                            </Badge>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                {stylizePromptId ? (
+                  <p className="text-[11px] text-muted-foreground line-clamp-3 rounded-md border border-border/60 bg-muted/20 p-2">
+                    {savedStylePrompts.find((p) => p.id === stylizePromptId)?.prompt}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="cinema-stylize-extra" className="text-xs sm:text-sm">
+                  Extra direction (optional)
+                </Label>
+                <Textarea
+                  id="cinema-stylize-extra"
+                  value={stylizeExtraDirection}
+                  onChange={(e) => setStylizeExtraDirection(e.target.value)}
+                  placeholder="e.g., stronger film grain, cooler night grade, more painterly edges"
+                  className="bg-input border-border min-h-[64px] text-xs sm:text-sm resize-none"
+                  disabled={stylizeUploading}
+                />
+              </div>
+
+              <Button
+                size="sm"
+                onClick={() => void handleCinemaStylize()}
+                disabled={
+                  stylizeUploading ||
+                  !stylizePromptId ||
+                  !imageToolsStoryboard.image_url ||
+                  !getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                }
+                className="gap-2 w-full sm:w-auto bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {stylizeUploading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Stylizing...
+                  </>
+                ) : (
+                  <>
+                    <Palette className="h-4 w-4" />
+                    Stylize Image
                   </>
                 )}
               </Button>

@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Loader2, Sparkles, Plus, Edit, Save, X, Trash2, Tag, Copy, Search, Upload, Image as ImageIcon } from "lucide-react"
 import { useSearchParams, useRouter } from "next/navigation"
+import Link from "next/link"
 import { useToast } from "@/hooks/use-toast"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
@@ -463,6 +464,12 @@ export default function PromptsListPage() {
               Manage your saved AI prompts for image generation and other AI features.
             </p>
           </div>
+          <Button asChild className="gap-2">
+            <Link href={projectId ? `/prompt-create?movie=${projectId}` : "/prompt-create"}>
+              <Plus className="h-4 w-4" />
+              Create Prompt
+            </Link>
+          </Button>
         </div>
 
         <div className="mb-6">

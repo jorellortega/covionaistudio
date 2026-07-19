@@ -12,6 +12,7 @@ export interface SavedPrompt {
   model?: string
   tags: string[]
   use_count: number
+  image_url?: string | null
   created_at: string
   updated_at: string
 }
@@ -25,6 +26,7 @@ export interface CreateSavedPromptData {
   style?: string
   model?: string
   tags?: string[]
+  image_url?: string | null
 }
 
 export class SavedPromptsService {
