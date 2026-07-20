@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-type AudioKind = 'dialogue' | 'sound-effect'
+type AudioKind = 'dialogue' | 'sound-effect' | 'stable-audio'
 
 type AudioPromptAssistBody = {
   kind?: AudioKind
@@ -75,6 +75,23 @@ function buildFallbackPrompt(body: AudioPromptAssistBody, kind: AudioKind): stri
     return `${inferDialogueToneTags(body)} ${line}`.trim()
   }
 
+  if (kind === 'stable-audio') {
+    const moodBits = [
+      body.action?.trim(),
+      body.description?.trim(),
+      body.visualNotes?.trim(),
+      body.locationName ? `set in ${body.locationName}` : null,
+      body.shotType ? `${body.shotType} framing` : null,
+    ].filter(Boolean)
+    const base =
+      moodBits.join('. ') ||
+      body.title?.trim() ||
+      `Cinematic underscore for shot ${body.shotNumber ?? ''}`
+    return `${base}. Instrumental music bed with clear mood, tempo, and instrumentation. No vocals, no dialogue.`
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
   const parts: string[] = []
   if (body.action?.trim()) parts.push(body.action.trim())
   if (body.description?.trim()) parts.push(body.description.trim())
@@ -120,7 +137,12 @@ async function resolveOpenAIKey(): Promise<string | null> {
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as AudioPromptAssistBody
-    const kind: AudioKind = body.kind === 'dialogue' ? 'dialogue' : 'sound-effect'
+    const kind: AudioKind =
+      body.kind === 'dialogue'
+        ? 'dialogue'
+        : body.kind === 'stable-audio'
+          ? 'stable-audio'
+          : 'sound-effect'
     const fallback = buildFallbackPrompt(body, kind)
 
     const apiKey = await resolveOpenAIKey()
@@ -167,7 +189,17 @@ Rules:
 - Do NOT invent other characters speaking unless dialogue already includes them.
 - Do NOT write stage directions as spoken words (no "he says quietly").
 Example: [tired][softly] Another day...`
-        : `You write concise prompts for AI sound-effect generation (ElevenLabs Sound Effects).
+        : kind === 'stable-audio'
+          ? `You write prompts for Stability AI Stable Audio (music / ambience generation for film).
+Rules:
+- Return ONLY the final music/ambience prompt text — no markdown, no quotes, no preamble.
+- Describe genre, mood, instrumentation, tempo/energy, and how it should evolve over the clip.
+- Prefer cinematic underscore / score language (e.g. "low tense strings, distant percussion, slowly building") over vague words like "epic" alone.
+- Match the emotional tone of the shot, action, location, and reference image when present.
+- Do NOT include vocals, lyrics, dialogue, or sound-effect Foley lists.
+- Keep it under 300 characters when possible, max 500.
+- One cohesive musical idea, production-ready for Stable Audio.`
+          : `You write concise prompts for AI sound-effect generation (ElevenLabs Sound Effects).
 Rules:
 - Return ONLY the final sound-effect prompt text, no quotes, no markdown, no preamble.
 - Describe audible events, materials, space, distance, and mood — not camera or lighting.
@@ -185,7 +217,9 @@ Rules:
         text:
           kind === 'dialogue'
             ? `Write ElevenLabs TTS input (audio tags + spoken line) from these shot details. Choose tone that fits the moment:\n\n${detailLines}`
-            : `Write one production-ready sound-effect prompt from these shot details:\n\n${detailLines}`,
+            : kind === 'stable-audio'
+              ? `Write one production-ready Stable Audio music/ambience prompt from these shot details:\n\n${detailLines}`
+              : `Write one production-ready sound-effect prompt from these shot details:\n\n${detailLines}`,
       },
     ]
 
@@ -204,8 +238,8 @@ Rules:
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
-        temperature: kind === 'dialogue' ? 0.55 : 0.4,
-        max_tokens: kind === 'dialogue' ? 220 : 180,
+        temperature: kind === 'dialogue' ? 0.55 : kind === 'stable-audio' ? 0.5 : 0.4,
+        max_tokens: kind === 'dialogue' ? 220 : kind === 'stable-audio' ? 200 : 180,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: userContent },
@@ -244,7 +278,7 @@ Rules:
 
     return NextResponse.json({
       success: true,
-      prompt: promptOut.slice(0, kind === 'dialogue' ? 1200 : 500),
+      prompt: promptOut.slice(0, kind === 'dialogue' ? 1200 : kind === 'stable-audio' ? 600 : 500),
       source: 'ai',
     })
   } catch (error) {

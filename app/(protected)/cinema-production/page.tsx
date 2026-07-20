@@ -39,6 +39,8 @@ import {
   Link2,
   Palette,
   RectangleHorizontal,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { ImageSizeBadge } from "@/components/image-size-badge"
@@ -531,6 +533,8 @@ function StableAudioGenerator({
   onSaveNameChange,
   onRemoveClip,
   savingClipId,
+  onPromptAssist,
+  promptAssistLoading,
 }: {
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -549,6 +553,8 @@ function StableAudioGenerator({
   onSaveNameChange: (clipId: string, name: string) => void
   onRemoveClip?: (clipId: string) => void
   savingClipId?: string | null
+  onPromptAssist?: () => Promise<string | null>
+  promptAssistLoading?: boolean
 }) {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState(30)
@@ -563,6 +569,32 @@ function StableAudioGenerator({
         onChange={(e) => setPrompt(e.target.value)}
         rows={2}
       />
+      {onPromptAssist && (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            className="gap-1.5"
+            disabled={promptAssistLoading || isGenerating}
+            onClick={async () => {
+              const assisted = await onPromptAssist()
+              if (assisted?.trim()) setPrompt(assisted.trim())
+            }}
+            title="Build a music/ambience prompt from shot details and reference image"
+          >
+            {promptAssistLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            Prompt Assist
+          </Button>
+          <p className="text-xs text-muted-foreground self-center">
+            Uses shot action, notes, and image when available.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <div>
           <Label className="text-xs">Model</Label>
@@ -732,11 +764,16 @@ export default function CinemaProductionPage() {
   
   // Toggle between image and video in detail view (per storyboard)
   const [detailViewMode, setDetailViewMode] = useState<Map<string, 'image' | 'video'>>(new Map())
+  /** Which saved/generated video is shown in the main player (per storyboard). */
+  const [selectedVideoUrlByStoryboard, setSelectedVideoUrlByStoryboard] = useState<Map<string, string>>(
+    new Map(),
+  )
 
   // Full-size image viewer
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
   const [fullImageTitle, setFullImageTitle] = useState<string>("")
+  const [fullImageStoryboardId, setFullImageStoryboardId] = useState<string | null>(null)
   const [fullImageLibraryRef, setFullImageLibraryRef] = useState<{
     storyboardId: string
     frameId: string
@@ -1743,7 +1780,7 @@ export default function CinemaProductionPage() {
     }
   }
 
-  const buildAudioAssistPayload = (storyboard: Storyboard, kind: 'dialogue' | 'sound-effect') => {
+  const buildAudioAssistPayload = (storyboard: Storyboard, kind: 'dialogue' | 'sound-effect' | 'stable-audio') => {
     const generation = storyboardGenerations.get(storyboard.id)
     const character = storyboard.character_id
       ? projectCharacters.find((c) => c.id === storyboard.character_id)
@@ -1775,7 +1812,7 @@ export default function CinemaProductionPage() {
 
   const fetchAudioPromptAssist = async (
     storyboard: Storyboard,
-    kind: 'dialogue' | 'sound-effect',
+    kind: 'dialogue' | 'sound-effect' | 'stable-audio',
   ): Promise<string> => {
     const response = await fetch('/api/ai/audio-prompt-assist', {
       method: 'POST',
@@ -1862,6 +1899,41 @@ export default function CinemaProductionPage() {
           error instanceof Error
             ? `${error.message} — filled sound-effect prompt from storyboard fields.`
             : 'Filled sound-effect prompt from storyboard fields.',
+      })
+      return fallback
+    } finally {
+      setAudioPromptAssistLoadingId(null)
+    }
+  }
+
+  const handleStableAudioPromptAssist = async (
+    storyboard: Storyboard,
+  ): Promise<string | null> => {
+    const loadingKey = `${storyboard.id}-stable-audio`
+    setAudioPromptAssistLoadingId(loadingKey)
+    try {
+      const prompt = await fetchAudioPromptAssist(storyboard, 'stable-audio')
+      toast({
+        title: 'Prompt Assist ready',
+        description: storyboard.image_url
+          ? 'Built a Stable Audio music prompt from shot details + reference image.'
+          : 'Built a Stable Audio music prompt from shot details.',
+      })
+      return prompt
+    } catch (error) {
+      const parts = [
+        storyboard.action?.trim(),
+        storyboard.description?.trim(),
+        storyboard.visual_notes?.trim(),
+      ].filter(Boolean)
+      const fallback =
+        `${parts.join('. ') || `Cinematic underscore for shot ${storyboard.shot_number}`}. Instrumental music bed, no vocals.`
+      toast({
+        title: 'Used shot details',
+        description:
+          error instanceof Error
+            ? `${error.message} — filled music prompt from storyboard fields.`
+            : 'Filled music prompt from storyboard fields.',
       })
       return fallback
     } finally {
@@ -2051,6 +2123,85 @@ export default function CinemaProductionPage() {
     ]
   }
 
+  const getStoryboardVideoList = (storyboardId: string): StoryboardVideo[] => {
+    const videos = storyboardVideos.get(storyboardId) || []
+    const storyboard = storyboards.find((s) => s.id === storyboardId)
+    const generation = storyboardGenerations.get(storyboardId)
+    const allVideos = [...videos]
+    if (
+      generation?.generatedVideoUrl &&
+      !videos.some((v) => v.video_url === generation.generatedVideoUrl)
+    ) {
+      allVideos.unshift({
+        id: "generated-temp",
+        storyboard_id: storyboardId,
+        user_id: userId || "",
+        video_url: generation.generatedVideoUrl,
+        video_name: `${storyboard?.title || "storyboard"}-shot-${storyboard?.shot_number} (Generated)`,
+        is_default: false,
+        generation_model: generation.model || null,
+        generation_prompt: generation.prompt || null,
+        metadata: {},
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+    }
+    return allVideos
+  }
+
+  const getActiveVideoUrl = (storyboardId: string) => {
+    const list = getStoryboardVideoList(storyboardId)
+    if (!list.length) return null
+    const selected = selectedVideoUrlByStoryboard.get(storyboardId)
+    if (selected && list.some((v) => v.video_url === selected)) return selected
+    const defaultVideo = list.find((v) => v.is_default)
+    return defaultVideo?.video_url || list[0]?.video_url || null
+  }
+
+  const setActiveVideoUrl = (storyboardId: string, url: string) => {
+    setSelectedVideoUrlByStoryboard((prev) => {
+      const next = new Map(prev)
+      next.set(storyboardId, url)
+      return next
+    })
+  }
+
+  const stepShotImage = (storyboard: Storyboard, delta: number) => {
+    const frames = getShotLibraryFrames(storyboard)
+    if (frames.length < 2) return
+    const currentUrl = getDisplayedShotImage(storyboard)
+    const idx = Math.max(0, frames.findIndex((f) => f.url === currentUrl))
+    const next = frames[(idx + delta + frames.length) % frames.length]
+    setShotPreviewImage(storyboard.id, next.url)
+  }
+
+  const stepShotVideo = (storyboardId: string, delta: number) => {
+    const list = getStoryboardVideoList(storyboardId)
+    if (list.length < 2) return
+    const currentUrl = getActiveVideoUrl(storyboardId)
+    const idx = Math.max(0, list.findIndex((v) => v.video_url === currentUrl))
+    const next = list[(idx + delta + list.length) % list.length]
+    setActiveVideoUrl(storyboardId, next.video_url)
+  }
+
+  const stepFullImage = (delta: number) => {
+    if (!fullImageStoryboardId) return
+    const storyboard = storyboards.find((s) => s.id === fullImageStoryboardId)
+    if (!storyboard) return
+    const frames = getShotLibraryFrames(storyboard)
+    if (frames.length < 2) return
+    const idx = Math.max(0, frames.findIndex((f) => f.url === fullImageUrl))
+    const next = frames[(idx + delta + frames.length) % frames.length]
+    setFullImageUrl(next.url)
+    setFullImageTitle(next.label)
+    setShotPreviewImage(storyboard.id, next.url)
+    if (next.id.startsWith("original-")) {
+      setFullImageLibraryRef(null)
+    } else {
+      setFullImageLibraryRef({ storyboardId: storyboard.id, frameId: next.id })
+    }
+  }
+
   const promoteFrameToShotImage = async (storyboard: Storyboard, imageUrl: string) => {
     if (!imageUrl || storyboard.image_url === imageUrl) return
     try {
@@ -2153,6 +2304,7 @@ export default function CinemaProductionPage() {
   const openFrameViewer = (storyboardId: string, frame: ShotReferenceFrame) => {
     setFullImageUrl(frame.url)
     setFullImageTitle(frame.label)
+    setFullImageStoryboardId(storyboardId)
     setFullImageLibraryRef({ storyboardId, frameId: frame.id })
     setFullImageViewerOpen(true)
   }
@@ -2161,6 +2313,7 @@ export default function CinemaProductionPage() {
     setFullImageViewerOpen(false)
     setFullImageUrl(null)
     setFullImageTitle("")
+    setFullImageStoryboardId(null)
     setFullImageLibraryRef(null)
   }
 
@@ -5642,6 +5795,12 @@ export default function CinemaProductionPage() {
                             {currentViewMode === 'image' ? (
                               (() => {
                                 const displayImageUrl = getDisplayedShotImage(storyboard)
+                                const libraryFrames = getShotLibraryFrames(storyboard)
+                                const imageIndex = Math.max(
+                                  0,
+                                  libraryFrames.findIndex((f) => f.url === displayImageUrl),
+                                )
+                                const canStepImages = libraryFrames.length > 1
                                 return displayImageUrl ? (
                                 <div className="space-y-2">
                                 <div
@@ -5651,7 +5810,13 @@ export default function CinemaProductionPage() {
                                     setFullImageTitle(
                                       storyboard.title || `Shot ${storyboard.shot_number}`,
                                     )
-                                    setFullImageLibraryRef(null)
+                                    setFullImageStoryboardId(storyboard.id)
+                                    const frame = libraryFrames.find((f) => f.url === displayImageUrl)
+                                    setFullImageLibraryRef(
+                                      frame && !frame.id.startsWith("original-")
+                                        ? { storyboardId: storyboard.id, frameId: frame.id }
+                                        : null,
+                                    )
                                     setFullImageViewerOpen(true)
                                   }}
                                   title="Click to view full image"
@@ -5675,6 +5840,39 @@ export default function CinemaProductionPage() {
                                       Library preview
                                     </div>
                                   ) : null}
+                                  {canStepImages && (
+                                    <>
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="secondary"
+                                        className="absolute left-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                                        title="Previous image"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          stepShotImage(storyboard, -1)
+                                        }}
+                                      >
+                                        <ChevronLeft className="h-5 w-5" />
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        size="icon"
+                                        variant="secondary"
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                                        title="Next image"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          stepShotImage(storyboard, 1)
+                                        }}
+                                      >
+                                        <ChevronRight className="h-5 w-5" />
+                                      </Button>
+                                      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded bg-black/70 text-white text-[10px] px-2 py-0.5 z-10">
+                                        {imageIndex + 1} / {libraryFrames.length}
+                                      </div>
+                                    </>
+                                  )}
                                   <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/20">
                                     <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
                                       View full image
@@ -5694,33 +5892,13 @@ export default function CinemaProductionPage() {
                             ) : (
                               // Video view
                               (() => {
-                                const videos = storyboardVideos.get(storyboard.id) || []
-                                const generation = storyboardGenerations.get(storyboard.id) || {
-                                  shotId: storyboard.id,
-                                  model: "",
-                                  prompt: "",
-                                  duration: "5s",
-                                  resolution: "1280x720",
-                                  uploadedFile: null,
-                                  startFrame: null,
-                                  endFrame: null,
-                                  filePreview: null,
-                                  startFramePreview: null,
-                                  endFramePreview: null,
-                                  isGenerating: false,
-                                  generatedVideoUrl: null,
-                                  generationStatus: null,
-                                  motionControl: "",
-                                  motionStrength: 2,
-                                  videoModelType: undefined,
-                                  videoDuration: undefined,
-                                  startFrameImageUrl: null,
-                                  endFrameImageUrl: null
-                                }
-                                
-                                const defaultVideo = videos.find(v => v.is_default)
-                                const displayVideoUrl = defaultVideo?.video_url || (videos.length > 0 ? videos[0]?.video_url : null) || generation.generatedVideoUrl
-                                const hasMultipleVideos = videos.length > 1 || (generation.generatedVideoUrl && !videos.some(v => v.video_url === generation.generatedVideoUrl))
+                                const allVideos = getStoryboardVideoList(storyboard.id)
+                                const displayVideoUrl = getActiveVideoUrl(storyboard.id)
+                                const videoIndex = Math.max(
+                                  0,
+                                  allVideos.findIndex((v) => v.video_url === displayVideoUrl),
+                                )
+                                const hasMultipleVideos = allVideos.length > 1
                                 
                                 return displayVideoUrl ? (
                                   <div className="space-y-2">
@@ -5735,18 +5913,44 @@ export default function CinemaProductionPage() {
                                         onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                       />
                                       {hasMultipleVideos && (
-                                        <Button
-                                          size="sm"
-                                          variant="secondary"
-                                          className="absolute top-2 right-2"
-                                          onClick={() => {
-                                            setSelectedStoryboardForVideos(storyboard.id)
-                                            setVideoSelectorOpen(true)
-                                          }}
-                                        >
-                                          <MoreVertical className="h-4 w-4 mr-1" />
-                                          {videos.length} Videos
-                                        </Button>
+                                        <>
+                                          <Button
+                                            type="button"
+                                            size="icon"
+                                            variant="secondary"
+                                            className="absolute left-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                                            title="Previous video"
+                                            onClick={() => stepShotVideo(storyboard.id, -1)}
+                                          >
+                                            <ChevronLeft className="h-5 w-5" />
+                                          </Button>
+                                          <Button
+                                            type="button"
+                                            size="icon"
+                                            variant="secondary"
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                                            title="Next video"
+                                            onClick={() => stepShotVideo(storyboard.id, 1)}
+                                          >
+                                            <ChevronRight className="h-5 w-5" />
+                                          </Button>
+                                          <div className="absolute bottom-12 left-1/2 -translate-x-1/2 rounded bg-black/70 text-white text-[10px] px-2 py-0.5 z-10 pointer-events-none">
+                                            {videoIndex + 1} / {allVideos.length}
+                                          </div>
+                                          <Button
+                                            size="sm"
+                                            variant="secondary"
+                                            className="absolute top-2 right-2 z-10"
+                                            onClick={() => {
+                                              setSelectedStoryboardForVideos(storyboard.id)
+                                              setSelectedVideoUrl(displayVideoUrl)
+                                              setVideoSelectorOpen(true)
+                                            }}
+                                          >
+                                            <MoreVertical className="h-4 w-4 mr-1" />
+                                            {allVideos.length} Videos
+                                          </Button>
+                                        </>
                                       )}
                                     </div>
                                     <div className="flex gap-2">
@@ -7040,6 +7244,10 @@ export default function CinemaProductionPage() {
                               userId={userId || undefined}
                               projectId={selectedProjectId || undefined}
                               sceneId={selectedSceneId || undefined}
+                              promptAssistLoading={
+                                audioPromptAssistLoadingId === `${storyboard.id}-stable-audio`
+                              }
+                              onPromptAssist={() => handleStableAudioPromptAssist(storyboard)}
                             />
                           </div>
                         </div>
@@ -7078,6 +7286,41 @@ export default function CinemaProductionPage() {
                 className="max-h-full max-w-full h-full w-auto object-contain"
               />
               <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
+              {(() => {
+                const storyboard = fullImageStoryboardId
+                  ? storyboards.find((s) => s.id === fullImageStoryboardId)
+                  : null
+                const frames = storyboard ? getShotLibraryFrames(storyboard) : []
+                if (frames.length < 2) return null
+                const idx = Math.max(0, frames.findIndex((f) => f.url === fullImageUrl))
+                return (
+                  <>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="secondary"
+                      className="absolute left-2 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                      title="Previous image"
+                      onClick={() => stepFullImage(-1)}
+                    >
+                      <ChevronLeft className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="secondary"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/60 text-white hover:bg-black/80 border-0 z-10"
+                      title="Next image"
+                      onClick={() => stepFullImage(1)}
+                    >
+                      <ChevronRight className="h-5 w-5" />
+                    </Button>
+                    <div className="absolute top-3 left-1/2 -translate-x-1/2 rounded bg-black/70 text-white text-xs px-2.5 py-1 z-10">
+                      {idx + 1} / {frames.length}
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           ) : null}
           {fullImageLibraryRef ? (
@@ -7754,7 +7997,12 @@ export default function CinemaProductionPage() {
                             ? 'border-primary'
                             : 'border-border hover:border-primary/50'
                         }`}
-                        onClick={() => setSelectedVideoUrl(video.video_url)}
+                        onClick={() => {
+                          setSelectedVideoUrl(video.video_url)
+                          if (selectedStoryboardForVideos) {
+                            setActiveVideoUrl(selectedStoryboardForVideos, video.video_url)
+                          }
+                        }}
                       >
                         <div className="relative">
                           <video
