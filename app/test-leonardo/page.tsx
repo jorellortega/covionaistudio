@@ -34,6 +34,11 @@ import {
 import { useToast } from "@/hooks/use-toast"
 import { useAuthReady } from "@/components/auth-hooks"
 import { getSupabaseClient } from "@/lib/supabase"
+import {
+  LEONARDO_MOTION_CONTROLS,
+  resolveLeonardoMotionControlId,
+  resolveLeonardoMotionControlUUID,
+} from "@/lib/leonardo-motion-controls"
 
 interface Generation {
   id: string
@@ -1121,49 +1126,30 @@ export default function TestLeonardoPage() {
           // Add motion control if selected (image-to-video endpoint supports elements)
           if (motionControl) {
             console.log('🎬 [VIDEO GENERATION] Adding motion control to image-to-video request:', motionControl)
-            
-            let motionControlUUID: string | null = null
-            
-            // First, try to find UUID from fetched motion control elements
-            if (motionControlElements.length > 0) {
-              const element = motionControlElements.find((el: any) => {
-                const name = (el.name || el.title || '').toUpperCase().replace(/[^A-Z0-9]/g, '_')
-                return name === motionControl || name.includes(motionControl.replace('_', ''))
-              })
-              if (element) {
-                motionControlUUID = element.akUUID || element.id || element.uuid
-                console.log('🎬 [VIDEO GENERATION] Found motion control UUID from API:', motionControlUUID)
-              }
+
+            const resolved = resolveLeonardoMotionControlUUID(
+              motionControl,
+              motionControlElements,
+            )
+
+            if (!resolved) {
+              throw new Error(
+                `Motion control “${motionControl}” is not a Leonardo control. Use Tilt Up/Down, Dolly, Orbit, Crash Zoom, etc.`,
+              )
             }
-            
-            // If not found, use hardcoded mapping (from Leonardo AI documentation)
-            if (!motionControlUUID) {
-              const motionControlUUIDs: Record<string, string> = {
-                'DOLLY_OUT': '74bea0cc-9942-4d45-9977-28c25078bfd4', // Common UUID pattern - may need verification
-                'DOLLY_IN': 'ece8c6a9-3deb-430e-8c93-4d5061b6adbf', // From docs
-                'TILT_UP': '6ad6de1f-bd15-4d0b-ae0e-81d1a4c6c085', // From docs
-                'ORBIT_LEFT': '74bea0cc-9942-4d45-9977-28c25078bfd4', // From docs
-                // Note: These UUIDs need to be verified from Leonardo AI documentation
-                // The complete list is available at: https://docs.leonardo.ai/docs/generate-with-motion-20-using-generated-images
-              }
-              motionControlUUID = motionControlUUIDs[motionControl] || null
-            }
-            
-            if (motionControlUUID) {
-              if (!requestBody.elements) {
-                requestBody.elements = []
-              }
-              requestBody.elements.push({
-                akUUID: motionControlUUID,
-                weight: 1
-              })
-              console.log('🎬 [VIDEO GENERATION] ✅ Added motion control element:', motionControl, 'UUID:', motionControlUUID)
-            } else {
-              console.warn('🎬 [VIDEO GENERATION] ⚠️ Motion control UUID not found for:', motionControl)
-              console.warn('🎬 [VIDEO GENERATION] Motion control will not be applied')
-              console.warn('🎬 [VIDEO GENERATION] Please check Leonardo AI documentation for motion control element UUIDs')
-              console.warn('🎬 [VIDEO GENERATION] Docs: https://docs.leonardo.ai/docs/generate-with-motion-20-using-generated-images')
-            }
+
+            requestBody.elements = [
+              {
+                akUUID: resolved.uuid,
+                weight: 1,
+              },
+            ]
+            console.log(
+              '🎬 [VIDEO GENERATION] ✅ Added motion control:',
+              resolved.label,
+              resolved.id,
+              resolved.uuid,
+            )
           }
           
           console.log('🎬 [VIDEO GENERATION] Using Image-to-Video endpoint (single image)')
@@ -2053,50 +2039,28 @@ export default function TestLeonardoPage() {
                 {videoModel === 'motion-svd' && (
                   <div>
                     <Label>Motion Control (Optional)</Label>
-                    <Select value={motionControl || "none"} onValueChange={(value) => setMotionControl(value === "none" ? "" : value)}>
+                    <Select
+                      value={
+                        motionControl
+                          ? resolveLeonardoMotionControlId(motionControl)
+                          : "none"
+                      }
+                      onValueChange={(value) => setMotionControl(value === "none" ? "" : value)}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select motion control (optional)" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="BULLET_TIME">Bullet Time</SelectItem>
-                        <SelectItem value="CRANE_DOWN">Crane Down</SelectItem>
-                        <SelectItem value="CRANE_OVER_HEAD">Crane Over Head</SelectItem>
-                        <SelectItem value="CRANE_UP">Crane Up</SelectItem>
-                        <SelectItem value="CRASH_ZOOM_IN">Crash Zoom In</SelectItem>
-                        <SelectItem value="CRASH_ZOOM_OUT">Crash Zoom Out</SelectItem>
-                        <SelectItem value="DISINTEGRATION">Disintegration</SelectItem>
-                        <SelectItem value="DOLLY_IN">Dolly In</SelectItem>
-                        <SelectItem value="DOLLY_LEFT">Dolly Left</SelectItem>
-                        <SelectItem value="DOLLY_OUT">Dolly Out</SelectItem>
-                        <SelectItem value="DOLLY_RIGHT">Dolly Right</SelectItem>
-                        <SelectItem value="DUTCH_ANGLE">Dutch Angle</SelectItem>
-                        <SelectItem value="EXPLOSION">Explosion</SelectItem>
-                        <SelectItem value="EYES_IN">Eyes In</SelectItem>
-                        <SelectItem value="EYES_OUT">Eyes Out</SelectItem>
-                        <SelectItem value="FADE_IN">Fade In</SelectItem>
-                        <SelectItem value="FADE_OUT">Fade Out</SelectItem>
-                        <SelectItem value="PAN_DOWN">Pan Down</SelectItem>
-                        <SelectItem value="PAN_LEFT">Pan Left</SelectItem>
-                        <SelectItem value="PAN_RIGHT">Pan Right</SelectItem>
-                        <SelectItem value="PAN_UP">Pan Up</SelectItem>
-                        <SelectItem value="PUSH_IN">Push In</SelectItem>
-                        <SelectItem value="PUSH_OUT">Push Out</SelectItem>
-                        <SelectItem value="ROLL">Roll</SelectItem>
-                        <SelectItem value="ROTATE_CLOCKWISE">Rotate Clockwise</SelectItem>
-                        <SelectItem value="ROTATE_COUNTER_CLOCKWISE">Rotate Counter Clockwise</SelectItem>
-                        <SelectItem value="TILT_DOWN">Tilt Down</SelectItem>
-                        <SelectItem value="TILT_UP">Tilt Up</SelectItem>
-                        <SelectItem value="TRACK_IN">Track In</SelectItem>
-                        <SelectItem value="TRACK_OUT">Track Out</SelectItem>
-                        <SelectItem value="TRACK_LEFT">Track Left</SelectItem>
-                        <SelectItem value="TRACK_RIGHT">Track Right</SelectItem>
-                        <SelectItem value="ZOOM_IN">Zoom In</SelectItem>
-                        <SelectItem value="ZOOM_OUT">Zoom Out</SelectItem>
+                        {LEONARDO_MOTION_CONTROLS.map((control) => (
+                          <SelectItem key={control.id} value={control.id}>
+                            {control.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Select a cinematic motion control effect (optional). Motion 2.0 supports advanced camera movements.
+                      Official Leonardo Motion Control list only (Tilt Up = vertical pan). Invalid options were removed.
                     </p>
                   </div>
                 )}

@@ -18,6 +18,7 @@ interface User {
   elevenlabsApiKey?: string
   sunoApiKey?: string
   leonardoApiKey?: string
+  stabilityApiKey?: string
   settings_password_hash?: string
   settings_password_enabled?: boolean
   created_at: string
@@ -185,7 +186,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Simple function to fetch user profile
   const fetchUserProfile = useCallback(async (userId: string): Promise<User | null> => {
     try {
-      const { data, error } = await supabase
+      const { data, error } = await getSupabaseClient()
         .from('users')
         .select('*')
         .eq('id', userId)
@@ -201,7 +202,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.role !== 'ceo') {
           try {
             // Check for active subscription
-            const { data: subscription, error: subError } = await supabase
+            const { data: subscription, error: subError } = await getSupabaseClient()
               .from('subscriptions')
               .select('plan_id')
               .eq('user_id', userId)
@@ -224,7 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               if (subscriptionRole && data.role !== subscriptionRole) {
                 console.log(`Syncing role from subscription: ${data.role} -> ${subscriptionRole}`)
                 // Update role in database
-                await supabase
+                await getSupabaseClient()
                   .from('users')
                   .update({ role: subscriptionRole })
                   .eq('id', userId)
@@ -235,7 +236,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             } else if (data.role !== 'user') {
               // No active subscription, revert to 'user' if not already
               console.log(`No active subscription, reverting role to 'user'`)
-              await supabase
+              await getSupabaseClient()
                 .from('users')
                 .update({ role: 'user' })
                 .eq('id', userId)
@@ -261,6 +262,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           elevenlabsApiKey: data.elevenlabs_api_key,
           sunoApiKey: data.suno_api_key,
           leonardoApiKey: data.leonardo_api_key,
+          stabilityApiKey: data.stability_api_key,
           settings_password_hash: data.settings_password_hash,
           settings_password_enabled: data.settings_password_enabled,
           created_at: data.created_at,
@@ -281,7 +283,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data: { user: authUser } } = await getSupabaseClient().auth.getUser()
       if (!authUser) return null
       
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('users')
         .insert({
           id: userId,
@@ -514,7 +516,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       console.log('Attempting to sign in with email:', email)
       
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await getSupabaseClient().auth.signInWithPassword({
         email,
         password,
       })
@@ -534,7 +536,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = async (email: string, password: string, name: string): Promise<{ error: any }> => {
     try {
-      const { error } = await supabase.auth.signUp({
+      const { error } = await getSupabaseClient().auth.signUp({
         email,
         password,
         options: {
@@ -561,7 +563,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearLoadingTimeout()
       
       // Sign out from Supabase
-      await supabase.auth.signOut()
+      await getSupabaseClient().auth.signOut()
       
       // Broadcast auth change to other tabs
       sessionSync.broadcastAuthChange()
@@ -590,7 +592,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!user) return
     
     try {
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('users')
         .update({ openai_api_key: apiKey })
         .eq('id', user.id)
@@ -618,7 +620,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'runway': 'runway_api_key',
         'elevenlabs': 'elevenlabs_api_key',
         'suno': 'sunoApiKey',
-        'leonardo': 'leonardo_api_key'
+        'leonardo': 'leonardo_api_key',
+        'stability': 'stability_api_key',
       }
       
       const propertyMapping: { [key: string]: string } = {
@@ -628,7 +631,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         'runway': 'runwayApiKey',
         'elevenlabs': 'elevenlabsApiKey',
         'suno': 'sunoApiKey',
-        'leonardo': 'leonardoApiKey'
+        'leonardo': 'leonardoApiKey',
+        'stability': 'stabilityApiKey',
       }
       
       const dbColumn = serviceMapping[service]
@@ -641,7 +645,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const updateData: any = {}
       updateData[dbColumn] = apiKey
 
-      const { error } = await supabase
+      const { error } = await getSupabaseClient()
         .from('users')
         .update(updateData)
         .eq('id', user.id)
@@ -686,7 +690,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoadingTimeout();
       
       // Force a fresh session check
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await getSupabaseClient().auth.getSession();
       await handleSessionChange(session);
     } catch (error) {
       console.error('Error in force refresh:', error);

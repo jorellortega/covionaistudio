@@ -41,6 +41,7 @@ export default function SetupAIPage() {
     suno: '',
     leonardo: '',
     hedra: '',
+    stability: '',
   })
   const [showKeys, setShowKeys] = useState({
     openai: false,
@@ -53,6 +54,7 @@ export default function SetupAIPage() {
     suno: false,
     leonardo: false,
     hedra: false,
+    stability: false,
   })
 
 
@@ -63,7 +65,7 @@ export default function SetupAIPage() {
     try {
       const { data, error } = await getSupabaseClient()
         .from('users')
-        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, kling_secret_key, runway_api_key, elevenlabs_api_key, suno_api_key, leonardo_api_key, hedra_api_key')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, kling_secret_key, runway_api_key, elevenlabs_api_key, suno_api_key, leonardo_api_key, hedra_api_key, stability_api_key')
         .eq('id', userId)
         .single()
 
@@ -80,6 +82,7 @@ export default function SetupAIPage() {
         suno: data?.suno_api_key || '',
         leonardo: data?.leonardo_api_key || '',
         hedra: data?.hedra_api_key || '',
+        stability: data?.stability_api_key || '',
       })
     } catch (error) {
       console.error('Error loading API keys:', error)
@@ -103,6 +106,7 @@ export default function SetupAIPage() {
         'suno': 'suno_api_key',
         'leonardo': 'leonardo_api_key',
         'hedra': 'hedra_api_key',
+        'stability': 'stability_api_key',
       }
       
       const dbColumn = serviceMapping[service]
@@ -153,6 +157,7 @@ export default function SetupAIPage() {
             'suno_api_key': 'Suno AI API key for music generation',
             'leonardo_api_key': 'Leonardo AI API key for image and video generation',
             'hedra_api_key': 'Hedra API key for avatar and video generation',
+            'stability_api_key': 'Stability AI API key for Stable Image generation and editing',
           }
           
           const { error: systemError } = await supabase
@@ -1363,6 +1368,85 @@ export default function SetupAIPage() {
                   <div className="text-xs text-muted-foreground mt-2">
                     <p>• Get your API key from <a href="https://www.hedra.com/api-profile" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Hedra API Profile</a></p>
                     <p>• Used for Hedra Character 3 avatar generation in Cinema Production</p>
+                  </div>
+                </div>
+
+                {/* Stability AI */}
+                <div className="p-4 border border-border rounded-lg">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium">Stability AI</h4>
+                    <Badge variant="outline" className="text-xs">
+                      {apiKeys.stability ? "Configured" : "Not Configured"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Stable Image Ultra, Core, SD 3.5, upscale, and edit APIs
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type={showKeys.stability ? "text" : "password"}
+                      placeholder="Stability AI API Key"
+                      value={apiKeys.stability || ''}
+                      onChange={(e) => setApiKeys(prev => ({ ...prev, stability: e.target.value }))}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, stability: !prev.stability }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.stability ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('stability', apiKeys.stability)
+                          toast({
+                            title: "Success",
+                            description: "Stability AI API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to save Stability AI API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-green-500/20 text-green-500 hover:bg-green-500/10"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        setApiKeys(prev => ({ ...prev, stability: '' }))
+                        try {
+                          await saveApiKey('stability', '')
+                          toast({
+                            title: "Cleared",
+                            description: "Stability AI API key cleared",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: "Failed to clear Stability AI API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-red-500/20 text-red-500 hover:bg-red-500/10"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    <p>• Get your API key from <a href="https://platform.stability.ai/account/keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Stability Platform Keys</a></p>
+                    <p>• Test at <a href="/stability-ai-test" className="text-blue-500 hover:underline">/stability-ai-test</a></p>
                   </div>
                 </div>
 

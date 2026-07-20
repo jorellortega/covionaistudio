@@ -75,6 +75,11 @@ import {
   referenceUrlToFile,
 } from "@/lib/project-image-linking"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import {
+  LEONARDO_MOTION_CONTROLS,
+  resolveLeonardoMotionControlId,
+  resolveLeonardoMotionControlUUID,
+} from "@/lib/leonardo-motion-controls"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -161,7 +166,7 @@ type VideoModel =
   | "Veo 3.1 Fast (Frame-to-Frame)"
   | "Hedra Character 3"
 
-type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx"
+type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx" | "session-stable-audio"
 
 interface StoryboardAudioOption {
   id: string
@@ -209,7 +214,7 @@ interface StoryboardVideo {
 }
 
 function suggestAudioSaveName(
-  type: "dialogue" | "sound-effect",
+  type: "dialogue" | "sound-effect" | "stable-audio",
   storyboard: Storyboard,
   prompt: string,
 ): string {
@@ -219,6 +224,9 @@ function suggestAudioSaveName(
   const ellipsis = cleaned.length > 28 ? "…" : ""
   if (type === "dialogue") {
     return snippet ? `${shotLabel} ${snippet}${ellipsis}` : `${shotLabel} dialogue`
+  }
+  if (type === "stable-audio") {
+    return snippet ? `${shotLabel} Music ${snippet}${ellipsis}` : `${shotLabel} Music`
   }
   return snippet ? `${shotLabel} SFX ${snippet}${ellipsis}` : `${shotLabel} SFX`
 }
@@ -253,7 +261,7 @@ function showVideoFrameThumbnail(video: HTMLVideoElement, time = 0.1) {
 
 interface SessionAudioClip {
   id: string
-  type: "dialogue" | "sound-effect"
+  type: "dialogue" | "sound-effect" | "stable-audio"
   prompt: string
   audioUrl: string
   createdAt: number
@@ -508,6 +516,142 @@ function SoundEffectGenerator({
   )
 }
 
+// Stable Audio Generator (Stability AI music / ambient)
+function StableAudioGenerator({
+  storyboard,
+  clips,
+  onGenerate,
+  isGenerating,
+  hasApiKey,
+  onSaveAudio,
+  userId,
+  projectId,
+  sceneId,
+  getSaveName,
+  onSaveNameChange,
+  onRemoveClip,
+  savingClipId,
+}: {
+  storyboard: Storyboard
+  clips: SessionAudioClip[]
+  onGenerate: (
+    storyboard: Storyboard,
+    prompt: string,
+    options: { duration: number; family: "2.5" | "3.0"; steps: number }
+  ) => void
+  isGenerating: boolean
+  hasApiKey: boolean
+  onSaveAudio?: (clip: SessionAudioClip, saveName: string) => Promise<void>
+  userId?: string
+  projectId?: string
+  sceneId?: string
+  getSaveName: (clip: SessionAudioClip) => string
+  onSaveNameChange: (clipId: string, name: string) => void
+  onRemoveClip?: (clipId: string) => void
+  savingClipId?: string | null
+}) {
+  const [prompt, setPrompt] = useState("")
+  const [duration, setDuration] = useState(30)
+  const [family, setFamily] = useState<"2.5" | "3.0">("2.5")
+  const [steps, setSteps] = useState(8)
+
+  return (
+    <div className="space-y-3">
+      <Textarea
+        placeholder="Describe music or ambience (e.g., 'Tense cinematic strings with low brass, building suspense')"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={2}
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-xs">Model</Label>
+          <Select value={family} onValueChange={(v) => setFamily(v as "2.5" | "3.0")}>
+            <SelectTrigger className="h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="2.5">Stable Audio 2.5 (20 cr)</SelectItem>
+              <SelectItem value="3.0">Stable Audio 3.0 (26 cr, async)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs">Duration (seconds)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={family === "3.0" ? 380 : 190}
+            step={1}
+            value={duration}
+            onChange={(e) => setDuration(Math.max(1, parseInt(e.target.value || "30", 10)))}
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Steps (4–8)</Label>
+          <Input
+            type="number"
+            min={4}
+            max={8}
+            step={1}
+            value={steps}
+            onChange={(e) => setSteps(Math.min(8, Math.max(4, parseInt(e.target.value || "8", 10))))}
+          />
+        </div>
+      </div>
+      {!hasApiKey && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Add your Stability API key in{" "}
+          <Link href="/setup-ai" className="underline underline-offset-2">
+            Setup AI
+          </Link>{" "}
+          or test at{" "}
+          <Link href="/stability-ai-test" className="underline underline-offset-2">
+            /stability-ai-test
+          </Link>
+          .
+        </p>
+      )}
+      <Button
+        onClick={() => onGenerate(storyboard, prompt, { duration, family, steps })}
+        disabled={!prompt.trim() || isGenerating || !hasApiKey}
+        className="w-full"
+      >
+        {isGenerating ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Generating...
+          </>
+        ) : (
+          <>
+            <Music className="h-4 w-4 mr-2" />
+            Generate Stable Audio
+          </>
+        )}
+      </Button>
+      {userId && projectId && sceneId && (
+        <SessionAudioClipList
+          clips={clips}
+          getSaveName={getSaveName}
+          onSaveNameChange={onSaveNameChange}
+          onDownload={(clip) => {
+            const link = document.createElement("a")
+            link.href = clip.audioUrl
+            const ext = clip.audioUrl.includes("audio/wav") || clip.audioUrl.endsWith(".wav") ? "wav" : "mp3"
+            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.${ext}`
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+          }}
+          onSave={onSaveAudio}
+          onRemove={onRemoveClip}
+          savingClipId={savingClipId}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function CinemaProductionPage() {
   const { session } = useAuth()
   const { toast } = useToast()
@@ -622,7 +766,7 @@ export default function CinemaProductionPage() {
   )
 
   const setDefaultAudioSaveName = useCallback(
-    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect", prompt: string) => {
+    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect" | "stable-audio", prompt: string) => {
       const key = audioSaveNameKey(storyboard.id, clipId)
       setAudioSaveNames((prev) => {
         const next = new Map(prev)
@@ -913,7 +1057,7 @@ export default function CinemaProductionPage() {
         const supabase = getSupabaseClient()
         const { data: userData, error: userError } = await supabase
           .from('users')
-          .select('elevenlabs_api_key, openai_api_key, anthropic_api_key')
+          .select('elevenlabs_api_key, openai_api_key, anthropic_api_key, stability_api_key')
           .eq('id', userId)
           .maybeSingle()
         
@@ -922,11 +1066,13 @@ export default function CinemaProductionPage() {
             elevenlabs_api_key: userData.elevenlabs_api_key || null,
             openai_api_key: userData.openai_api_key || null,
             anthropic_api_key: userData.anthropic_api_key || null,
+            stability_api_key: userData.stability_api_key || null,
           })
           console.log('✅ Loaded user API keys:', {
             hasElevenLabs: !!userData.elevenlabs_api_key,
             hasOpenAI: !!userData.openai_api_key,
             hasAnthropic: !!userData.anthropic_api_key,
+            hasStability: !!userData.stability_api_key,
           })
         } else {
           console.warn('⚠️ Could not load user API keys:', userError?.message)
@@ -935,13 +1081,27 @@ export default function CinemaProductionPage() {
             const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
             if (response.ok) {
               const systemKey = await response.json()
-              if (systemKey?.key) {
-                setUserApiKeys({ elevenlabs_api_key: systemKey.key })
+              const elKey = systemKey?.apiKey || systemKey?.key
+              if (elKey) {
+                setUserApiKeys((prev: any) => ({ ...prev, elevenlabs_api_key: elKey }))
                 console.log('✅ Using system-wide ElevenLabs API key')
               }
             }
           } catch (error) {
             console.error('Error fetching system API key:', error)
+          }
+          try {
+            const response = await fetch('/api/ai/get-system-api-key?type=stability_api_key')
+            if (response.ok) {
+              const systemKey = await response.json()
+              const stKey = systemKey?.apiKey || systemKey?.key
+              if (stKey) {
+                setUserApiKeys((prev: any) => ({ ...prev, stability_api_key: stKey }))
+                console.log('✅ Using system-wide Stability API key')
+              }
+            }
+          } catch (error) {
+            console.error('Error fetching system Stability API key:', error)
           }
         }
       } catch (error) {
@@ -1252,7 +1412,8 @@ export default function CinemaProductionPage() {
     const sessionClips = [...(sessionAudioClips.get(storyboardId) || [])].reverse()
     for (const clip of sessionClips) {
       if (!clip.audioUrl) continue
-      const typeLabel = clip.type === "dialogue" ? "Dialogue" : "SFX"
+      const typeLabel =
+        clip.type === "dialogue" ? "Dialogue" : clip.type === "stable-audio" ? "Music" : "SFX"
       const name =
         storyboard && audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))
           ? audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))!
@@ -1263,7 +1424,12 @@ export default function CinemaProductionPage() {
         id: sessionAudioOptionId(clip.id),
         label: `${typeLabel}: ${name}`,
         url: clip.audioUrl,
-        source: clip.type === "dialogue" ? "session-dialogue" : "session-sfx",
+        source:
+          clip.type === "dialogue"
+            ? "session-dialogue"
+            : clip.type === "stable-audio"
+              ? "session-stable-audio"
+              : "session-sfx",
       })
     }
     const saved = storyboardSavedAudio.get(storyboardId) || []
@@ -1274,7 +1440,9 @@ export default function CinemaProductionPage() {
           ? "Dialogue"
           : asset.metadata?.type === "sound-effect"
             ? "SFX"
-            : "Audio"
+            : asset.metadata?.type === "stable-audio"
+              ? "Music"
+              : "Audio"
       options.push({
         id: asset.id,
         label: `${typeLabel}: ${asset.title}`,
@@ -2818,11 +2986,126 @@ export default function CinemaProductionPage() {
     }
   }
 
+  // Generate Stable Audio (music / ambience) via Stability AI
+  const handleGenerateStableAudio = async (
+    storyboard: Storyboard,
+    prompt: string,
+    options: { duration: number; family: "2.5" | "3.0"; steps: number }
+  ) => {
+    if (!userId || !userApiKeys.stability_api_key) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your Stability AI API key in Setup AI.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioKey = `${storyboard.id}-stable-audio`
+    const clipId = crypto.randomUUID()
+    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
+
+    try {
+      const endpoint = options.family === "3.0" ? "audio-3-text" : "audio-2-text"
+      const form = new FormData()
+      form.append("apiKey", userApiKeys.stability_api_key)
+      form.append("endpoint", endpoint)
+      form.append("prompt", prompt.trim())
+      form.append("output_format", "mp3")
+      form.append("duration", String(options.duration))
+      form.append("steps", String(options.steps))
+      form.append("cfg_scale", "1")
+      form.append("model", options.family === "3.0" ? "stable-audio-3" : "stable-audio-2.5")
+
+      const response = await fetch("/api/stability/generate", {
+        method: "POST",
+        body: form,
+      })
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || `HTTP ${response.status}: Failed to generate Stable Audio`)
+      }
+
+      let audioDataUrl: string | undefined = data.audio
+
+      if (data.async && data.id) {
+        toast({
+          title: "Stable Audio started",
+          description: "Async generation in progress — this can take a minute.",
+        })
+        const maxAttempts = 36
+        for (let i = 0; i < maxAttempts; i++) {
+          await new Promise((r) => setTimeout(r, 10000))
+          const poll = await fetch("/api/stability/results", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              apiKey: userApiKeys.stability_api_key,
+              id: data.id,
+              kind: "audio",
+              outputFormat: "mp3",
+            }),
+          })
+          if (poll.status === 202) continue
+          const pollData = await poll.json()
+          if (!poll.ok) {
+            throw new Error(pollData.error || "Async Stable Audio failed")
+          }
+          audioDataUrl = pollData.audio
+          break
+        }
+        if (!audioDataUrl) {
+          throw new Error("Timed out waiting for Stable Audio result")
+        }
+      }
+
+      if (!audioDataUrl) {
+        throw new Error("No audio returned from Stability")
+      }
+
+      // Prefer blob URL for session playback consistency with ElevenLabs clips
+      let audioUrl = audioDataUrl
+      try {
+        const res = await fetch(audioDataUrl)
+        const blob = await res.blob()
+        audioUrl = URL.createObjectURL(blob)
+      } catch {
+        /* keep data URL */
+      }
+
+      const clip: SessionAudioClip = {
+        id: clipId,
+        type: "stable-audio",
+        prompt,
+        audioUrl,
+        createdAt: Date.now(),
+      }
+
+      addSessionClip(storyboard.id, clip)
+      setDefaultAudioSaveName(storyboard, clipId, "stable-audio", prompt)
+
+      toast({
+        title: "Stable Audio Generated",
+        description: "Music / ambience clip added. Save it to storage when ready.",
+      })
+    } catch (error) {
+      console.error("Error generating Stable Audio:", error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate Stable Audio.",
+        variant: "destructive",
+      })
+    } finally {
+      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
+    }
+  }
+
   // Save audio to storage
   const handleSaveAudio = async (
     audioUrl: string,
     prompt: string,
-    type: "dialogue" | "sound-effect" = "sound-effect",
+    type: "dialogue" | "sound-effect" | "stable-audio" = "sound-effect",
     storyboard?: Storyboard,
     saveName?: string,
   ) => {
@@ -2887,7 +3170,9 @@ export default function CinemaProductionPage() {
 
         toast({
           title: "Audio Saved",
-          description: `${type === 'dialogue' ? 'Dialogue' : 'Sound effect'} audio has been saved to storage.`,
+          description: `${
+            type === "dialogue" ? "Dialogue" : type === "stable-audio" ? "Stable Audio" : "Sound effect"
+          } audio has been saved to storage.`,
         })
         if (selectedSceneId) {
           await loadSavedAudioForScene(selectedSceneId)
@@ -3452,74 +3737,30 @@ export default function CinemaProductionPage() {
 
           // Add motion control if selected
           if (generation.motionControl) {
-            let motionControlUUID: string | null = null
+            const resolved = resolveLeonardoMotionControlUUID(
+              generation.motionControl,
+              motionControlElements,
+            )
 
-            // Try to find UUID from fetched motion control elements
-            if (motionControlElements.length > 0) {
-              console.log('🔍 [LEONARDO] Searching for motion control:', generation.motionControl)
-              console.log('🔍 [LEONARDO] Available elements:', motionControlElements.length)
-              
-              // Try exact match first
-              let element = motionControlElements.find((el: any) => {
-                const name = (el.name || el.title || '').toUpperCase().replace(/[^A-Z0-9]/g, '_')
-                return name === generation.motionControl
-              })
-              
-              // If no exact match, try partial match
-              if (!element) {
-                element = motionControlElements.find((el: any) => {
-                  const name = (el.name || el.title || '').toUpperCase().replace(/[^A-Z0-9]/g, '_')
-                  const controlName = generation.motionControl?.toUpperCase().replace(/[^A-Z0-9]/g, '_') || ''
-                  return name.includes(controlName) || controlName.includes(name.replace('_', ''))
-                })
-              }
-              
-              if (element) {
-                motionControlUUID = element.akUUID || element.id || element.uuid
-                console.log('✅ [LEONARDO] Found motion control UUID from API:', motionControlUUID, 'for:', element.name || element.title)
-              } else {
-                console.warn('⚠️ [LEONARDO] Motion control element not found in API response:', generation.motionControl)
-                console.warn('⚠️ [LEONARDO] Available element names:', motionControlElements.map((el: any) => el.name || el.title))
-              }
-            } else {
-              console.warn('⚠️ [LEONARDO] No motion control elements fetched from API')
+            if (!resolved) {
+              throw new Error(
+                `Motion control “${generation.motionControl}” is not supported by Leonardo. Pick Tilt Up/Down, Dolly, Orbit, Crash Zoom, etc.`,
+              )
             }
 
-            // Fallback to hardcoded UUIDs (only if API fetch failed)
-            // Note: These UUIDs may be incorrect - prefer using API-fetched elements
-            if (!motionControlUUID) {
-              console.warn('⚠️ [LEONARDO] Motion control UUID not found from API, using fallback (may be incorrect)')
-              console.warn('⚠️ [LEONARDO] Motion control:', generation.motionControl)
-              console.warn('⚠️ [LEONARDO] Available motion control elements:', motionControlElements.length)
-              
-              // Only use hardcoded UUIDs as last resort - these are likely incorrect
-              // The API should provide the correct UUIDs
-              const motionControlUUIDs: Record<string, string> = {
-                'DOLLY_OUT': '74bea0cc-9942-4d45-9977-28c25078bfd4', // May need verification
-                'DOLLY_IN': 'ece8c6a9-3deb-430e-8c93-4d5061b6adbf',
-                'TILT_UP': '6ad6de1f-bd15-4d0b-ae0e-81d1a4c6c085',
-                'ORBIT_LEFT': '74bea0cc-9942-4d45-9977-28c25078bfd4', // May need verification
-                // Note: Most other UUIDs are missing - need to fetch from API
-                // See: https://docs.leonardo.ai/docs/generate-with-motion-20-using-generated-images
-              }
-              motionControlUUID = motionControlUUIDs[generation.motionControl] || null
-              
-              if (!motionControlUUID) {
-                console.error('❌ [LEONARDO] No UUID found for motion control:', generation.motionControl)
-                console.error('❌ [LEONARDO] Motion control will not be applied')
-                console.error('❌ [LEONARDO] Please ensure motion control elements are fetched from API')
-              }
-            }
+            console.log(
+              "✅ [LEONARDO] Applying motion control:",
+              resolved.label,
+              resolved.id,
+              resolved.uuid,
+            )
 
-            if (motionControlUUID) {
-              if (!requestBody.elements) {
-                requestBody.elements = []
-              }
-              requestBody.elements.push({
-                akUUID: motionControlUUID,
-                weight: 1
-              })
-            }
+            requestBody.elements = [
+              {
+                akUUID: resolved.uuid,
+                weight: 1,
+              },
+            ]
           }
         } else {
           // Motion SVD endpoint (Motion 2.0 default)
@@ -6364,7 +6605,11 @@ export default function CinemaProductionPage() {
                                 <div>
                                   <Label>Motion Control (Optional)</Label>
                                   <Select 
-                                    value={generation.motionControl || "none"} 
+                                    value={
+                                      generation.motionControl
+                                        ? resolveLeonardoMotionControlId(generation.motionControl)
+                                        : "none"
+                                    } 
                                     onValueChange={(value) => updateStoryboardGeneration(storyboard.id, { 
                                       motionControl: value === "none" ? "" : value 
                                     })}
@@ -6374,38 +6619,15 @@ export default function CinemaProductionPage() {
                                     </SelectTrigger>
                                     <SelectContent>
                                       <SelectItem value="none">None</SelectItem>
-                                      <SelectItem value="BULLET_TIME">Bullet Time</SelectItem>
-                                      <SelectItem value="CRANE_DOWN">Crane Down</SelectItem>
-                                      <SelectItem value="CRANE_UP">Crane Up</SelectItem>
-                                      <SelectItem value="CRASH_ZOOM_IN">Crash Zoom In</SelectItem>
-                                      <SelectItem value="CRASH_ZOOM_OUT">Crash Zoom Out</SelectItem>
-                                      <SelectItem value="DOLLY_IN">Dolly In</SelectItem>
-                                      <SelectItem value="DOLLY_OUT">Dolly Out</SelectItem>
-                                      <SelectItem value="DOLLY_LEFT">Dolly Left</SelectItem>
-                                      <SelectItem value="DOLLY_RIGHT">Dolly Right</SelectItem>
-                                      <SelectItem value="PAN_LEFT">Pan Left</SelectItem>
-                                      <SelectItem value="PAN_RIGHT">Pan Right</SelectItem>
-                                      <SelectItem value="PAN_UP">Pan Up</SelectItem>
-                                      <SelectItem value="PAN_DOWN">Pan Down</SelectItem>
-                                      <SelectItem value="TILT_UP">Tilt Up</SelectItem>
-                                      <SelectItem value="TILT_DOWN">Tilt Down</SelectItem>
-                                      <SelectItem value="ZOOM_IN">Zoom In</SelectItem>
-                                      <SelectItem value="ZOOM_OUT">Zoom Out</SelectItem>
-                                      <SelectItem value="PUSH_IN">Push In</SelectItem>
-                                      <SelectItem value="PUSH_OUT">Push Out</SelectItem>
-                                      <SelectItem value="TRACK_IN">Track In</SelectItem>
-                                      <SelectItem value="TRACK_OUT">Track Out</SelectItem>
-                                      <SelectItem value="TRACK_LEFT">Track Left</SelectItem>
-                                      <SelectItem value="TRACK_RIGHT">Track Right</SelectItem>
-                                      <SelectItem value="ROTATE_CLOCKWISE">Rotate Clockwise</SelectItem>
-                                      <SelectItem value="ROTATE_COUNTER_CLOCKWISE">Rotate Counter Clockwise</SelectItem>
-                                      <SelectItem value="ROLL">Roll</SelectItem>
-                                      <SelectItem value="FADE_IN">Fade In</SelectItem>
-                                      <SelectItem value="FADE_OUT">Fade Out</SelectItem>
+                                      {LEONARDO_MOTION_CONTROLS.map((control) => (
+                                        <SelectItem key={control.id} value={control.id}>
+                                          {control.label}
+                                        </SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select>
                                   <p className="text-xs text-muted-foreground mt-1">
-                                    Select a cinematic motion control effect (optional). Motion 2.0 supports advanced camera movements.
+                                    Leonardo Motion Control camera moves (Tilt Up is the vertical pan). Applied via image-to-video.
                                   </p>
                                 </div>
 
@@ -6525,7 +6747,7 @@ export default function CinemaProductionPage() {
                           <div className="mb-4">
                             <Label className="flex items-center gap-2 mb-2">
                               <Music className="h-4 w-4" />
-                              Dialogue (Text-to-Speech)
+                              Dialogue (ElevenLabs TTS)
                             </Label>
                             <div className="space-y-2">
                               {dialogueVoiceOptions.length > 0 ? (
@@ -6743,10 +6965,10 @@ export default function CinemaProductionPage() {
                           </div>
 
                           {/* Sound Effects Generation */}
-                          <div>
+                          <div className="mb-4">
                             <Label className="flex items-center gap-2 mb-2">
                               <Zap className="h-4 w-4" />
-                              Sound Effects
+                              Sound Effects (ElevenLabs)
                             </Label>
                             <SoundEffectGenerator
                               storyboard={storyboard}
@@ -6779,6 +7001,45 @@ export default function CinemaProductionPage() {
                                 audioPromptAssistLoadingId === `${storyboard.id}-sound-effect`
                               }
                               onPromptAssist={() => handleSoundEffectPromptAssist(storyboard)}
+                            />
+                          </div>
+
+                          {/* Stable Audio (music / ambience) */}
+                          <div>
+                            <Label className="flex items-center gap-2 mb-2">
+                              <Music className="h-4 w-4" />
+                              Music / Ambience (Stable Audio)
+                            </Label>
+                            <p className="text-xs text-muted-foreground mb-2">
+                              Generate cinematic music and ambience with Stability AI. Dialogue and SFX still use ElevenLabs.
+                            </p>
+                            <StableAudioGenerator
+                              storyboard={storyboard}
+                              clips={getSessionClipsForStoryboard(storyboard.id, "stable-audio")}
+                              onGenerate={handleGenerateStableAudio}
+                              isGenerating={audioGenerating.get(`${storyboard.id}-stable-audio`) || false}
+                              hasApiKey={!!userApiKeys.stability_api_key}
+                              getSaveName={(clip) => getAudioSaveNameForClip(storyboard, clip)}
+                              onSaveNameChange={(clipId, name) => {
+                                setAudioSaveNames((prev) => {
+                                  const next = new Map(prev)
+                                  next.set(audioSaveNameKey(storyboard.id, clipId), name)
+                                  return next
+                                })
+                              }}
+                              onRemoveClip={(clipId) => removeSessionClip(storyboard.id, clipId)}
+                              onSaveAudio={async (clip, saveName) => {
+                                setSavingAudioClipId(clip.id)
+                                try {
+                                  await handleSaveAudio(clip.audioUrl, clip.prompt, "stable-audio", storyboard, saveName)
+                                } finally {
+                                  setSavingAudioClipId(null)
+                                }
+                              }}
+                              savingClipId={savingAudioClipId}
+                              userId={userId || undefined}
+                              projectId={selectedProjectId || undefined}
+                              sceneId={selectedSceneId || undefined}
                             />
                           </div>
                         </div>
