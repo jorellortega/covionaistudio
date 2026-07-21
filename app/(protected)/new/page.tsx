@@ -214,7 +214,7 @@ export default function NewCreativePage() {
     }
   }
 
-  const handleUpdateArtifact = async (id: string, data: Partial<CreativeArtifact>) => {
+  const handleUpdateArtifact = async (id: string, data: Record<string, unknown>) => {
     if (!activeWorkspaceId) return
     const res = await fetch(`/api/creative-workspace/${activeWorkspaceId}/artifacts/${id}`, {
       method: "PATCH",
@@ -224,7 +224,10 @@ export default function NewCreativePage() {
     if (res.ok) {
       const result = await res.json()
       setArtifacts((prev) => prev.map((a) => (a.id === id ? result.artifact : a)))
+      return { syncMessage: result.syncMessage as string | null | undefined }
     }
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || "Failed to update artifact")
   }
 
   const handleDeleteArtifact = async (id: string) => {
@@ -283,8 +286,16 @@ export default function NewCreativePage() {
         {activeWorkspaceId && (
           <ArtifactPanel
             artifacts={artifacts}
+            workspaceId={activeWorkspaceId}
+            linkedProjectId={linkedProject?.id}
+            linkedProjectName={linkedProject?.name}
             onUpdate={handleUpdateArtifact}
             onDelete={handleDeleteArtifact}
+            onArtifactRenamed={(artifact) => {
+              setArtifacts((prev) =>
+                prev.map((a) => (a.id === artifact.id ? artifact : a)),
+              )
+            }}
           />
         )}
       </div>
