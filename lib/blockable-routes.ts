@@ -39,6 +39,8 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'AI & keys', path: '/ai-studio', label: 'AI studio' },
   { group: 'AI & keys', path: '/runwayml', label: 'Runway ML' },
   { group: 'AI & keys', path: '/hedra-testing', label: 'Hedra testing' },
+  { group: 'AI & keys', path: '/mirelo-ai-test', label: 'Mirelo AI test' },
+  { group: 'AI & keys', path: '/twin', label: 'Digital Twin (HeyGen)' },
   { group: 'AI & keys', path: '/ai-info', label: 'AI info' },
 
   { group: 'Productions', path: '/movies', label: 'Movies' },

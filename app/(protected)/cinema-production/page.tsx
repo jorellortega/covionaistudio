@@ -42,6 +42,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  AudioWaveform,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -258,7 +259,7 @@ async function prepareImageForRunway(
   return new File([blob], "runway-input.jpg", { type: "image/jpeg" })
 }
 
-type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx" | "session-stable-audio"
+type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx" | "session-stable-audio" | "session-mirelo-sfx"
 
 interface StoryboardAudioOption {
   id: string
@@ -307,7 +308,7 @@ interface StoryboardVideo {
 }
 
 function suggestAudioSaveName(
-  type: "dialogue" | "sound-effect" | "stable-audio",
+  type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx",
   storyboard: Storyboard,
   prompt: string,
 ): string {
@@ -320,6 +321,9 @@ function suggestAudioSaveName(
   }
   if (type === "stable-audio") {
     return snippet ? `${shotLabel} Music ${snippet}${ellipsis}` : `${shotLabel} Music`
+  }
+  if (type === "mirelo-sfx") {
+    return snippet ? `${shotLabel} Mirelo ${snippet}${ellipsis}` : `${shotLabel} Mirelo SFX`
   }
   return snippet ? `${shotLabel} SFX ${snippet}${ellipsis}` : `${shotLabel} SFX`
 }
@@ -354,7 +358,7 @@ function showVideoFrameThumbnail(video: HTMLVideoElement, time = 0.1) {
 
 interface SessionAudioClip {
   id: string
-  type: "dialogue" | "sound-effect" | "stable-audio"
+  type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx"
   prompt: string
   audioUrl: string
   createdAt: number
@@ -812,6 +816,188 @@ function StableAudioGenerator({
   )
 }
 
+function MireloSfxGenerator({
+  storyboard,
+  clips,
+  videoUrl,
+  onGenerate,
+  isGenerating,
+  hasApiKey,
+  onSaveAudio,
+  userId,
+  projectId,
+  sceneId,
+  getSaveName,
+  onSaveNameChange,
+  onRemoveClip,
+  savingClipId,
+}: {
+  storyboard: Storyboard
+  clips: SessionAudioClip[]
+  videoUrl: string | null
+  onGenerate: (
+    storyboard: Storyboard,
+    videoUrl: string,
+    options: { durationMs: number; startOffsetMs: number; numSamples: number; version: "v1.5" | "v1.6" },
+  ) => void
+  isGenerating: boolean
+  hasApiKey: boolean
+  onSaveAudio?: (clip: SessionAudioClip, saveName: string) => Promise<void>
+  userId?: string
+  projectId?: string
+  sceneId?: string
+  getSaveName: (clip: SessionAudioClip) => string
+  onSaveNameChange: (clipId: string, name: string) => void
+  onRemoveClip?: (clipId: string) => void
+  savingClipId?: string | null
+}) {
+  const [durationSec, setDurationSec] = useState(10)
+  const [startOffsetSec, setStartOffsetSec] = useState(0)
+  const [numSamples, setNumSamples] = useState(3)
+  const [version, setVersion] = useState<"v1.5" | "v1.6">("v1.6")
+  const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!videoUrl) {
+      setVideoDurationSec(null)
+      return
+    }
+    const video = document.createElement("video")
+    video.preload = "metadata"
+    video.crossOrigin = "anonymous"
+    video.src = videoUrl
+    const onLoaded = () => {
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        const sec = Math.ceil(video.duration)
+        setVideoDurationSec(sec)
+        setDurationSec(sec)
+      }
+    }
+    video.addEventListener("loadedmetadata", onLoaded)
+    return () => {
+      video.removeEventListener("loadedmetadata", onLoaded)
+      video.src = ""
+    }
+  }, [videoUrl])
+
+  return (
+    <div className="space-y-3">
+      {videoUrl ? (
+        <p className="text-xs text-muted-foreground">
+          Uses this shot&apos;s active video
+          {videoDurationSec ? ` (${videoDurationSec}s)` : ""}. Switch videos above if needed.
+        </p>
+      ) : (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Generate a video for this shot first — Mirelo creates SFX synced to the video.
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-xs">Duration (seconds)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={120}
+            step={1}
+            value={durationSec}
+            onChange={(e) => setDurationSec(Math.max(1, parseInt(e.target.value || "10", 10)))}
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Start offset (seconds)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={60}
+            step={0.1}
+            value={startOffsetSec}
+            onChange={(e) => setStartOffsetSec(Math.max(0, parseFloat(e.target.value || "0")))}
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Samples (1–4)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={4}
+            step={1}
+            value={numSamples}
+            onChange={(e) => setNumSamples(Math.min(4, Math.max(1, parseInt(e.target.value || "3", 10))))}
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Model version</Label>
+          <Select value={version} onValueChange={(v) => setVersion(v as "v1.5" | "v1.6")}>
+            <SelectTrigger className="h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="v1.6">v1.6 (recommended)</SelectItem>
+              <SelectItem value="v1.5">v1.5</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      {!hasApiKey && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Add your Mirelo API key in{" "}
+          <Link href="/setup-ai" className="underline underline-offset-2">
+            Setup AI
+          </Link>{" "}
+          or test at{" "}
+          <Link href="/mirelo-ai-test" className="underline underline-offset-2">
+            /mirelo-ai-test
+          </Link>
+          .
+        </p>
+      )}
+      <Button
+        onClick={() =>
+          onGenerate(storyboard, videoUrl!, {
+            durationMs: Math.round(durationSec * 1000),
+            startOffsetMs: Math.round(startOffsetSec * 1000),
+            numSamples,
+            version,
+          })
+        }
+        disabled={!videoUrl || isGenerating || !hasApiKey}
+        className="w-full"
+      >
+        {isGenerating ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Generating...
+          </>
+        ) : (
+          <>
+            <AudioWaveform className="h-4 w-4 mr-2" />
+            Generate Video SFX (Mirelo)
+          </>
+        )}
+      </Button>
+      {userId && projectId && sceneId && (
+        <SessionAudioClipList
+          clips={clips}
+          getSaveName={getSaveName}
+          onSaveNameChange={onSaveNameChange}
+          onDownload={(clip) => {
+            const link = document.createElement("a")
+            link.href = clip.audioUrl
+            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.mp3`
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+          }}
+          onSave={onSaveAudio}
+          onRemove={onRemoveClip}
+          savingClipId={savingClipId}
+        />
+      )}
+    </div>
+  )
+}
+
 export default function CinemaProductionPage() {
   const { session } = useAuth()
   const { toast } = useToast()
@@ -931,7 +1117,7 @@ export default function CinemaProductionPage() {
   )
 
   const setDefaultAudioSaveName = useCallback(
-    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect" | "stable-audio", prompt: string) => {
+    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx", prompt: string) => {
       const key = audioSaveNameKey(storyboard.id, clipId)
       setAudioSaveNames((prev) => {
         const next = new Map(prev)
@@ -1222,7 +1408,7 @@ export default function CinemaProductionPage() {
         const supabase = getSupabaseClient()
         const { data: userData, error: userError } = await supabase
           .from('users')
-          .select('elevenlabs_api_key, openai_api_key, anthropic_api_key, stability_api_key')
+          .select('elevenlabs_api_key, openai_api_key, anthropic_api_key, stability_api_key, mirelo_api_key')
           .eq('id', userId)
           .maybeSingle()
         
@@ -1232,12 +1418,14 @@ export default function CinemaProductionPage() {
             openai_api_key: userData.openai_api_key || null,
             anthropic_api_key: userData.anthropic_api_key || null,
             stability_api_key: userData.stability_api_key || null,
+            mirelo_api_key: userData.mirelo_api_key || null,
           })
           console.log('✅ Loaded user API keys:', {
             hasElevenLabs: !!userData.elevenlabs_api_key,
             hasOpenAI: !!userData.openai_api_key,
             hasAnthropic: !!userData.anthropic_api_key,
             hasStability: !!userData.stability_api_key,
+            hasMirelo: !!userData.mirelo_api_key,
           })
         } else {
           console.warn('⚠️ Could not load user API keys:', userError?.message)
@@ -1267,6 +1455,19 @@ export default function CinemaProductionPage() {
             }
           } catch (error) {
             console.error('Error fetching system Stability API key:', error)
+          }
+          try {
+            const response = await fetch('/api/ai/get-system-api-key?type=mirelo_api_key')
+            if (response.ok) {
+              const systemKey = await response.json()
+              const mireloKey = systemKey?.apiKey || systemKey?.key
+              if (mireloKey) {
+                setUserApiKeys((prev: any) => ({ ...prev, mirelo_api_key: mireloKey }))
+                console.log('✅ Using system-wide Mirelo API key')
+              }
+            }
+          } catch (error) {
+            console.error('Error fetching system Mirelo API key:', error)
           }
         }
       } catch (error) {
@@ -1441,8 +1642,10 @@ export default function CinemaProductionPage() {
       console.log('🎬 Loaded scenes:', projectScenes.length, projectScenes)
       setScenes(projectScenes)
       
-      // If only one scene, auto-select it
-      if (projectScenes.length === 1) {
+      const sceneParam = searchParams.get("scene")
+      if (sceneParam && projectScenes.some((s) => s.id === sceneParam)) {
+        setSelectedSceneId(sceneParam)
+      } else if (projectScenes.length === 1) {
         setSelectedSceneId(projectScenes[0].id)
       }
     } catch (error) {
@@ -1578,7 +1781,13 @@ export default function CinemaProductionPage() {
     for (const clip of sessionClips) {
       if (!clip.audioUrl) continue
       const typeLabel =
-        clip.type === "dialogue" ? "Dialogue" : clip.type === "stable-audio" ? "Music" : "SFX"
+        clip.type === "dialogue"
+          ? "Dialogue"
+          : clip.type === "stable-audio"
+            ? "Music"
+            : clip.type === "mirelo-sfx"
+              ? "Mirelo SFX"
+              : "SFX"
       const name =
         storyboard && audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))
           ? audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))!
@@ -1594,7 +1803,9 @@ export default function CinemaProductionPage() {
             ? "session-dialogue"
             : clip.type === "stable-audio"
               ? "session-stable-audio"
-              : "session-sfx",
+              : clip.type === "mirelo-sfx"
+                ? "session-mirelo-sfx"
+                : "session-sfx",
       })
     }
     const saved = storyboardSavedAudio.get(storyboardId) || []
@@ -1607,7 +1818,9 @@ export default function CinemaProductionPage() {
             ? "SFX"
             : asset.metadata?.type === "stable-audio"
               ? "Music"
-              : "Audio"
+              : asset.metadata?.type === "mirelo-sfx"
+                ? "Mirelo SFX"
+                : "Audio"
       options.push({
         id: asset.id,
         label: `${typeLabel}: ${asset.title}`,
@@ -3396,11 +3609,136 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const handleGenerateMireloSfx = async (
+    storyboard: Storyboard,
+    videoUrl: string,
+    options: { durationMs: number; startOffsetMs: number; numSamples: number; version: "v1.5" | "v1.6" },
+  ) => {
+    if (!userId || !userApiKeys.mirelo_api_key) {
+      toast({
+        title: "API Key Required",
+        description: "Please configure your Mirelo API key in Setup AI.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioKey = `${storyboard.id}-mirelo-sfx`
+    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
+
+    try {
+      const response = await fetch("/api/mirelo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "video-to-sfx",
+          mode: "async",
+          version: options.version,
+          video_url: videoUrl,
+          duration_ms: options.durationMs,
+          start_offset_ms: options.startOffsetMs,
+          num_samples: options.numSamples,
+          output: "audio",
+          apiKey: userApiKeys.mirelo_api_key,
+        }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || "Mirelo request failed")
+      }
+
+      let resultUrls: string[] = []
+      if (typeof data.job_id === "string") {
+        toast({
+          title: "Mirelo job started",
+          description: "Generating SFX from video — this may take a minute.",
+        })
+        const maxAttempts = 120
+        for (let i = 0; i < maxAttempts; i++) {
+          await new Promise((r) => setTimeout(r, 2000))
+          const params = new URLSearchParams({
+            action: "job-status",
+            endpoint: "video-to-sfx",
+            version: options.version,
+            jobId: data.job_id,
+          })
+          const poll = await fetch(`/api/mirelo?${params.toString()}`)
+          const pollData = await poll.json()
+          if (!poll.ok) continue
+          const job = pollData.job as {
+            status?: string
+            result?: { result_urls?: string[] }
+            error?: { message?: string }
+          }
+          if (job.status === "succeeded") {
+            resultUrls = job.result?.result_urls || []
+            break
+          }
+          if (job.status === "errored") {
+            throw new Error(job.error?.message || "Mirelo job failed")
+          }
+        }
+        if (!resultUrls.length) {
+          throw new Error("Timed out waiting for Mirelo result")
+        }
+      } else {
+        resultUrls = Array.isArray(data.result_urls) ? (data.result_urls as string[]) : []
+      }
+
+      if (!resultUrls.length) {
+        throw new Error("No audio returned from Mirelo")
+      }
+
+      const actionSnippet = storyboard.action?.trim().slice(0, 80) || ""
+      const basePrompt = actionSnippet
+        ? `Video SFX — Shot ${storyboard.shot_number}: ${actionSnippet}`
+        : `Video SFX — Shot ${storyboard.shot_number}`
+
+      for (let i = 0; i < resultUrls.length; i++) {
+        const clipId = crypto.randomUUID()
+        const url = resultUrls[i]
+        let audioUrl = url
+        try {
+          const res = await fetch(url)
+          const blob = await res.blob()
+          audioUrl = URL.createObjectURL(blob)
+        } catch {
+          /* keep remote url */
+        }
+
+        const prompt = resultUrls.length > 1 ? `${basePrompt} (sample ${i + 1})` : basePrompt
+        const clip: SessionAudioClip = {
+          id: clipId,
+          type: "mirelo-sfx",
+          prompt,
+          audioUrl,
+          createdAt: Date.now(),
+        }
+        addSessionClip(storyboard.id, clip)
+        setDefaultAudioSaveName(storyboard, clipId, "mirelo-sfx", prompt)
+      }
+
+      toast({
+        title: "Mirelo SFX Generated",
+        description: `${resultUrls.length} clip${resultUrls.length === 1 ? "" : "s"} added from storyboard video.`,
+      })
+    } catch (error) {
+      console.error("Error generating Mirelo SFX:", error)
+      toast({
+        title: "Generation Failed",
+        description: error instanceof Error ? error.message : "Failed to generate Mirelo SFX.",
+        variant: "destructive",
+      })
+    } finally {
+      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
+    }
+  }
+
   // Save audio to storage
   const handleSaveAudio = async (
     audioUrl: string,
     prompt: string,
-    type: "dialogue" | "sound-effect" | "stable-audio" = "sound-effect",
+    type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx" = "sound-effect",
     storyboard?: Storyboard,
     saveName?: string,
   ) => {
@@ -3466,7 +3804,13 @@ export default function CinemaProductionPage() {
         toast({
           title: "Audio Saved",
           description: `${
-            type === "dialogue" ? "Dialogue" : type === "stable-audio" ? "Stable Audio" : "Sound effect"
+            type === "dialogue"
+              ? "Dialogue"
+              : type === "stable-audio"
+                ? "Stable Audio"
+                : type === "mirelo-sfx"
+                  ? "Mirelo SFX"
+                  : "Sound effect"
           } audio has been saved to storage.`,
         })
         if (selectedSceneId) {
@@ -7162,7 +7506,7 @@ export default function CinemaProductionPage() {
                             <h3 className="text-lg font-semibold">Audio Generation</h3>
                           </div>
                           <p className="text-xs text-muted-foreground mb-3">
-                            Expand a section to generate dialogue, sound effects, or music for this shot.
+                            Expand a section to generate dialogue, sound effects, music, or video-synced SFX for this shot.
                           </p>
 
                           <div className="space-y-2">
@@ -7462,6 +7806,43 @@ export default function CinemaProductionPage() {
                                 audioPromptAssistLoadingId === `${storyboard.id}-stable-audio`
                               }
                               onPromptAssist={() => handleStableAudioPromptAssist(storyboard)}
+                            />
+                          </AudioGeneratorSection>
+
+                          <AudioGeneratorSection
+                            title="Video SFX (Mirelo)"
+                            icon={AudioWaveform}
+                            description="Generate sound effects synced to this shot's video with Mirelo AI. Requires a generated video on the shot."
+                            clipCount={getSessionClipsForStoryboard(storyboard.id, "mirelo-sfx").length}
+                          >
+                            <MireloSfxGenerator
+                              storyboard={storyboard}
+                              clips={getSessionClipsForStoryboard(storyboard.id, "mirelo-sfx")}
+                              videoUrl={getActiveVideoUrl(storyboard.id)}
+                              onGenerate={handleGenerateMireloSfx}
+                              isGenerating={audioGenerating.get(`${storyboard.id}-mirelo-sfx`) || false}
+                              hasApiKey={!!userApiKeys.mirelo_api_key}
+                              getSaveName={(clip) => getAudioSaveNameForClip(storyboard, clip)}
+                              onSaveNameChange={(clipId, name) => {
+                                setAudioSaveNames((prev) => {
+                                  const next = new Map(prev)
+                                  next.set(audioSaveNameKey(storyboard.id, clipId), name)
+                                  return next
+                                })
+                              }}
+                              onRemoveClip={(clipId) => removeSessionClip(storyboard.id, clipId)}
+                              onSaveAudio={async (clip, saveName) => {
+                                setSavingAudioClipId(clip.id)
+                                try {
+                                  await handleSaveAudio(clip.audioUrl, clip.prompt, "mirelo-sfx", storyboard, saveName)
+                                } finally {
+                                  setSavingAudioClipId(null)
+                                }
+                              }}
+                              savingClipId={savingAudioClipId}
+                              userId={userId || undefined}
+                              projectId={selectedProjectId || undefined}
+                              sceneId={selectedSceneId || undefined}
                             />
                           </AudioGeneratorSection>
                           </div>

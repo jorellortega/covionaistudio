@@ -36,6 +36,7 @@ import {
   Type,
   Video,
   List,
+  AudioWaveform,
 } from "lucide-react"
 import { Palette as MoodPalette } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -103,8 +104,10 @@ const navigationCategories: NavCategory[] = [
     icon: Bot,
     items: [
       { name: "AI Studio", href: "/ai-studio", icon: Bot },
+      { name: "Digital Twin", href: "/twin", icon: ScanFace },
       { name: "Runway ML", href: "/runwayml", icon: Video },
       { name: "Hedra Testing", href: "/hedra-testing", icon: UserCircle },
+      { name: "Mirelo AI", href: "/mirelo-ai-test", icon: AudioWaveform },
       { name: "Prompts List", href: "/prompts-list", icon: Sparkles },
     ],
   },

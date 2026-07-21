@@ -10,6 +10,10 @@ import { useToast } from "@/hooks/use-toast"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
+import {
+  AvatarImagesService,
+  type AvatarImageRecord,
+} from "@/lib/avatar-images-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import {
   buildLinkedAssetGroups,
@@ -89,6 +93,7 @@ interface AvatarImage {
   saved?: boolean
   source?: "generated" | "existing" | "from_reference"
   assetId?: string
+  avatarImageId?: string
 }
 
 interface AngleGallery {
@@ -107,6 +112,34 @@ function isAvatarAsset(asset: Asset): boolean {
     asset.metadata?.type === "avatar" &&
     typeof asset.metadata?.avatar_angle === "string"
   )
+}
+
+function buildGalleriesFromAvatarImageRecords(images: AvatarImageRecord[]): AngleGalleries {
+  const galleries: AngleGalleries = {}
+  const sorted = [...images].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+  )
+
+  for (const row of sorted) {
+    const gallery = galleries[row.angle_id] ?? { images: [], selectedIndex: 0 }
+    gallery.images.push({
+      id: row.id,
+      avatarImageId: row.id,
+      imageUrl: row.image_url,
+      prompt: row.prompt || row.angle_label,
+      saved: true,
+      assetId: row.asset_id || undefined,
+      source: row.source,
+    })
+    galleries[row.angle_id] = gallery
+  }
+
+  for (const angleId of Object.keys(galleries)) {
+    const gallery = galleries[angleId]
+    gallery.selectedIndex = Math.max(0, gallery.images.length - 1)
+  }
+
+  return galleries
 }
 
 function buildGalleriesFromAvatarAssets(assets: Asset[]): AngleGalleries {
@@ -191,6 +224,8 @@ export default function AvatarsPage() {
   const [characterImageAssets, setCharacterImageAssets] = useState<Asset[]>([])
   const [projectLocations, setProjectLocations] = useState<Location[]>([])
   const [isLoadingImages, setIsLoadingImages] = useState(false)
+  const [isLoadingAvatars, setIsLoadingAvatars] = useState(false)
+  const [projectAvatarImages, setProjectAvatarImages] = useState<AvatarImageRecord[]>([])
   const [pickDialogAngleId, setPickDialogAngleId] = useState<string | null>(null)
   const [generationMode, setGenerationMode] = useState<GenerationMode>("description")
   const [sourceReference, setSourceReference] = useState<SourceReference | null>(null)
@@ -252,45 +287,74 @@ export default function AvatarsPage() {
   useEffect(() => {
     setGalleriesHydrated(false)
     setAngleGalleries({})
-  }, [projectId, userId])
+    setProjectAvatarImages([])
+  }, [projectId, userId, linkedCharacterId])
 
   useEffect(() => {
-    if (!ready || !userId || galleriesHydrated || isLoadingImages) return
+    if (!ready || !userId || !projectId || galleriesHydrated || isLoadingImages) return
 
-    const avatarAssets = projectImageAssets.filter(isAvatarAsset)
-    if (avatarAssets.length > 0) {
-      setAngleGalleries(buildGalleriesFromAvatarAssets(projectImageAssets))
-      const nameFromMeta = avatarAssets.find(
-        (a) => typeof a.metadata?.character_name === "string",
-      )?.metadata?.character_name
-      if (typeof nameFromMeta === "string" && nameFromMeta.trim()) {
-        setCharacterName((prev) => prev || nameFromMeta)
-      }
-      setGalleriesHydrated(true)
-      return
-    }
+    setIsLoadingAvatars(true)
+    AvatarImagesService.listImagesForProject(projectId)
+      .then((images) => {
+        setProjectAvatarImages(images)
+        const scoped = linkedCharacterId
+          ? images.filter((img) => img.character_id === linkedCharacterId)
+          : images.filter((img) => !img.character_id)
 
-    try {
-      const storageKey = getAvatarGalleryStorageKey(projectId, userId)
-      const raw = localStorage.getItem(storageKey)
-      if (raw) {
-        const parsed = JSON.parse(raw) as AngleGalleries
-        if (parsed && typeof parsed === "object") {
-          setAngleGalleries(parsed)
+        if (scoped.length > 0) {
+          setAngleGalleries(buildGalleriesFromAvatarImageRecords(scoped))
+          const nameFromRow = scoped.find((img) => img.metadata?.character_name)
+          const metaName =
+            typeof nameFromRow?.metadata?.character_name === "string"
+              ? nameFromRow.metadata.character_name
+              : null
+          if (metaName?.trim()) {
+            setCharacterName((prev) => prev || metaName)
+          }
+          setGalleriesHydrated(true)
+          return
         }
-      }
-    } catch {
-      // ignore corrupt local cache
-    }
 
-    setGalleriesHydrated(true)
+        const avatarAssets = projectImageAssets.filter(isAvatarAsset)
+        if (avatarAssets.length > 0) {
+          setAngleGalleries(buildGalleriesFromAvatarAssets(projectImageAssets))
+          const nameFromMeta = avatarAssets.find(
+            (a) => typeof a.metadata?.character_name === "string",
+          )?.metadata?.character_name
+          if (typeof nameFromMeta === "string" && nameFromMeta.trim()) {
+            setCharacterName((prev) => prev || nameFromMeta)
+          }
+          setGalleriesHydrated(true)
+          return
+        }
+
+        try {
+          const storageKey = getAvatarGalleryStorageKey(projectId, userId)
+          const raw = localStorage.getItem(storageKey)
+          if (raw) {
+            const parsed = JSON.parse(raw) as AngleGalleries
+            if (parsed && typeof parsed === "object") {
+              setAngleGalleries(parsed)
+            }
+          }
+        } catch {
+          // ignore corrupt local cache
+        }
+
+        setGalleriesHydrated(true)
+      })
+      .catch(() => {
+        setGalleriesHydrated(true)
+      })
+      .finally(() => setIsLoadingAvatars(false))
   }, [
     ready,
     userId,
     projectId,
+    linkedCharacterId,
     projectImageAssets,
-    isLoadingImages,
     galleriesHydrated,
+    isLoadingImages,
   ])
 
   useEffect(() => {
@@ -376,39 +440,80 @@ export default function AvatarsPage() {
     angle: AvatarAngle,
     image: Omit<AvatarImage, "id">,
   ): Promise<AvatarImage> => {
-    const baseImage = createAvatarImage(image)
-
     if (!projectId) {
-      return baseImage
+      return createAvatarImage(image)
     }
 
     try {
-      const asset = await AssetService.createAsset({
+      let assetId: string | undefined
+      try {
+        const asset = await AssetService.createAsset({
+          project_id: projectId,
+          character_id: linkedCharacterId || null,
+          title: `${characterName || "Character"} - ${angle.label}`,
+          content_type: "image",
+          content_url: image.imageUrl,
+          prompt: image.prompt,
+          metadata: {
+            type: "avatar",
+            avatar_angle: angle.id,
+            avatar_source: image.source || "generated",
+            character_name: characterName || null,
+          },
+        })
+        assetId = asset.id
+        setProjectImageAssets((prev) =>
+          prev.some((a) => a.id === asset.id) ? prev : [asset, ...prev],
+        )
+      } catch (assetError) {
+        console.error("Failed to mirror avatar to project assets:", assetError)
+      }
+
+      const record = await AvatarImagesService.createImage({
         project_id: projectId,
         character_id: linkedCharacterId || null,
-        title: `${characterName || "Character"} - ${angle.label}`,
-        content_type: "image",
-        content_url: image.imageUrl,
+        character_name: characterName || null,
+        description: description || null,
+        style,
+        angle_id: angle.id,
+        angle_label: angle.label,
+        image_url: image.imageUrl,
         prompt: image.prompt,
+        source: image.source || "generated",
+        asset_id: assetId ?? null,
         metadata: {
-          type: "avatar",
-          avatar_angle: angle.id,
-          avatar_source: image.source || "generated",
           character_name: characterName || null,
         },
       })
-      setProjectImageAssets((prev) =>
-        prev.some((a) => a.id === asset.id) ? prev : [asset, ...prev],
-      )
+
+      setProjectAvatarImages((prev) => [...prev, record])
+
+      if (linkedCharacterId) {
+        const character = characters.find((c) => c.id === linkedCharacterId)
+        if (character) {
+          const refs = Array.isArray(character.reference_images)
+            ? character.reference_images.filter((url): url is string => !!url)
+            : []
+          if (!refs.includes(image.imageUrl)) {
+            await CharactersService.updateCharacter(linkedCharacterId, {
+              reference_images: [image.imageUrl, ...refs],
+            })
+          }
+        }
+      }
+
       return {
-        ...baseImage,
-        id: asset.id,
-        assetId: asset.id,
+        id: record.id,
+        avatarImageId: record.id,
+        imageUrl: image.imageUrl,
+        prompt: image.prompt,
+        source: image.source,
         saved: true,
+        assetId,
       }
     } catch (error) {
-      console.error("Failed to auto-save avatar to project:", error)
-      return baseImage
+      console.error("Failed to save avatar image:", error)
+      return createAvatarImage(image)
     }
   }
 
@@ -466,6 +571,43 @@ export default function AvatarsPage() {
     }
 
     removeAvatarImageFromGallery(angle.id, image.id)
+
+    if (image.avatarImageId) {
+      try {
+        const deleted = await AvatarImagesService.deleteImage(image.avatarImageId)
+        if (deleted) {
+          setProjectAvatarImages((prev) =>
+            prev.filter((row) => row.id !== deleted.id),
+          )
+        }
+      } catch (error) {
+        toast({
+          title: "Removed from gallery",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not delete the avatar record.",
+          variant: "destructive",
+        })
+      }
+    } else {
+      const rowId =
+        projectAvatarImages.find(
+          (row) => row.id === image.id || row.asset_id === image.assetId,
+        )?.id ?? null
+      if (rowId) {
+        try {
+          const deleted = await AvatarImagesService.deleteImage(rowId)
+          if (deleted) {
+            setProjectAvatarImages((prev) =>
+              prev.filter((row) => row.id !== deleted.id),
+            )
+          }
+        } catch {
+          // avatar row may already be gone
+        }
+      }
+    }
 
     const shouldDeleteAsset =
       !!image.assetId && image.saved && image.source !== "existing"
@@ -804,6 +946,35 @@ export default function AvatarsPage() {
       if (assets.length > 0) groups.push({ label: "This character", assets })
     }
 
+    if (projectAvatarImages.length > 0) {
+      const avatarStudioAssets = projectAvatarImages
+        .map((row) =>
+          addAsset({
+            id: row.id,
+            user_id: row.user_id,
+            project_id: row.project_id,
+            character_id: row.character_id ?? undefined,
+            title: `${row.angle_label}${row.metadata?.character_name ? ` — ${row.metadata.character_name}` : ""}`,
+            content_type: "image",
+            content_url: row.image_url,
+            prompt: row.prompt ?? undefined,
+            version: 1,
+            is_latest_version: true,
+            metadata: {
+              type: "avatar",
+              avatar_angle: row.angle_id,
+              avatar_source: row.source,
+            },
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+          }),
+        )
+        .filter(Boolean) as Asset[]
+      if (avatarStudioAssets.length > 0) {
+        groups.push({ label: "Avatar Studio", assets: avatarStudioAssets })
+      }
+    }
+
     if (linkedCharacter?.image_url && !seen.has(linkedCharacter.image_url)) {
       seen.add(linkedCharacter.image_url)
       groups.push({
@@ -859,6 +1030,7 @@ export default function AvatarsPage() {
     characterImageAssets,
     linkedCharacter,
     linkedCharacterId,
+    projectAvatarImages,
     projectImageAssets,
     projectLocations,
     characters,
@@ -1205,7 +1377,7 @@ export default function AvatarsPage() {
     if (!projectId) {
       toast({
         title: "Select a project",
-        description: "Link a movie project to save avatars as assets.",
+        description: "Link a movie project to save avatars.",
         variant: "destructive",
       })
       return
@@ -1218,29 +1390,37 @@ export default function AvatarsPage() {
       for (const angle of avatarShots) {
         const gallery = angleGalleries[angle.id]
         if (!gallery) continue
-        const savedIds: string[] = []
         for (const avatar of gallery.images) {
           if (avatar.saved) continue
           if (avatar.source === "existing" && avatar.assetId) continue
-          await AssetService.createAsset({
-            project_id: projectId,
-            character_id: linkedCharacterId || null,
-            title: `${characterName || "Character"} - ${angle.label}`,
-            content_type: "image",
-            content_url: avatar.imageUrl,
+          const persisted = await persistAvatarImage(angle, {
+            imageUrl: avatar.imageUrl,
             prompt: avatar.prompt,
-            metadata: { avatar_angle: angle.id, type: "avatar" },
+            source: avatar.source,
           })
-          savedIds.push(avatar.id)
+          if (persisted.id !== avatar.id) {
+            setAngleGalleries((prev) => {
+              const current = prev[angle.id]
+              if (!current) return prev
+              return {
+                ...prev,
+                [angle.id]: {
+                  ...current,
+                  images: current.images.map((img) =>
+                    img.id === avatar.id ? persisted : img,
+                  ),
+                },
+              }
+            })
+          } else {
+            markAngleImagesSaved(angle.id, [avatar.id])
+          }
           saved++
-        }
-        if (savedIds.length > 0) {
-          markAngleImagesSaved(angle.id, savedIds)
         }
       }
       toast({
         title: "Saved to project",
-        description: `${saved} avatar image${saved === 1 ? "" : "s"} saved to assets.`,
+        description: `${saved} avatar image${saved === 1 ? "" : "s"} saved.`,
       })
     } catch (error) {
       toast({
@@ -1540,7 +1720,7 @@ export default function AvatarsPage() {
                         </Badge>
                       )}
                     </div>
-                    {isLoadingImages ? (
+                    {isLoadingImages || isLoadingAvatars ? (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         Loading project images…
@@ -2203,7 +2383,7 @@ export default function AvatarsPage() {
                     Adds more images as references from characters, locations, or project assets.
                     Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
                   </p>
-                  {isLoadingImages ? (
+                  {isLoadingImages || isLoadingAvatars ? (
                     <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Loading project assets…

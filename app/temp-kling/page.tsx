@@ -1,1024 +1,731 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import Header from "@/components/header"
+import { useAuthReady } from "@/components/auth-hooks"
+import { useToast } from "@/hooks/use-toast"
+import { getSupabaseClient } from "@/lib/supabase"
+import { KlingService } from "@/lib/ai-services"
+import {
+  KLING_3_UI_MODELS,
+  KLING_V3_DURATIONS,
+  getKlingModelConfig,
+  isKlingOmniModel,
+  type Kling3UiModel,
+  type KlingApiMode,
+} from "@/lib/kling-models"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { useToast } from "@/hooks/use-toast"
-import { useAuthReady } from "@/components/auth-hooks"
-import { getSupabaseClient } from "@/lib/supabase"
-import { 
-  Video, 
-  Play, 
-  Download, 
-  Upload, 
-  Settings, 
-  TestTube, 
-  AlertCircle, 
-  CheckCircle,
-  Clock,
-  Image as ImageIcon,
-  FileVideo,
+import {
   Loader2,
-  RefreshCw
+  KeyRound,
+  Video,
+  Download,
+  ExternalLink,
+  CheckCircle2,
+  Save,
+  Eye,
+  EyeOff,
+  Play,
+  Film,
+  Volume2,
+  AlertCircle,
+  Clock,
+  Sparkles,
 } from "lucide-react"
 
-interface KlingGeneration {
+const ASPECT_RATIOS = [
+  { value: "16:9", label: "16:9 Landscape" },
+  { value: "9:16", label: "9:16 Portrait" },
+  { value: "1:1", label: "1:1 Square" },
+] as const
+
+type AspectRatio = (typeof ASPECT_RATIOS)[number]["value"]
+
+type KlingJob = {
   id: string
+  uiModel: string
   prompt: string
-  type: 'text_to_video' | 'image_to_video' | 'frame_to_frame'
-  status: 'pending' | 'processing' | 'completed' | 'failed'
-  video_url?: string
-  thumbnail_url?: string
-  created_at: string
-  duration?: number
-  model?: string
+  status: "processing" | "completed" | "failed"
+  videoUrl?: string
+  taskId?: string
+  mode?: KlingApiMode
+  duration: number
+  ratio: AspectRatio
+  sound: boolean
+  createdAt: number
+  error?: string
+  pollAttempt?: number
 }
 
-interface KlingUser {
-  id: string
-  email: string
-  credits: number
-  subscription: string
+function ratioToResolution(ratio: AspectRatio): string {
+  if (ratio === "9:16") return "720:1280"
+  if (ratio === "1:1") return "960:960"
+  return "1280:720"
 }
 
-export default function TempKlingPage() {
-  // Add custom styles for active tab
+function useFilePreview(file: File | null) {
+  const [preview, setPreview] = useState<string | null>(null)
   useEffect(() => {
-    const style = document.createElement('style')
-    style.textContent = `
-      .kling-tab-trigger[data-state="active"] {
-        background-color: #10b981 !important;
-        color: white !important;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1) !important;
-      }
-    `
-    document.head.appendChild(style)
-    return () => document.head.removeChild(style)
-  }, [])
-  const { user, userId, ready } = useAuthReady()
-  const { toast } = useToast()
-  
-  // API Key state
-  const [apiKey, setApiKey] = useState('')
-  const [secretKey, setSecretKey] = useState('')
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [showSecretKey, setShowSecretKey] = useState(false)
-  const [apiKeyValid, setApiKeyValid] = useState(false)
-  const [userInfo, setUserInfo] = useState<KlingUser | null>(null)
-  const [apiBaseUrl, setApiBaseUrl] = useState('https://api.klingai.com')
-  
-  // Generation states
-  const [generations, setGenerations] = useState<KlingGeneration[]>([])
-  const [loading, setLoading] = useState(false)
-  const [testing, setTesting] = useState(false)
-  
-  // Text to Video state
-  const [textPrompt, setTextPrompt] = useState('')
-  const [textDuration, setTextDuration] = useState('10')
-  const [textModel, setTextModel] = useState('kling-v1')
-  
-  // Image to Video state
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string | null>(null)
-  const [imagePrompt, setImagePrompt] = useState('')
-  const [imageDuration, setImageDuration] = useState('10')
-  const [imageModel, setImageModel] = useState('kling-v1')
-  
-  // Frame to Frame state
-  const [frameFile, setFrameFile] = useState<File | null>(null)
-  const [framePreview, setFramePreview] = useState<string | null>(null)
-  const [framePrompt, setFramePrompt] = useState('')
-  const [frameDuration, setFrameDuration] = useState('10')
-  const [frameModel, setFrameModel] = useState('kling-v1')
-  
-  // Load API key from database
-  useEffect(() => {
-    if (ready && userId) {
-      loadApiKey()
+    if (!file) {
+      setPreview(null)
+      return
     }
-  }, [ready, userId])
-  
-  const loadApiKey = async () => {
+    const url = URL.createObjectURL(file)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+  return preview
+}
+
+export default function KlingAiTestPage() {
+  const { ready, userId } = useAuthReady()
+  const { toast } = useToast()
+
+  const [activeTab, setActiveTab] = useState("generate")
+
+  const [accessKey, setAccessKey] = useState("")
+  const [secretKey, setSecretKey] = useState("")
+  const [showAccessKey, setShowAccessKey] = useState(false)
+  const [showSecretKey, setShowSecretKey] = useState(false)
+  const [isSavingKeys, setIsSavingKeys] = useState(false)
+  const [isTestingKeys, setIsTestingKeys] = useState(false)
+  const [serverReady, setServerReady] = useState<boolean | null>(null)
+
+  const [uiModel, setUiModel] = useState<Kling3UiModel>("Kling 3.0 T2V")
+  const [prompt, setPrompt] = useState(
+    "Cinematic aerial shot over misty pine forest at dawn, slow push-in, golden light through fog",
+  )
+  const [duration, setDuration] = useState<number>(8)
+  const [ratio, setRatio] = useState<AspectRatio>("16:9")
+  const [nativeAudio, setNativeAudio] = useState(false)
+  const [imageFile, setImageFile] = useState<File | null>(null)
+  const [startFrame, setStartFrame] = useState<File | null>(null)
+  const [endFrame, setEndFrame] = useState<File | null>(null)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [jobs, setJobs] = useState<KlingJob[]>([])
+
+  const imagePreview = useFilePreview(imageFile)
+  const startPreview = useFilePreview(startFrame)
+  const endPreview = useFilePreview(endFrame)
+
+  const modelConfig = useMemo(() => getKlingModelConfig(uiModel), [uiModel])
+
+  const loadKeys = useCallback(async () => {
+    if (!userId) return
     try {
       const { data, error } = await getSupabaseClient()
-        .from('users')
-        .select('kling_api_key, kling_secret_key')
-        .eq('id', userId)
-        .single()
-      
+        .from("users")
+        .select("kling_api_key, kling_secret_key")
+        .eq("id", userId)
+        .maybeSingle()
       if (error) throw error
-      
-      if (data?.kling_api_key) {
-        setApiKey(data.kling_api_key)
-      }
-      if (data?.kling_secret_key) {
-        setSecretKey(data.kling_secret_key)
-      }
-      
-      // Try to validate with the available key(s)
-      const keyToValidate = data?.kling_secret_key || data?.kling_api_key
-      if (keyToValidate) {
-        await validateApiKey(keyToValidate)
-      }
+      if (data?.kling_api_key) setAccessKey(data.kling_api_key)
+      if (data?.kling_secret_key) setSecretKey(data.kling_secret_key)
     } catch (error) {
-      console.error('Error loading Kling API keys:', error)
+      console.error("Failed to load Kling keys:", error)
     }
-  }
-  
-  const validateApiKey = async (key: string) => {
-    try {
-      console.log('🔑 Validating Kling API key...', { keyLength: key.length, keyPrefix: key.substring(0, 10) })
-      
-      const response = await fetch('https://api.klingai.com/v1/user', {
-        headers: { 'Authorization': `Bearer ${key}` },
-      })
-      
-      console.log('🔑 Kling API validation response:', { 
-        status: response.status, 
-        statusText: response.statusText,
-        ok: response.ok 
-      })
-      
-      if (response.ok) {
-        const userData = await response.json()
-        console.log('🔑 Kling user data:', userData)
-        setUserInfo(userData)
-        setApiKeyValid(true)
-        toast({
-          title: "API Key Valid",
-          description: `Connected to Kling as ${userData.email || 'User'}`,
-        })
-      } else {
-        const errorText = await response.text()
-        console.log('🔑 Kling API validation error:', errorText)
-        setApiKeyValid(false)
-        setUserInfo(null)
-        toast({
-          title: "Invalid API Key",
-          description: `API Error: ${response.status} - ${errorText}`,
-          variant: "destructive",
-        })
-      }
-    } catch (error) {
-      console.error('🔑 Kling API validation error:', error)
-      setApiKeyValid(false)
-      setUserInfo(null)
-      toast({
-        title: "Connection Error",
-        description: `Failed to validate API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        variant: "destructive",
-      })
-    }
-  }
-  
-  const saveApiKey = async () => {
+  }, [userId])
+
+  useEffect(() => {
+    if (ready && userId) void loadKeys()
+  }, [ready, userId, loadKeys])
+
+  const saveKeys = async () => {
     if (!userId) return
-    
+    setIsSavingKeys(true)
     try {
-      const updateData: any = {}
-      if (apiKey) updateData.kling_api_key = apiKey
-      if (secretKey) updateData.kling_secret_key = secretKey
-      
       const { error } = await getSupabaseClient()
-        .from('users')
-        .update(updateData)
-        .eq('id', userId)
-      
-      if (error) throw error
-      
-      // Try to validate with the secret key first, then access key
-      const keyToValidate = secretKey || apiKey
-      if (keyToValidate) {
-        await validateApiKey(keyToValidate)
-      }
-      
-      toast({
-        title: "API Keys Saved",
-        description: "Kling API keys saved successfully",
-      })
-    } catch (error) {
-      toast({
-        title: "Save Failed",
-        description: "Failed to save API keys",
-        variant: "destructive",
-      })
-    }
-  }
-  
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setImageFile(file)
-      const reader = new FileReader()
-      reader.onload = (e) => setImagePreview(e.target?.result as string)
-      reader.readAsDataURL(file)
-    }
-  }
-  
-  const handleFrameUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setFrameFile(file)
-      const reader = new FileReader()
-      reader.onload = (e) => setFramePreview(e.target?.result as string)
-      reader.readAsDataURL(file)
-    }
-  }
-  
-  const generateTextToVideo = async () => {
-    if (!apiKey || !textPrompt.trim()) {
-      console.log('❌ Cannot generate video:', { hasApiKey: !!apiKey, hasPrompt: !!textPrompt.trim() })
-      return
-    }
-    
-    console.log('🎬 Starting text-to-video generation...', {
-      prompt: textPrompt,
-      duration: textDuration,
-      model: textModel,
-      apiKeyLength: apiKey.length
-    })
-    
-    setLoading(true)
-    try {
-      const requestBody = {
-        prompt: textPrompt,
-        duration: parseInt(textDuration),
-        model: textModel,
-        type: 'text_to_video'
-      }
-      
-      console.log('🎬 Making request to server-side API...', requestBody)
-      
-      const response = await fetch(`/api/ai/generate-kling-video?t=${Date.now()}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      })
-      
-      console.log('🎬 Server response received:', {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok
-      })
-      
-      if (!response.ok) {
-        const error = await response.json()
-        console.error('🎬 Server API Error:', error)
-        throw new Error(`Server API Error (${response.status}): ${error.error || 'Unknown error'}`)
-      }
-      
-      const result = await response.json()
-      console.log('🎬 Generation result:', result)
-      
-      const newGeneration: KlingGeneration = {
-        id: result.data?.id || Date.now().toString(),
-        prompt: textPrompt,
-        type: 'text_to_video',
-        status: 'processing',
-        created_at: new Date().toISOString(),
-        duration: parseInt(textDuration),
-        model: textModel,
-      }
-      
-      setGenerations(prev => [newGeneration, ...prev])
-      
-      // Poll for completion
-      pollGenerationStatus(result.data?.id || newGeneration.id)
-      
-      toast({
-        title: "Video Generation Started",
-        description: `Using endpoint: ${result.endpoint}. Your video is being generated.`,
-      })
-      
-    } catch (error) {
-      console.error('🎬 Generation error:', error)
-      toast({
-        title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-  
-  const generateImageToVideo = async () => {
-    if (!apiKey || !imageFile || !imagePrompt.trim()) return
-    
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image', imageFile)
-      formData.append('prompt', imagePrompt)
-      formData.append('duration', imageDuration)
-      formData.append('model', imageModel)
-      
-      const response = await fetch('https://api.klingai.com/v1/image_to_video', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: formData,
-      })
-      
-      if (!response.ok) {
-        const error = await response.text()
-        throw new Error(`API Error: ${error}`)
-      }
-      
-      const result = await response.json()
-      
-      const newGeneration: KlingGeneration = {
-        id: result.id || Date.now().toString(),
-        prompt: imagePrompt,
-        type: 'image_to_video',
-        status: 'processing',
-        created_at: new Date().toISOString(),
-        duration: parseInt(imageDuration),
-        model: imageModel,
-      }
-      
-      setGenerations(prev => [newGeneration, ...prev])
-      
-      // Poll for completion
-      pollGenerationStatus(result.id || newGeneration.id)
-      
-      toast({
-        title: "Video Generation Started",
-        description: "Your image-to-video is being generated. This may take a few minutes.",
-      })
-      
-    } catch (error) {
-      toast({
-        title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-  
-  const generateFrameToFrame = async () => {
-    if (!apiKey || !frameFile || !framePrompt.trim()) return
-    
-    setLoading(true)
-    try {
-      const formData = new FormData()
-      formData.append('image', frameFile)
-      formData.append('prompt', framePrompt)
-      formData.append('duration', frameDuration)
-      formData.append('model', frameModel)
-      
-      const response = await fetch('https://api.klingai.com/v1/frame_to_frame', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: formData,
-      })
-      
-      if (!response.ok) {
-        const error = await response.text()
-        throw new Error(`API Error: ${error}`)
-      }
-      
-      const result = await response.json()
-      
-      const newGeneration: KlingGeneration = {
-        id: result.id || Date.now().toString(),
-        prompt: framePrompt,
-        type: 'frame_to_frame',
-        status: 'processing',
-        created_at: new Date().toISOString(),
-        duration: parseInt(frameDuration),
-        model: frameModel,
-      }
-      
-      setGenerations(prev => [newGeneration, ...prev])
-      
-      // Poll for completion
-      pollGenerationStatus(result.id || newGeneration.id)
-      
-      toast({
-        title: "Frame-to-Frame Generation Started",
-        description: "Your frame-to-frame video is being generated. This may take a few minutes.",
-      })
-      
-    } catch (error) {
-      toast({
-        title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
-  
-  const pollGenerationStatus = async (generationId: string) => {
-    const maxAttempts = 60 // 5 minutes max
-    let attempts = 0
-    
-    const poll = async () => {
-      try {
-        const response = await fetch(`https://api.klingai.com/v1/generations/${generationId}`, {
-          headers: { 'Authorization': `Bearer ${apiKey}` },
+        .from("users")
+        .update({
+          kling_api_key: accessKey.trim() || null,
+          kling_secret_key: secretKey.trim() || null,
         })
-        
-        if (response.ok) {
-          const result = await response.json()
-          
-          setGenerations(prev => prev.map(gen => 
-            gen.id === generationId 
-              ? {
-                  ...gen,
-                  status: result.status === 'completed' ? 'completed' : 
-                         result.status === 'failed' ? 'failed' : 'processing',
-                  video_url: result.video_url,
-                  thumbnail_url: result.thumbnail_url,
-                }
-              : gen
-          ))
-          
-          if (result.status === 'completed' || result.status === 'failed') {
-            return
-          }
-        }
-        
-        attempts++
-        if (attempts < maxAttempts) {
-          setTimeout(poll, 5000) // Poll every 5 seconds
-        }
-      } catch (error) {
-        console.error('Error polling generation status:', error)
-      }
+        .eq("id", userId)
+      if (error) throw error
+      toast({ title: "Keys saved", description: "Kling access + secret keys saved to your profile." })
+    } catch (error) {
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Could not save keys",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingKeys(false)
     }
-    
-    setTimeout(poll, 5000) // Start polling after 5 seconds
   }
-  
-  const downloadVideo = (url: string, filename: string) => {
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-  }
-  
-  const testApiConnection = async () => {
-    if (!apiKey) {
-      console.log('❌ No API key provided for test')
-      return
-    }
-    
-    console.log('🧪 Testing Kling API connection via server...', { apiKeyLength: apiKey.length })
-    setTesting(true)
-    
+
+  const testServerConnection = async () => {
+    setIsTestingKeys(true)
+    setServerReady(null)
     try {
-      console.log('🧪 Testing server-side Kling API route...')
-      const response = await fetch('/api/ai/generate-kling-video', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prompt: "test video generation",
-          duration: 3,
-          model: "kling-v1",
-          type: 'text_to_video'
-        }),
-      })
-      
-      console.log('🧪 Server response:', {
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok
-      })
-      
-      if (response.ok) {
-        const result = await response.json()
-        console.log('🧪 Server test result:', result)
+      const result = await KlingService.testApiConnection("")
+      if (result.success) {
+        setServerReady(true)
         toast({
-          title: "API Test Successful",
-          description: `Kling API is working via server. Endpoint: ${result.endpoint}`,
+          title: "Server connection OK",
+          description: "Kling API accepted a test request via /api/kling/generate.",
         })
       } else {
-        const error = await response.json()
-        console.error('🧪 Server test error:', error)
+        setServerReady(false)
         toast({
-          title: "API Test Failed",
-          description: `Error (${response.status}): ${error.error || 'Unknown error'}`,
+          title: "Connection failed",
+          description: result.error || `HTTP ${result.status ?? "error"}`,
           variant: "destructive",
         })
       }
     } catch (error) {
-      console.error('🧪 API test error:', error)
+      setServerReady(false)
       toast({
-        title: "API Test Failed",
-        description: error instanceof Error ? error.message : "Connection error",
+        title: "Connection failed",
+        description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       })
     } finally {
-      setTesting(false)
+      setIsTestingKeys(false)
     }
   }
-  
+
+  const updateJob = (id: string, patch: Partial<KlingJob>) => {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)))
+  }
+
+  const pollJob = async (jobId: string, taskId: string, mode: KlingApiMode) => {
+    try {
+      const { url } = await KlingService.pollTaskUntilComplete(taskId, mode, {
+        maxAttempts: 120,
+        intervalMs: 5000,
+        onProgress: (attempt) => {
+          updateJob(jobId, { pollAttempt: attempt, status: "processing" })
+        },
+      })
+      updateJob(jobId, { status: "completed", videoUrl: url })
+      toast({ title: "Video ready", description: "Kling generation completed." })
+    } catch (error) {
+      updateJob(jobId, {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Polling failed",
+      })
+      toast({
+        title: "Generation failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleGenerate = async () => {
+    if (!prompt.trim()) {
+      toast({ title: "Enter a prompt", variant: "destructive" })
+      return
+    }
+    if (!modelConfig) {
+      toast({ title: "Invalid model", variant: "destructive" })
+      return
+    }
+    if (modelConfig.needsStartEnd && (!startFrame || !endFrame)) {
+      toast({
+        title: "Start and end frames required",
+        description: `${uiModel} needs both a first and last frame image.`,
+        variant: "destructive",
+      })
+      return
+    }
+    if (modelConfig.needsImage && !modelConfig.needsStartEnd && !imageFile) {
+      toast({
+        title: "Image required",
+        description: `${uiModel} needs a reference image.`,
+        variant: "destructive",
+      })
+      return
+    }
+
+    const jobId = crypto.randomUUID()
+    const job: KlingJob = {
+      id: jobId,
+      uiModel,
+      prompt: prompt.trim(),
+      status: "processing",
+      duration,
+      ratio,
+      sound: nativeAudio,
+      createdAt: Date.now(),
+      mode: modelConfig.apiMode,
+    }
+    setJobs((prev) => [job, ...prev])
+    setIsGenerating(true)
+
+    try {
+      const response = await KlingService.generateVideo({
+        prompt: prompt.trim(),
+        model: uiModel,
+        duration: String(duration),
+        resolution: ratioToResolution(ratio),
+        klingNativeAudio: nativeAudio,
+        file: imageFile || undefined,
+        startFrame: startFrame || undefined,
+        endFrame: endFrame || undefined,
+      })
+
+      if (!response.success || !response.data) {
+        throw new Error(response.error || "Generation failed")
+      }
+
+      const url = (response.data.url || response.data.video_url) as string | undefined
+      const taskId = response.data.taskId as string | undefined
+      const mode = (response.data.mode || modelConfig.apiMode) as KlingApiMode
+
+      if (url) {
+        updateJob(jobId, { status: "completed", videoUrl: url, taskId, mode })
+        toast({ title: "Video ready", description: "Completed during server poll." })
+        return
+      }
+
+      if (taskId) {
+        updateJob(jobId, { taskId, mode })
+        toast({
+          title: "Job submitted",
+          description: `Task ${taskId.slice(0, 12)}… — polling for result.`,
+        })
+        void pollJob(jobId, taskId, mode)
+        return
+      }
+
+      throw new Error("No video URL or task ID returned")
+    } catch (error) {
+      updateJob(jobId, {
+        status: "failed",
+        error: error instanceof Error ? error.message : "Generation failed",
+      })
+      toast({
+        title: "Generation failed",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGenerating(false)
+    }
+  }
+
   if (!ready) {
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <main className="container mx-auto max-w-6xl px-6 py-8">
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            <span className="ml-2 text-muted-foreground">Loading...</span>
-          </div>
+        <main className="container mx-auto max-w-5xl px-6 py-12 flex items-center justify-center gap-2 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Loading…
         </main>
       </div>
     )
   }
-  
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      
-      <main className="container mx-auto max-w-6xl px-6 py-8">
-        {/* Page Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-purple-500/10 rounded-lg">
-              <TestTube className="h-6 w-6 text-purple-500" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">
-                Kling API Testing
-              </h1>
-              <p className="text-muted-foreground">
-                Test all Kling video generation features including frame-to-frame
-              </p>
-            </div>
+      <main className="container mx-auto max-w-5xl px-6 py-8 space-y-6">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">Kling AI Test</h1>
+            <p className="text-muted-foreground mt-1 max-w-2xl">
+              Test Kling 3.0 and Omni video generation — text-to-video, image-to-video, start/end frames, native
+              audio, and up to 15s clips. Uses the same{" "}
+              <code className="text-xs bg-muted px-1 py-0.5 rounded">/api/kling</code> routes as Cinema Production.
+            </p>
           </div>
-          
-          {userInfo && (
-            <Alert className="mb-6">
-              <CheckCircle className="h-4 w-4" />
-              <AlertDescription>
-                Connected as <strong>{userInfo.email}</strong> • 
-                Credits: <strong>{userInfo.credits}</strong> • 
-                Plan: <strong>{userInfo.subscription}</strong>
-              </AlertDescription>
-            </Alert>
-          )}
+          <Button variant="outline" size="sm" asChild className="shrink-0">
+            <Link href="/setup-ai">
+              <KeyRound className="h-4 w-4 mr-2" />
+              Setup AI
+            </Link>
+          </Button>
         </div>
-        
-        {/* API Key Setup */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Settings className="h-5 w-5" />
-              API Key Configuration
-            </CardTitle>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Supported models</CardTitle>
+            <CardDescription>Kling 3.0 (Singapore API) — all modes available in Cinema Production</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-4">
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <Input
-                    type={showApiKey ? "text" : "password"}
-                    placeholder="Enter your Kling Access Key"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowApiKey(!showApiKey)}
-                  >
-                    {showApiKey ? "Hide" : "Show"}
-                  </Button>
-                </div>
-                
-                <div className="flex gap-2">
-                  <Input
-                    type={showSecretKey ? "text" : "password"}
-                    placeholder="Enter your Kling Secret Key"
-                    value={secretKey}
-                    onChange={(e) => setSecretKey(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowSecretKey(!showSecretKey)}
-                  >
-                    {showSecretKey ? "Hide" : "Show"}
-                  </Button>
-                </div>
-                
-                <div className="flex gap-2">
-                  <Button
-                    onClick={saveApiKey}
-                    disabled={!apiKey.trim() && !secretKey.trim()}
-                    className="flex-1"
-                  >
-                    Save Keys
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={testApiConnection}
-                    disabled={(!apiKey && !secretKey) || testing}
-                  >
-                    {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : "Test API"}
-                  </Button>
-                </div>
-              </div>
-              
-              <div className="flex gap-2">
-                <Label htmlFor="api-base-url" className="flex items-center">API Base URL:</Label>
-                <Input
-                  id="api-base-url"
-                  type="text"
-                  placeholder="https://api.klingai.com"
-                  value={apiBaseUrl}
-                  onChange={(e) => setApiBaseUrl(e.target.value)}
-                  className="flex-1"
-                />
-              </div>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {KLING_3_UI_MODELS.map((model) => {
+                const cfg = getKlingModelConfig(model)
+                return (
+                  <Badge key={model} variant={model === uiModel ? "default" : "secondary"} className="text-xs">
+                    {model}
+                    {cfg?.needsStartEnd ? " · frames" : cfg?.needsImage ? " · image" : " · text"}
+                    {isKlingOmniModel(model) ? " · omni" : ""}
+                  </Badge>
+                )
+              })}
             </div>
-            
-            {apiKeyValid && (
-              <div className="flex items-center gap-2 text-green-600">
-                <CheckCircle className="h-4 w-4" />
-                <span className="text-sm">API Key is valid and ready to use</span>
-              </div>
-            )}
           </CardContent>
         </Card>
-        
-        {/* Generation Tabs */}
-        <Tabs defaultValue="text-to-video" className="w-full">
-          <TabsList className="grid w-full grid-cols-3 mb-8 bg-muted/50 p-1 rounded-lg">
-            <TabsTrigger 
-              value="text-to-video"
-              className="kling-tab-trigger"
-            >
-              Text to Video
-            </TabsTrigger>
-            <TabsTrigger 
-              value="image-to-video"
-              className="kling-tab-trigger"
-            >
-              Image to Video
-            </TabsTrigger>
-            <TabsTrigger 
-              value="frame-to-frame"
-              className="kling-tab-trigger"
-            >
-              Frame to Frame
+
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="install">Install &amp; Keys</TabsTrigger>
+            <TabsTrigger value="generate">Generate</TabsTrigger>
+            <TabsTrigger value="results">
+              Results
+              {jobs.length > 0 && (
+                <Badge variant="secondary" className="ml-2 text-[10px] px-1.5">
+                  {jobs.length}
+                </Badge>
+              )}
             </TabsTrigger>
           </TabsList>
-          
-          {/* Text to Video */}
-          <TabsContent value="text-to-video" className="space-y-6">
+
+          <TabsContent value="install" className="space-y-4 mt-4">
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                <strong>Server credentials:</strong> <code>/api/kling/generate</code> signs requests with{" "}
+                <code>KLING_ACCESS_KEY</code> + <code>KLING_SECRET_KEY</code> from your server{" "}
+                <code>.env</code>. Save profile keys below for reference — they are used by some legacy routes but
+                generation on this page goes through the server env pair (same as Cinema Production).
+              </AlertDescription>
+            </Alert>
+
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Video className="h-5 w-5" />
-                  Text to Video Generation
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <KeyRound className="h-5 w-5" />
+                  API keys
                 </CardTitle>
                 <CardDescription>
-                  Generate videos from text prompts using Kling AI
+                  Get keys from{" "}
+                  <a
+                    href="https://klingai.com/global/dev"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2"
+                  >
+                    klingai.com/global/dev
+                  </a>{" "}
+                  — you need both Access Key and Secret Key.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="text-prompt">Video Prompt</Label>
-                  <Textarea
-                    id="text-prompt"
-                    placeholder="Describe the video you want to generate..."
-                    value={textPrompt}
-                    onChange={(e) => setTextPrompt(e.target.value)}
-                    rows={4}
-                  />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="text-duration">Duration (seconds)</Label>
-                    <Select value={textDuration} onValueChange={setTextDuration}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3">3 seconds</SelectItem>
-                        <SelectItem value="5">5 seconds</SelectItem>
-                        <SelectItem value="10">10 seconds</SelectItem>
-                        <SelectItem value="15">15 seconds</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="text-model">Model</Label>
-                    <Select value={textModel} onValueChange={setTextModel}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="kling-v1">Kling V1</SelectItem>
-                        <SelectItem value="kling-v2">Kling V2</SelectItem>
-                      </SelectContent>
-                    </Select>
+                  <Label>Access Key</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type={showAccessKey ? "text" : "password"}
+                      value={accessKey}
+                      onChange={(e) => setAccessKey(e.target.value)}
+                      placeholder="ak_…"
+                      className="font-mono text-sm"
+                    />
+                    <Button type="button" variant="outline" size="icon" onClick={() => setShowAccessKey((v) => !v)}>
+                      {showAccessKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
                   </div>
                 </div>
-                
-                <Button
-                  onClick={generateTextToVideo}
-                  disabled={!apiKey || !textPrompt.trim() || loading}
-                  className="w-full"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-                  Generate Video
-                </Button>
-                
-                {/* Debug info */}
-                <div className="text-xs text-muted-foreground mt-2 space-y-1">
-                  <div>Debug: API Key: {apiKey ? `Present (${apiKey.length} chars)` : 'Missing'}</div>
-                  <div>Prompt: {textPrompt ? `Present (${textPrompt.length} chars)` : 'Missing'}</div>
-                  <div>Loading: {loading ? 'Yes' : 'No'} | API Valid: {apiKeyValid ? 'Yes' : 'No'}</div>
-                  <div>Duration: {textDuration}s | Model: {textModel}</div>
-                  <div>Button Disabled: {(!apiKey || !textPrompt.trim() || loading) ? 'Yes' : 'No'}</div>
+                <div className="space-y-2">
+                  <Label>Secret Key</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type={showSecretKey ? "text" : "password"}
+                      value={secretKey}
+                      onChange={(e) => setSecretKey(e.target.value)}
+                      placeholder="sk_…"
+                      className="font-mono text-sm"
+                    />
+                    <Button type="button" variant="outline" size="icon" onClick={() => setShowSecretKey((v) => !v)}>
+                      {showSecretKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                  </div>
                 </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={() => void saveKeys()} disabled={isSavingKeys || !userId}>
+                    {isSavingKeys ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                    Save to profile
+                  </Button>
+                  <Button variant="outline" onClick={() => void testServerConnection()} disabled={isTestingKeys}>
+                    {isTestingKeys ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="h-4 w-4 mr-2" />
+                    )}
+                    Test server connection
+                  </Button>
+                </div>
+                {serverReady === true && (
+                  <p className="text-sm text-green-600 flex items-center gap-1.5">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Server can reach Kling API
+                  </p>
+                )}
+                {serverReady === false && (
+                  <p className="text-sm text-destructive">
+                    Server test failed — confirm <code>KLING_ACCESS_KEY</code> and <code>KLING_SECRET_KEY</code> are in{" "}
+                    <code>.env</code> and restart the dev server.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">API endpoints used</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground space-y-1 font-mono">
+                <p>POST https://api-singapore.klingai.com/v1/videos/text2video</p>
+                <p>POST https://api-singapore.klingai.com/v1/videos/image2video</p>
+                <p>POST https://api-singapore.klingai.com/v1/videos/omni-video</p>
+                <p className="text-xs pt-2 font-sans">
+                  Models: <code>kling-v3</code> (standard) · <code>kling-v3-omni</code> (Omni) · mode: pro · duration
+                  3–15s
+                </p>
               </CardContent>
             </Card>
           </TabsContent>
-          
-          {/* Image to Video */}
-          <TabsContent value="image-to-video" className="space-y-6">
+
+          <TabsContent value="generate" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <ImageIcon className="h-5 w-5" />
-                  Image to Video Generation
+                  <Sparkles className="h-5 w-5" />
+                  Generate video
                 </CardTitle>
                 <CardDescription>
-                  Generate videos from uploaded images using Kling AI
+                  Pick a model — the form adapts for text, image, or start/end frame inputs.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="image-upload">Upload Image</Label>
-                  <Input
-                    id="image-upload"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                  />
-                  {imagePreview && (
-                    <div className="mt-2">
-                      <img
-                        src={imagePreview}
-                        alt="Preview"
-                        className="w-32 h-32 object-cover rounded-lg border"
-                      />
-                    </div>
+                  <Label>Model</Label>
+                  <Select value={uiModel} onValueChange={(v) => setUiModel(v as Kling3UiModel)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {KLING_3_UI_MODELS.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {modelConfig && (
+                    <p className="text-xs text-muted-foreground">
+                      API: {modelConfig.apiMode} · {modelConfig.modelName}
+                      {modelConfig.needsStartEnd
+                        ? " · requires start + end frame images"
+                        : modelConfig.needsImage
+                          ? " · requires one reference image"
+                          : " · text prompt only"}
+                    </p>
                   )}
                 </div>
-                
+
                 <div className="space-y-2">
-                  <Label htmlFor="image-prompt">Video Prompt</Label>
+                  <Label>Prompt</Label>
                   <Textarea
-                    id="image-prompt"
-                    placeholder="Describe how the image should move and transform..."
-                    value={imagePrompt}
-                    onChange={(e) => setImagePrompt(e.target.value)}
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
                     rows={3}
+                    placeholder="Describe the motion, camera, and scene…"
                   />
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4">
+
+                {modelConfig?.needsImage && !modelConfig.needsStartEnd && (
                   <div className="space-y-2">
-                    <Label htmlFor="image-duration">Duration (seconds)</Label>
-                    <Select value={imageDuration} onValueChange={setImageDuration}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3">3 seconds</SelectItem>
-                        <SelectItem value="5">5 seconds</SelectItem>
-                        <SelectItem value="10">10 seconds</SelectItem>
-                        <SelectItem value="15">15 seconds</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>Reference image</Label>
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => setImageFile(e.target.files?.[0] || null)}
+                    />
+                    {imagePreview && (
+                      <img src={imagePreview} alt="Reference" className="h-32 w-auto rounded-md border object-cover" />
+                    )}
                   </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="image-model">Model</Label>
-                    <Select value={imageModel} onValueChange={setImageModel}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="kling-v1">Kling V1</SelectItem>
-                        <SelectItem value="kling-v2">Kling V2</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                
-                <Button
-                  onClick={generateImageToVideo}
-                  disabled={!apiKeyValid || !imageFile || !imagePrompt.trim() || loading}
-                  className="w-full"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-                  Generate Video from Image
-                </Button>
-              </CardContent>
-            </Card>
-          </TabsContent>
-          
-          {/* Frame to Frame */}
-          <TabsContent value="frame-to-frame" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileVideo className="h-5 w-5" />
-                  Frame to Frame Video Generation
-                </CardTitle>
-                <CardDescription>
-                  Generate videos that start and end with specific frames using Kling AI
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="frame-upload">Upload Starting Frame</Label>
-                  <Input
-                    id="frame-upload"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFrameUpload}
-                  />
-                  {framePreview && (
-                    <div className="mt-2">
-                      <img
-                        src={framePreview}
-                        alt="Frame Preview"
-                        className="w-32 h-32 object-cover rounded-lg border"
+                )}
+
+                {modelConfig?.needsStartEnd && (
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Start frame</Label>
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setStartFrame(e.target.files?.[0] || null)}
                       />
+                      {startPreview && (
+                        <img src={startPreview} alt="Start" className="h-28 w-full rounded-md border object-cover" />
+                      )}
                     </div>
+                    <div className="space-y-2">
+                      <Label>End frame</Label>
+                      <Input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setEndFrame(e.target.files?.[0] || null)}
+                      />
+                      {endPreview && (
+                        <img src={endPreview} alt="End" className="h-28 w-full rounded-md border object-cover" />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid sm:grid-cols-3 gap-3">
+                  <div className="space-y-2">
+                    <Label>Duration</Label>
+                    <Select value={String(duration)} onValueChange={(v) => setDuration(parseInt(v, 10))}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {KLING_V3_DURATIONS.map((d) => (
+                          <SelectItem key={d} value={String(d)}>
+                            {d}s
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Aspect ratio</Label>
+                    <Select value={ratio} onValueChange={(v) => setRatio(v as AspectRatio)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ASPECT_RATIOS.map((r) => (
+                          <SelectItem key={r.value} value={r.value}>
+                            {r.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Native audio</Label>
+                    <Button
+                      type="button"
+                      variant={nativeAudio ? "default" : "outline"}
+                      className="w-full justify-start gap-2"
+                      onClick={() => setNativeAudio((v) => !v)}
+                    >
+                      <Volume2 className="h-4 w-4" />
+                      {nativeAudio ? "Sound on" : "Sound off"}
+                    </Button>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <Button className="w-full" onClick={() => void handleGenerate()} disabled={isGenerating}>
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Submitting…
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-4 w-4 mr-2" />
+                      Generate with {uiModel}
+                    </>
                   )}
-                </div>
-                
-                <div className="space-y-2">
-                  <Label htmlFor="frame-prompt">Video Prompt</Label>
-                  <Textarea
-                    id="frame-prompt"
-                    placeholder="Describe how the video should start from this frame and end with another frame..."
-                    value={framePrompt}
-                    onChange={(e) => setFramePrompt(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="frame-duration">Duration (seconds)</Label>
-                    <Select value={frameDuration} onValueChange={setFrameDuration}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="3">3 seconds</SelectItem>
-                        <SelectItem value="5">5 seconds</SelectItem>
-                        <SelectItem value="10">10 seconds</SelectItem>
-                        <SelectItem value="15">15 seconds</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="frame-model">Model</Label>
-                    <Select value={frameModel} onValueChange={setFrameModel}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="kling-v1">Kling V1</SelectItem>
-                        <SelectItem value="kling-v2">Kling V2</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                
-                <Button
-                  onClick={generateFrameToFrame}
-                  disabled={!apiKeyValid || !frameFile || !framePrompt.trim() || loading}
-                  className="w-full"
-                >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-                  Generate Frame-to-Frame Video
                 </Button>
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
-        
-        {/* Generated Videos */}
-        {generations.length > 0 && (
-          <Card className="mt-8">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Video className="h-5 w-5" />
-                Generated Videos
-              </CardTitle>
-              <CardDescription>
-                Your video generations will appear here
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {generations.map((generation) => (
-                  <div key={generation.id} className="p-4 border border-border rounded-lg">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{generation.type.replace('_', ' ').toUpperCase()}</Badge>
-                        <Badge 
-                          variant={generation.status === 'completed' ? 'default' : 
-                                  generation.status === 'failed' ? 'destructive' : 'secondary'}
-                        >
-                          {generation.status}
+
+          <TabsContent value="results" className="space-y-4 mt-4">
+            {jobs.length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <Film className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                  <p>No generations yet. Run a test from the Generate tab.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              jobs.map((job) => (
+                <Card key={job.id}>
+                  <CardHeader className="pb-2">
+                    <div className="flex flex-wrap items-center gap-2 justify-between">
+                      <CardTitle className="text-sm font-medium line-clamp-1">{job.prompt}</CardTitle>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge variant="outline" className="text-[10px]">
+                          {job.uiModel}
                         </Badge>
-                        {generation.duration && (
-                          <Badge variant="outline">
-                            <Clock className="h-3 w-3 mr-1" />
-                            {generation.duration}s
+                        <Badge
+                          variant={
+                            job.status === "completed"
+                              ? "default"
+                              : job.status === "failed"
+                                ? "destructive"
+                                : "secondary"
+                          }
+                          className="text-[10px]"
+                        >
+                          {job.status}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          <Clock className="h-3 w-3 mr-0.5" />
+                          {job.duration}s
+                        </Badge>
+                        {job.sound && (
+                          <Badge variant="outline" className="text-[10px]">
+                            <Volume2 className="h-3 w-3 mr-0.5" />
+                            audio
                           </Badge>
                         )}
                       </div>
-                      <div className="text-sm text-muted-foreground">
-                        {new Date(generation.created_at).toLocaleString()}
-                      </div>
                     </div>
-                    
-                    <p className="text-sm mb-3">{generation.prompt}</p>
-                    
-                    {generation.status === 'completed' && generation.video_url && (
-                      <div className="space-y-2">
-                        <video
-                          src={generation.video_url}
-                          controls
-                          className="w-full max-w-md rounded-lg"
-                        />
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            onClick={() => downloadVideo(generation.video_url!, `kling-video-${generation.id}.mp4`)}
-                          >
-                            <Download className="h-4 w-4 mr-2" />
-                            Download
+                    <CardDescription className="text-xs">
+                      {new Date(job.createdAt).toLocaleString()}
+                      {job.taskId ? ` · task ${job.taskId.slice(0, 16)}…` : ""}
+                      {job.pollAttempt ? ` · poll ${job.pollAttempt}/120` : ""}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {job.status === "processing" && (
+                      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Generating — Kling jobs often take 2–10 minutes.
+                      </div>
+                    )}
+                    {job.status === "failed" && job.error && (
+                      <p className="text-sm text-destructive">{job.error}</p>
+                    )}
+                    {job.status === "completed" && job.videoUrl && (
+                      <>
+                        <video src={job.videoUrl} controls className="w-full max-w-lg rounded-lg border" />
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="sm" variant="outline" asChild>
+                            <a href={job.videoUrl} download={`kling-${job.id}.mp4`}>
+                              <Download className="h-4 w-4 mr-2" />
+                              Download
+                            </a>
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => window.open(generation.video_url, '_blank')}
-                          >
-                            <Play className="h-4 w-4 mr-2" />
-                            Open in New Tab
+                          <Button size="sm" variant="outline" asChild>
+                            <a href={job.videoUrl} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-4 w-4 mr-2" />
+                              Open
+                            </a>
                           </Button>
                         </div>
-                      </div>
+                      </>
                     )}
-                    
-                    {generation.status === 'processing' && (
-                      <div className="flex items-center gap-2 text-blue-600">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span className="text-sm">Generating video... This may take a few minutes.</span>
-                      </div>
-                    )}
-                    
-                    {generation.status === 'failed' && (
-                      <div className="flex items-center gap-2 text-red-600">
-                        <AlertCircle className="h-4 w-4" />
-                        <span className="text-sm">Video generation failed. Please try again.</span>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   )

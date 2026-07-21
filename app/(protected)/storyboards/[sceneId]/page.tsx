@@ -27,7 +27,7 @@ import {
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
 } from "@/lib/image-model-utils"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -103,6 +103,34 @@ function parseScriptSelection(text: string): { dialogue?: string; action?: strin
     dialogue: dialogueLines.length > 0 ? dialogueLines.join('\n') : undefined,
     action: actionLines.length > 0 ? actionLines.join('\n') : undefined,
   }
+}
+
+/** Build an image prompt from storyboard shot fields for one-click generation */
+function buildQuickShotImagePrompt(storyboard: Storyboard): string {
+  const actionText =
+    storyboard.action?.trim() &&
+    storyboard.action.trim() !== storyboard.description?.trim()
+      ? storyboard.action.trim()
+      : null
+
+  const parts = [
+    storyboard.title?.trim() ? `Shot: ${storyboard.title.trim()}` : null,
+    storyboard.shot_type ? `${storyboard.shot_type} shot` : null,
+    storyboard.camera_angle ? `${storyboard.camera_angle} angle` : null,
+    storyboard.movement && storyboard.movement !== "static"
+      ? `${storyboard.movement} camera`
+      : null,
+    storyboard.description?.trim() || null,
+    actionText ? `Action: ${actionText}` : null,
+    storyboard.visual_notes?.trim()
+      ? `Visual notes: ${storyboard.visual_notes.trim()}`
+      : null,
+    storyboard.dialogue?.trim()
+      ? `Dialogue context: ${storyboard.dialogue.trim()}`
+      : null,
+  ].filter(Boolean)
+
+  return parts.join(", ")
 }
 
 export default function SceneStoryboardsPage() {
@@ -292,6 +320,7 @@ export default function SceneStoryboardsPage() {
   const [aiImagePrompt, setAiImagePrompt] = useState("")
   const [aiImagePromptFull, setAiImagePromptFull] = useState("") // Store the actual full prompt text
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
+  const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
   const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
@@ -2283,8 +2312,39 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  const quickGenerateShotImage = async (storyboard: Storyboard) => {
+    const prompt = buildQuickShotImagePrompt(storyboard)
+    if (!prompt.trim()) {
+      toast({
+        title: "No shot details",
+        description: "Add a description, action, or shot details before generating.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    await generateShotImage(storyboard.id, prompt, {
+      quick: true,
+      includeCharacterDetails: Boolean(storyboard.character_id),
+      includeMasterPrompt: Boolean(storyboard.character_id),
+    })
+  }
+
   // Function to generate AI image for a storyboard shot
-  const generateShotImage = async (storyboardId: string, prompt: string) => {
+  const generateShotImage = async (
+    storyboardId: string,
+    prompt: string,
+    options?: {
+      quick?: boolean
+      includeCharacterDetails?: boolean
+      includeMasterPrompt?: boolean
+    },
+  ) => {
+    const isQuick = options?.quick ?? false
+    const useCharacterDetails =
+      options?.includeCharacterDetails ?? includeCharacterDetails
+    const useMasterPrompt = options?.includeMasterPrompt ?? includeMasterPrompt
+
     if (!prompt.trim() || !userId) {
       toast({
         title: "Missing Information",
@@ -2295,7 +2355,11 @@ export default function SceneStoryboardsPage() {
     }
 
     try {
-      setIsGeneratingShotImage(true)
+      if (isQuick) {
+        setQuickGeneratingShotIds((prev) => new Set(prev).add(storyboardId))
+      } else {
+        setIsGeneratingShotImage(true)
+      }
       
       // Get the AI settings for images tab
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
@@ -2340,7 +2404,7 @@ export default function SceneStoryboardsPage() {
       let characterDetailsText = ""
       let masterPromptText = ""
       const storyboard = storyboards.find(sb => sb.id === storyboardId)
-      if (includeCharacterDetails && storyboard?.character_id) {
+      if (useCharacterDetails && storyboard?.character_id) {
         const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
         if (selectedCharacter) {
           const characterDetails = [
@@ -2367,7 +2431,7 @@ export default function SceneStoryboardsPage() {
       }
       
       // Get master prompt if option is enabled and character has one
-      if (includeMasterPrompt && storyboard?.character_id) {
+      if (useMasterPrompt && storyboard?.character_id) {
         const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
         if (selectedCharacter?.master_prompt) {
           masterPromptText = ` Master prompt: ${selectedCharacter.master_prompt}.`
@@ -2486,13 +2550,15 @@ export default function SceneStoryboardsPage() {
             : "AI image has been generated and added to the storyboard shot.",
         })
 
-        // Clear the prompt
-        setAiImagePrompt("")
-        
-        // Close edit form if it's open
-        if (showEditForm) {
-          setShowEditForm(false)
-          setEditingStoryboard(null)
+        if (!isQuick) {
+          // Clear the prompt
+          setAiImagePrompt("")
+
+          // Close edit form if it's open
+          if (showEditForm) {
+            setShowEditForm(false)
+            setEditingStoryboard(null)
+          }
         }
       } else {
         throw new Error('Failed to generate image')
@@ -2505,7 +2571,15 @@ export default function SceneStoryboardsPage() {
         variant: "destructive"
       })
     } finally {
-      setIsGeneratingShotImage(false)
+      if (isQuick) {
+        setQuickGeneratingShotIds((prev) => {
+          const next = new Set(prev)
+          next.delete(storyboardId)
+          return next
+        })
+      } else {
+        setIsGeneratingShotImage(false)
+      }
     }
   }
 
@@ -2606,7 +2680,18 @@ export default function SceneStoryboardsPage() {
             </span>
           </nav>
           <div className="flex flex-col items-start gap-2 sm:items-end sm:flex-shrink-0">
-            <SceneViewSwitcher sceneId={sceneId} activeView="storyboards" />
+            <div className="flex flex-wrap items-center gap-2">
+              {sceneInfo?.project_id ? (
+                <Button variant="outline" size="sm" asChild className="h-8 text-xs sm:text-sm">
+                  <Link href={`/cinema-production?project=${sceneInfo.project_id}&scene=${sceneId}`}>
+                    <Video className="h-4 w-4 sm:mr-1.5" />
+                    <span className="hidden sm:inline">Cinema Production</span>
+                    <span className="sm:hidden">Production</span>
+                  </Link>
+                </Button>
+              ) : null}
+              <SceneViewSwitcher sceneId={sceneId} activeView="storyboards" />
+            </div>
             <SceneSyncControls
               sceneId={sceneId}
               projectId={sceneInfo?.project_id}
@@ -4448,17 +4533,35 @@ export default function SceneStoryboardsPage() {
                     </div>
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => openLinkImageDialog(storyboard)}
-                    className="flex h-40 sm:h-48 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-muted/30 hover:bg-muted/50 hover:border-primary/40 transition-colors"
-                  >
-                    <Link2 className="h-7 w-7 text-muted-foreground" />
-                    <span className="text-sm font-medium text-muted-foreground">Link existing image</span>
-                    <span className="text-xs text-muted-foreground px-4 text-center">
-                      Browse images from characters, locations, and project assets
-                    </span>
-                  </button>
+                  <div className="flex h-40 sm:h-48 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
+                    {quickGeneratingShotIds.has(storyboard.id) ? (
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-8 w-8 animate-spin text-purple-500" />
+                        <span className="text-sm font-medium">Generating image…</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                          disabled={quickGeneratingShotIds.has(storyboard.id)}
+                          onClick={() => void quickGenerateShotImage(storyboard)}
+                        >
+                          <Zap className="h-4 w-4 mr-2" />
+                          Quick Generate
+                        </Button>
+                        <button
+                          type="button"
+                          onClick={() => openLinkImageDialog(storyboard)}
+                          className="flex flex-col items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <Link2 className="h-5 w-5" />
+                          <span className="text-xs">or link existing image</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
                 
                 <div className="space-y-2">
@@ -4540,12 +4643,28 @@ export default function SceneStoryboardsPage() {
                       <Link2 className="h-4 w-4" />
                     </Button>
 
-                    {/* Quick AI Image Generation Button */}
+                    {/* Quick one-click AI image generation */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
+                      title="Quick generate image from shot details"
+                      disabled={quickGeneratingShotIds.has(storyboard.id)}
+                      onClick={() => void quickGenerateShotImage(storyboard)}
+                    >
+                      {quickGeneratingShotIds.has(storyboard.id) ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
+                    </Button>
+
+                    {/* Open AI generation form with prompt editor */}
                     <Button 
                       variant="ghost" 
                       size="sm" 
                       className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
-                      title="Generate AI Image"
+                      title="Open AI image generator (custom prompt)"
                       onClick={() => {
                         // Set the editing storyboard and show edit form with AI focus
                         closeReferenceEditDialog()
@@ -4570,8 +4689,7 @@ export default function SceneStoryboardsPage() {
                           scene_id: sceneId
                         })
                         // Pre-fill AI prompt with shot details
-                        const autoPrompt = `${storyboard.shot_type} shot, ${storyboard.camera_angle} angle, ${storyboard.movement} camera, ${storyboard.description}`
-                        setAiImagePrompt(autoPrompt)
+                        setAiImagePrompt(buildQuickShotImagePrompt(storyboard))
                         setShowEditForm(true)
                         // Scroll to AI section after form opens
                         setTimeout(() => {

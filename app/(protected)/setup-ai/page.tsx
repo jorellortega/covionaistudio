@@ -41,6 +41,8 @@ export default function SetupAIPage() {
     suno: '',
     leonardo: '',
     hedra: '',
+    heygen: '',
+    mirelo: '',
     stability: '',
   })
   const [showKeys, setShowKeys] = useState({
@@ -54,6 +56,8 @@ export default function SetupAIPage() {
     suno: false,
     leonardo: false,
     hedra: false,
+    heygen: false,
+    mirelo: false,
     stability: false,
   })
 
@@ -65,7 +69,7 @@ export default function SetupAIPage() {
     try {
       const { data, error } = await getSupabaseClient()
         .from('users')
-        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, kling_secret_key, runway_api_key, elevenlabs_api_key, suno_api_key, leonardo_api_key, hedra_api_key, stability_api_key')
+        .select('openai_api_key, anthropic_api_key, openart_api_key, kling_api_key, kling_secret_key, runway_api_key, elevenlabs_api_key, suno_api_key, leonardo_api_key, hedra_api_key, heygen_api_key, mirelo_api_key, stability_api_key')
         .eq('id', userId)
         .single()
 
@@ -82,6 +86,8 @@ export default function SetupAIPage() {
         suno: data?.suno_api_key || '',
         leonardo: data?.leonardo_api_key || '',
         hedra: data?.hedra_api_key || '',
+        heygen: data?.heygen_api_key || '',
+        mirelo: data?.mirelo_api_key || '',
         stability: data?.stability_api_key || '',
       })
     } catch (error) {
@@ -106,6 +112,8 @@ export default function SetupAIPage() {
         'suno': 'suno_api_key',
         'leonardo': 'leonardo_api_key',
         'hedra': 'hedra_api_key',
+        'heygen': 'heygen_api_key',
+        'mirelo': 'mirelo_api_key',
         'stability': 'stability_api_key',
       }
       
@@ -157,6 +165,8 @@ export default function SetupAIPage() {
             'suno_api_key': 'Suno AI API key for music generation',
             'leonardo_api_key': 'Leonardo AI API key for image and video generation',
             'hedra_api_key': 'Hedra API key for avatar and video generation',
+            'heygen_api_key': 'HeyGen API key for digital twin and avatar video generation',
+            'mirelo_api_key': 'Mirelo API key for AI sound effects (text-to-SFX and video-to-SFX)',
             'stability_api_key': 'Stability AI API key for Stable Image generation and editing',
           }
           
@@ -1368,6 +1378,164 @@ export default function SetupAIPage() {
                   <div className="text-xs text-muted-foreground mt-2">
                     <p>• Get your API key from <a href="https://www.hedra.com/api-profile" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Hedra API Profile</a></p>
                     <p>• Used for Hedra Character 3 avatar generation in Cinema Production</p>
+                  </div>
+                </div>
+
+                {/* HeyGen */}
+                <div className="rounded-lg border border-border/50 p-4 bg-card/50">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-medium">HeyGen</h4>
+                    <Badge variant="outline" className="text-xs">
+                      {apiKeys.heygen ? "Configured" : "Not Configured"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Digital twin creation and lip-synced avatar videos
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type={showKeys.heygen ? "text" : "password"}
+                      placeholder="HeyGen API Key"
+                      value={apiKeys.heygen || ''}
+                      onChange={(e) => setApiKeys(prev => ({ ...prev, heygen: e.target.value }))}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, heygen: !prev.heygen }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.heygen ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('heygen', apiKeys.heygen)
+                          toast({
+                            title: "Success",
+                            description: "HeyGen API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: error instanceof Error ? error.message : "Failed to save API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        setApiKeys(prev => ({ ...prev, heygen: '' }))
+                        try {
+                          await saveApiKey('heygen', '')
+                          toast({
+                            title: "Cleared",
+                            description: "HeyGen API key cleared",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: error instanceof Error ? error.message : "Failed to clear API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-red-500/20 text-red-500 hover:bg-red-500/10"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    <p>• Get your API key from <a href="https://app.heygen.com/settings?nav=API" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">HeyGen API Settings</a></p>
+                    <p>• Used on the <a href="/twin" className="text-blue-500 hover:underline">Digital Twin</a> page</p>
+                  </div>
+                </div>
+
+                {/* Mirelo */}
+                <div className="rounded-lg border border-border/50 p-4 bg-card/50">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-medium">Mirelo</h4>
+                    <Badge variant="outline" className="text-xs">
+                      {apiKeys.mirelo ? "Configured" : "Not Configured"}
+                    </Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    AI sound effects from text or video (SFX 1.6)
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type={showKeys.mirelo ? "text" : "password"}
+                      placeholder="Mirelo API Key"
+                      value={apiKeys.mirelo || ''}
+                      onChange={(e) => setApiKeys(prev => ({ ...prev, mirelo: e.target.value }))}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowKeys(prev => ({ ...prev, mirelo: !prev.mirelo }))}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      {showKeys.mirelo ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await saveApiKey('mirelo', apiKeys.mirelo)
+                          toast({
+                            title: "Success",
+                            description: "Mirelo API key saved successfully",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: error instanceof Error ? error.message : "Failed to save API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-blue-500/20 text-blue-500 hover:bg-blue-500/10"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        setApiKeys(prev => ({ ...prev, mirelo: '' }))
+                        try {
+                          await saveApiKey('mirelo', '')
+                          toast({
+                            title: "Cleared",
+                            description: "Mirelo API key cleared",
+                          })
+                        } catch (error) {
+                          toast({
+                            title: "Error",
+                            description: error instanceof Error ? error.message : "Failed to clear API key",
+                            variant: "destructive",
+                          })
+                        }
+                      }}
+                      className="border-red-500/20 text-red-500 hover:bg-red-500/10"
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    <p>• Get your API key from <a href="https://mirelo.ai/api-docs" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">Mirelo API Docs</a></p>
+                    <p>• Used on the <a href="/mirelo-ai-test" className="text-blue-500 hover:underline">Mirelo AI Test</a> page</p>
                   </div>
                 </div>
 
