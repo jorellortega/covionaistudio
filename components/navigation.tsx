@@ -21,6 +21,7 @@ import {
   Zap,
   Users,
   Package,
+  ScanFace,
   Sparkles,
   Box,
   Mic,
@@ -77,6 +78,7 @@ const navigationCategories: NavCategory[] = [
     name: "Creative",
     icon: Palette,
     items: [
+      { name: "New Project", href: "/new", icon: Sparkles },
       { name: "Treatments", href: "/treatments", icon: FileText },
       { name: "Create Cover", href: "/create-cover", icon: ImageIcon },
       { name: "Create Voice", href: "/create-voice", icon: Mic },
@@ -87,6 +89,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
       { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
+      { name: "Avatars", href: "/avatars", icon: ScanFace },
       { name: "Locations", href: "/locations", icon: MapPin },
     ],
   },

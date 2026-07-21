@@ -95,6 +95,11 @@ export function resolveOpenAIImageSize(
   const requested = w && h ? `${w}x${h}` : fallback
 
   if (isGPTImage2ApiModel(apiModel)) {
+    // GPT Image 2 enforces a minimum pixel budget (~1M+ pixels)
+    const pixels = (w ?? 0) * (h ?? 0)
+    if (!w || !h || pixels < 1_048_576) {
+      return DEFAULT_CINEMATIC_IMAGE_SIZE
+    }
     return requested
   }
 

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb, Palette } from "lucide-react"
+import { Film, Plus, ArrowRight, Clock, Users, TrendingUp, User, FileText, Image as ImageIcon, LogOut, Lightbulb, Palette, Sparkles } from "lucide-react"
 import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -151,6 +151,12 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <Button asChild className="gradient-button neon-glow text-white">
+              <Link href="/new">
+                <Sparkles className="h-4 w-4 mr-2" />
+                New Project
+              </Link>
+            </Button>
             <Button 
               onClick={handleSignOut}
               variant="outline" 

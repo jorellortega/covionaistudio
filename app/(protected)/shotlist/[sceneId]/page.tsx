@@ -23,6 +23,8 @@ import {
 } from "@/lib/project-image-linking"
 import {
   displayModelSupportsReferenceImage,
+  DEFAULT_CINEMATIC_IMAGE_HEIGHT,
+  DEFAULT_CINEMATIC_IMAGE_WIDTH,
   mapDisplayModelToService,
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
@@ -962,8 +964,8 @@ export default function SceneShotListPage() {
       height?: number
     },
   ) => {
-    const width = options?.width ?? (config.service === "runway" ? 1280 : 1024)
-    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+    const width = options?.width ?? (config.service === "runway" ? 1280 : DEFAULT_CINEMATIC_IMAGE_WIDTH)
+    const height = options?.height ?? (config.service === "runway" ? 720 : DEFAULT_CINEMATIC_IMAGE_HEIGHT)
 
     if (config.supportsReference && options?.referenceFile) {
       const formData = new FormData()

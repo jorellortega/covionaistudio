@@ -4,6 +4,7 @@ import { sanitizeFilename } from '@/lib/utils'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { DEFAULT_CINEMATIC_IMAGE_HEIGHT, DEFAULT_CINEMATIC_IMAGE_WIDTH } from '@/lib/image-model-utils'
 
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
@@ -417,8 +418,8 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             prompt: prompt,
             modelId: "ac614f96-1082-45bf-be9d-757f2d31c174", // Leonardo Creative
-            width: 1024,
-            height: 1024,
+            width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
+            height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
             num_images: 1,
             promptMagic: true,
             highContrast: true,

@@ -512,8 +512,8 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             prompt: prompt, // Send only the user's exact prompt
             modelId: "6bef9f1b-29cb-40c7-b9df-32b51c1ed67c", // Leonardo Creative
-            width: 1024,
-            height: 1024,
+            width: width || DEFAULT_CINEMATIC_IMAGE_WIDTH,
+            height: height || DEFAULT_CINEMATIC_IMAGE_HEIGHT,
             num_images: 1,
             promptMagic: true,
             highContrast: true,

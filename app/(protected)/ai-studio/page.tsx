@@ -20,6 +20,7 @@ import { AssetService } from "@/lib/asset-service"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
 import { CharactersService, Character } from "@/lib/characters-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import { getKlingModelConfig, isNativeKlingModel } from "@/lib/kling-models"
 import Link from "next/link"
 import {
   Dialog,
@@ -90,7 +91,7 @@ interface GeneratedContent {
 const aiModels = {
   script: ["ChatGPT", "Claude", "GPT-4", "Gemini", "Custom"],
   image: ["GPT Image 2", "GPT Image 1", "OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
-  video: ["Kling T2V", "Kling I2V", "Kling I2V Extended", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
+  video: ["Kling 3.0 T2V", "Kling 3.0 I2V", "Kling 3.0 I2V Extended", "Kling 3.0 Omni T2V", "Kling 3.0 Omni I2V", "Kling 3.0 Omni I2V Extended", "Runway ML", "Runway Gen-4 Turbo", "Runway Gen-4 Aleph", "Runway Gen-3A Turbo", "Runway Act-Two", "Runway Upscale", "Pika Labs", "Stable Video", "LumaAI"],
   audio: ["ElevenLabs", "Suno AI", "Udio", "MusicLM", "AudioCraft", "Custom"],
 }
 
@@ -1521,7 +1522,8 @@ export default function AIStudioPage() {
               variant: "destructive",
             })
           }
-        } else if (type === "video" && (selectedModel === "Kling T2V" || selectedModel === "Kling I2V" || selectedModel === "Kling I2V Extended")) {
+        } else if (type === "video" && isNativeKlingModel(selectedModel)) {
+          const klingConfig = getKlingModelConfig(selectedModel)
           console.log('Attempting to generate video with Kling:', {
             prompt: videoPrompt,
             model: selectedModel,
@@ -1531,21 +1533,20 @@ export default function AIStudioPage() {
             hasUploadedFile: !!uploadedFile
           })
           
-          // Validate required files for each model
-          if (selectedModel === "Kling I2V" && !uploadedFile) {
+          if (klingConfig?.needsImage && !klingConfig.needsStartEnd && !uploadedFile) {
             toast({
               title: "Missing Image",
-              description: "Kling I2V requires an image to be uploaded",
+              description: "Kling 3.0 I2V requires an image to be uploaded",
               variant: "destructive",
             })
             setIsGenerating(false)
             return
           }
           
-          if (selectedModel === "Kling I2V Extended" && (!startFrame || !endFrame)) {
+          if (klingConfig?.needsStartEnd && (!startFrame || !endFrame)) {
             toast({
               title: "Missing Frames",
-              description: "Kling I2V Extended requires both start and end frames",
+              description: "Kling 3.0 frame-to-frame requires both start and end frames",
               variant: "destructive",
             })
             setIsGenerating(false)
@@ -3687,7 +3688,7 @@ export default function AIStudioPage() {
                       )}
 
                       {/* Kling File Upload - Show for Kling models */}
-                      {selectedModel === "Kling I2V" && (
+                      {getKlingModelConfig(selectedModel)?.needsImage && !getKlingModelConfig(selectedModel)?.needsStartEnd && (
                         <div className="grid gap-2">
                           <Label>Upload Image (Required)</Label>
                           <div className="border-2 border-dashed border-border rounded-lg p-4">
@@ -3755,7 +3756,7 @@ export default function AIStudioPage() {
                       )}
 
                       {/* Kling I2V Extended - Start and End Frames */}
-                      {selectedModel === "Kling I2V Extended" && (
+                      {getKlingModelConfig(selectedModel)?.needsStartEnd && (
                         <div className="grid gap-4">
                           {/* Start Frame */}
                           <div className="grid gap-2">

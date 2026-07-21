@@ -11,6 +11,16 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/hooks/use-toast';
+import { SIGNUP_DISABLED } from '@/lib/signup-config';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 type Mode = 'signin' | 'signup' | 'reset';
 
@@ -79,6 +89,7 @@ function LoginPageContent() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [signupBlockedOpen, setSignupBlockedOpen] = useState(false);
 
   console.log('[ENV] URL:', process.env.NEXT_PUBLIC_SUPABASE_URL);
   console.log('[ENV] ANON present:', !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
@@ -148,7 +159,13 @@ function LoginPageContent() {
   // Pricing page: /login?mode=signup&next=/subscriptions&plan=creator|studio|production
   useEffect(() => {
     const m = sp.get('mode');
-    if (m === 'signup') setMode('signup');
+    if (m === 'signup') {
+      if (SIGNUP_DISABLED) {
+        setSignupBlockedOpen(true);
+      } else {
+        setMode('signup');
+      }
+    }
     if (m === 'signin') setMode('signin');
     const plan = sp.get('plan');
     if (plan === 'creator' || plan === 'studio' || plan === 'production') {
@@ -174,6 +191,10 @@ function LoginPageContent() {
     setError(null); setMessage(null);
     const v = validate();
     if (v) { setError(v); return; }
+    if (mode === 'signup' && SIGNUP_DISABLED) {
+      setSignupBlockedOpen(true);
+      return;
+    }
     setSubmitting(true);
     try {
       if (mode === 'signin') {
@@ -418,7 +439,13 @@ function LoginPageContent() {
       <div className="w-full max-w-sm space-y-4">
         <Tabs 
           value={mode === 'reset' ? 'signin' : mode} 
-          onValueChange={(value) => setMode(value as Mode)}
+          onValueChange={(value) => {
+            if (SIGNUP_DISABLED && value === 'signup') {
+              setSignupBlockedOpen(true);
+              return;
+            }
+            setMode(value as Mode);
+          }}
           className="w-full"
         >
           <TabsList className="grid w-full grid-cols-2">
@@ -705,6 +732,20 @@ function LoginPageContent() {
           </form>
         )}
       </div>
+
+      <AlertDialog open={signupBlockedOpen} onOpenChange={setSignupBlockedOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Still under construction</AlertDialogTitle>
+            <AlertDialogDescription>
+              Sign up isn&apos;t open yet — please try again later. If you already have an account, you can sign in.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction>OK</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }

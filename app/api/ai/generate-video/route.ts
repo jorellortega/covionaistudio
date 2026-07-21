@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { RunwayML } from '@runwayml/sdk'
+import {
+  describeRunwayFailureCode,
+  formatRunwayTaskFailure,
+  isRunwayRetryableFailure,
+  mapResolutionToRunwayRatio,
+  pickClosestRunwayRatio,
+  readImageDimensionsFromBuffer,
+  truncateRunwayPrompt,
+} from '@/lib/runway-video-utils'
 
 // Increase body size limit for this route (100MB for video uploads)
 export const maxDuration = 300 // 5 minutes
@@ -48,6 +57,8 @@ export async function POST(request: NextRequest) {
     let runwayUri: string | null = null
     let fileType: 'image' | 'video' | null = null
     let referenceVideoUri: string | null = null
+    let sourceWidth: number | null = null
+    let sourceHeight: number | null = null
     
     const contentType = request.headers.get('content-type')
     if (contentType?.includes('multipart/form-data')) {
@@ -61,6 +72,12 @@ export async function POST(request: NextRequest) {
       height = parseInt(formData.get('height') as string) || 576
       model = formData.get('model') as string || 'gen4_turbo'
       file = formData.get('file') as File | null
+      const sw = formData.get('sourceWidth') as string | null
+      const sh = formData.get('sourceHeight') as string | null
+      if (sw && sh) {
+        sourceWidth = parseInt(sw) || null
+        sourceHeight = parseInt(sh) || null
+      }
       
       // Validate file size on server side (50MB for videos, 10MB for images)
       if (file) {
@@ -91,6 +108,8 @@ export async function POST(request: NextRequest) {
       runwayUri = body.runwayUri || null
       fileType = body.fileType || null
       referenceVideoUri = body.referenceVideoUri || null
+      sourceWidth = body.sourceWidth ? parseInt(String(body.sourceWidth)) : null
+      sourceHeight = body.sourceHeight ? parseInt(String(body.sourceHeight)) : null
       console.log('🎬 Server Debug - Received model from frontend (JSON):', model)
       console.log('🎬 Server Debug - Received duration from frontend (JSON):', durationStr, '->', duration)
       console.log('🎬 Server Debug - Received runwayUri:', runwayUri ? 'present' : 'none')
@@ -102,6 +121,9 @@ export async function POST(request: NextRequest) {
     if (!prompt && model !== 'upscale_v1') {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
     }
+
+    // Truncate prompt for Runway's 1000-char limit
+    prompt = truncateRunwayPrompt(prompt)
 
     // Clean and validate the API key
     const rawKey = process.env.RUNWAYML_API_SECRET?.trim()
@@ -139,26 +161,36 @@ export async function POST(request: NextRequest) {
     
     // Ensure duration is valid for Runway ML (5 or 10 seconds)
     const validDuration = durationSeconds === 5 || durationSeconds === 10 ? durationSeconds : 5
-    
-    // Map resolution to correct ratio format
-    const mapResolutionToRatio = (width: number, height: number): string => {
-      const ratio = `${width}:${height}`
-      // Check if this is a valid ratio for Runway ML
-      const validRatios = [
-        "1280:720", "1920:1080", "1080:1920", "720:720", "960:720", "720:960",
-        "1024:1024", "1080:1080", "1168:880", "1360:768", "1440:1080", "1080:1440",
-        "1808:768", "2112:912", "1680:720"
-      ]
-      
-      if (validRatios.includes(ratio)) {
-        return ratio
+
+    // Detect source image dimensions for Runway ratio matching (header only — keeps file readable)
+    if (file && file.type.startsWith('image/') && (!sourceWidth || !sourceHeight)) {
+      try {
+        const headerBuffer = Buffer.from(await file.slice(0, 65536).arrayBuffer())
+        const dims = readImageDimensionsFromBuffer(headerBuffer)
+        if (dims) {
+          sourceWidth = dims.width
+          sourceHeight = dims.height
+          console.log('🎬 Detected source image dimensions:', `${sourceWidth}x${sourceHeight}`)
+        }
+      } catch (dimErr) {
+        console.warn('🎬 Could not read source image dimensions:', dimErr)
       }
-      
-      // Default to 1280:720 if not a valid ratio
-      return "1280:720"
     }
     
-    const ratio = mapResolutionToRatio(width, height)
+    // Map resolution to Runway Gen-4 ratio (auto-match source image when possible)
+    const imageGenModels = ['gen4_turbo', 'gen3a_turbo']
+    let ratio: string
+
+    if (imageGenModels.includes(model) && sourceWidth && sourceHeight) {
+      ratio = pickClosestRunwayRatio(sourceWidth, sourceHeight, width, height)
+      console.log('🎬 Auto-matched Runway ratio from source image:', {
+        source: `${sourceWidth}x${sourceHeight}`,
+        requested: `${width}x${height}`,
+        ratio,
+      })
+    } else {
+      ratio = mapResolutionToRunwayRatio(width, height)
+    }
     
     // Initialize Runway SDK client
     const runway = new RunwayML({
@@ -563,34 +595,55 @@ export async function POST(request: NextRequest) {
             throw new Error('Text-to-video generation requires an image input. Please upload an image or use a different model.')
           }
           
-          const taskPromise = runway.imageToVideo.create({
-            model: modelToTry as 'gen3a_turbo' | 'gen4_turbo',
-            promptImage: promptImage,
-            ratio: baseParams.ratio as any,
-            duration: baseParams.duration as 5 | 10,
-            promptText: baseParams.promptText
-          })
-          
-          const task = await taskPromise
-          console.log(`🎬 Task created for ${modelToTry}:`, task.id)
-          console.log(`🎬 Task initial status:`, task.status)
-          
-          // Wait for task completion using the SDK's built-in method
-          const result = await taskPromise.waitForTaskOutput({
-            timeout: 300000, // 5 minutes timeout
-          })
-          
-          console.log(`🎬 Task completed for ${modelToTry}:`, result)
-          console.log(`🎬 Task final status:`, result?.status)
-          
-          // Check if task failed
-          if (result?.status === 'FAILED' || result?.failure) {
-            const failureReason = result?.failure || result?.failureReason || 'Unknown reason'
-            console.error(`🎬 Task failed with reason:`, failureReason)
-            throw new Error(`Video generation failed: ${failureReason}`)
+          const maxAttempts = 2
+          let lastGenError: any = null
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+              const taskPromise = runway.imageToVideo.create({
+                model: modelToTry as 'gen3a_turbo' | 'gen4_turbo',
+                promptImage: promptImage,
+                ratio: baseParams.ratio as any,
+                duration: baseParams.duration as 5 | 10,
+                promptText: baseParams.promptText
+              })
+
+              const task = await taskPromise
+              console.log(`🎬 Task created for ${modelToTry} (attempt ${attempt}):`, task.id)
+              console.log(`🎬 Task initial status:`, task.status)
+
+              const result = await taskPromise.waitForTaskOutput({
+                timeout: 300000, // 5 minutes timeout
+              })
+
+              console.log(`🎬 Task completed for ${modelToTry}:`, result)
+              console.log(`🎬 Task final status:`, result?.status)
+
+              if (result?.status === 'FAILED' || result?.failure) {
+                const failureReason = result?.failure || result?.failureReason || 'Unknown reason'
+                const failureCode = (result as { failureCode?: string })?.failureCode
+                console.error(`🎬 Task failed with reason:`, failureReason, failureCode || '')
+                const err = new Error(`Video generation failed: ${failureReason}`) as Error & {
+                  taskDetails?: { failure?: string; failureCode?: string }
+                }
+                err.taskDetails = { failure: failureReason, failureCode }
+                throw err
+              }
+
+              return result
+            } catch (error: any) {
+              lastGenError = error
+              const failureCode = error.taskDetails?.failureCode
+              if (attempt < maxAttempts && isRunwayRetryableFailure(failureCode)) {
+                console.log(`🎬 Retrying after ${failureCode} in 5s (attempt ${attempt + 1}/${maxAttempts})...`)
+                await new Promise((resolve) => setTimeout(resolve, 5000))
+                continue
+              }
+              throw error
+            }
           }
-          
-          return result
+
+          throw lastGenError || new Error('Video generation failed')
         }
       } catch (error: any) {
         console.log(`🎬 Error with model ${modelToTry}:`, error.message)
@@ -607,7 +660,8 @@ export async function POST(request: NextRequest) {
         
         // Check for specific error types
         if (error.name === 'TaskFailedError' || error.message?.includes('Task failed')) {
-          console.error(`🎬 Task failed error details:`, error.task || error)
+          const details = error.taskDetails || error.task
+          console.error('🎬 Task failed — Runway details:', JSON.stringify(details, null, 2))
         }
         
         throw error
@@ -659,7 +713,9 @@ export async function POST(request: NextRequest) {
     // If all models failed, return clear error with helpful message
     if (!result) {
       let errorMessage = 'Video generation failed. '
-      let errorDetails = lastError?.message || 'Unknown error'
+      const failureCode = (lastError as { taskDetails?: { failureCode?: string } })?.taskDetails?.failureCode
+      const codeHint = describeRunwayFailureCode(failureCode)
+      const runwayDetail = lastError ? formatRunwayTaskFailure(lastError) : 'Unknown error'
       
       if (lastError?.message?.includes('requires video input')) {
         errorMessage += 'The selected model requires a video input file. Please upload a video or select a different model.'
@@ -669,19 +725,25 @@ export async function POST(request: NextRequest) {
         errorMessage += 'No video models are enabled on this API workspace. Contact Runway support to enable video models.'
       } else if (lastError?.message?.includes('credits') || lastError?.message?.includes('quota')) {
         errorMessage += 'You may have run out of credits. Please check your Runway account balance.'
-      } else if (lastError?.message?.includes('content') || lastError?.message?.includes('policy')) {
-        errorMessage += 'The content may have been flagged. Please try a different prompt or image.'
+      } else if (codeHint) {
+        errorMessage += codeHint
+      } else if (
+        runwayDetail.toLowerCase().includes('content') ||
+        runwayDetail.toLowerCase().includes('policy') ||
+        runwayDetail.toLowerCase().includes('moderation')
+      ) {
+        errorMessage += `Runway rejected the request (content policy): ${runwayDetail}`
+      } else if (runwayDetail.toLowerCase().includes('aspect ratio')) {
+        errorMessage += `Runway aspect ratio issue: ${runwayDetail}. Try a different resolution or crop your storyboard image closer to 16:9 or 4:3.`
       } else if (lastError?.message?.includes('timeout') || lastError?.message?.includes('Timeout')) {
         errorMessage += 'The request timed out. Please try again.'
-      } else if (errorDetails.includes('An unexpected error occurred')) {
-        errorMessage += 'The Runway API returned an unexpected error. This could be due to: image format/quality issues, content policy violations, or temporary API issues. Try a different image or contact Runway support.'
       } else {
-        errorMessage += `Error: ${errorDetails}`
+        errorMessage += runwayDetail
       }
       
       console.error('🎬 Final error message:', errorMessage)
       console.error('🎬 Last error object:', lastError)
-      return NextResponse.json({ error: errorMessage }, { status: 403 })
+      return NextResponse.json({ error: errorMessage }, { status: 502 })
     }
 
     // Extract the video URL from the result

@@ -18,7 +18,58 @@ type VideoPromptAssistBody = {
   startImageUrl?: string | null
   endImageUrl?: string | null
   videoModel?: string | null
+  /** Leonardo Motion 2.0 camera preset id/label */
+  motionControl?: string | null
+  motionStrength?: number | null
+  duration?: string | null
+  klingNativeAudio?: boolean | null
   userId?: string | null
+  /** User's in-progress prompt — creative direction to preserve and refine */
+  currentPrompt?: string | null
+}
+
+function getVideoModelGuidance(model: string | null | undefined): string | null {
+  if (!model?.trim()) return null
+  const m = model.toLowerCase()
+
+  if (m.includes('leonardo motion')) {
+    return 'Leonardo Motion 2.0: image-to-video with optional Motion Control camera presets. Describe subject motion clearly; camera movement is often set separately via Motion Control — focus prompt on what moves in the scene (subjects, environment, atmosphere), not duplicate camera instructions unless no Motion Control is set.'
+  }
+  if (m.includes('kling') && m.includes('omni')) {
+    return 'Kling 3.0 Omni: reference-driven I2V/T2V with native audio support. Strong on character consistency and atmosphere; describe motion, mood, and optional audio (dialogue, ambient, SFX) if native audio is enabled.'
+  }
+  if (m.includes('kling') && m.includes('extended')) {
+    return 'Kling 3.0 I2V Extended: frame-to-frame interpolation between start and end stills. Describe the transition — what changes from start pose to end pose with continuous motion.'
+  }
+  if (m.includes('kling') && m.includes('i2v')) {
+    return 'Kling 3.0 I2V: animate a single reference image. Keep composition/lighting; describe clear subject and environmental motion.'
+  }
+  if (m.includes('kling') && m.includes('t2v')) {
+    return 'Kling 3.0 T2V: text-only video generation. Be vivid and specific about scene, motion, camera, and atmosphere — no reference image.'
+  }
+  if (m.includes('kling 2.1') || m.includes('frame-to-frame')) {
+    return 'Kling 2.1 Pro (Leonardo): frame-to-frame via Leonardo API. Describe motion between start and optional end frame.'
+  }
+  if (m.includes('veo')) {
+    return 'Veo 3.1: high-fidelity frame-to-frame. Describe cinematic motion and transition between frames; keep prompts focused and production-ready.'
+  }
+  if (m.includes('runway gen-4 turbo') || m.includes('gen-4 turbo')) {
+    return 'Runway Gen-4 Turbo: image-to-video. Animate from a still — describe motion within the existing frame; avoid major scene changes.'
+  }
+  if (m.includes('gen-3a') || m.includes('gen-3')) {
+    return 'Runway Gen-3A Turbo: image-to-video. Describe natural motion from the reference still.'
+  }
+  if (m.includes('act-two') || m.includes('act_two')) {
+    return 'Runway Act-Two: character performance driven by a reference video. Prompt should describe the performance/emotion; motion comes from the reference clip.'
+  }
+  if (m.includes('aleph')) {
+    return 'Runway Gen-4 Aleph: video-to-video editing/transform. Describe how to change or stylize the input video, not animate a still.'
+  }
+  if (m.includes('hedra')) {
+    return 'Hedra Character 3: talking-head lip-sync avatar. Prompt should describe facial expression, subtle head movement, and speaking performance — not full-body action.'
+  }
+
+  return `Target model: ${model}. Tailor the prompt to this model's typical input mode (image-to-video, text-to-video, or frame-to-frame).`
 }
 
 function buildFallbackPrompt(body: VideoPromptAssistBody): string {
@@ -41,6 +92,17 @@ function buildFallbackPrompt(body: VideoPromptAssistBody): string {
   }
   if (body.dialogue?.trim()) parts.push(`Dialogue/performance: ${body.dialogue.trim()}`)
   if (body.visualNotes?.trim()) parts.push(`Visual notes: ${body.visualNotes.trim()}`)
+  if (body.currentPrompt?.trim()) {
+    parts.push(`Creator direction: ${body.currentPrompt.trim()}`)
+  }
+  if (body.videoModel?.trim()) {
+    parts.push(`For ${body.videoModel}`)
+    const modelHint = getVideoModelGuidance(body.videoModel)
+    if (modelHint) parts.push(modelHint)
+  }
+  if (body.motionControl?.trim()) {
+    parts.push(`Leonardo Motion Control preset: ${body.motionControl}`)
+  }
   if (body.characterName) parts.push(`Featuring: ${body.characterName}`)
   if (body.locationName) parts.push(`Location: ${body.locationName}`)
 
@@ -108,7 +170,27 @@ export async function POST(request: NextRequest) {
     const endUrl = body.endImageUrl?.trim() || null
     const hasPair = !!(startUrl && endUrl)
 
+    const modelGuidance = getVideoModelGuidance(body.videoModel)
+
     const detailLines = [
+      body.videoModel
+        ? `SELECTED VIDEO MODEL (tailor prompt to this model): ${body.videoModel}`
+        : 'Video model: not selected — write a general cinematic video prompt.',
+      modelGuidance ? `Model-specific guidance: ${modelGuidance}` : null,
+      body.motionControl?.trim()
+        ? `Leonardo Motion Control preset (camera is handled by this — focus prompt on subject/environment motion): ${body.motionControl}`
+        : null,
+      body.motionStrength != null && body.motionControl?.trim()
+        ? null
+        : body.motionStrength != null
+          ? `Motion strength (Leonardo): ${body.motionStrength}/10`
+          : null,
+      body.duration ? `Clip duration: ${body.duration}` : null,
+      body.klingNativeAudio
+        ? 'Native audio: ON — include brief audio cues (ambient, dialogue tone, SFX) if relevant.'
+        : body.videoModel?.toLowerCase().includes('kling')
+          ? 'Native audio: OFF — visual motion only.'
+          : null,
       body.shotNumber != null ? `Shot number: ${body.shotNumber}` : null,
       body.sceneNumber != null ? `Scene number: ${body.sceneNumber}` : null,
       body.title ? `Title: ${body.title}` : null,
@@ -125,9 +207,11 @@ export async function POST(request: NextRequest) {
         : 'Action: not specified — invent believable subject motion from the image(s) (breathing, wingbeats, wind, walking, etc.)',
       body.dialogue ? `Dialogue: ${body.dialogue}` : null,
       body.visualNotes ? `Visual notes: ${body.visualNotes}` : null,
+      body.currentPrompt?.trim()
+        ? `Creator's draft prompt / creative direction (MUST incorporate and refine — do not discard their intent): ${body.currentPrompt.trim()}`
+        : null,
       body.characterName ? `Character: ${body.characterName}` : null,
       body.locationName ? `Location: ${body.locationName}` : null,
-      body.videoModel ? `Target video model: ${body.videoModel}` : null,
       hasPair
         ? 'Two reference stills are attached: START FRAME first, END FRAME second. Write a frame-to-frame video prompt that begins on the start and finishes on the end.'
         : startUrl
@@ -145,6 +229,9 @@ Rules:
 - If START and END frames are both attached, describe the transition between them (what changes, how the subject moves from start pose/position to end). Keep identity, wardrobe, lighting, and location consistent across the interpolate.
 - CRITICAL: "static" / locked-off camera means the CAMERA does not move. It does NOT mean a freeze-frame. The subject and environment must still have clear continuous motion.
 - Prioritize the Action field as the main animation (e.g. if action is "the crow flies", describe wingbeats, forward flight path, body banking — not a still crow).
+- If the user provided a draft prompt or creative direction, weave their specific ideas (mood, motion, atmosphere, details they mentioned) into the final prompt. Do not replace their intent with a generic description — refine and expand what they wrote using the shot details and image(s).
+- Tailor phrasing to the SELECTED VIDEO MODEL and its model-specific guidance (I2V vs T2V vs frame-to-frame vs lip-sync vs video-edit). Do not write a generic prompt that ignores the model.
+- For Leonardo Motion 2.0 with Motion Control set, describe subject/environment motion; avoid conflicting camera moves in the prompt.
 - Preserve composition/subject/lighting from the still(s); animate motion within that world.
 - Explicitly forbid frozen/static subjects. Prefer verbs like flaps, flies, glides, walks, breathes, turns, steps, emerges.
 - No on-screen text, logos, or watermarks.`

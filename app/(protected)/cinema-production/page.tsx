@@ -41,8 +41,10 @@ import {
   RectangleHorizontal,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ImageSizeBadge } from "@/components/image-size-badge"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -52,6 +54,13 @@ import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
+import {
+  getKlingModelConfig,
+  isNativeKlingModel,
+  KLING_V3_DURATIONS,
+  normalizeKlingUiModel,
+} from "@/lib/kling-models"
+import { RUNWAY_GEN4_RATIOS, resolveRunwayOutputRatio } from "@/lib/runway-video-utils"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { AISettingsService } from "@/lib/ai-settings-service"
@@ -155,9 +164,12 @@ function shotFramesFromAssets(assets: Asset[]): Map<string, ShotReferenceFrame[]
 }
 
 type VideoModel = 
-  | "Kling T2V" 
-  | "Kling I2V" 
-  | "Kling I2V Extended" 
+  | "Kling 3.0 T2V" 
+  | "Kling 3.0 I2V" 
+  | "Kling 3.0 I2V Extended"
+  | "Kling 3.0 Omni T2V"
+  | "Kling 3.0 Omni I2V"
+  | "Kling 3.0 Omni I2V Extended"
   | "Runway Gen-4 Turbo" 
   | "Runway Gen-3A Turbo" 
   | "Runway Act-Two" 
@@ -167,6 +179,84 @@ type VideoModel =
   | "Veo 3.1 (Frame-to-Frame)"
   | "Veo 3.1 Fast (Frame-to-Frame)"
   | "Hedra Character 3"
+
+function isRunwayGen4ImageToVideoModel(model: string): boolean {
+  return model === "Runway Gen-4 Turbo" || model === "Runway Gen-3A Turbo"
+}
+
+function getRunwayResolutionValue(width: number, height: number): string {
+  return `${width}x${height}`
+}
+
+function isValidRunwayGen4Resolution(resolution: string): boolean {
+  return RUNWAY_GEN4_RATIOS.some(
+    (entry) => getRunwayResolutionValue(entry.width, entry.height) === resolution,
+  )
+}
+
+async function getImageFileDimensions(file: File): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve({ width: img.naturalWidth, height: img.naturalHeight })
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("Failed to read image dimensions"))
+    }
+    img.src = url
+  })
+}
+
+async function prepareImageForRunway(
+  file: File,
+  targetWidth: number,
+  targetHeight: number,
+): Promise<File> {
+  const url = URL.createObjectURL(file)
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error("Failed to load image for Runway prep"))
+    image.src = url
+  })
+  URL.revokeObjectURL(url)
+
+  const targetAspect = targetWidth / targetHeight
+  const sourceAspect = img.naturalWidth / img.naturalHeight
+
+  let cropW = img.naturalWidth
+  let cropH = img.naturalHeight
+  let cropX = 0
+  let cropY = 0
+
+  if (sourceAspect > targetAspect) {
+    cropW = img.naturalHeight * targetAspect
+    cropX = (img.naturalWidth - cropW) / 2
+  } else if (sourceAspect < targetAspect) {
+    cropH = img.naturalWidth / targetAspect
+    cropY = (img.naturalHeight - cropH) / 2
+  }
+
+  const canvas = document.createElement("canvas")
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  const ctx = canvas.getContext("2d")
+  if (!ctx) throw new Error("Canvas not available")
+  ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, targetWidth, targetHeight)
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => (b ? resolve(b) : reject(new Error("Failed to encode JPEG for Runway"))),
+      "image/jpeg",
+      0.92,
+    )
+  })
+
+  return new File([blob], "runway-input.jpg", { type: "image/jpeg" })
+}
 
 type SavedAudioSource = "saved" | "session-dialogue" | "session-sfx" | "session-stable-audio"
 
@@ -196,6 +286,7 @@ interface ShotGenerationState {
   motionStrength?: number // For Leonardo Motion 2.0
   videoModelType?: 'KLING2_1' | 'VEO3_1' | 'VEO3_1FAST' // For Kling/Veo frame-to-frame
   videoDuration?: number // Duration in seconds for Kling/Veo (4/6/8 for Veo, 5/10 for Kling)
+  klingNativeAudio?: boolean // Native audio for Kling 3.0 models
   startFrameImageUrl?: string | null // URL to storyboard image for start frame
   endFrameImageUrl?: string | null // URL to storyboard image for end frame
   savedAudioOptionId?: string | null // asset id or session-dialogue / session-sfx
@@ -275,6 +366,43 @@ function sessionAudioOptionId(clipId: string) {
 
 function audioSaveNameKey(storyboardId: string, clipId: string) {
   return `${storyboardId}-${clipId}`
+}
+
+function AudioGeneratorSection({
+  title,
+  icon: Icon,
+  description,
+  clipCount = 0,
+  children,
+}: {
+  title: string
+  icon: React.ComponentType<{ className?: string }>
+  description?: string
+  clipCount?: number
+  children: React.ReactNode
+}) {
+  return (
+    <Collapsible defaultOpen={false} className="rounded-lg border border-border/60 bg-muted/10">
+      <CollapsibleTrigger className="group flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors rounded-lg data-[state=open]:rounded-b-none">
+        <div className="flex items-center gap-2 min-w-0">
+          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="font-medium text-sm">{title}</span>
+          {clipCount > 0 && (
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+              {clipCount} clip{clipCount === 1 ? "" : "s"}
+            </Badge>
+          )}
+        </div>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-3 pb-3 pt-2 space-y-2 border-t border-border/40">
+        {description && (
+          <p className="text-xs text-muted-foreground">{description}</p>
+        )}
+        {children}
+      </CollapsibleContent>
+    </Collapsible>
+  )
 }
 
 function SessionAudioClipList({
@@ -1521,15 +1649,16 @@ export default function CinemaProductionPage() {
   const getModelFileRequirement = (
     model: VideoModel,
   ): "none" | "image" | "video" | "start-end-frames" | "hedra-avatar" => {
+    const klingConfig = getKlingModelConfig(model)
+    if (klingConfig) {
+      if (klingConfig.needsStartEnd) return 'start-end-frames'
+      if (klingConfig.needsImage) return 'image'
+      return 'none'
+    }
+
     switch (model) {
       case "Hedra Character 3":
         return "hedra-avatar"
-      case "Kling T2V":
-        return 'none'
-      case "Kling I2V":
-        return 'image'
-      case "Kling I2V Extended":
-        return 'start-end-frames'
       case "Kling 2.1 Pro (Frame-to-Frame)":
       case "Veo 3.1 (Frame-to-Frame)":
       case "Veo 3.1 Fast (Frame-to-Frame)":
@@ -1741,6 +1870,11 @@ export default function CinemaProductionPage() {
           startImageUrl,
           endImageUrl,
           videoModel: generation?.model || null,
+          motionControl: generation?.motionControl || null,
+          motionStrength: generation?.motionStrength ?? null,
+          duration: generation?.duration || null,
+          klingNativeAudio: generation?.klingNativeAudio ?? false,
+          currentPrompt: generation?.prompt?.trim() || null,
           userId,
         }),
       })
@@ -1753,20 +1887,28 @@ export default function CinemaProductionPage() {
       updateStoryboardGeneration(storyboard.id, { prompt: data.prompt })
       toast({
         title: 'Prompt Assist ready',
-        description: endImageUrl
-          ? 'Built a frame-to-frame prompt from your selected start + end images.'
-          : startImageUrl
-            ? 'Built a video prompt from shot details + selected image.'
-            : 'Built a video prompt from shot details. Select a frame image for stronger I2V prompts.',
+        description: generation?.model
+          ? `Built a prompt for ${generation.model}${generation?.prompt?.trim() ? ' using your notes' : ''}.`
+          : generation?.prompt?.trim()
+            ? 'Built a prompt from your notes + shot details + selected image(s).'
+            : endImageUrl
+            ? 'Built a frame-to-frame prompt from your selected start + end images.'
+            : startImageUrl
+              ? 'Built a video prompt from shot details + selected image.'
+              : 'Built a video prompt from shot details. Select a frame image for stronger I2V prompts.',
       })
     } catch (error) {
       // Local fallback if API fails
+      const userDraft = generation?.prompt?.trim()
       const fallback = buildPromptFromStoryboard(storyboard)
-      const withImage = endImageUrl
+      let withImage = endImageUrl
         ? `${fallback}. Interpolate from the start frame to the end frame with continuous natural motion. No text overlays.`
         : startImageUrl || storyboard.image_url
           ? `${fallback}. Animate from the attached reference image — keep composition and lighting, add natural cinematic motion. No text overlays.`
           : `${fallback}. Photoreal cinematic motion, no text overlays.`
+      if (userDraft) {
+        withImage = `${userDraft}. ${withImage}`
+      }
       updateStoryboardGeneration(storyboard.id, { prompt: withImage })
       toast({
         title: 'Used shot details',
@@ -3605,7 +3747,7 @@ export default function CinemaProductionPage() {
           toast({
             title: "Missing Frames",
             description:
-              "Kling I2V Extended needs a start and end frame. Use Make Frames → Start / End, or upload both.",
+              "Kling 3.0 frame-to-frame needs a start and end frame. Use Make Frames → Start / End, or upload both.",
             variant: "destructive",
           })
           return
@@ -4812,8 +4954,13 @@ export default function CinemaProductionPage() {
             variant: "destructive"
           })
         }
-      } else if (generation.model.startsWith("Kling")) {
-        // Handle Kling models
+      } else if (isNativeKlingModel(generation.model)) {
+        const klingConfig = getKlingModelConfig(generation.model)
+        if (!klingConfig) {
+          throw new Error(`Unsupported Kling model: ${generation.model}`)
+        }
+
+        // Handle Kling 3.0 models
         // Convert storyboard image_url to File if no uploaded file
         let imageFile: File | undefined = generation.uploadedFile || undefined
         let startFrameFile: File | undefined = generation.startFrame || undefined
@@ -4831,7 +4978,8 @@ export default function CinemaProductionPage() {
         if (
           !imageFile &&
           storyboard.image_url &&
-          generation.model === "Kling I2V"
+          klingConfig.needsImage &&
+          !klingConfig.needsStartEnd
         ) {
           try {
             updateStoryboardGeneration(storyboard.id, {
@@ -4847,7 +4995,7 @@ export default function CinemaProductionPage() {
           }
         }
 
-        if (generation.model === "Kling I2V Extended") {
+        if (klingConfig.needsStartEnd) {
           try {
             if (!startFrameFile) {
               const startUrl =
@@ -4881,11 +5029,12 @@ export default function CinemaProductionPage() {
         const response = await KlingService.generateVideo({
           prompt: generation.prompt,
           duration: generation.duration,
-          model: generation.model,
+          model: normalizeKlingUiModel(generation.model),
           file: imageFile,
           startFrame: startFrameFile,
           endFrame: endFrameFile,
           resolution: generation.resolution,
+          klingNativeAudio: generation.klingNativeAudio ?? false,
         })
 
         if (response.success) {
@@ -4929,8 +5078,6 @@ export default function CinemaProductionPage() {
         formData.append('model', modelMap[generation.model] || "gen4_turbo")
         
         const [width, height] = generation.resolution.split('x').map(v => parseInt(v) || 1024)
-        formData.append('width', width.toString())
-        formData.append('height', height.toString())
         
         // Use uploaded file or convert storyboard image_url to File
         let imageFile: File | null = generation.uploadedFile || null
@@ -4948,9 +5095,31 @@ export default function CinemaProductionPage() {
             console.error('Error loading storyboard image:', error)
           }
         }
+
+        let runwayWidth = width
+        let runwayHeight = height
+
+        if (imageFile) {
+          try {
+            updateStoryboardGeneration(storyboard.id, { generationStatus: "Preparing image for Runway..." })
+            const dims = await getImageFileDimensions(imageFile)
+            const resolved = resolveRunwayOutputRatio(dims.width, dims.height, width, height)
+            runwayWidth = resolved.width
+            runwayHeight = resolved.height
+            imageFile = await prepareImageForRunway(imageFile, runwayWidth, runwayHeight)
+            console.log(`✅ [RUNWAY] Prepared image ${runwayWidth}x${runwayHeight} (ratio ${resolved.ratio})`)
+          } catch (prepError) {
+            console.warn('[RUNWAY] Image prep failed, using original:', prepError)
+          }
+        }
+
+        formData.append('width', runwayWidth.toString())
+        formData.append('height', runwayHeight.toString())
         
         if (imageFile) {
           formData.append('file', imageFile)
+          formData.append('sourceWidth', String(runwayWidth))
+          formData.append('sourceHeight', String(runwayHeight))
         }
 
         const response = await fetch('/api/ai/generate-video', {
@@ -6214,6 +6383,7 @@ export default function CinemaProductionPage() {
                                                      newModel === "Veo 3.1 (Frame-to-Frame)" || 
                                                      newModel === "Veo 3.1 Fast (Frame-to-Frame)"
                                     const isVeo = newModel === "Veo 3.1 (Frame-to-Frame)" || newModel === "Veo 3.1 Fast (Frame-to-Frame)"
+                                    const isRunwayGen4I2V = isRunwayGen4ImageToVideoModel(newModel)
                                     const audioOptions =
                                       newModel === "Hedra Character 3"
                                         ? getAudioOptionsForStoryboard(storyboard.id)
@@ -6221,6 +6391,11 @@ export default function CinemaProductionPage() {
                                     
                                     updateStoryboardGeneration(storyboard.id, { 
                                       model: newModel,
+                                      resolution: isRunwayGen4I2V
+                                        ? (isValidRunwayGen4Resolution(generation.resolution)
+                                            ? generation.resolution
+                                            : getRunwayResolutionValue(1104, 832))
+                                        : generation.resolution,
                                       // Clear files when model changes
                                       uploadedFile: null,
                                       startFrame: null,
@@ -6251,9 +6426,12 @@ export default function CinemaProductionPage() {
                                     <SelectValue placeholder="Select a video model..." />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="Kling T2V">Kling T2V (Text-to-Video)</SelectItem>
-                                    <SelectItem value="Kling I2V">Kling I2V (Image-to-Video)</SelectItem>
-                                    <SelectItem value="Kling I2V Extended">Kling I2V Extended (Frame-to-Frame)</SelectItem>
+                                    <SelectItem value="Kling 3.0 T2V">Kling 3.0 T2V (Text-to-Video)</SelectItem>
+                                    <SelectItem value="Kling 3.0 I2V">Kling 3.0 I2V (Image-to-Video)</SelectItem>
+                                    <SelectItem value="Kling 3.0 I2V Extended">Kling 3.0 I2V Extended (Frame-to-Frame)</SelectItem>
+                                    <SelectItem value="Kling 3.0 Omni T2V">Kling 3.0 Omni T2V (Reference + Audio)</SelectItem>
+                                    <SelectItem value="Kling 3.0 Omni I2V">Kling 3.0 Omni I2V (Reference + Audio)</SelectItem>
+                                    <SelectItem value="Kling 3.0 Omni I2V Extended">Kling 3.0 Omni I2V Extended (Frame-to-Frame)</SelectItem>
                                     <SelectItem value="Kling 2.1 Pro (Frame-to-Frame)">Kling 2.1 Pro (Frame-to-Frame via Leonardo)</SelectItem>
                                     <SelectItem value="Veo 3.1 (Frame-to-Frame)">Veo 3.1 (Frame-to-Frame via Leonardo)</SelectItem>
                                     <SelectItem value="Veo 3.1 Fast (Frame-to-Frame)">Veo 3.1 Fast (Frame-to-Frame via Leonardo)</SelectItem>
@@ -6385,9 +6563,14 @@ export default function CinemaProductionPage() {
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          <SelectItem value="5s">5 seconds</SelectItem>
-                                          <SelectItem value="10s">10 seconds</SelectItem>
-                                          <SelectItem value="15s">15 seconds</SelectItem>
+                                          {(isNativeKlingModel(generation.model)
+                                            ? KLING_V3_DURATIONS
+                                            : [5, 10, 15]
+                                          ).map((seconds) => (
+                                            <SelectItem key={seconds} value={`${seconds}s`}>
+                                              {seconds} seconds
+                                            </SelectItem>
+                                          ))}
                                         </SelectContent>
                                       </Select>
                                     </div>
@@ -6402,12 +6585,44 @@ export default function CinemaProductionPage() {
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          <SelectItem value="1280x720">1280x720 (HD)</SelectItem>
-                                          <SelectItem value="1920x1080">1920x1080 (Full HD)</SelectItem>
+                                          {isRunwayGen4ImageToVideoModel(generation.model)
+                                            ? RUNWAY_GEN4_RATIOS.map((entry) => (
+                                                <SelectItem
+                                                  key={entry.ratio}
+                                                  value={getRunwayResolutionValue(entry.width, entry.height)}
+                                                >
+                                                  {entry.label}
+                                                </SelectItem>
+                                              ))
+                                            : (
+                                              <>
+                                                <SelectItem value="1280x720">1280x720 (HD)</SelectItem>
+                                                <SelectItem value="1920x1080">1920x1080 (Full HD)</SelectItem>
+                                              </>
+                                            )}
                                         </SelectContent>
                                       </Select>
                                     </div>
                                   </div>
+
+                                  {isNativeKlingModel(generation.model) && (
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        id={`kling-audio-${storyboard.id}`}
+                                        type="checkbox"
+                                        checked={generation.klingNativeAudio ?? false}
+                                        onChange={(e) =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            klingNativeAudio: e.target.checked,
+                                          })
+                                        }
+                                        className="h-4 w-4 rounded border-border"
+                                      />
+                                      <Label htmlFor={`kling-audio-${storyboard.id}`} className="text-sm font-normal">
+                                        Native audio (dialogue, SFX, ambient)
+                                      </Label>
+                                    </div>
+                                  )}
 
                             {/* File Uploads Based on Model */}
                             {fileRequirement === 'hedra-avatar' && (
@@ -6652,7 +6867,7 @@ export default function CinemaProductionPage() {
                                     {
                                       kind: "end" as const,
                                       label:
-                                        generation.model === "Kling I2V Extended"
+                                        getKlingModelConfig(generation.model)?.needsStartEnd
                                           ? "End Frame (Required)"
                                           : "End Frame (Optional)",
                                       preview:
@@ -6942,17 +7157,20 @@ export default function CinemaProductionPage() {
 
                         {/* Audio Generation Section */}
                         <div className="mt-6 pt-6 border-t">
-                          <div className="flex items-center gap-2 mb-4">
+                          <div className="flex items-center gap-2 mb-3">
                             <Volume2 className="h-5 w-5" />
                             <h3 className="text-lg font-semibold">Audio Generation</h3>
                           </div>
+                          <p className="text-xs text-muted-foreground mb-3">
+                            Expand a section to generate dialogue, sound effects, or music for this shot.
+                          </p>
 
-                          {/* Dialogue Generation */}
-                          <div className="mb-4">
-                            <Label className="flex items-center gap-2 mb-2">
-                              <Music className="h-4 w-4" />
-                              Dialogue (ElevenLabs TTS)
-                            </Label>
+                          <div className="space-y-2">
+                          <AudioGeneratorSection
+                            title="Dialogue (ElevenLabs TTS)"
+                            icon={Music}
+                            clipCount={getSessionClipsForStoryboard(storyboard.id, "dialogue").length}
+                          >
                             <div className="space-y-2">
                               {dialogueVoiceOptions.length > 0 ? (
                                 <Select
@@ -7166,14 +7384,13 @@ export default function CinemaProductionPage() {
                                 savingClipId={savingAudioClipId}
                               />
                             </div>
-                          </div>
+                          </AudioGeneratorSection>
 
-                          {/* Sound Effects Generation */}
-                          <div className="mb-4">
-                            <Label className="flex items-center gap-2 mb-2">
-                              <Zap className="h-4 w-4" />
-                              Sound Effects (ElevenLabs)
-                            </Label>
+                          <AudioGeneratorSection
+                            title="Sound Effects (ElevenLabs)"
+                            icon={Zap}
+                            clipCount={getSessionClipsForStoryboard(storyboard.id, "sound-effect").length}
+                          >
                             <SoundEffectGenerator
                               storyboard={storyboard}
                               clips={getSessionClipsForStoryboard(storyboard.id, "sound-effect")}
@@ -7206,17 +7423,14 @@ export default function CinemaProductionPage() {
                               }
                               onPromptAssist={() => handleSoundEffectPromptAssist(storyboard)}
                             />
-                          </div>
+                          </AudioGeneratorSection>
 
-                          {/* Stable Audio (music / ambience) */}
-                          <div>
-                            <Label className="flex items-center gap-2 mb-2">
-                              <Music className="h-4 w-4" />
-                              Music / Ambience (Stable Audio)
-                            </Label>
-                            <p className="text-xs text-muted-foreground mb-2">
-                              Generate cinematic music and ambience with Stability AI. Dialogue and SFX still use ElevenLabs.
-                            </p>
+                          <AudioGeneratorSection
+                            title="Music / Ambience (Stable Audio)"
+                            icon={Music}
+                            description="Generate cinematic music and ambience with Stability AI. Dialogue and SFX still use ElevenLabs."
+                            clipCount={getSessionClipsForStoryboard(storyboard.id, "stable-audio").length}
+                          >
                             <StableAudioGenerator
                               storyboard={storyboard}
                               clips={getSessionClipsForStoryboard(storyboard.id, "stable-audio")}
@@ -7249,6 +7463,7 @@ export default function CinemaProductionPage() {
                               }
                               onPromptAssist={() => handleStableAudioPromptAssist(storyboard)}
                             />
+                          </AudioGeneratorSection>
                           </div>
                         </div>
                       </div>

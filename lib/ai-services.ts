@@ -3,6 +3,12 @@ import {
   DEFAULT_CINEMATIC_IMAGE_SIZE,
   resolveOpenAIImageSize,
 } from '@/lib/image-model-utils'
+import {
+  getKlingModelConfig,
+  isNativeKlingModel,
+  normalizeKlingUiModel,
+  type KlingApiMode,
+} from '@/lib/kling-models'
 
 // Base interfaces for AI services
 interface AIResponse {
@@ -45,6 +51,7 @@ interface GenerateVideoRequest {
   file?: File | null
   startFrame?: File | null
   endFrame?: File | null
+  klingNativeAudio?: boolean
 }
 
 interface GenerateAudioRequest {
@@ -617,7 +624,7 @@ export class OpenArtService {
 export class KlingService {
   static async pollTaskUntilComplete(
     taskId: string,
-    mode: 'image2video' | 'text2video' = 'image2video',
+    mode: KlingApiMode = 'image2video',
     options?: { maxAttempts?: number; intervalMs?: number; onProgress?: (attempt: number, max: number) => void },
   ): Promise<{ url: string }> {
     const maxAttempts = options?.maxAttempts ?? 120 // ~10 minutes
@@ -674,16 +681,20 @@ export class KlingService {
         hasEndFrame: !!request.endFrame,
       })
       
+      const uiModel = normalizeKlingUiModel(request.model)
+      if (!isNativeKlingModel(uiModel)) {
+        throw new Error(`Unsupported Kling model: ${request.model}`)
+      }
+
+      const modelConfig = getKlingModelConfig(uiModel)
+      if (!modelConfig) {
+        throw new Error(`Unsupported Kling model: ${request.model}`)
+      }
+
       // Prepare form data for file upload support
       const formData = new FormData()
       formData.append('prompt', request.prompt || '')
-      
-      // Map model to API model format
-      let apiModel = 'kling_t2v'
-      if (request.model === 'Kling I2V' || request.model === 'Kling I2V Extended') {
-        apiModel = 'kling_i2v'
-      }
-      formData.append('model', apiModel)
+      formData.append('ui_model', uiModel)
       
       // Parse duration (handle both "10s" and 10 formats)
       const durationStr = String(request.duration || '5')
@@ -703,17 +714,17 @@ export class KlingService {
       }
       const ratio = resolutionToRatio[request.resolution || '1280:720'] || '16:9'
       formData.append('ratio', ratio)
-      
-      // Add files based on model type
-      if (request.model === 'Kling I2V' && request.file) {
-        formData.append('file', request.file)
-      } else if (request.model === 'Kling I2V Extended') {
+      formData.append('sound', request.klingNativeAudio ? 'on' : 'off')
+
+      if (modelConfig.needsStartEnd) {
         if (request.startFrame) {
           formData.append('start_frame', request.startFrame)
         }
         if (request.endFrame) {
           formData.append('end_frame', request.endFrame)
         }
+      } else if (modelConfig.needsImage && request.file) {
+        formData.append('file', request.file)
       }
       
       // Call our server-side API route
@@ -740,9 +751,7 @@ export class KlingService {
 
       // Long-running jobs (common for frame-to-frame) — continue on the client
       const taskId = result.data?.taskId as string | undefined
-      const mode = (result.data?.mode === 'text2video' ? 'text2video' : 'image2video') as
-        | 'image2video'
-        | 'text2video'
+      const mode = (result.data?.mode || modelConfig.apiMode) as KlingApiMode
 
       if ((result.processing || result.data?.status === 'processing') && taskId) {
         console.log('⏳ Kling still processing — client polling task', taskId)
@@ -782,9 +791,10 @@ export class KlingService {
       // Test with a simple prompt via our server-side API
       const formData = new FormData()
       formData.append('prompt', 'test')
-      formData.append('model', 'kling_t2v')
+      formData.append('ui_model', 'Kling 3.0 T2V')
       formData.append('duration', '5')
       formData.append('ratio', '16:9')
+      formData.append('sound', 'off')
       
       const response = await fetch('/api/kling/generate', {
         method: 'POST',

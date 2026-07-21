@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import jwt from 'jsonwebtoken'
+import {
+  getKlingCreateEndpoint,
+  getKlingModelConfig,
+  getKlingStatusEndpoint,
+  type KlingApiMode,
+} from '@/lib/kling-models'
 
-// Generate JWT token for Kling AI authentication
 function generateKlingToken() {
   const accessKey = process.env.KLING_ACCESS_KEY
   const secretKey = process.env.KLING_SECRET_KEY
@@ -12,20 +17,43 @@ function generateKlingToken() {
 
   const payload = {
     iss: accessKey,
-    exp: Math.floor(Date.now() / 1000) + 1800, // 30 minutes
-    nbf: Math.floor(Date.now() / 1000) - 5 // 5 seconds ago
+    exp: Math.floor(Date.now() / 1000) + 1800,
+    nbf: Math.floor(Date.now() / 1000) - 5,
   }
 
-  const token = jwt.sign(payload, secretKey, { algorithm: 'HS256' })
-  return token
+  return jwt.sign(payload, secretKey, { algorithm: 'HS256' })
+}
+
+function mapRatioToKling(ratio: string): string {
+  const ratioMap: Record<string, string> = {
+    '1280:720': '16:9',
+    '1920:1080': '16:9',
+    '720:1280': '9:16',
+    '1080:1920': '9:16',
+    '960:960': '1:1',
+    '768:1280': '9:16',
+    '832:1104': '3:4',
+  }
+
+  if (ratio in ratioMap) return ratioMap[ratio]
+  if (ratio === '1280:768' || ratio === '1104:832' || ratio === '1584:672') return '16:9'
+
+  const [w, h] = ratio.split(':').map(Number)
+  if (w && h) {
+    const aspect = w / h
+    if (aspect > 1.5) return '16:9'
+    if (aspect < 0.6) return '9:16'
+    return '1:1'
+  }
+
+  return '16:9'
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // Get the current user using server-side Supabase client
     const { createServerClient } = await import('@supabase/ssr')
     const { cookies } = await import('next/headers')
-    
+
     const cookieStore = await cookies()
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -38,209 +66,173 @@ export async function POST(req: NextRequest) {
           setAll(cookiesToSet) {
             try {
               cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
+                cookieStore.set(name, value, options),
               )
             } catch {
-              // The `setAll` method was called from a Server Component.
+              // setAll called from a Server Component
             }
           },
         },
-      }
+      },
     )
 
     const { data: { user }, error: authError } = await supabase.auth.getUser()
-    
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    // Parse form data
     const formData = await req.formData()
     const prompt = formData.get('prompt') as string
-    const model = formData.get('model') as string
+    const uiModel = (formData.get('ui_model') as string) || (formData.get('model') as string)
     const duration = parseInt(formData.get('duration') as string) || 5
     const file = formData.get('file') as File | null
     const startFrame = formData.get('start_frame') as File | null
     const endFrame = formData.get('end_frame') as File | null
-    const ratio = formData.get('ratio') as string || '16:9'
+    const ratio = (formData.get('ratio') as string) || '16:9'
+    const sound = formData.get('sound') === 'on' ? 'on' : 'off'
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 })
     }
 
-    if (!model) {
+    if (!uiModel) {
       return NextResponse.json({ error: 'Model is required' }, { status: 400 })
+    }
+
+    const modelConfig = getKlingModelConfig(uiModel)
+    if (!modelConfig) {
+      return NextResponse.json({ error: `Unsupported Kling model: ${uiModel}` }, { status: 400 })
     }
 
     console.log('🎬 Kling AI video generation starting...')
     console.log('🎬 User:', user.id)
+    console.log('🎬 UI model:', uiModel)
+    console.log('🎬 API model:', modelConfig.modelName)
+    console.log('🎬 API mode:', modelConfig.apiMode)
     console.log('🎬 Prompt:', prompt)
-    console.log('🎬 Model:', model)
     console.log('🎬 Duration:', duration)
     console.log('🎬 Ratio:', ratio)
-    console.log('🎬 Has file:', !!file)
-    console.log('🎬 Has start frame:', !!startFrame)
-    console.log('🎬 Has end frame:', !!endFrame)
+    console.log('🎬 Sound:', sound)
 
-    // Convert files to base64 if provided
     let imageBase64: string | undefined
     let imageTailBase64: string | undefined
 
-    // Handle single file (for I2V)
     if (file) {
-      const arrayBuffer = await file.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
-      // Kling AI wants ONLY the base64 string, no data URI prefix
+      const buffer = Buffer.from(await file.arrayBuffer())
       imageBase64 = buffer.toString('base64')
       console.log('🎬 File uploaded - type:', file.type, 'size:', file.size)
     }
 
-    // Handle start/end frames (for I2V Extended)
     if (startFrame) {
-      const arrayBuffer = await startFrame.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
+      const buffer = Buffer.from(await startFrame.arrayBuffer())
       imageBase64 = buffer.toString('base64')
       console.log('🎬 Start frame uploaded - type:', startFrame.type, 'size:', startFrame.size)
     }
 
     if (endFrame) {
-      const arrayBuffer = await endFrame.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
+      const buffer = Buffer.from(await endFrame.arrayBuffer())
       imageTailBase64 = buffer.toString('base64')
       console.log('🎬 End frame uploaded - type:', endFrame.type, 'size:', endFrame.size)
     }
 
-    // Generate JWT token for Kling AI
     const authToken = generateKlingToken()
+    const klingAspectRatio = mapRatioToKling(ratio)
+    const apiMode: KlingApiMode = modelConfig.apiMode
+    const endpoint = getKlingCreateEndpoint(apiMode)
+    const durationStr = String(Math.min(15, Math.max(3, duration)))
 
-    // Determine endpoint based on model type
-    let endpoint: string
-    
-    if (model === 'kling_i2v' && imageBase64) {
-      endpoint = 'https://api-singapore.klingai.com/v1/videos/image2video'
-    } else if (imageBase64) {
-      endpoint = 'https://api-singapore.klingai.com/v1/videos/image2video'
-    } else {
-      endpoint = 'https://api-singapore.klingai.com/v1/videos/text2video'
-    }
+    let requestBody: Record<string, unknown>
 
-    // Map ratio to Kling AI format
-    let klingAspectRatio = '16:9' // default
-    const ratioMap: Record<string, string> = {
-      '1280:720': '16:9',
-      '1920:1080': '16:9',
-      '720:1280': '9:16',
-      '1080:1920': '9:16',
-      '960:960': '1:1',
-      '768:1280': '9:16',
-      '832:1104': '3:4',
-    }
-    
-    if (ratio in ratioMap) {
-      klingAspectRatio = ratioMap[ratio]
-    } else if (ratio === '1280:768' || ratio === '1104:832' || ratio === '1584:672') {
-      klingAspectRatio = '16:9'
-    } else {
-      const [w, h] = ratio.split(':').map(Number)
-      if (w && h) {
-        const aspect = w / h
-        if (aspect > 1.5) klingAspectRatio = '16:9'
-        else if (aspect < 0.6) klingAspectRatio = '9:16'
-        else klingAspectRatio = '1:1'
+    if (apiMode === 'omni-video') {
+      requestBody = {
+        model_name: modelConfig.modelName,
+        prompt,
+        duration: durationStr,
+        aspect_ratio: klingAspectRatio,
+        mode: 'pro',
+        sound,
       }
-    }
 
-    // Prepare request body
-    // Newer Kling API requires model_name. Without it, frame-to-frame (image_tail)
-    // jobs can sit in "processing" indefinitely on an implicit legacy default.
-    const modelName =
-      process.env.KLING_IMAGE2VIDEO_MODEL?.trim() ||
-      (imageTailBase64 ? 'kling-v2-6' : 'kling-v2-1')
+      const imageList: Array<{ image_url: string; type?: string }> = []
+      if (imageBase64) {
+        imageList.push({
+          image_url: imageBase64,
+          type: imageTailBase64 ? 'first_frame' : 'first_frame',
+        })
+      }
+      if (imageTailBase64) {
+        imageList.push({ image_url: imageTailBase64, type: 'end_frame' })
+      }
+      if (imageList.length > 0) {
+        requestBody.image_list = imageList
+      }
+    } else {
+      requestBody = {
+        model_name: modelConfig.modelName,
+        prompt,
+        duration: durationStr,
+        aspect_ratio: klingAspectRatio,
+        mode: 'pro',
+        sound,
+      }
 
-    const requestBody: Record<string, unknown> = {
-      model_name: modelName,
-      prompt: prompt,
-      duration: duration.toString(), // Must be string: "5" or "10"
-      aspect_ratio: klingAspectRatio,
-      // image_tail requires pro mode on current Kling versions
-      mode: 'pro',
-    }
-
-    // Add images if provided (base64 only, no data URI prefix)
-    if (imageBase64) {
-      requestBody.image = imageBase64
-    }
-
-    // Add end frame if provided (for I2V Extended)
-    if (imageTailBase64) {
-      requestBody.image_tail = imageTailBase64
+      if (imageBase64) {
+        requestBody.image = imageBase64
+      }
+      if (imageTailBase64) {
+        requestBody.image_tail = imageTailBase64
+      }
     }
 
     console.log('🎬 Calling Kling AI API:', {
       endpoint,
-      model_name: modelName,
+      model_name: modelConfig.modelName,
+      apiMode,
       prompt: prompt.slice(0, 120) + (prompt.length > 120 ? '…' : ''),
-      duration,
+      duration: durationStr,
       ratio: klingAspectRatio,
       mode: requestBody.mode,
+      sound,
       hasImage: !!imageBase64,
       hasImageTail: !!imageTailBase64,
-      imageBytes: imageBase64 ? Buffer.byteLength(imageBase64, 'utf8') : 0,
-      imageTailBytes: imageTailBase64 ? Buffer.byteLength(imageTailBase64, 'utf8') : 0,
     })
-    
-    // Step 1: Create task
+
     const createResponse = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Content-Type': 'application/json'
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(requestBody),
     })
 
     if (!createResponse.ok) {
       const errorText = await createResponse.text()
       console.error('❌ Kling AI error:', createResponse.status, errorText)
-      
-      // Parse error message
+
       let errorMessage = `Kling AI API error: ${createResponse.status}`
       try {
         const errorData = JSON.parse(errorText)
-        if (errorData.message) {
-          errorMessage = errorData.message
-        }
+        if (errorData.message) errorMessage = errorData.message
       } catch {
         errorMessage = errorText
       }
-      
-      return NextResponse.json({ 
-        error: errorMessage,
-        status: createResponse.status
-      }, { status: createResponse.status })
+
+      return NextResponse.json({ error: errorMessage, status: createResponse.status }, { status: createResponse.status })
     }
 
     const createData = await createResponse.json()
     console.log('✅ Kling AI task created:', createData)
 
-    // Check if task creation was successful
     if (createData.code !== 0 || !createData.data?.task_id) {
       throw new Error(`Kling AI task creation failed: ${createData.message || 'Unknown error'}`)
     }
 
     const taskId = createData.data.task_id
-    const mode = endpoint.includes('image2video') ? 'image2video' : 'text2video'
-
-    // Short server-side wait so we can return fast completions immediately.
-    // Frame-to-frame often needs longer — client continues polling via /api/kling/status.
-    const maxAttempts = 24 // ~2 minutes at 5s
+    const maxAttempts = 24
     let attempts = 0
     let videoUrl: string | null = null
-
-    const statusEndpoint =
-      mode === 'image2video'
-        ? `https://api-singapore.klingai.com/v1/videos/image2video/${taskId}`
-        : `https://api-singapore.klingai.com/v1/videos/text2video/${taskId}`
+    const statusEndpoint = getKlingStatusEndpoint(apiMode, taskId)
 
     while (attempts < maxAttempts) {
       attempts++
@@ -266,7 +258,7 @@ export async function POST(req: NextRequest) {
       const taskStatus = statusData.data?.task_status
       const statusMsg = statusData.data?.task_status_msg
       const updatedAt = statusData.data?.updated_at
-      console.log(`🎬 Task status:`, {
+      console.log('🎬 Task status:', {
         taskStatus,
         statusMsg: statusMsg || null,
         updatedAt: updatedAt || null,
@@ -281,7 +273,10 @@ export async function POST(req: NextRequest) {
           console.log('✅ Video generated successfully!')
           break
         }
-        console.warn('⚠️ Kling reported succeed but no video URL in task_result:', JSON.stringify(statusData.data?.task_result)?.slice(0, 500))
+        console.warn(
+          '⚠️ Kling reported succeed but no video URL in task_result:',
+          JSON.stringify(statusData.data?.task_result)?.slice(0, 500),
+        )
       } else if (taskStatus === 'failed') {
         const errorMsg = statusMsg || 'Unknown error'
         console.error('❌ Video generation failed:', errorMsg, JSON.stringify(statusData.data)?.slice(0, 800))
@@ -299,9 +294,9 @@ export async function POST(req: NextRequest) {
         processing: true,
         data: {
           taskId,
-          mode,
+          mode: apiMode,
           status: 'processing',
-          model,
+          model: uiModel,
           prompt,
           duration,
           ratio,
@@ -315,29 +310,26 @@ export async function POST(req: NextRequest) {
       success: true,
       data: {
         url: videoUrl,
-        model: model,
-        prompt: prompt,
-        duration: duration,
-        ratio: ratio,
+        model: uiModel,
+        prompt,
+        duration,
+        ratio,
         status: 'completed',
         taskId,
-        mode,
+        mode: apiMode,
       },
     })
-
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('🎬 Kling AI error:', error)
-    
-    let errorMessage = 'Video generation failed: ' + (error.message || 'Unknown error')
-    
-    if (error.message?.includes('Account balance not enough')) {
-      errorMessage = 'Kling AI account has insufficient credits. Please top up your API credits at https://klingai.com/global/dev/pricing'
+
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    let errorMessage = 'Video generation failed: ' + message
+
+    if (message.includes('Account balance not enough')) {
+      errorMessage =
+        'Kling AI account has insufficient credits. Please top up your API credits at https://klingai.com/global/dev/pricing'
     }
-    
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: 500 }
-    )
+
+    return NextResponse.json({ error: errorMessage }, { status: 500 })
   }
 }
-

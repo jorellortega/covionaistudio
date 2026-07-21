@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import jwt from 'jsonwebtoken'
+import { getKlingStatusEndpoint, type KlingApiMode } from '@/lib/kling-models'
 
 function generateKlingToken() {
   const accessKey = process.env.KLING_ACCESS_KEY
@@ -18,6 +19,13 @@ function generateKlingToken() {
   return jwt.sign(payload, secretKey, { algorithm: 'HS256' })
 }
 
+function parseKlingApiMode(raw: string | null): KlingApiMode {
+  if (raw === 'text2video' || raw === 'omni-video' || raw === 'image2video') {
+    return raw
+  }
+  return 'image2video'
+}
+
 /**
  * Poll Kling task status using server-side Kling credentials.
  * Intentionally does not require a Supabase user session — long /api/kling/generate
@@ -27,18 +35,14 @@ function generateKlingToken() {
 export async function GET(req: NextRequest) {
   try {
     const taskId = req.nextUrl.searchParams.get('taskId')?.trim()
-    const mode =
-      req.nextUrl.searchParams.get('mode') === 'text2video' ? 'text2video' : 'image2video'
+    const mode = parseKlingApiMode(req.nextUrl.searchParams.get('mode'))
 
     if (!taskId || !/^[A-Za-z0-9_-]{8,128}$/.test(taskId)) {
       return NextResponse.json({ error: 'Valid taskId is required' }, { status: 400 })
     }
 
     const authToken = generateKlingToken()
-    const statusEndpoint =
-      mode === 'text2video'
-        ? `https://api-singapore.klingai.com/v1/videos/text2video/${taskId}`
-        : `https://api-singapore.klingai.com/v1/videos/image2video/${taskId}`
+    const statusEndpoint = getKlingStatusEndpoint(mode, taskId)
 
     const statusResponse = await fetch(statusEndpoint, {
       method: 'GET',
