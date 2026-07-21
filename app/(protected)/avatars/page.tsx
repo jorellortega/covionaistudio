@@ -21,12 +21,14 @@ import {
   AVATAR_TURNAROUND_ANGLE_IDS,
   buildAvatarPrompt,
   buildAvatarEditPrompt,
+  createCustomAvatarAngle,
   type AvatarAngle,
 } from "@/lib/avatar-angles"
 import {
   mapDisplayModelToService,
   normalizeDisplayModelToApiId,
   displayModelSupportsReferenceImage,
+  migrateGPTImageDisplayLabel,
   DEFAULT_CINEMATIC_IMAGE_WIDTH,
   DEFAULT_CINEMATIC_IMAGE_HEIGHT,
 } from "@/lib/image-model-utils"
@@ -65,6 +67,9 @@ import {
   Upload,
   X,
   Link2,
+  Plus,
+  Pencil,
+  Trash2,
 } from "lucide-react"
 
 type GenerationMode = "description" | "from_reference"
@@ -93,6 +98,59 @@ interface AngleGallery {
 
 type AngleGalleries = Record<string, AngleGallery>
 
+const MAX_LINKED_REFERENCE_IMAGES = 5
+
+function isAvatarAsset(asset: Asset): boolean {
+  return (
+    asset.content_type === "image" &&
+    !!asset.content_url &&
+    asset.metadata?.type === "avatar" &&
+    typeof asset.metadata?.avatar_angle === "string"
+  )
+}
+
+function buildGalleriesFromAvatarAssets(assets: Asset[]): AngleGalleries {
+  const galleries: AngleGalleries = {}
+  const avatarAssets = assets
+    .filter(isAvatarAsset)
+    .sort(
+      (a, b) =>
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    )
+
+  for (const asset of avatarAssets) {
+    const angleId = asset.metadata!.avatar_angle as string
+    const gallery = galleries[angleId] ?? { images: [], selectedIndex: 0 }
+    gallery.images.push({
+      id: asset.id,
+      imageUrl: asset.content_url!,
+      prompt: asset.prompt || asset.title,
+      saved: true,
+      assetId: asset.id,
+      source:
+        asset.metadata?.avatar_source === "from_reference"
+          ? "from_reference"
+          : asset.metadata?.avatar_source === "existing"
+            ? "existing"
+            : "generated",
+    })
+    galleries[angleId] = gallery
+  }
+
+  for (const angleId of Object.keys(galleries)) {
+    const gallery = galleries[angleId]
+    gallery.selectedIndex = Math.max(0, gallery.images.length - 1)
+  }
+
+  return galleries
+}
+
+function getAvatarGalleryStorageKey(projectId: string, userId: string) {
+  return projectId
+    ? `avatar-galleries-project-${projectId}`
+    : `avatar-galleries-user-${userId}`
+}
+
 const createAvatarImage = (
   image: Omit<AvatarImage, "id">,
 ): AvatarImage => ({
@@ -118,6 +176,7 @@ export default function AvatarsPage() {
   const [characterName, setCharacterName] = useState("")
   const [description, setDescription] = useState("")
   const [style, setStyle] = useState(STYLE_OPTIONS[0].value)
+  const [avatarShots, setAvatarShots] = useState<AvatarAngle[]>([...AVATAR_ANGLES])
   const [selectedAngles, setSelectedAngles] = useState<string[]>(
     [...AVATAR_TURNAROUND_ANGLE_IDS],
   )
@@ -136,6 +195,29 @@ export default function AvatarsPage() {
   const [generationMode, setGenerationMode] = useState<GenerationMode>("description")
   const [sourceReference, setSourceReference] = useState<SourceReference | null>(null)
   const [sourcePickDialogOpen, setSourcePickDialogOpen] = useState(false)
+  const [imageAiSetting, setImageAiSetting] = useState<Awaited<
+    ReturnType<typeof AISettingsService.getOrCreateDefaultTabSetting>
+  > | null>(null)
+  const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
+  const [imageEditAngleId, setImageEditAngleId] = useState<string | null>(null)
+  const [imageEditPrompt, setImageEditPrompt] = useState("")
+  const [imageEditUploading, setImageEditUploading] = useState(false)
+  const [imageEditProgress, setImageEditProgress] = useState("")
+  const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
+  const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
+  const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
+  const [shotDialogOpen, setShotDialogOpen] = useState(false)
+  const [editingShotId, setEditingShotId] = useState<string | null>(null)
+  const [shotFormLabel, setShotFormLabel] = useState("")
+  const [shotFormPrompt, setShotFormPrompt] = useState("")
+  const [galleriesHydrated, setGalleriesHydrated] = useState(false)
+
+  useEffect(() => {
+    if (!ready) return
+    AISettingsService.getOrCreateDefaultTabSetting("images")
+      .then(setImageAiSetting)
+      .catch(() => setImageAiSetting(null))
+  }, [ready])
 
   useEffect(() => {
     if (!ready || !projectId) {
@@ -168,6 +250,63 @@ export default function AvatarsPage() {
   }, [ready, projectId])
 
   useEffect(() => {
+    setGalleriesHydrated(false)
+    setAngleGalleries({})
+  }, [projectId, userId])
+
+  useEffect(() => {
+    if (!ready || !userId || galleriesHydrated || isLoadingImages) return
+
+    const avatarAssets = projectImageAssets.filter(isAvatarAsset)
+    if (avatarAssets.length > 0) {
+      setAngleGalleries(buildGalleriesFromAvatarAssets(projectImageAssets))
+      const nameFromMeta = avatarAssets.find(
+        (a) => typeof a.metadata?.character_name === "string",
+      )?.metadata?.character_name
+      if (typeof nameFromMeta === "string" && nameFromMeta.trim()) {
+        setCharacterName((prev) => prev || nameFromMeta)
+      }
+      setGalleriesHydrated(true)
+      return
+    }
+
+    try {
+      const storageKey = getAvatarGalleryStorageKey(projectId, userId)
+      const raw = localStorage.getItem(storageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw) as AngleGalleries
+        if (parsed && typeof parsed === "object") {
+          setAngleGalleries(parsed)
+        }
+      }
+    } catch {
+      // ignore corrupt local cache
+    }
+
+    setGalleriesHydrated(true)
+  }, [
+    ready,
+    userId,
+    projectId,
+    projectImageAssets,
+    isLoadingImages,
+    galleriesHydrated,
+  ])
+
+  useEffect(() => {
+    if (!ready || !userId || !galleriesHydrated) return
+    const hasImages = Object.values(angleGalleries).some((g) => g.images.length > 0)
+    if (!hasImages) return
+
+    try {
+      const storageKey = getAvatarGalleryStorageKey(projectId, userId)
+      localStorage.setItem(storageKey, JSON.stringify(angleGalleries))
+    } catch {
+      // ignore quota errors
+    }
+  }, [angleGalleries, ready, userId, projectId, galleriesHydrated])
+
+  useEffect(() => {
     if (!ready || !linkedCharacterId) {
       setCharacterImageAssets([])
       return
@@ -184,15 +323,22 @@ export default function AvatarsPage() {
   const addImageToAngle = (
     angleId: string,
     image: Omit<AvatarImage, "id">,
+    options?: { selectNew?: boolean },
   ) => {
     setAngleGalleries((prev) => {
       const gallery = prev[angleId] ?? { images: [], selectedIndex: 0 }
       const newImage = createAvatarImage(image)
+      const nextImages = [...gallery.images, newImage]
+      const selectNew = options?.selectNew ?? false
       return {
         ...prev,
         [angleId]: {
-          images: [...gallery.images, newImage],
-          selectedIndex: gallery.images.length,
+          images: nextImages,
+          selectedIndex: selectNew
+            ? nextImages.length - 1
+            : gallery.images.length > 0
+              ? gallery.selectedIndex
+              : 0,
         },
       }
     })
@@ -226,10 +372,289 @@ export default function AvatarsPage() {
     })
   }
 
+  const persistAvatarImage = async (
+    angle: AvatarAngle,
+    image: Omit<AvatarImage, "id">,
+  ): Promise<AvatarImage> => {
+    const baseImage = createAvatarImage(image)
+
+    if (!projectId) {
+      return baseImage
+    }
+
+    try {
+      const asset = await AssetService.createAsset({
+        project_id: projectId,
+        character_id: linkedCharacterId || null,
+        title: `${characterName || "Character"} - ${angle.label}`,
+        content_type: "image",
+        content_url: image.imageUrl,
+        prompt: image.prompt,
+        metadata: {
+          type: "avatar",
+          avatar_angle: angle.id,
+          avatar_source: image.source || "generated",
+          character_name: characterName || null,
+        },
+      })
+      setProjectImageAssets((prev) =>
+        prev.some((a) => a.id === asset.id) ? prev : [asset, ...prev],
+      )
+      return {
+        ...baseImage,
+        id: asset.id,
+        assetId: asset.id,
+        saved: true,
+      }
+    } catch (error) {
+      console.error("Failed to auto-save avatar to project:", error)
+      return baseImage
+    }
+  }
+
+  const addAvatarImage = async (
+    angle: AvatarAngle,
+    image: Omit<AvatarImage, "id">,
+    options?: { selectNew?: boolean },
+  ) => {
+    const persisted = await persistAvatarImage(angle, image)
+    addImageToAngle(angle.id, persisted, options)
+  }
+
+  const removeAvatarImageFromGallery = (angleId: string, imageId: string) => {
+    setAngleGalleries((prev) => {
+      const gallery = prev[angleId]
+      if (!gallery) return prev
+
+      const removeIndex = gallery.images.findIndex((img) => img.id === imageId)
+      if (removeIndex === -1) return prev
+
+      const nextImages = gallery.images.filter((img) => img.id !== imageId)
+      if (nextImages.length === 0) {
+        const next = { ...prev }
+        delete next[angleId]
+        return next
+      }
+
+      const nextSelectedIndex =
+        removeIndex < gallery.selectedIndex
+          ? gallery.selectedIndex - 1
+          : removeIndex === gallery.selectedIndex
+            ? Math.min(gallery.selectedIndex, nextImages.length - 1)
+            : gallery.selectedIndex
+
+      return {
+        ...prev,
+        [angleId]: {
+          images: nextImages,
+          selectedIndex: Math.max(0, nextSelectedIndex),
+        },
+      }
+    })
+  }
+
+  const galleryHasMultiple = (angleId: string) =>
+    (angleGalleries[angleId]?.images.length ?? 0) > 1
+
+  const handleDeleteAvatarImage = async (angle: AvatarAngle, image: AvatarImage) => {
+    if (
+      !window.confirm(
+        `Delete this ${angle.label} image${galleryHasMultiple(angle.id) ? " variant" : ""}?`,
+      )
+    ) {
+      return
+    }
+
+    removeAvatarImageFromGallery(angle.id, image.id)
+
+    const shouldDeleteAsset =
+      !!image.assetId && image.saved && image.source !== "existing"
+
+    if (shouldDeleteAsset) {
+      try {
+        await AssetService.deleteAsset(image.assetId!)
+        setProjectImageAssets((prev) => prev.filter((a) => a.id !== image.assetId))
+      } catch (error) {
+        toast({
+          title: "Removed from gallery",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Could not delete the saved project asset.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    toast({ title: "Image deleted", description: angle.label })
+  }
+
   const toggleAngle = (id: string) => {
     setSelectedAngles((prev) =>
       prev.includes(id) ? prev.filter((a) => a !== id) : [...prev, id],
     )
+  }
+
+  const openAddShotDialog = () => {
+    setEditingShotId(null)
+    setShotFormLabel("")
+    setShotFormPrompt("")
+    setShotDialogOpen(true)
+  }
+
+  const openEditShotDialog = (shot: AvatarAngle) => {
+    setEditingShotId(shot.id)
+    setShotFormLabel(shot.label)
+    setShotFormPrompt(shot.prompt)
+    setShotDialogOpen(true)
+  }
+
+  const saveShot = () => {
+    const label = shotFormLabel.trim()
+    const prompt = shotFormPrompt.trim()
+    if (!label || !prompt) {
+      toast({
+        title: "Shot details required",
+        description: "Add a name and framing description for this shot.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (editingShotId) {
+      setAvatarShots((prev) =>
+        prev.map((shot) =>
+          shot.id === editingShotId
+            ? {
+                ...shot,
+                label,
+                prompt,
+                shortLabel: label.split(/\s+/)[0]?.slice(0, 10) || shot.shortLabel,
+              }
+            : shot,
+        ),
+      )
+      toast({ title: "Shot updated" })
+    } else {
+      const newShot = createCustomAvatarAngle(label, prompt)
+      setAvatarShots((prev) => [...prev, newShot])
+      setSelectedAngles((prev) => [...prev, newShot.id])
+      toast({ title: "Shot added", description: newShot.label })
+    }
+
+    setShotDialogOpen(false)
+    setEditingShotId(null)
+    setShotFormLabel("")
+    setShotFormPrompt("")
+  }
+
+  const deleteShot = (shotId: string) => {
+    const shot = avatarShots.find((s) => s.id === shotId)
+    const imageCount = angleGalleries[shotId]?.images.length ?? 0
+    if (
+      imageCount > 0 &&
+      !window.confirm(
+        `Delete "${shot?.label || "this shot"}"? ${imageCount} saved image${imageCount === 1 ? "" : "s"} for this shot will be removed from the gallery.`,
+      )
+    ) {
+      return
+    }
+
+    setAvatarShots((prev) => prev.filter((s) => s.id !== shotId))
+    setSelectedAngles((prev) => prev.filter((id) => id !== shotId))
+    setAngleGalleries((prev) => {
+      const next = { ...prev }
+      delete next[shotId]
+      return next
+    })
+    toast({ title: "Shot removed", description: shot?.label })
+  }
+
+  const resetShotsToDefaults = () => {
+    const hasCustomShots =
+      avatarShots.some((s) => s.isCustom) ||
+      avatarShots.length !== AVATAR_ANGLES.length
+    if (hasCustomShots && !window.confirm("Reset shots to the default list? Custom shots will be removed.")) {
+      return
+    }
+    setAvatarShots([...AVATAR_ANGLES])
+    setSelectedAngles([...AVATAR_TURNAROUND_ANGLE_IDS])
+    toast({ title: "Shots reset to defaults" })
+  }
+
+  const getLockedImageModelLabel = () => {
+    if (imageAiSetting?.is_locked && imageAiSetting.locked_model) {
+      return migrateGPTImageDisplayLabel(imageAiSetting.locked_model)
+    }
+    return null
+  }
+
+  const getLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    if (!imageAiSetting?.is_locked || !imageAiSetting.locked_model) {
+      return null
+    }
+    const lockedModel = imageAiSetting.locked_model
+    const lower = lockedModel.toLowerCase()
+    const apiModel =
+      lower.includes("runway") && options?.withReferenceImage
+        ? "gen4_image_turbo"
+        : normalizeDisplayModelToApiId(lockedModel)
+    return {
+      lockedModel,
+      service: mapDisplayModelToService(lockedModel),
+      apiModel,
+      supportsReference: displayModelSupportsReferenceImage(lockedModel),
+    }
+  }
+
+  const requireLockedImageConfig = (options?: { withReferenceImage?: boolean }) => {
+    const config = getLockedImageConfig(options)
+    if (!config) {
+      throw new Error("Please lock an image model in AI Settings first.")
+    }
+    return config
+  }
+
+  const getImageGenerationErrorMessage = (error: unknown, fallback: string) => {
+    if (!(error instanceof Error)) return fallback
+    if (error.message.includes("API key")) {
+      return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
+    }
+    return error.message
+  }
+
+  const clearImageEditReference = () => {
+    if (imageEditReferencePreview) URL.revokeObjectURL(imageEditReferencePreview)
+    setImageEditReferenceFile(null)
+    setImageEditReferencePreview(null)
+  }
+
+  const clearImageEditStyleLinks = () => {
+    setImageEditStyleLinkAssetIds([])
+  }
+
+  const toggleImageEditStyleLink = (assetId: string) => {
+    setImageEditStyleLinkAssetIds((prev) => {
+      if (prev.includes(assetId)) return prev.filter((id) => id !== assetId)
+      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+        toast({
+          title: "Maximum references reached",
+          description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
+          variant: "destructive",
+        })
+        return prev
+      }
+      return [...prev, assetId]
+    })
+  }
+
+  const openImageEditDialog = (angleId: string) => {
+    setImageEditAngleId(angleId)
+    setImageEditPrompt("")
+    clearImageEditReference()
+    clearImageEditStyleLinks()
+    setImageEditDialogOpen(true)
   }
 
   const getImageConfig = async (withReferenceImage = false) => {
@@ -257,8 +682,12 @@ export default function AvatarsPage() {
   const requestImageGeneration = async (
     prompt: string,
     config: Awaited<ReturnType<typeof getImageConfig>>,
-    referenceFile?: File,
+    options?: {
+      referenceFile?: File
+      styleReferenceFiles?: File[]
+    },
   ) => {
+    const referenceFile = options?.referenceFile
     const width = config.service === "runway" ? 1280 : DEFAULT_CINEMATIC_IMAGE_WIDTH
     const height = config.service === "runway" ? 720 : DEFAULT_CINEMATIC_IMAGE_HEIGHT
 
@@ -271,7 +700,11 @@ export default function AvatarsPage() {
       formData.append("height", String(height))
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
+      formData.append("autoSaveToBucket", "true")
       formData.append("file", referenceFile)
+      for (const styleFile of options?.styleReferenceFiles ?? []) {
+        formData.append("styleFiles", styleFile)
+      }
       if (config.service === "runway") {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
       }
@@ -319,7 +752,7 @@ export default function AvatarsPage() {
           `avatar-source-${sourceReference!.assetId || "upload"}.png`,
         ))
 
-      const res = await requestImageGeneration(prompt, config, referenceFile)
+      const res = await requestImageGeneration(prompt, config, { referenceFile })
       if (!res.ok) {
         const err = await res.json()
         throw new Error(err.error || `Failed to generate ${angle.label} from reference`)
@@ -345,7 +778,7 @@ export default function AvatarsPage() {
     }
 
     const data = await res.json()
-    const imageUrl = data.imageUrl || data.url
+    const imageUrl = data.bucketUrl || data.imageUrl || data.url
     if (!imageUrl) throw new Error("No image returned")
 
     return { imageUrl, prompt, source: "generated" as const }
@@ -436,10 +869,27 @@ export default function AvatarsPage() {
     [pickableImageGroups],
   )
 
-  const pickDialogAngle = useMemo(
-    () => AVATAR_ANGLES.find((a) => a.id === pickDialogAngleId) ?? null,
-    [pickDialogAngleId],
+  const allPickableAssets = useMemo(
+    () => pickableImageGroups.flatMap((group) => group.assets),
+    [pickableImageGroups],
   )
+
+  const pickDialogAngle = useMemo(
+    () => avatarShots.find((a) => a.id === pickDialogAngleId) ?? null,
+    [avatarShots, pickDialogAngleId],
+  )
+
+  const imageEditAngle = useMemo(
+    () => avatarShots.find((a) => a.id === imageEditAngleId) ?? null,
+    [avatarShots, imageEditAngleId],
+  )
+
+  const imageEditCurrentImage = useMemo(() => {
+    if (!imageEditAngleId) return null
+    const gallery = angleGalleries[imageEditAngleId]
+    if (!gallery) return null
+    return gallery.images[gallery.selectedIndex] ?? null
+  }, [imageEditAngleId, angleGalleries])
 
   const handlePickExistingImage = (angle: AvatarAngle, asset: Asset) => {
     if (!asset.content_url) return
@@ -547,7 +997,7 @@ export default function AvatarsPage() {
     }
 
     setIsGeneratingAll(true)
-    const anglesToGenerate = AVATAR_ANGLES.filter((a) => selectedAngles.includes(a.id))
+    const anglesToGenerate = avatarShots.filter((a) => selectedAngles.includes(a.id))
     let created = 0
 
     try {
@@ -555,7 +1005,7 @@ export default function AvatarsPage() {
         setGeneratingAngleId(angle.id)
         const result = await generateAngle(angle)
         if (result) {
-          addImageToAngle(angle.id, result)
+          await addAvatarImage(angle, result)
           created++
         }
       }
@@ -599,8 +1049,15 @@ export default function AvatarsPage() {
     try {
       const result = await generateAngle(angle)
       if (result) {
-        addImageToAngle(angle.id, result)
-        toast({ title: "Generated", description: angle.label })
+        await addAvatarImage(angle, result)
+        const variantCount = (angleGalleries[angle.id]?.images.length ?? 0) + 1
+        toast({
+          title: "Generated",
+          description:
+            variantCount > 1
+              ? `${angle.label} — variant ${variantCount} added`
+              : angle.label,
+        })
       }
     } catch (error) {
       toast({
@@ -647,6 +1104,103 @@ export default function AvatarsPage() {
     }
   }
 
+  const handleAvatarImageEdit = async () => {
+    const angleId = imageEditAngleId
+    const direction = imageEditPrompt.trim()
+    const currentImage = imageEditCurrentImage
+    const angle = imageEditAngle
+    if (!angleId || !userId) return
+    if (!direction) {
+      toast({
+        title: "Describe your edit",
+        description: 'e.g. "warmer lighting" or "darker jacket".',
+        variant: "destructive",
+      })
+      return
+    }
+    if (!imageEditReferenceFile && !currentImage?.imageUrl) {
+      toast({
+        title: "Reference required",
+        description: "This view needs an image, or upload a reference to edit from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setImageEditUploading(true)
+    setImageEditProgress("Editing image...")
+    try {
+      const config = requireLockedImageConfig({ withReferenceImage: true })
+      let prompt = direction
+      if (angle) prompt += ` Avatar view: ${angle.label}.`
+      if (characterName.trim()) prompt += ` Character: ${characterName.trim()}.`
+      prompt = prompt.slice(0, 990)
+
+      const styleReferenceFiles: File[] = []
+      for (const assetId of imageEditStyleLinkAssetIds) {
+        const styleAsset = allPickableAssets.find((a) => a.id === assetId)
+        if (styleAsset?.content_url) {
+          styleReferenceFiles.push(
+            await referenceUrlToFile(
+              styleAsset.content_url,
+              `style-ref-${styleAsset.id}.png`,
+            ),
+          )
+        }
+      }
+
+      let referenceFile: File | undefined
+      if (config.supportsReference) {
+        referenceFile =
+          imageEditReferenceFile ??
+          (await referenceUrlToFile(
+            currentImage!.imageUrl,
+            `avatar-edit-${angleId}.png`,
+          ))
+      }
+
+      const response = await requestImageGeneration(prompt, config, {
+        referenceFile,
+        styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
+      })
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to edit image")
+      }
+      const result = await response.json()
+      const imageUrl = result.bucketUrl || result.imageUrl || result.url
+      if (!imageUrl) {
+        throw new Error("Failed to edit image")
+      }
+
+      if (imageEditAngle) {
+        await addAvatarImage(imageEditAngle, {
+          imageUrl,
+          prompt,
+          source: "generated",
+        })
+      }
+
+      setImageEditDialogOpen(false)
+      clearImageEditReference()
+      clearImageEditStyleLinks()
+      setImageEditPrompt("")
+      toast({
+        title: "Edit added",
+        description: "Edited version added as a new variant for this angle.",
+      })
+    } catch (error) {
+      toast({
+        title: "Edit failed",
+        description: getImageGenerationErrorMessage(error, "Could not edit the image."),
+        variant: "destructive",
+      })
+    } finally {
+      setImageEditUploading(false)
+      setImageEditProgress("")
+    }
+  }
+
   const handleSaveToProject = async () => {
     if (!projectId) {
       toast({
@@ -661,7 +1215,7 @@ export default function AvatarsPage() {
     setIsSavingAll(true)
     try {
       let saved = 0
-      for (const angle of AVATAR_ANGLES) {
+      for (const angle of avatarShots) {
         const gallery = angleGalleries[angle.id]
         if (!gallery) continue
         const savedIds: string[] = []
@@ -1031,20 +1585,33 @@ export default function AvatarsPage() {
 
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Shots</CardTitle>
-                <CardDescription>
-                  {generationMode === "from_reference"
-                    ? "Select shot types to generate from your source image"
-                    : "Select which reference shots to generate"}
-                </CardDescription>
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-lg">Shots</CardTitle>
+                    <CardDescription>
+                      {generationMode === "from_reference"
+                        ? "Select shot types to generate from your source image"
+                        : "Select which reference shots to generate"}
+                    </CardDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs shrink-0"
+                    onClick={resetShotsToDefaults}
+                  >
+                    Reset
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="flex gap-2 mb-2">
+                <div className="flex flex-wrap gap-2 mb-2">
                   <Button
                     variant="outline"
                     size="sm"
                     className="text-xs h-7"
-                    onClick={() => setSelectedAngles(AVATAR_ANGLES.map((a) => a.id))}
+                    onClick={() => setSelectedAngles(avatarShots.map((a) => a.id))}
                   >
                     All
                   </Button>
@@ -1052,7 +1619,15 @@ export default function AvatarsPage() {
                     variant="outline"
                     size="sm"
                     className="text-xs h-7"
-                    onClick={() => setSelectedAngles([...AVATAR_TURNAROUND_ANGLE_IDS])}
+                    onClick={() =>
+                      setSelectedAngles(
+                        avatarShots
+                          .filter((a) =>
+                            (AVATAR_TURNAROUND_ANGLE_IDS as readonly string[]).includes(a.id),
+                          )
+                          .map((a) => a.id),
+                      )
+                    }
                   >
                     Essentials
                   </Button>
@@ -1060,7 +1635,15 @@ export default function AvatarsPage() {
                     variant="outline"
                     size="sm"
                     className="text-xs h-7"
-                    onClick={() => setSelectedAngles(["close_up", "wide_full_body", "clothing", "feet_shoes"])}
+                    onClick={() =>
+                      setSelectedAngles(
+                        avatarShots
+                          .filter((a) =>
+                            ["close_up", "wide_full_body", "clothing", "feet_shoes"].includes(a.id),
+                          )
+                          .map((a) => a.id),
+                      )
+                    }
                   >
                     Scene Details
                   </Button>
@@ -1073,20 +1656,63 @@ export default function AvatarsPage() {
                     Clear
                   </Button>
                 </div>
-                {AVATAR_ANGLES.map((angle) => (
-                  <label
-                    key={angle.id}
-                    className="flex items-center gap-3 rounded-md border border-border p-2 cursor-pointer hover:bg-muted/50"
-                  >
-                    <Checkbox
-                      checked={selectedAngles.includes(angle.id)}
-                      onCheckedChange={() => toggleAngle(angle.id)}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">{angle.label}</p>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {avatarShots.map((angle) => (
+                    <div
+                      key={angle.id}
+                      className="flex items-center gap-2 rounded-md border border-border p-2 hover:bg-muted/50"
+                    >
+                      <Checkbox
+                        checked={selectedAngles.includes(angle.id)}
+                        onCheckedChange={() => toggleAngle(angle.id)}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{angle.label}</p>
+                        {angle.isCustom && (
+                          <p className="text-[10px] text-muted-foreground truncate">{angle.prompt}</p>
+                        )}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => openEditShotDialog(angle)}
+                        title="Edit shot"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                        onClick={() => deleteShot(angle.id)}
+                        title="Delete shot"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
                     </div>
-                  </label>
-                ))}
+                  ))}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={openAddShotDialog}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Shot
+                </Button>
+
+                <p className="text-[11px] text-muted-foreground">
+                  New generations are added as variants — existing images are kept.
+                  {projectId
+                    ? " Images auto-save to your project."
+                    : " Link a project to persist images after refresh."}
+                </p>
 
                 <Button
                   className="w-full mt-2"
@@ -1144,7 +1770,7 @@ export default function AvatarsPage() {
               </Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                {AVATAR_ANGLES.filter(
+                {avatarShots.filter(
                   (a) => selectedAngles.includes(a.id) || (angleGalleries[a.id]?.images.length ?? 0) > 0,
                 ).map((angle) => {
                   const gallery = angleGalleries[angle.id]
@@ -1239,11 +1865,11 @@ export default function AvatarsPage() {
                           </div>
                         )}
                         {avatar && (
-                          <div className="flex gap-1 p-2 border-t border-border">
+                          <div className="flex flex-wrap gap-1 p-2 border-t border-border">
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="flex-1 h-8 text-xs"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               asChild
                             >
                               <a href={avatar.imageUrl} download target="_blank" rel="noreferrer">
@@ -1254,7 +1880,17 @@ export default function AvatarsPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="flex-1 h-8 text-xs"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
+                              onClick={() => openImageEditDialog(angle.id)}
+                              disabled={isLoading || isGeneratingAll || imageEditUploading}
+                            >
+                              <Wand2 className="h-3 w-3 mr-1" />
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               onClick={() => openPickDialog(angle.id)}
                               disabled={isLoading || isGeneratingAll}
                             >
@@ -1264,12 +1900,22 @@ export default function AvatarsPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="flex-1 h-8 text-xs"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               onClick={() => handleGenerateSingle(angle)}
                               disabled={isLoading || isGeneratingAll}
                             >
                               <Sparkles className="h-3 w-3 mr-1" />
                               Add
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs text-destructive hover:text-destructive"
+                              onClick={() => avatar && void handleDeleteAvatarImage(angle, avatar)}
+                              disabled={isLoading || isGeneratingAll || imageEditUploading}
+                            >
+                              <Trash2 className="h-3 w-3 mr-1" />
+                              Delete
                             </Button>
                           </div>
                         )}
@@ -1367,6 +2013,284 @@ export default function AvatarsPage() {
                 </div>
               ))}
             </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={shotDialogOpen} onOpenChange={setShotDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{editingShotId ? "Edit Shot" : "Add Shot"}</DialogTitle>
+              <DialogDescription>
+                Name the shot and describe the framing for AI generation.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="shot-label">Shot name</Label>
+                <Input
+                  id="shot-label"
+                  value={shotFormLabel}
+                  onChange={(e) => setShotFormLabel(e.target.value)}
+                  placeholder="Three-Quarter View"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="shot-prompt">Framing description</Label>
+                <Textarea
+                  id="shot-prompt"
+                  value={shotFormPrompt}
+                  onChange={(e) => setShotFormPrompt(e.target.value)}
+                  placeholder="three-quarter angle from slightly above, medium shot showing face and upper body"
+                  rows={4}
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShotDialogOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="button" onClick={saveShot}>
+                  {editingShotId ? "Save Changes" : "Add Shot"}
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={imageEditDialogOpen}
+          onOpenChange={(open) => {
+            if (!open && !imageEditUploading) {
+              setImageEditDialogOpen(false)
+              setImageEditAngleId(null)
+              clearImageEditReference()
+              clearImageEditStyleLinks()
+              setImageEditPrompt("")
+            }
+          }}
+        >
+          <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
+            <DialogHeader className="pb-2">
+              <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
+                <Wand2 className="h-5 w-5 text-violet-500" />
+                Edit Image
+              </DialogTitle>
+              <DialogDescription className="text-xs sm:text-sm">
+                {imageEditAngle
+                  ? `Reference edit for ${imageEditAngle.label}. Saves a new variant — the original is kept.`
+                  : "Edit this avatar view using a reference image."}
+              </DialogDescription>
+            </DialogHeader>
+
+            {imageEditAngle && imageEditCurrentImage && (
+              <div className="space-y-3">
+                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                  <img
+                    src={imageEditCurrentImage.imageUrl}
+                    alt={imageEditAngle.label}
+                    className="w-full h-full max-h-40 object-contain"
+                  />
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
+                  {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                    ? " Describe changes below and optionally link another project image as a second reference."
+                    : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+                </p>
+
+                {imageEditUploading && imageEditProgress ? (
+                  <p className="text-xs text-muted-foreground flex items-center gap-2">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {imageEditProgress}
+                  </p>
+                ) : null}
+
+                <div className="space-y-2">
+                  <Label htmlFor="avatar-image-edit-prompt" className="text-xs sm:text-sm">
+                    Describe your edit
+                  </Label>
+                  <Textarea
+                    id="avatar-image-edit-prompt"
+                    value={imageEditPrompt}
+                    onChange={(e) => setImageEditPrompt(e.target.value)}
+                    placeholder='e.g., warmer lighting, darker jacket, softer background'
+                    className="min-h-[72px] text-xs sm:text-sm resize-none"
+                    disabled={imageEditUploading}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="avatar-image-edit-ref" className="text-xs text-muted-foreground">
+                    Primary reference (optional)
+                  </Label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      id="avatar-image-edit-ref"
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={imageEditUploading}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        if (imageEditReferencePreview) URL.revokeObjectURL(imageEditReferencePreview)
+                        setImageEditReferenceFile(file)
+                        setImageEditReferencePreview(URL.createObjectURL(file))
+                        e.target.value = ""
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      disabled={imageEditUploading}
+                      onClick={() => document.getElementById("avatar-image-edit-ref")?.click()}
+                    >
+                      <Upload className="h-4 w-4" />
+                      Upload reference
+                    </Button>
+                    {imageEditReferencePreview ? (
+                      <>
+                        <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                          <img
+                            src={imageEditReferencePreview}
+                            alt="Uploaded reference"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          disabled={imageEditUploading}
+                          onClick={clearImageEditReference}
+                          title="Remove uploaded reference"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </>
+                    ) : (
+                      <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
+                        <img
+                          src={imageEditCurrentImage.imageUrl}
+                          alt={imageEditAngle.label}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {imageEditReferenceFile
+                      ? "Using your uploaded image as the primary reference."
+                      : "Uses the current avatar image if you don't upload one."}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                    <Label className="text-xs text-muted-foreground">
+                      Link existing image (optional)
+                    </Label>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Adds more images as references from characters, locations, or project assets.
+                    Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
+                  </p>
+                  {isLoadingImages ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Loading project assets…
+                    </div>
+                  ) : pickableImageGroups.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-1">
+                      No other images in this project yet.
+                    </p>
+                  ) : (
+                    <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+                      {pickableImageGroups.map((group) => (
+                        <div key={group.label} className="space-y-1.5">
+                          <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                            {group.label}
+                          </p>
+                          <div className="flex gap-2 overflow-x-auto pb-1">
+                            {group.assets.map((asset) => (
+                              <button
+                                key={asset.id}
+                                type="button"
+                                disabled={imageEditUploading}
+                                onClick={() => toggleImageEditStyleLink(asset.id)}
+                                className={cn(
+                                  "relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all",
+                                  imageEditStyleLinkAssetIds.includes(asset.id)
+                                    ? "border-violet-500 ring-2 ring-violet-500/40"
+                                    : "border-border hover:border-violet-500/50",
+                                )}
+                                title={`${getProjectAssetSourceLabel(asset, projectLocations, characters)} — ${asset.title}`}
+                              >
+                                <img
+                                  src={asset.content_url!}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {imageEditStyleLinkAssetIds.length > 0 ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-xs text-violet-400">
+                        {imageEditStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as
+                        additional references
+                      </p>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        disabled={imageEditUploading}
+                        onClick={clearImageEditStyleLinks}
+                      >
+                        Clear all
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <Button
+                  size="sm"
+                  onClick={() => void handleAvatarImageEdit()}
+                  disabled={
+                    imageEditUploading ||
+                    !imageEditPrompt.trim() ||
+                    !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
+                    (!imageEditReferenceFile && !imageEditCurrentImage?.imageUrl)
+                  }
+                  className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
+                >
+                  {imageEditUploading && imageEditPrompt.trim() ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Editing...
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 className="h-4 w-4" />
+                      Edit Image
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       </main>

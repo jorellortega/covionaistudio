@@ -3,6 +3,7 @@ export interface AvatarAngle {
   label: string
   shortLabel: string
   prompt: string
+  isCustom?: boolean
 }
 
 /** Practical shot types for scene prep — not redundant left/right turnarounds. */
@@ -65,6 +66,20 @@ export const AVATAR_TURNAROUND_ANGLE_IDS = [
   "back",
   "wide_full_body",
 ] as const
+
+export function createCustomAvatarAngle(label: string, prompt: string): AvatarAngle {
+  const trimmedLabel = label.trim()
+  const trimmedPrompt = prompt.trim()
+  const id = `custom_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const shortLabel = trimmedLabel.split(/\s+/)[0]?.slice(0, 10) || "Custom"
+  return {
+    id,
+    label: trimmedLabel,
+    shortLabel,
+    prompt: trimmedPrompt,
+    isCustom: true,
+  }
+}
 
 export function buildAvatarEditPrompt(
   characterName: string,
