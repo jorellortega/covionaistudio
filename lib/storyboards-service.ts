@@ -1,5 +1,5 @@
 import { getSupabaseClient } from './supabase'
-import { sortShotListRows } from './shot-list-order'
+import { sortShotListRows, sortStoryboardRows } from './shot-list-order'
 
 export interface Storyboard {
   id: string
@@ -577,7 +577,7 @@ export class StoryboardsService {
         throw error
       }
 
-      return sortShotListRows(data || [])
+      return sortStoryboardRows(data || [])
     } catch (error) {
       console.error('Error in getStoryboardsBySceneOrdered:', error)
       throw error

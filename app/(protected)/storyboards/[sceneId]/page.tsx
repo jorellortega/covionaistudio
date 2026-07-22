@@ -43,6 +43,7 @@ import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
 import { ImageSizeBadge } from "@/components/image-size-badge"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
+import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -321,6 +322,7 @@ export default function SceneStoryboardsPage() {
   const [aiImagePromptFull, setAiImagePromptFull] = useState("") // Store the actual full prompt text
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
   const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
+  const [quickInsertingKey, setQuickInsertingKey] = useState<string | null>(null)
   const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
@@ -969,6 +971,14 @@ export default function SceneStoryboardsPage() {
       }))
       .filter((group) => group.assets.length > 0)
   }, [linkedProjectImageGroups, linkImageSearch, locations, characters])
+
+  const sceneProjectId = useMemo(() => {
+    if (sceneInfo?.project_id) return sceneInfo.project_id
+    const fromShot = storyboards.find((sb) => sb.project_id)?.project_id
+    return fromShot || undefined
+  }, [sceneInfo?.project_id, storyboards])
+
+  const orderedStoryboards = useMemo(() => sortStoryboardRows(storyboards), [storyboards])
 
   const openLinkImageDialog = (storyboard: Storyboard) => {
     setLinkingStoryboard(storyboard)
@@ -1930,11 +1940,65 @@ export default function SceneStoryboardsPage() {
     }
   }, [storyboards, shotMode])
 
+  const resolveCreateShotPlacement = (): { shot_number: number; sequence_order: number } | { error: string } => {
+    const formShot = formData.shot_number ?? 0
+    const formSequence = formData.sequence_order ?? 0
+    const hasShot = formShot > 0
+    const hasSequence = formSequence > 0
+
+    if (hasShot || hasSequence) {
+      const sequence_order = hasSequence ? formSequence : formShot
+
+      const duplicateSequence = storyboards.some(
+        (sb) => shotOrderValue(sb) === sequence_order
+      )
+
+      if (duplicateSequence) {
+        return {
+          error: `Sequence order ${sequence_order} is already used. Pick another value (e.g. 8.5 between shots 8 and 9).`,
+        }
+      }
+
+      if (
+        Number.isInteger(sequence_order) &&
+        storyboards.some((sb) => Number(sb.shot_number) === sequence_order)
+      ) {
+        return {
+          error: `Shot number ${sequence_order} is already used. Try a decimal like ${Number(sequence_order) + 0.5} to insert between shots.`,
+        }
+      }
+
+      return storyboardPlacementForInsert(storyboards, sequence_order)
+    }
+
+    const nextShotNumber = getNextShotNumber()
+    return { shot_number: nextShotNumber, sequence_order: nextShotNumber }
+  }
+
   const handleCreateStoryboard = async () => {
-    if (!formData.title || !formData.description) {
+    if (!formData.title?.trim()) {
       toast({
-        title: "Missing Fields",
-        description: "Please fill in all required fields.",
+        title: "Missing Title",
+        description: "Please enter a title for this shot.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (!formData.description?.trim()) {
+      toast({
+        title: "Missing Description",
+        description: "Please enter a shot description before creating.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const placement = resolveCreateShotPlacement()
+    if ("error" in placement) {
+      toast({
+        title: "Shot Number Conflict",
+        description: placement.error,
         variant: "destructive"
       })
       return
@@ -1942,25 +2006,24 @@ export default function SceneStoryboardsPage() {
 
     try {
       setIsCreating(true)
-
-      // Get unique shot number and sequence order
-      const nextShotNumber = getNextShotNumber()
       
       // Clean up form data - convert empty strings to undefined for optional fields
       const cleanFormData = {
         ...formData,
-        shot_number: nextShotNumber,
-        sequence_order: formData.sequence_order || nextShotNumber,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        shot_number: placement.shot_number,
+        sequence_order: placement.sequence_order,
         dialogue: formData.dialogue?.trim() || undefined,
         action: formData.action?.trim() || undefined,
         visual_notes: formData.visual_notes?.trim() || undefined,
         image_url: formData.image_url?.trim() || undefined,
-        project_id: formData.project_id?.trim() || undefined,
+        project_id: formData.project_id?.trim() || sceneProjectId,
         scene_id: sceneId
       }
 
       const newStoryboard = await StoryboardsService.createStoryboard(cleanFormData)
-      setStoryboards(prev => [...prev, newStoryboard])
+      setStoryboards((prev) => sortStoryboardRows([...prev, newStoryboard]))
       setShowCreateForm(false)
       resetForm()
       
@@ -1977,6 +2040,12 @@ export default function SceneStoryboardsPage() {
         errorMessage = 'Your session has expired. Please refresh the page and try again.'
       } else if (error?.message?.includes('please refresh the page')) {
         errorMessage = 'Authentication issue. Please refresh the page and try again.'
+      } else if (error?.code === '23505') {
+        if (error?.message?.includes('unique_scene_sequence_order')) {
+          errorMessage = `Sequence order ${placement.sequence_order} is already taken. Try another decimal between existing shots.`
+        } else {
+          errorMessage = `Shot number ${placement.shot_number} is already taken in this scene. Try a decimal like 8.5 to insert between shots.`
+        }
       } else if (error?.message) {
         errorMessage = `Failed to create storyboard: ${error.message}`
       }
@@ -2011,7 +2080,7 @@ export default function SceneStoryboardsPage() {
         action: formData.action?.trim() || undefined,
         visual_notes: formData.visual_notes?.trim() || undefined,
         image_url: formData.image_url?.trim() || undefined,
-        project_id: formData.project_id?.trim() || undefined,
+        project_id: formData.project_id?.trim() || sceneProjectId,
         scene_id: sceneId
       }
 
@@ -2034,6 +2103,84 @@ export default function SceneStoryboardsPage() {
       })
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  const resolveQuickInsertPlacement = (
+    anchorId: string,
+    side: "before" | "after"
+  ): { shot_number: number; sequence_order: number } | { error: string } => {
+    const index = orderedStoryboards.findIndex((sb) => sb.id === anchorId)
+    if (index === -1) return { error: "Shot not found" }
+
+    const taken = orderedStoryboards.map((sb) => shotOrderValue(sb))
+
+    let beforeOrder: number
+    let afterOrder: number
+    if (side === "before") {
+      afterOrder = shotOrderValue(orderedStoryboards[index])
+      beforeOrder = index > 0 ? shotOrderValue(orderedStoryboards[index - 1]) : 0
+    } else {
+      beforeOrder = shotOrderValue(orderedStoryboards[index])
+      afterOrder =
+        index < orderedStoryboards.length - 1
+          ? shotOrderValue(orderedStoryboards[index + 1])
+          : beforeOrder + 1
+    }
+
+    const sequence_order = computeInsertPlacementBetween(beforeOrder, afterOrder, taken)
+    if (sequence_order == null) {
+      return { error: "No space to insert here. Try renumbering shots first." }
+    }
+
+    return storyboardPlacementForInsert(orderedStoryboards, sequence_order)
+  }
+
+  const handleQuickInsertAdjacent = async (anchorId: string, side: "before" | "after") => {
+    const insertKey = `${side}-${anchorId}`
+    if (quickInsertingKey) return
+
+    const placement = resolveQuickInsertPlacement(anchorId, side)
+    if ("error" in placement) {
+      toast({
+        title: "Cannot insert shot",
+        description: placement.error,
+        variant: "destructive",
+      })
+      return
+    }
+
+    const shotLabel = displayShotNumber({ shot_number: placement.shot_number, sequence_order: placement.sequence_order })
+
+    try {
+      setQuickInsertingKey(insertKey)
+      const newStoryboard = await StoryboardsService.createStoryboard({
+        title: `Shot ${shotLabel}`,
+        description: `New shot ${shotLabel}`,
+        scene_number: sceneNumberForSync,
+        shot_number: placement.shot_number,
+        sequence_order: placement.sequence_order,
+        shot_type: "wide",
+        camera_angle: "eye-level",
+        movement: "static",
+        status: "draft",
+        scene_id: sceneId,
+        project_id: sceneProjectId,
+      })
+      setStoryboards((prev) => sortStoryboardRows([...prev, newStoryboard]))
+      toast({
+        title: "Shot inserted",
+        description: `Created Shot ${shotLabel}`,
+      })
+    } catch (error: any) {
+      console.error("Error quick-inserting storyboard:", error)
+      toast({
+        title: "Error",
+        description: error?.message || error?.details || "Failed to insert shot",
+        variant: "destructive",
+      })
+    } finally {
+      setQuickInsertingKey(null)
     }
   }
 
@@ -3495,7 +3642,7 @@ export default function SceneStoryboardsPage() {
                     Boolean(parseScriptSelection(storyboard.description || '').dialogue)
                   return (
                   <span key={storyboard.id} className="bg-background px-2 py-1 rounded text-xs font-mono border flex-shrink-0 inline-flex items-center gap-1">
-                    {index + 1}. Shot {storyboard.shot_number || 1}
+                    {index + 1}. Shot {displayShotNumber(storyboard)}
                     {hasDialogueInShot ? (
                       <MessageSquare className="h-3 w-3 text-amber-500" aria-label="Has dialogue" />
                     ) : null}
@@ -4367,7 +4514,8 @@ export default function SceneStoryboardsPage() {
             const hasDialogue = dialogueText.length > 0
 
             return (
-            <Card key={storyboard.id} className="cinema-card hover:neon-glow transition-all duration-300">
+            <div key={storyboard.id} className="flex flex-col">
+            <Card className="cinema-card hover:neon-glow transition-all duration-300 flex-1">
               <CardHeader className="p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -4388,7 +4536,7 @@ export default function SceneStoryboardsPage() {
                 </div>
                 <CardDescription className="flex items-center gap-2 flex-wrap">
                   <span className="bg-muted px-2 py-1 rounded text-xs font-mono">
-                    Shot {storyboard.shot_number || 1}
+                    Shot {displayShotNumber(storyboard)}
                   </span>
                   {sceneInfo?.scene_number && (
                     <span className="bg-blue-500/20 text-blue-500 px-2 py-1 rounded text-xs font-mono border border-blue-500/30">
@@ -4801,6 +4949,42 @@ export default function SceneStoryboardsPage() {
                 </div>
               </CardContent>
             </Card>
+            <div className="mt-1 flex items-center justify-between gap-2 border-t border-border/40 px-1 pt-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                title="Insert shot before this one"
+                disabled={!!quickInsertingKey}
+                onClick={() => void handleQuickInsertAdjacent(storyboard.id, "before")}
+              >
+                {quickInsertingKey === `before-${storyboard.id}` ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ChevronLeft className="h-4 w-4" />
+                )}
+              </Button>
+              <span className="text-[10px] sm:text-xs font-medium uppercase tracking-wide text-muted-foreground select-none">
+                Insert Shot
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-foreground"
+                title="Insert shot after this one"
+                disabled={!!quickInsertingKey}
+                onClick={() => void handleQuickInsertAdjacent(storyboard.id, "after")}
+              >
+                {quickInsertingKey === `after-${storyboard.id}` ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            </div>
             )
           })}
         </div>

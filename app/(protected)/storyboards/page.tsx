@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -16,12 +15,11 @@ import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
 
 export default function StoryboardsPage() {
-  const { session, loading: authLoading } = useAuth()
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const movieId = searchParams.get("movie")
-  const { ready, userId } = useAuthReady()
+  const { ready, userId, loading: authLoading } = useAuthReady()
   
   const [movie, setMovie] = useState<Movie | null>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
@@ -31,7 +29,8 @@ export default function StoryboardsPage() {
   useEffect(() => {
     if (authLoading) return
 
-    if (!session?.user) {
+    if (!ready || !userId) {
+      setLoading(false)
       return
     }
 
@@ -40,10 +39,8 @@ export default function StoryboardsPage() {
       return
     }
 
-    if (ready && userId) {
-      loadMovieAndScenes()
-    }
-  }, [authLoading, session?.user, movieId, ready, userId, router])
+    void loadMovieAndScenes()
+  }, [authLoading, ready, userId, movieId, router])
 
   const loadMovieAndScenes = async () => {
     if (!movieId || !ready || !userId) return
@@ -89,7 +86,7 @@ export default function StoryboardsPage() {
     return null
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-background">
         <Header />

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
+import { displayShotNumber, shotOrderValue } from "@/lib/shot-list-order"
 import { useToast } from "@/hooks/use-toast"
 import { ArrowDown, ArrowUp, ChevronsDown, ChevronsUp, Loader2 } from "lucide-react"
 
@@ -27,13 +28,19 @@ export function StoryboardShotNumberPopover({
   const [value, setValue] = useState(String(storyboard.shot_number || 1))
   const [saving, setSaving] = useState(false)
 
-  const current = Number(storyboard.shot_number) || 1
+  const current = shotOrderValue(storyboard)
+  const currentLabel = displayShotNumber(storyboard)
   const maxShot = storyboards.length || 1
   const parsed = parseInt(value, 10)
   const valid = Number.isFinite(parsed) && parsed >= 1 && parsed <= maxShot
   const target = valid ? parsed : current
 
+  const isDecimalPosition = !Number.isInteger(current)
+
   const shiftHint = useMemo(() => {
+    if (isDecimalPosition) {
+      return `Shot ${currentLabel} is inserted between shots. Use the Insert Shot arrows on cards to add more.`
+    }
     if (!valid || target === current) return null
     if (current > target) {
       if (current - target === 1) {
@@ -45,13 +52,21 @@ export function StoryboardShotNumberPopover({
       return `Shot ${current} moves to ${target}; former Shot ${target} becomes ${target - 1}.`
     }
     return `Shots ${current + 1}–${target} shift up to ${current}–${target - 1}.`
-  }, [valid, target, current])
+  }, [valid, target, current, isDecimalPosition, currentLabel])
 
   useEffect(() => {
-    if (open) setValue(String(storyboard.shot_number || 1))
-  }, [open, storyboard.shot_number])
+    if (open) setValue(String(Math.round(current)))
+  }, [open, current])
 
   const apply = async (newNum: number) => {
+    if (!Number.isInteger(current)) {
+      toast({
+        title: "Use insert arrows",
+        description: `Shot ${currentLabel} uses decimal positioning. Use the Insert Shot arrows on the card to add shots nearby.`,
+        variant: "destructive",
+      })
+      return
+    }
     const clamped = Math.max(1, Math.min(Math.round(newNum), maxShot))
     if (!Number.isFinite(clamped) || clamped < 1) {
       toast({
@@ -104,7 +119,7 @@ export function StoryboardShotNumberPopover({
           title="Change shot order"
           className="flex items-center justify-center w-8 h-8 bg-primary text-primary-foreground rounded-full text-xs sm:text-sm font-bold flex-shrink-0 cursor-pointer ring-offset-background transition hover:scale-105 hover:ring-2 hover:ring-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {current}
+          {currentLabel}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-72 space-y-3">
@@ -116,6 +131,10 @@ export function StoryboardShotNumberPopover({
         </div>
 
         <div className="space-y-1.5">
+          {isDecimalPosition ? (
+            <p className="text-xs text-muted-foreground">{shiftHint}</p>
+          ) : (
+            <>
           <Label htmlFor={`shot-num-${storyboard.id}`} className="text-xs">
             Move to position (1–{maxShot})
           </Label>
@@ -135,8 +154,11 @@ export function StoryboardShotNumberPopover({
           {shiftHint ? (
             <p className="text-[11px] text-muted-foreground">{shiftHint}</p>
           ) : null}
+            </>
+          )}
         </div>
 
+        {!isDecimalPosition ? (
         <div className="grid grid-cols-2 gap-1.5">
           <Button
             type="button"
@@ -183,6 +205,7 @@ export function StoryboardShotNumberPopover({
             Last
           </Button>
         </div>
+        ) : null}
 
         <div className="flex justify-end gap-2 pt-1">
           <Button
@@ -192,8 +215,9 @@ export function StoryboardShotNumberPopover({
             disabled={saving}
             onClick={() => setOpen(false)}
           >
-            Cancel
+            {isDecimalPosition ? "Close" : "Cancel"}
           </Button>
+          {!isDecimalPosition ? (
           <Button
             type="button"
             size="sm"
@@ -202,6 +226,7 @@ export function StoryboardShotNumberPopover({
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Move"}
           </Button>
+          ) : null}
         </div>
       </PopoverContent>
     </Popover>

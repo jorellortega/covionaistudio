@@ -54,6 +54,7 @@ import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
+import { displayShotNumber } from "@/lib/shot-list-order"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import {
@@ -1896,9 +1897,30 @@ export default function CinemaProductionPage() {
     try {
       setLoadingStoryboards(true)
       console.log('🎬 Loading storyboards for scene:', selectedSceneId)
-      const sceneStoryboards = await StoryboardsService.getStoryboardsByScene(selectedSceneId)
+      const sceneStoryboards = await StoryboardsService.getStoryboardsBySceneOrdered(selectedSceneId)
       console.log('🎬 Loaded storyboards:', sceneStoryboards.length, sceneStoryboards)
-      setStoryboards(sceneStoryboards)
+
+      let storyboardsToShow = sceneStoryboards
+      if (selectedProjectId) {
+        const orphans = sceneStoryboards.filter((sb) => !sb.project_id)
+        if (orphans.length > 0) {
+          const repaired = await Promise.all(
+            sceneStoryboards.map(async (sb) => {
+              if (sb.project_id) return sb
+              try {
+                return await StoryboardsService.updateStoryboard(sb.id, {
+                  project_id: selectedProjectId,
+                })
+              } catch {
+                return sb
+              }
+            })
+          )
+          storyboardsToShow = repaired
+        }
+      }
+
+      setStoryboards(storyboardsToShow)
       await loadSavedAudioForScene(selectedSceneId)
       
       // Check for saved videos in the bucket for each storyboard
@@ -2065,13 +2087,12 @@ export default function CinemaProductionPage() {
       const storyboard = storyboards.find(s => s.id === selectedStoryboardId)
       return storyboard ? [storyboard] : []
     }
-    // Otherwise show all storyboards for the scene
-    // Filter by selected project to ensure we only show storyboards from the current project
-    let filtered = storyboards
-    if (selectedProjectId) {
-      filtered = storyboards.filter(sb => sb.project_id === selectedProjectId)
-    }
-    return filtered
+    // Storyboards are already loaded for this scene — include rows with missing project_id
+    // (inserted shots may not have project_id set yet)
+    if (!selectedProjectId) return storyboards
+    return storyboards.filter(
+      (sb) => !sb.project_id || sb.project_id === selectedProjectId
+    )
   }
 
   const getModelFileRequirement = (
@@ -6197,7 +6218,7 @@ export default function CinemaProductionPage() {
                     <SelectItem value="all">All Storyboards ({storyboards.length})</SelectItem>
                     {storyboards.map((storyboard) => (
                       <SelectItem key={storyboard.id} value={storyboard.id}>
-                        {storyboard.title} - Shot {storyboard.shot_number}
+                        {storyboard.title} - Shot {displayShotNumber(storyboard)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -6332,7 +6353,7 @@ export default function CinemaProductionPage() {
                             <div className="absolute top-0 left-0 right-0 h-6 bg-primary/10 border-b border-border flex items-center justify-between px-2 z-10">
                               <div className="flex items-center gap-1">
                                 <Badge variant="outline" className="font-mono text-[10px] h-4 px-1">
-                                  {storyboard.shot_number}
+                                  {displayShotNumber(storyboard)}
                                 </Badge>
                                 <span className="text-[10px] text-muted-foreground truncate max-w-[100px]">
                                   {storyboard.title}
@@ -6636,7 +6657,7 @@ export default function CinemaProductionPage() {
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <Badge variant="outline" className="font-mono text-xs">
-                            Shot {storyboard.shot_number}
+                            Shot {displayShotNumber(storyboard)}
                           </Badge>
                           <Badge className={
                             storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
@@ -6772,7 +6793,7 @@ export default function CinemaProductionPage() {
                         <div>
                           <CardTitle className="flex items-center gap-2">
                             <Badge variant="outline" className="font-mono">
-                              Shot {storyboard.shot_number}
+                              Shot {displayShotNumber(storyboard)}
                             </Badge>
                             {storyboard.title}
                           </CardTitle>
@@ -6874,7 +6895,7 @@ export default function CinemaProductionPage() {
                                   onClick={() => {
                                     setFullImageUrl(displayImageUrl)
                                     setFullImageTitle(
-                                      storyboard.title || `Shot ${storyboard.shot_number}`,
+                                      storyboard.title || `Shot ${displayShotNumber(storyboard)}`,
                                     )
                                     setFullImageStoryboardId(storyboard.id)
                                     const frame = libraryFrames.find((f) => f.url === displayImageUrl)
