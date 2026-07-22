@@ -1,6 +1,13 @@
 /** Kling video model metadata for cinema-production and API routes. */
 
-export type KlingApiMode = 'text2video' | 'image2video' | 'omni-video'
+export type KlingApiMode =
+  | 'text2video'
+  | 'image2video'
+  | 'omni-video'
+  | 'lip-sync'
+  | 'motion-control'
+
+export const KLING_MOTION_CONTROL_MODEL = 'Kling 3.0 Motion Control' as const
 
 export type KlingModelName = 'kling-v3' | 'kling-v3-omni'
 
@@ -37,6 +44,10 @@ export function isKlingOmniModel(model: string): boolean {
   return normalized.includes('Omni')
 }
 
+export function isKlingMotionControlModel(model: string): boolean {
+  return normalizeKlingUiModel(model) === KLING_MOTION_CONTROL_MODEL
+}
+
 export function getKlingModelConfig(uiModel: string): {
   apiMode: KlingApiMode
   modelName: KlingModelName
@@ -70,10 +81,23 @@ export function getKlingStatusEndpoint(mode: KlingApiMode, taskId: string): stri
       return `${base}/text2video/${taskId}`
     case 'omni-video':
       return `${base}/omni-video/${taskId}`
+    case 'lip-sync':
+      return `${base}/advanced-lip-sync/${taskId}`
+    case 'motion-control':
+      return `${base}/motion-control/${taskId}`
     default:
       return `${base}/image2video/${taskId}`
   }
 }
+
+export const KLING_IDENTIFY_FACE_ENDPOINT =
+  'https://api-singapore.klingai.com/v1/videos/identify-face'
+
+export const KLING_LIP_SYNC_CREATE_ENDPOINT =
+  'https://api-singapore.klingai.com/v1/videos/advanced-lip-sync'
+
+export const KLING_MOTION_CONTROL_CREATE_ENDPOINT =
+  'https://api-singapore.klingai.com/v1/videos/motion-control'
 
 export function getKlingCreateEndpoint(mode: KlingApiMode): string {
   const base = 'https://api-singapore.klingai.com/v1/videos'
@@ -82,6 +106,8 @@ export function getKlingCreateEndpoint(mode: KlingApiMode): string {
       return `${base}/text2video`
     case 'omni-video':
       return `${base}/omni-video`
+    case 'motion-control':
+      return `${base}/motion-control`
     default:
       return `${base}/image2video`
   }

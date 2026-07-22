@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback, type ChangeEvent } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef, type ChangeEvent } from "react"
 import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ import {
   Upload, 
   Image as ImageIcon, 
   Video,
+  FileText,
   Camera,
   Move,
   Clock,
@@ -57,6 +58,7 @@ import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import {
   getKlingModelConfig,
+  isKlingMotionControlModel,
   isNativeKlingModel,
   KLING_V3_DURATIONS,
   normalizeKlingUiModel,
@@ -171,6 +173,7 @@ type VideoModel =
   | "Kling 3.0 Omni T2V"
   | "Kling 3.0 Omni I2V"
   | "Kling 3.0 Omni I2V Extended"
+  | "Kling 3.0 Motion Control"
   | "Runway Gen-4 Turbo" 
   | "Runway Gen-3A Turbo" 
   | "Runway Act-Two" 
@@ -288,6 +291,12 @@ interface ShotGenerationState {
   videoModelType?: 'KLING2_1' | 'VEO3_1' | 'VEO3_1FAST' // For Kling/Veo frame-to-frame
   videoDuration?: number // Duration in seconds for Kling/Veo (4/6/8 for Veo, 5/10 for Kling)
   klingNativeAudio?: boolean // Native audio for Kling 3.0 models
+  klingCharacterOrientation?: 'image' | 'video'
+  klingMotionMode?: 'std' | 'pro'
+  klingKeepOriginalSound?: boolean
+  referenceVideoFile?: File | null
+  referenceVideoPreview?: string | null
+  motionReferenceVideoUrl?: string | null
   startFrameImageUrl?: string | null // URL to storyboard image for start frame
   endFrameImageUrl?: string | null // URL to storyboard image for end frame
   savedAudioOptionId?: string | null // asset id or session-dialogue / session-sfx
@@ -330,6 +339,71 @@ function suggestAudioSaveName(
 
 function sanitizeAudioFileName(name: string): string {
   return name.trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 50) || "audio"
+}
+
+async function fetchAudioBlob(audioUrl: string): Promise<Blob> {
+  if (audioUrl.startsWith("blob:") || audioUrl.startsWith("data:")) {
+    const response = await fetch(audioUrl)
+    if (!response.ok) {
+      throw new Error("Failed to read audio")
+    }
+    const blob = await response.blob()
+    if (!blob.size) {
+      throw new Error("Audio file is empty")
+    }
+    return blob
+  }
+
+  const response = await fetch("/api/ai/download-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ url: audioUrl }),
+  })
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new Error(data.error || "Failed to fetch audio")
+  }
+
+  const blob = await response.blob()
+  if (!blob.size) {
+    throw new Error("Audio file is empty")
+  }
+  return blob
+}
+
+function audioExtensionFromBlob(blob: Blob, audioUrl: string): string {
+  const type = blob.type.toLowerCase()
+  if (type.includes("wav")) return "wav"
+  if (type.includes("mp4") || type.includes("m4a")) return "m4a"
+  if (type.includes("ogg")) return "ogg"
+  if (audioUrl.includes(".wav")) return "wav"
+  return "mp3"
+}
+
+async function downloadSessionAudioClip(
+  fileName: string,
+  audioUrl: string,
+  onError?: (message: string) => void,
+) {
+  try {
+    const blob = await fetchAudioBlob(audioUrl)
+    const ext = audioExtensionFromBlob(blob, audioUrl)
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = blobUrl
+    link.download = `${sanitizeAudioFileName(fileName)}.${ext}`
+    link.style.display = "none"
+    document.body.appendChild(link)
+    link.click()
+    setTimeout(() => {
+      document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
+    }, 200)
+  } catch (error) {
+    onError?.(error instanceof Error ? error.message : "Download failed")
+  }
 }
 
 function safeVideoPlay(video: HTMLVideoElement) {
@@ -413,7 +487,7 @@ function SessionAudioClipList({
   clips,
   getSaveName,
   onSaveNameChange,
-  onDownload,
+  onDownloadError,
   onSave,
   onRemove,
   savingClipId,
@@ -421,7 +495,7 @@ function SessionAudioClipList({
   clips: SessionAudioClip[]
   getSaveName: (clip: SessionAudioClip) => string
   onSaveNameChange: (clipId: string, name: string) => void
-  onDownload: (clip: SessionAudioClip) => void
+  onDownloadError?: (message: string) => void
   onSave?: (clip: SessionAudioClip, saveName: string) => Promise<void>
   onRemove?: (clipId: string) => void
   savingClipId?: string | null
@@ -467,7 +541,13 @@ function SessionAudioClipList({
                 size="sm"
                 variant="outline"
                 className="flex-1"
-                onClick={() => onDownload(clip)}
+                onClick={() => {
+                  void downloadSessionAudioClip(
+                    getSaveName(clip),
+                    clip.audioUrl,
+                    onDownloadError,
+                  )
+                }}
               >
                 <Download className="h-4 w-4 mr-2" />
                 Download
@@ -516,6 +596,7 @@ function SoundEffectGenerator({
   onSaveNameChange,
   onRemoveClip,
   savingClipId,
+  onDownloadError,
   onPromptAssist,
   promptAssistLoading,
 }: { 
@@ -532,6 +613,7 @@ function SoundEffectGenerator({
   onSaveNameChange: (clipId: string, name: string) => void
   onRemoveClip?: (clipId: string) => void
   savingClipId?: string | null
+  onDownloadError?: (message: string) => void
   onPromptAssist?: () => Promise<string | null>
   promptAssistLoading?: boolean
 }) {
@@ -633,14 +715,7 @@ function SoundEffectGenerator({
           clips={clips}
           getSaveName={getSaveName}
           onSaveNameChange={onSaveNameChange}
-          onDownload={(clip) => {
-            const link = document.createElement("a")
-            link.href = clip.audioUrl
-            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.mp3`
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
-          }}
+          onDownloadError={onDownloadError}
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
@@ -665,6 +740,7 @@ function StableAudioGenerator({
   onSaveNameChange,
   onRemoveClip,
   savingClipId,
+  onDownloadError,
   onPromptAssist,
   promptAssistLoading,
 }: {
@@ -685,6 +761,7 @@ function StableAudioGenerator({
   onSaveNameChange: (clipId: string, name: string) => void
   onRemoveClip?: (clipId: string) => void
   savingClipId?: string | null
+  onDownloadError?: (message: string) => void
   onPromptAssist?: () => Promise<string | null>
   promptAssistLoading?: boolean
 }) {
@@ -798,15 +875,7 @@ function StableAudioGenerator({
           clips={clips}
           getSaveName={getSaveName}
           onSaveNameChange={onSaveNameChange}
-          onDownload={(clip) => {
-            const link = document.createElement("a")
-            link.href = clip.audioUrl
-            const ext = clip.audioUrl.includes("audio/wav") || clip.audioUrl.endsWith(".wav") ? "wav" : "mp3"
-            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.${ext}`
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
-          }}
+          onDownloadError={onDownloadError}
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
@@ -814,6 +883,79 @@ function StableAudioGenerator({
       )}
     </div>
   )
+}
+
+function clampMireloVideoTiming(
+  videoDurationMs: number,
+  startOffsetMs: number,
+  durationMs: number,
+): { startOffsetMs: number; durationMs: number } {
+  const safeStart = Math.min(
+    Math.max(0, startOffsetMs),
+    Math.max(0, videoDurationMs - 1),
+  )
+  const maxDurationMs = Math.max(0, videoDurationMs - safeStart)
+  const safeDuration = Math.min(Math.max(1, durationMs), maxDurationMs)
+  return { startOffsetMs: safeStart, durationMs: safeDuration }
+}
+
+function probeVideoDurationMs(videoUrl: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video")
+    video.preload = "metadata"
+    video.src = videoUrl
+
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error("Timed out reading video metadata"))
+    }, 12_000)
+
+    const cleanup = () => {
+      window.clearTimeout(timeout)
+      video.removeEventListener("loadedmetadata", onLoaded)
+      video.removeEventListener("error", onError)
+      video.src = ""
+    }
+
+    const onLoaded = () => {
+      cleanup()
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        resolve(Math.floor(video.duration * 1000))
+        return
+      }
+      reject(new Error("Could not read video duration"))
+    }
+
+    const onError = () => {
+      cleanup()
+      reject(new Error("Could not load video metadata"))
+    }
+
+    video.addEventListener("loadedmetadata", onLoaded)
+    video.addEventListener("error", onError)
+  })
+}
+
+async function probeVideoDurationMsServer(videoUrl: string): Promise<number> {
+  const response = await fetch("/api/ai/probe-video-duration", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ url: videoUrl }),
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok || !data.durationMs) {
+    throw new Error(data.error || "Server could not read video duration")
+  }
+  return data.durationMs as number
+}
+
+async function resolveVideoDurationMs(videoUrl: string): Promise<number> {
+  try {
+    return await probeVideoDurationMs(videoUrl)
+  } catch {
+    return probeVideoDurationMsServer(videoUrl)
+  }
 }
 
 function MireloSfxGenerator({
@@ -831,6 +973,10 @@ function MireloSfxGenerator({
   onSaveNameChange,
   onRemoveClip,
   savingClipId,
+  onDownloadError,
+  onError,
+  videoDurationMs: preloadedDurationMs = null,
+  loadingVideoDuration: preloadedLoading = false,
 }: {
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -850,42 +996,54 @@ function MireloSfxGenerator({
   onSaveNameChange: (clipId: string, name: string) => void
   onRemoveClip?: (clipId: string) => void
   savingClipId?: string | null
+  onDownloadError?: (message: string) => void
+  onError?: (message: string) => void
+  videoDurationMs?: number | null
+  loadingVideoDuration?: boolean
 }) {
   const [durationSec, setDurationSec] = useState(10)
   const [startOffsetSec, setStartOffsetSec] = useState(0)
   const [numSamples, setNumSamples] = useState(3)
   const [version, setVersion] = useState<"v1.5" | "v1.6">("v1.6")
-  const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null)
+
+  const videoDurationMs = preloadedDurationMs
+  const loadingVideoDuration = preloadedLoading
 
   useEffect(() => {
-    if (!videoUrl) {
-      setVideoDurationSec(null)
-      return
+    if (preloadedDurationMs != null) {
+      setDurationSec(preloadedDurationMs / 1000)
+      setStartOffsetSec(0)
     }
-    const video = document.createElement("video")
-    video.preload = "metadata"
-    video.crossOrigin = "anonymous"
-    video.src = videoUrl
-    const onLoaded = () => {
-      if (Number.isFinite(video.duration) && video.duration > 0) {
-        const sec = Math.ceil(video.duration)
-        setVideoDurationSec(sec)
-        setDurationSec(sec)
-      }
-    }
-    video.addEventListener("loadedmetadata", onLoaded)
-    return () => {
-      video.removeEventListener("loadedmetadata", onLoaded)
-      video.src = ""
-    }
-  }, [videoUrl])
+  }, [preloadedDurationMs, videoUrl])
+
+  const maxDurationSec =
+    videoDurationMs != null
+      ? Math.max(0, (videoDurationMs - Math.round(startOffsetSec * 1000)) / 1000)
+      : 120
+
+  const handleStartOffsetChange = (nextOffsetSec: number) => {
+    const safeOffset = Math.max(0, nextOffsetSec)
+    setStartOffsetSec(safeOffset)
+    if (videoDurationMs == null) return
+    const { durationMs } = clampMireloVideoTiming(
+      videoDurationMs,
+      Math.round(safeOffset * 1000),
+      Math.round(durationSec * 1000),
+    )
+    setDurationSec(durationMs / 1000)
+  }
 
   return (
     <div className="space-y-3">
       {videoUrl ? (
         <p className="text-xs text-muted-foreground">
           Uses this shot&apos;s active video
-          {videoDurationSec ? ` (${videoDurationSec}s)` : ""}. Switch videos above if needed.
+          {loadingVideoDuration
+            ? " (reading length…)"
+            : videoDurationMs != null
+              ? ` (${(videoDurationMs / 1000).toFixed(1)}s)`
+              : " (length will be checked when you generate)"}
+          . Switch videos above if needed.
         </p>
       ) : (
         <p className="text-xs text-amber-600 dark:text-amber-500">
@@ -897,11 +1055,14 @@ function MireloSfxGenerator({
           <Label className="text-xs">Duration (seconds)</Label>
           <Input
             type="number"
-            min={1}
-            max={120}
-            step={1}
+            min={0.1}
+            max={maxDurationSec}
+            step={0.1}
             value={durationSec}
-            onChange={(e) => setDurationSec(Math.max(1, parseInt(e.target.value || "10", 10)))}
+            onChange={(e) => {
+              const next = Math.max(0.1, parseFloat(e.target.value || "10"))
+              setDurationSec(Math.min(next, maxDurationSec))
+            }}
           />
         </div>
         <div>
@@ -909,10 +1070,10 @@ function MireloSfxGenerator({
           <Input
             type="number"
             min={0}
-            max={60}
+            max={videoDurationMs != null ? videoDurationMs / 1000 : 60}
             step={0.1}
             value={startOffsetSec}
-            onChange={(e) => setStartOffsetSec(Math.max(0, parseFloat(e.target.value || "0")))}
+            onChange={(e) => handleStartOffsetChange(parseFloat(e.target.value || "0"))}
           />
         </div>
         <div>
@@ -953,15 +1114,34 @@ function MireloSfxGenerator({
         </p>
       )}
       <Button
-        onClick={() =>
-          onGenerate(storyboard, videoUrl!, {
-            durationMs: Math.round(durationSec * 1000),
-            startOffsetMs: Math.round(startOffsetSec * 1000),
-            numSamples,
-            version,
-          })
-        }
-        disabled={!videoUrl || isGenerating || !hasApiKey}
+        onClick={() => {
+          void (async () => {
+            const requestedDurationMs = Math.round(durationSec * 1000)
+            const requestedStartMs = Math.round(startOffsetSec * 1000)
+            let knownDurationMs = videoDurationMs
+            if (knownDurationMs == null) {
+              try {
+                knownDurationMs = await resolveVideoDurationMs(videoUrl!)
+                setDurationSec(knownDurationMs / 1000)
+              } catch {
+                onError?.("Could not read this video's length. Try another saved clip.")
+                return
+              }
+            }
+            const timing = clampMireloVideoTiming(
+              knownDurationMs,
+              requestedStartMs,
+              requestedDurationMs,
+            )
+            onGenerate(storyboard, videoUrl!, {
+              durationMs: timing.durationMs,
+              startOffsetMs: timing.startOffsetMs,
+              numSamples,
+              version,
+            })
+          })()
+        }}
+        disabled={!videoUrl || isGenerating || !hasApiKey || loadingVideoDuration}
         className="w-full"
       >
         {isGenerating ? (
@@ -981,14 +1161,7 @@ function MireloSfxGenerator({
           clips={clips}
           getSaveName={getSaveName}
           onSaveNameChange={onSaveNameChange}
-          onDownload={(clip) => {
-            const link = document.createElement("a")
-            link.href = clip.audioUrl
-            link.download = `${sanitizeAudioFileName(getSaveName(clip))}.mp3`
-            document.body.appendChild(link)
-            link.click()
-            document.body.removeChild(link)
-          }}
+          onDownloadError={onDownloadError}
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
@@ -1082,6 +1255,33 @@ export default function CinemaProductionPage() {
   const [selectedVideoUrlByStoryboard, setSelectedVideoUrlByStoryboard] = useState<Map<string, string>>(
     new Map(),
   )
+  const [videoDurationByUrl, setVideoDurationByUrl] = useState<Record<string, number>>({})
+  const [videoDurationLoadingUrls, setVideoDurationLoadingUrls] = useState<Record<string, true>>({})
+  const videoDurationCacheRef = useRef<Record<string, number>>({})
+  const videoDurationInflightRef = useRef<Set<string>>(new Set())
+
+  const preloadVideoDuration = useCallback((url: string) => {
+    if (!url) return
+    if (videoDurationCacheRef.current[url] != null) return
+    if (videoDurationInflightRef.current.has(url)) return
+
+    videoDurationInflightRef.current.add(url)
+    setVideoDurationLoadingUrls((loading) => ({ ...loading, [url]: true }))
+
+    void resolveVideoDurationMs(url)
+      .then((ms) => {
+        videoDurationCacheRef.current[url] = ms
+        setVideoDurationByUrl((current) => ({ ...current, [url]: ms }))
+      })
+      .finally(() => {
+        videoDurationInflightRef.current.delete(url)
+        setVideoDurationLoadingUrls((loading) => {
+          if (!loading[url]) return loading
+          const { [url]: _removed, ...rest } = loading
+          return rest
+        })
+      })
+  }, [])
 
   // Full-size image viewer
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
@@ -1107,6 +1307,7 @@ export default function CinemaProductionPage() {
   const [projectVoices, setProjectVoices] = useState<ProjectVoice[]>([])
   const [dialogueVoiceByStoryboard, setDialogueVoiceByStoryboard] = useState<Map<string, string>>(new Map())
   const [audioSaveNames, setAudioSaveNames] = useState<Map<string, string>>(new Map())
+  const [klingLipSyncingId, setKlingLipSyncingId] = useState<string | null>(null)
 
   const getAudioSaveNameForClip = useCallback(
     (storyboard: Storyboard, clip: SessionAudioClip) => {
@@ -1352,6 +1553,20 @@ export default function CinemaProductionPage() {
       })
     }
   }, [storyboards, userId])
+
+  // Preload video durations for Mirelo SFX as soon as shot videos are known.
+  useEffect(() => {
+    const urls = new Set<string>()
+    storyboardVideos.forEach((videos) => {
+      videos.forEach((video) => {
+        if (video.video_url) urls.add(video.video_url)
+      })
+    })
+    selectedVideoUrlByStoryboard.forEach((url) => {
+      if (url) urls.add(url)
+    })
+    urls.forEach((url) => preloadVideoDuration(url))
+  }, [storyboardVideos, selectedVideoUrlByStoryboard, preloadVideoDuration])
 
   // Update selected video when dialog opens (only on initial open, not on every render)
   useEffect(() => {
@@ -1861,7 +2076,11 @@ export default function CinemaProductionPage() {
 
   const getModelFileRequirement = (
     model: VideoModel,
-  ): "none" | "image" | "video" | "start-end-frames" | "hedra-avatar" => {
+  ): "none" | "image" | "video" | "start-end-frames" | "hedra-avatar" | "motion-control" => {
+    if (isKlingMotionControlModel(model)) {
+      return 'motion-control'
+    }
+
     const klingConfig = getKlingModelConfig(model)
     if (klingConfig) {
       if (klingConfig.needsStartEnd) return 'start-end-frames'
@@ -1920,7 +2139,11 @@ export default function CinemaProductionPage() {
     })
   }
 
-  const handleFileUpload = (storyboardId: string, file: File, type: 'file' | 'startFrame' | 'endFrame') => {
+  const handleFileUpload = (
+    storyboardId: string,
+    file: File,
+    type: 'file' | 'startFrame' | 'endFrame' | 'referenceVideo',
+  ) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       const preview = e.target?.result as string
@@ -1930,18 +2153,33 @@ export default function CinemaProductionPage() {
         updateStoryboardGeneration(storyboardId, { startFrame: file, startFramePreview: preview })
       } else if (type === 'endFrame') {
         updateStoryboardGeneration(storyboardId, { endFrame: file, endFramePreview: preview })
+      } else if (type === 'referenceVideo') {
+        updateStoryboardGeneration(storyboardId, {
+          referenceVideoFile: file,
+          referenceVideoPreview: preview,
+          motionReferenceVideoUrl: null,
+        })
       }
     }
     reader.readAsDataURL(file)
   }
 
-  const handleRemoveFile = (storyboardId: string, type: 'file' | 'startFrame' | 'endFrame') => {
+  const handleRemoveFile = (
+    storyboardId: string,
+    type: 'file' | 'startFrame' | 'endFrame' | 'referenceVideo',
+  ) => {
     if (type === 'file') {
       updateStoryboardGeneration(storyboardId, { uploadedFile: null, filePreview: null })
     } else if (type === 'startFrame') {
       updateStoryboardGeneration(storyboardId, { startFrame: null, startFramePreview: null })
     } else if (type === 'endFrame') {
       updateStoryboardGeneration(storyboardId, { endFrame: null, endFramePreview: null })
+    } else if (type === 'referenceVideo') {
+      updateStoryboardGeneration(storyboardId, {
+        referenceVideoFile: null,
+        referenceVideoPreview: null,
+        motionReferenceVideoUrl: null,
+      })
     }
   }
 
@@ -3067,6 +3305,193 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const getAudioDurationMs = async (audioUrl: string): Promise<number> => {
+    try {
+      const response = await fetch(audioUrl)
+      const arrayBuffer = await response.arrayBuffer()
+      const AudioCtx =
+        window.AudioContext ||
+        (window as Window & { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext
+      if (AudioCtx) {
+        const ctx = new AudioCtx()
+        try {
+          const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0))
+          const ms = Math.round(audioBuffer.duration * 1000)
+          if (Number.isFinite(ms) && ms > 0) {
+            return Math.min(60_000, ms)
+          }
+        } finally {
+          await ctx.close().catch(() => undefined)
+        }
+      }
+    } catch {
+      // Fall back to HTMLAudioElement metadata below.
+    }
+
+    return new Promise((resolve) => {
+      const audio = new Audio(audioUrl)
+      audio.preload = "metadata"
+      audio.onloadedmetadata = () => {
+        const ms = Math.round(audio.duration * 1000)
+        resolve(Number.isFinite(ms) && ms > 0 ? Math.min(60_000, ms) : 0)
+      }
+      audio.onerror = () => resolve(0)
+    })
+  }
+
+  const audioUrlToBase64 = async (audioUrl: string): Promise<string> => {
+    const response = await fetch(audioUrl)
+    const blob = await response.blob()
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const result = reader.result
+        if (typeof result !== "string") {
+          reject(new Error("Failed to read audio"))
+          return
+        }
+        const comma = result.indexOf(",")
+        resolve(comma >= 0 ? result.slice(comma + 1) : result)
+      }
+      reader.onerror = () => reject(new Error("Failed to read audio"))
+      reader.readAsDataURL(blob)
+    })
+  }
+
+  const handleDownloadImage = async (storyboard: Storyboard) => {
+    const imageUrl = getDisplayedShotImage(storyboard)
+    if (!imageUrl) {
+      toast({
+        title: "No image to download",
+        description: "Generate or link a storyboard image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      const response = await fetch(imageUrl)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`)
+      }
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      const ext = blob.type.split("/")[1]?.split(";")[0] || "png"
+      a.download = `${storyboard.title || "storyboard"}-shot-${storyboard.shot_number || "image"}.${ext}`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+      toast({
+        title: "Download Started",
+        description: "Image download has started.",
+      })
+    } catch (error) {
+      console.error("Error downloading image:", error)
+      toast({
+        title: "Download Failed",
+        description: "Failed to download image. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleKlingLipSync = async (storyboard: Storyboard) => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    const videoUrl = getActiveVideoUrl(storyboard.id) || generation?.generatedVideoUrl
+    if (!videoUrl) {
+      toast({
+        title: "Video required",
+        description: "Generate a Kling video first, then apply lip sync.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const audioOption = resolveSelectedAudioForStoryboard(
+      storyboard.id,
+      generation?.savedAudioOptionId,
+    )
+    if (!audioOption) {
+      toast({
+        title: "Audio required",
+        description: "Generate dialogue audio below, then try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setKlingLipSyncingId(storyboard.id)
+    updateStoryboardGeneration(storyboard.id, {
+      generationStatus: "Preparing Kling lip sync…",
+    })
+
+    try {
+      const audioDurationMs = await getAudioDurationMs(audioOption.url)
+      const payload: {
+        videoUrl: string
+        audioDurationMs: number
+        audioUrl?: string
+        audioBase64?: string
+      } = {
+        videoUrl,
+        audioDurationMs,
+      }
+
+      if (audioOption.url.startsWith("http") && !audioOption.url.startsWith("blob:")) {
+        payload.audioUrl = audioOption.url
+      } else {
+        payload.audioBase64 = await audioUrlToBase64(audioOption.url)
+      }
+
+      const response = await KlingService.lipSyncVideo({
+        ...payload,
+        onProgress: (status) => {
+          updateStoryboardGeneration(storyboard.id, { generationStatus: status })
+        },
+      })
+
+      if (!response.success || !response.data?.url) {
+        throw new Error(response.error || "Kling lip sync failed")
+      }
+
+      const lipSyncUrl = response.data.url as string
+      updateStoryboardGeneration(storyboard.id, {
+        generatedVideoUrl: lipSyncUrl,
+        generationStatus: "Lip sync complete",
+      })
+      setActiveVideoUrl(storyboard.id, lipSyncUrl)
+      switchDetailToVideo(storyboard.id)
+
+      await autoSaveGeneratedVideo(lipSyncUrl, storyboard, {
+        model: "Kling Lip Sync",
+        prompt: audioOption.label,
+        duration: generation?.duration || "5",
+        resolution: generation?.resolution || "1280x720",
+      })
+
+      toast({
+        title: "Lip sync complete",
+        description: `Applied "${audioOption.label}" to your Kling video.`,
+      })
+    } catch (error) {
+      console.error("Kling lip sync error:", error)
+      updateStoryboardGeneration(storyboard.id, {
+        generationStatus: error instanceof Error ? error.message : "Lip sync failed",
+      })
+      toast({
+        title: "Lip sync failed",
+        description: error instanceof Error ? error.message : "Could not apply lip sync.",
+        variant: "destructive",
+      })
+    } finally {
+      setKlingLipSyncingId(null)
+    }
+  }
+
   const handleDownloadVideo = async (videoUrl: string, storyboard: Storyboard) => {
     try {
       const response = await fetch(videoUrl)
@@ -3390,12 +3815,9 @@ export default function CinemaProductionPage() {
       addSessionClip(storyboard.id, clip)
       setDefaultAudioSaveName(storyboard, clipId, "dialogue", text)
 
-      const generation = storyboardGenerations.get(storyboard.id)
-      if (generation?.model === "Hedra Character 3") {
-        updateStoryboardGeneration(storyboard.id, {
-          savedAudioOptionId: sessionAudioOptionId(clipId),
-        })
-      }
+      updateStoryboardGeneration(storyboard.id, {
+        savedAudioOptionId: sessionAudioOptionId(clipId),
+      })
 
       toast({
         title: "Dialogue Generated",
@@ -3627,6 +4049,19 @@ export default function CinemaProductionPage() {
     setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
 
     try {
+      const cachedDurationMs = videoDurationByUrl[videoUrl]
+      const videoDurationMs =
+        cachedDurationMs ?? (await resolveVideoDurationMs(videoUrl))
+      if (cachedDurationMs == null) {
+        videoDurationCacheRef.current[videoUrl] = videoDurationMs
+        setVideoDurationByUrl((current) => ({ ...current, [videoUrl]: videoDurationMs }))
+      }
+      const timing = clampMireloVideoTiming(
+        videoDurationMs,
+        options.startOffsetMs,
+        options.durationMs,
+      )
+
       const response = await fetch("/api/mirelo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3635,8 +4070,8 @@ export default function CinemaProductionPage() {
           mode: "async",
           version: options.version,
           video_url: videoUrl,
-          duration_ms: options.durationMs,
-          start_offset_ms: options.startOffsetMs,
+          duration_ms: timing.durationMs,
+          start_offset_ms: timing.startOffsetMs,
           num_samples: options.numSamples,
           output: "audio",
           apiKey: userApiKeys.mirelo_api_key,
@@ -3697,14 +4132,8 @@ export default function CinemaProductionPage() {
       for (let i = 0; i < resultUrls.length; i++) {
         const clipId = crypto.randomUUID()
         const url = resultUrls[i]
-        let audioUrl = url
-        try {
-          const res = await fetch(url)
-          const blob = await res.blob()
-          audioUrl = URL.createObjectURL(blob)
-        } catch {
-          /* keep remote url */
-        }
+        const blob = await fetchAudioBlob(url)
+        const audioUrl = URL.createObjectURL(blob)
 
         const prompt = resultUrls.length > 1 ? `${basePrompt} (sample ${i + 1})` : basePrompt
         const clip: SessionAudioClip = {
@@ -3762,9 +4191,7 @@ export default function CinemaProductionPage() {
     }
 
     try {
-      // Convert blob URL to blob
-      const response = await fetch(audioUrl)
-      const audioBlob = await response.blob()
+      const audioBlob = await fetchAudioBlob(audioUrl)
       
       // Convert blob to base64 for API
       const reader = new FileReader()
@@ -4029,10 +4456,13 @@ export default function CinemaProductionPage() {
 
   const handleGenerateVideo = async (storyboard: Storyboard) => {
     const generation = storyboardGenerations.get(storyboard.id)
-    if (!generation || !generation.model || !generation.prompt.trim()) {
+    const promptOptional = generation?.model === "Kling 3.0 Motion Control"
+    if (!generation || !generation.model || (!promptOptional && !generation.prompt.trim())) {
       toast({
         title: "Missing Information",
-        description: "Please select a model and enter a prompt.",
+        description: promptOptional
+          ? "Please select a model."
+          : "Please select a model and enter a prompt.",
         variant: "destructive"
       })
       return
@@ -4063,6 +4493,32 @@ export default function CinemaProductionPage() {
         variant: "destructive"
       })
       return
+    }
+
+    if (fileRequirement === 'motion-control') {
+      const hasCharacterImage = !!(generation.uploadedFile || storyboard.image_url)
+      const hasReferenceVideo = !!(
+        generation.referenceVideoFile ||
+        generation.motionReferenceVideoUrl
+      )
+      if (!hasCharacterImage) {
+        toast({
+          title: "Missing Character Image",
+          description:
+            "Kling Motion Control needs a character image. Use the storyboard image or upload one.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (!hasReferenceVideo) {
+        toast({
+          title: "Missing Reference Video",
+          description:
+            "Upload a reference motion video or pick one from saved shot videos.",
+          variant: "destructive",
+        })
+        return
+      }
     }
     
     if (fileRequirement === 'start-end-frames') {
@@ -5298,6 +5754,71 @@ export default function CinemaProductionPage() {
             variant: "destructive"
           })
         }
+      } else if (isKlingMotionControlModel(generation.model)) {
+        let imageFile: File | undefined = generation.uploadedFile || undefined
+
+        if (!imageFile && storyboard.image_url) {
+          try {
+            updateStoryboardGeneration(storyboard.id, {
+              generationStatus: "Loading character image...",
+            })
+            const imageResponse = await fetch(storyboard.image_url)
+            if (imageResponse.ok) {
+              const imageBlob = await imageResponse.blob()
+              imageFile = new File([imageBlob], 'character-image.jpg', {
+                type: imageBlob.type || 'image/jpeg',
+              })
+            }
+          } catch (error) {
+            console.error('Error loading storyboard image:', error)
+          }
+        }
+
+        updateStoryboardGeneration(storyboard.id, {
+          generationStatus: "Kling is transferring motion — this can take several minutes...",
+        })
+
+        const response = await KlingService.generateMotionControl({
+          prompt: generation.prompt || undefined,
+          imageFile,
+          imageUrl: !imageFile ? storyboard.image_url || undefined : undefined,
+          referenceVideoFile: generation.referenceVideoFile || undefined,
+          referenceVideoUrl: generation.motionReferenceVideoUrl || undefined,
+          characterOrientation: generation.klingCharacterOrientation || 'image',
+          mode: generation.klingMotionMode || 'pro',
+          keepOriginalSound: generation.klingKeepOriginalSound ?? true,
+          onProgress: (status) => {
+            updateStoryboardGeneration(storyboard.id, { generationStatus: status })
+          },
+        })
+
+        if (response.success) {
+          const videoUrl =
+            response.data?.video_url || response.data?.url || response.data?.output?.[0]
+          updateStoryboardGeneration(storyboard.id, {
+            isGenerating: false,
+            generatedVideoUrl: videoUrl || null,
+            generationStatus: videoUrl ? "Completed" : "Processing - check back soon",
+          })
+          switchDetailToVideo(storyboard.id)
+          if (videoUrl) {
+            await autoSaveGeneratedVideo(videoUrl, storyboard, {
+              model: generation.model,
+              prompt: generation.prompt,
+              duration: generation.duration,
+              resolution: generation.resolution,
+            })
+          }
+
+          toast({
+            title: "Success",
+            description: videoUrl
+              ? "Motion control video generated — switched to Video view."
+              : "Motion control started. Check back in a few minutes.",
+          })
+        } else {
+          throw new Error(response.error || "Generation failed")
+        }
       } else if (isNativeKlingModel(generation.model)) {
         const klingConfig = getKlingModelConfig(generation.model)
         if (!klingConfig) {
@@ -5533,13 +6054,45 @@ export default function CinemaProductionPage() {
       <Header />
       <div className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <div className="flex items-center gap-3 mb-2">
-            <Film className="h-6 w-6 text-primary" />
-            <h1 className="text-3xl font-bold">Cinema Production</h1>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex items-center gap-3 mb-2">
+                <Film className="h-6 w-6 text-primary" />
+                <h1 className="text-3xl font-bold">Cinema Production</h1>
+              </div>
+              <p className="text-muted-foreground">
+                Convert your storyboard shots into video using AI models
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {selectedSceneId ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/storyboards/${selectedSceneId}`}>
+                    <FileText className="h-4 w-4 mr-2" />
+                    Storyboards
+                  </Link>
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" disabled title="Select a scene first">
+                  <FileText className="h-4 w-4 mr-2" />
+                  Storyboards
+                </Button>
+              )}
+              {selectedSceneId ? (
+                <Button variant="outline" size="sm" asChild>
+                  <Link href={`/shotlist/${selectedSceneId}`}>
+                    <List className="h-4 w-4 mr-2" />
+                    Shot List
+                  </Link>
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" disabled title="Select a scene first">
+                  <List className="h-4 w-4 mr-2" />
+                  Shot List
+                </Button>
+              )}
+            </div>
           </div>
-          <p className="text-muted-foreground">
-            Convert your storyboard shots into video using AI models
-          </p>
         </div>
 
         {/* Project Selection */}
@@ -6486,6 +7039,69 @@ export default function CinemaProductionPage() {
                                         Save to Storage
                                       </Button>
                                     </div>
+                                    {(() => {
+                                      const lipSyncAudioOptions = getAudioOptionsForStoryboard(
+                                        storyboard.id,
+                                      ).filter(
+                                        (option) =>
+                                          option.source === "session-dialogue" ||
+                                          option.label.startsWith("Dialogue:"),
+                                      )
+                                      if (lipSyncAudioOptions.length === 0) return null
+                                      return (
+                                        <div className="rounded-lg border border-violet-500/25 bg-violet-500/5 p-3 space-y-2">
+                                          <div className="flex items-center gap-2">
+                                            <Volume2 className="h-4 w-4 text-violet-500" />
+                                            <p className="text-sm font-medium">Kling Lip Sync</p>
+                                          </div>
+                                          <p className="text-xs text-muted-foreground">
+                                            Apply your ElevenLabs dialogue to this video. The face should be clearly visible.
+                                          </p>
+                                          <Select
+                                            value={
+                                              generation.savedAudioOptionId ||
+                                              lipSyncAudioOptions[0]?.id ||
+                                              ""
+                                            }
+                                            onValueChange={(value) =>
+                                              updateStoryboardGeneration(storyboard.id, {
+                                                savedAudioOptionId: value,
+                                              })
+                                            }
+                                          >
+                                            <SelectTrigger>
+                                              <SelectValue placeholder="Select dialogue clip" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {lipSyncAudioOptions.map((option) => (
+                                                <SelectItem key={option.id} value={option.id}>
+                                                  {option.label}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                          <Button
+                                            size="sm"
+                                            className="w-full gap-1.5"
+                                            variant="secondary"
+                                            disabled={klingLipSyncingId === storyboard.id}
+                                            onClick={() => void handleKlingLipSync(storyboard)}
+                                          >
+                                            {klingLipSyncingId === storyboard.id ? (
+                                              <>
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                Applying lip sync…
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Volume2 className="h-4 w-4" />
+                                                Apply Lip Sync to Video
+                                              </>
+                                            )}
+                                          </Button>
+                                        </div>
+                                      )
+                                    })()}
                                   </div>
                                 ) : (
                                   <div className="py-12 text-center bg-muted rounded-lg">
@@ -6562,6 +7178,22 @@ export default function CinemaProductionPage() {
                             {getShotLibraryFrames(storyboard).length > 0
                               ? ` (${getShotLibraryFrames(storyboard).length})`
                               : ""}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => void handleDownloadImage(storyboard)}
+                            disabled={!getDisplayedShotImage(storyboard)}
+                            title={
+                              getDisplayedShotImage(storyboard)
+                                ? "Download current shot image"
+                                : "Generate a shot image first"
+                            }
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Download
                           </Button>
                         </div>
                         {getShotLibraryFrames(storyboard).length > 0 && (
@@ -6733,13 +7365,17 @@ export default function CinemaProductionPage() {
                                         ? getAudioOptionsForStoryboard(storyboard.id)
                                         : []
                                     
+                                    const isMotionControl = newModel === "Kling 3.0 Motion Control"
+                                    
                                     updateStoryboardGeneration(storyboard.id, { 
                                       model: newModel,
                                       resolution: isRunwayGen4I2V
                                         ? (isValidRunwayGen4Resolution(generation.resolution)
                                             ? generation.resolution
                                             : getRunwayResolutionValue(1104, 832))
-                                        : generation.resolution,
+                                        : isMotionControl
+                                          ? '1920x1080'
+                                          : generation.resolution,
                                       // Clear files when model changes
                                       uploadedFile: null,
                                       startFrame: null,
@@ -6749,6 +7385,12 @@ export default function CinemaProductionPage() {
                                       endFramePreview: null,
                                       startFrameImageUrl: null,
                                       endFrameImageUrl: null,
+                                      referenceVideoFile: null,
+                                      referenceVideoPreview: null,
+                                      motionReferenceVideoUrl: null,
+                                      klingCharacterOrientation: isMotionControl ? 'image' : undefined,
+                                      klingMotionMode: isMotionControl ? 'pro' : undefined,
+                                      klingKeepOriginalSound: isMotionControl ? true : undefined,
                                       savedAudioOptionId:
                                         newModel === "Hedra Character 3"
                                           ? audioOptions[0]?.id ?? null
@@ -6776,6 +7418,7 @@ export default function CinemaProductionPage() {
                                     <SelectItem value="Kling 3.0 Omni T2V">Kling 3.0 Omni T2V (Reference + Audio)</SelectItem>
                                     <SelectItem value="Kling 3.0 Omni I2V">Kling 3.0 Omni I2V (Reference + Audio)</SelectItem>
                                     <SelectItem value="Kling 3.0 Omni I2V Extended">Kling 3.0 Omni I2V Extended (Frame-to-Frame)</SelectItem>
+                                    <SelectItem value="Kling 3.0 Motion Control">Kling 3.0 Motion Control (Image + Motion Video)</SelectItem>
                                     <SelectItem value="Kling 2.1 Pro (Frame-to-Frame)">Kling 2.1 Pro (Frame-to-Frame via Leonardo)</SelectItem>
                                     <SelectItem value="Veo 3.1 (Frame-to-Frame)">Veo 3.1 (Frame-to-Frame via Leonardo)</SelectItem>
                                     <SelectItem value="Veo 3.1 Fast (Frame-to-Frame)">Veo 3.1 Fast (Frame-to-Frame via Leonardo)</SelectItem>
@@ -6895,6 +7538,75 @@ export default function CinemaProductionPage() {
                                     })()}
                                   </div>
 
+                                  {isKlingMotionControlModel(generation.model) ? (
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div>
+                                        <Label>Character orientation</Label>
+                                        <Select
+                                          value={generation.klingCharacterOrientation || 'image'}
+                                          onValueChange={(value: 'image' | 'video') =>
+                                            updateStoryboardGeneration(storyboard.id, {
+                                              klingCharacterOrientation: value,
+                                            })
+                                          }
+                                        >
+                                          <SelectTrigger>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="image">
+                                              Match image (up to 10s)
+                                            </SelectItem>
+                                            <SelectItem value="video">
+                                              Match video (up to 30s)
+                                            </SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div>
+                                        <Label>Quality</Label>
+                                        <Select
+                                          value={generation.klingMotionMode || 'pro'}
+                                          onValueChange={(value: 'std' | 'pro') =>
+                                            updateStoryboardGeneration(storyboard.id, {
+                                              klingMotionMode: value,
+                                              resolution: value === 'pro' ? '1920x1080' : '1280x720',
+                                            })
+                                          }
+                                        >
+                                          <SelectTrigger>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="std">Standard (720p)</SelectItem>
+                                            <SelectItem value="pro">Pro (1080p)</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                      </div>
+                                      <div className="col-span-2 flex items-center gap-2">
+                                        <input
+                                          id={`kling-motion-sound-${storyboard.id}`}
+                                          type="checkbox"
+                                          checked={generation.klingKeepOriginalSound ?? true}
+                                          onChange={(e) =>
+                                            updateStoryboardGeneration(storyboard.id, {
+                                              klingKeepOriginalSound: e.target.checked,
+                                            })
+                                          }
+                                          className="h-4 w-4 rounded border-border"
+                                        />
+                                        <Label
+                                          htmlFor={`kling-motion-sound-${storyboard.id}`}
+                                          className="text-sm font-normal"
+                                        >
+                                          Keep reference video audio
+                                        </Label>
+                                      </div>
+                                      <p className="col-span-2 text-xs text-muted-foreground">
+                                        Transfers motion from a reference video onto your character image — similar to Runway Act-Two.
+                                      </p>
+                                    </div>
+                                  ) : (
                                   <div className="grid grid-cols-2 gap-4">
                                     <div>
                                       <Label>Duration</Label>
@@ -6948,6 +7660,7 @@ export default function CinemaProductionPage() {
                                       </Select>
                                     </div>
                                   </div>
+                                  )}
 
                                   {isNativeKlingModel(generation.model) && (
                                     <div className="flex items-center gap-2">
@@ -7038,6 +7751,137 @@ export default function CinemaProductionPage() {
                               </div>
                             )}
 
+                            {fileRequirement === 'motion-control' && (
+                              <div className="space-y-4 rounded-lg border p-3 bg-muted/20">
+                                <div className="rounded-md border bg-background/50 px-3 py-2 space-y-2">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <Label className="text-sm">Character image</Label>
+                                      <p className="text-xs text-muted-foreground truncate">
+                                        {generation.filePreview
+                                          ? `Override: ${generation.uploadedFile?.name || 'uploaded image'}`
+                                          : storyboard.image_url
+                                            ? 'Using the storyboard image shown above'
+                                            : 'Upload a character image'}
+                                      </p>
+                                    </div>
+                                    {generation.filePreview ? (
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        <img
+                                          src={generation.filePreview}
+                                          alt=""
+                                          className="h-10 w-14 rounded object-cover border"
+                                        />
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          onClick={() => handleRemoveFile(storyboard.id, 'file')}
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                  <Input
+                                    type="file"
+                                    accept="image/*"
+                                    className="text-xs"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0]
+                                      if (file) handleFileUpload(storyboard.id, file, 'file')
+                                    }}
+                                  />
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label>Reference motion video</Label>
+                                  <p className="text-xs text-muted-foreground">
+                                    MP4/MOV, 3–30 seconds. Upload a clip or pick a saved shot video.
+                                  </p>
+                                  {generation.referenceVideoPreview ? (
+                                    <div className="flex items-center gap-2">
+                                      <video
+                                        src={generation.referenceVideoPreview}
+                                        className="h-16 w-28 rounded object-cover border"
+                                        muted
+                                        playsInline
+                                      />
+                                      <span className="text-sm truncate">
+                                        {generation.referenceVideoFile?.name}
+                                      </span>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => handleRemoveFile(storyboard.id, 'referenceVideo')}
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  ) : generation.motionReferenceVideoUrl ? (
+                                    <div className="flex items-center gap-2">
+                                      <video
+                                        src={generation.motionReferenceVideoUrl}
+                                        className="h-16 w-28 rounded object-cover border"
+                                        muted
+                                        playsInline
+                                      />
+                                      <span className="text-sm text-muted-foreground">Saved shot video</span>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            motionReferenceVideoUrl: null,
+                                          })
+                                        }
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <Input
+                                      type="file"
+                                      accept="video/mp4,video/quicktime,video/*"
+                                      className="text-xs"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0]
+                                        if (file) handleFileUpload(storyboard.id, file, 'referenceVideo')
+                                      }}
+                                    />
+                                  )}
+                                  {(() => {
+                                    const savedVideos = getStoryboardVideoList(storyboard.id)
+                                    if (savedVideos.length === 0) return null
+                                    return (
+                                      <Select
+                                        value={generation.motionReferenceVideoUrl || ''}
+                                        onValueChange={(value) =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            motionReferenceVideoUrl: value,
+                                            referenceVideoFile: null,
+                                            referenceVideoPreview: null,
+                                          })
+                                        }
+                                      >
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Or pick a saved shot video…" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {savedVideos.map((video) => (
+                                            <SelectItem key={video.id} value={video.video_url}>
+                                              {video.video_name ||
+                                                video.generation_model ||
+                                                `Video ${video.id.slice(0, 8)}`}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
+                                    )
+                                  })()}
+                                </div>
+                              </div>
+                            )}
+
                             {fileRequirement === 'image' && (
                               <div className="rounded-md border bg-muted/20 px-3 py-2 space-y-2">
                                 <div className="flex items-center justify-between gap-3">
@@ -7113,14 +7957,16 @@ export default function CinemaProductionPage() {
                             {/* Generate early for simple models — after prompt/settings/image, before frame-to-frame extras */}
                             {(fileRequirement === 'image' ||
                               fileRequirement === 'video' ||
-                              fileRequirement === 'none') &&
+                              fileRequirement === 'none' ||
+                              fileRequirement === 'motion-control') &&
                               generation.model !== 'Leonardo Motion 2.0' && (
                               <>
                                 <Button
                                   onClick={() => handleGenerateVideo(storyboard)}
                                   disabled={
                                     generation.isGenerating ||
-                                    !generation.prompt.trim()
+                                    (!isKlingMotionControlModel(generation.model) &&
+                                      !generation.prompt.trim())
                                   }
                                   className="w-full"
                                 >
@@ -7696,7 +8542,8 @@ export default function CinemaProductionPage() {
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 Prompt Assist fills the spoken line plus tone tags (e.g. [tired][softly])
-                                from shot action, dialogue, and the image.
+                                from shot action, dialogue, and the image. After you generate a Kling video,
+                                use Apply Lip Sync to Video below the video player to sync this clip.
                               </p>
                               <SessionAudioClipList
                                 clips={getSessionClipsForStoryboard(storyboard.id, "dialogue")}
@@ -7708,13 +8555,12 @@ export default function CinemaProductionPage() {
                                     return next
                                   })
                                 }}
-                                onDownload={(clip) => {
-                                  const link = document.createElement("a")
-                                  link.href = clip.audioUrl
-                                  link.download = `${sanitizeAudioFileName(getAudioSaveNameForClip(storyboard, clip))}.mp3`
-                                  document.body.appendChild(link)
-                                  link.click()
-                                  document.body.removeChild(link)
+                                onDownloadError={(message) => {
+                                  toast({
+                                    title: "Download Failed",
+                                    description: message,
+                                    variant: "destructive",
+                                  })
                                 }}
                                 onSave={async (clip, saveName) => {
                                   setSavingAudioClipId(clip.id)
@@ -7766,6 +8612,13 @@ export default function CinemaProductionPage() {
                                 audioPromptAssistLoadingId === `${storyboard.id}-sound-effect`
                               }
                               onPromptAssist={() => handleSoundEffectPromptAssist(storyboard)}
+                              onDownloadError={(message) => {
+                                toast({
+                                  title: "Download Failed",
+                                  description: message,
+                                  variant: "destructive",
+                                })
+                              }}
                             />
                           </AudioGeneratorSection>
 
@@ -7806,6 +8659,13 @@ export default function CinemaProductionPage() {
                                 audioPromptAssistLoadingId === `${storyboard.id}-stable-audio`
                               }
                               onPromptAssist={() => handleStableAudioPromptAssist(storyboard)}
+                              onDownloadError={(message) => {
+                                toast({
+                                  title: "Download Failed",
+                                  description: message,
+                                  variant: "destructive",
+                                })
+                              }}
                             />
                           </AudioGeneratorSection>
 
@@ -7819,6 +8679,18 @@ export default function CinemaProductionPage() {
                               storyboard={storyboard}
                               clips={getSessionClipsForStoryboard(storyboard.id, "mirelo-sfx")}
                               videoUrl={getActiveVideoUrl(storyboard.id)}
+                              videoDurationMs={
+                                (() => {
+                                  const activeUrl = getActiveVideoUrl(storyboard.id)
+                                  return activeUrl ? videoDurationByUrl[activeUrl] ?? null : null
+                                })()
+                              }
+                              loadingVideoDuration={
+                                (() => {
+                                  const activeUrl = getActiveVideoUrl(storyboard.id)
+                                  return activeUrl ? !!videoDurationLoadingUrls[activeUrl] : false
+                                })()
+                              }
                               onGenerate={handleGenerateMireloSfx}
                               isGenerating={audioGenerating.get(`${storyboard.id}-mirelo-sfx`) || false}
                               hasApiKey={!!userApiKeys.mirelo_api_key}
@@ -7843,6 +8715,20 @@ export default function CinemaProductionPage() {
                               userId={userId || undefined}
                               projectId={selectedProjectId || undefined}
                               sceneId={selectedSceneId || undefined}
+                              onDownloadError={(message) => {
+                                toast({
+                                  title: "Download Failed",
+                                  description: message,
+                                  variant: "destructive",
+                                })
+                              }}
+                              onError={(message) => {
+                                toast({
+                                  title: "Video length unavailable",
+                                  description: message,
+                                  variant: "destructive",
+                                })
+                              }}
                             />
                           </AudioGeneratorSection>
                           </div>

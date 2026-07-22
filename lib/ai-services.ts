@@ -773,6 +773,150 @@ export class KlingService {
     }
   }
 
+  static async lipSyncVideo(request: {
+    videoUrl: string
+    audioUrl?: string
+    audioBase64?: string
+    audioDurationMs: number
+    faceId?: string
+    soundInsertTimeMs?: number
+    onProgress?: (status: string) => void
+  }): Promise<AIResponse> {
+    try {
+      request.onProgress?.('Identifying faces in video…')
+
+      const response = await fetch('/api/kling/lip-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          videoUrl: request.videoUrl,
+          audioUrl: request.audioUrl,
+          audioBase64: request.audioBase64,
+          audioDurationMs: request.audioDurationMs,
+          faceId: request.faceId,
+          soundInsertTimeMs: request.soundInsertTimeMs,
+        }),
+      })
+
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Kling lip sync failed')
+      }
+
+      if (result.data?.url) {
+        return { success: true, data: result.data }
+      }
+
+      const taskId = result.data?.taskId as string | undefined
+      if ((result.processing || result.data?.status === 'processing') && taskId) {
+        request.onProgress?.('Kling is applying lip sync…')
+        const { url } = await this.pollTaskUntilComplete(taskId, 'lip-sync', {
+          onProgress: (attempt, max) => {
+            request.onProgress?.(`Lip sync in progress (${attempt}/${max})…`)
+          },
+        })
+        return {
+          success: true,
+          data: {
+            ...result.data,
+            url,
+            status: 'completed',
+          },
+        }
+      }
+
+      throw new Error('Kling lip sync did not return a video URL')
+    } catch (error) {
+      console.error('🎬 Kling lip sync error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
+  static async generateMotionControl(request: {
+    prompt?: string
+    imageFile?: File
+    imageUrl?: string
+    referenceVideoFile?: File
+    referenceVideoUrl?: string
+    characterOrientation?: 'image' | 'video'
+    mode?: 'std' | 'pro'
+    keepOriginalSound?: boolean
+    onProgress?: (status: string) => void
+  }): Promise<AIResponse> {
+    try {
+      request.onProgress?.('Submitting motion control job…')
+
+      const formData = new FormData()
+      if (request.prompt) {
+        formData.append('prompt', request.prompt)
+      }
+      if (request.imageFile) {
+        formData.append('image', request.imageFile)
+      } else if (request.imageUrl) {
+        formData.append('image_url', request.imageUrl)
+      }
+      if (request.referenceVideoFile) {
+        formData.append('reference_video', request.referenceVideoFile)
+      } else if (request.referenceVideoUrl) {
+        formData.append('reference_video_url', request.referenceVideoUrl)
+      }
+      formData.append(
+        'character_orientation',
+        request.characterOrientation || 'image',
+      )
+      formData.append('mode', request.mode || 'pro')
+      formData.append(
+        'keep_original_sound',
+        request.keepOriginalSound === false ? 'no' : 'yes',
+      )
+
+      const response = await fetch('/api/kling/motion-control', {
+        method: 'POST',
+        body: formData,
+        credentials: 'same-origin',
+      })
+
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Kling motion control failed')
+      }
+
+      if (result.data?.url) {
+        return { success: true, data: result.data }
+      }
+
+      const taskId = result.data?.taskId as string | undefined
+      if ((result.processing || result.data?.status === 'processing') && taskId) {
+        request.onProgress?.('Kling is transferring motion…')
+        const { url } = await this.pollTaskUntilComplete(taskId, 'motion-control', {
+          onProgress: (attempt, max) => {
+            request.onProgress?.(`Motion control in progress (${attempt}/${max})…`)
+          },
+        })
+        return {
+          success: true,
+          data: {
+            ...result.data,
+            url,
+            status: 'completed',
+          },
+        }
+      }
+
+      throw new Error('Kling motion control did not return a video URL')
+    } catch (error) {
+      console.error('🎬 Kling motion control error:', error)
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      }
+    }
+  }
+
   static async validateApiKey(apiKey: string): Promise<boolean> {
     try {
       const response = await fetch('https://api.klingai.com/v1/user', {
