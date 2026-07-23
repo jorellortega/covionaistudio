@@ -6,13 +6,14 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { FileText, Film, Loader2, ArrowLeft } from "lucide-react"
+import { FileText, Film, ImageIcon, Loader2, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuthReady } from "@/components/auth-hooks"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
+import { ProjectSelector } from "@/components/project-selector"
 
 export default function StoryboardsPage() {
   const { toast } = useToast()
@@ -24,7 +25,7 @@ export default function StoryboardsPage() {
   const [movie, setMovie] = useState<Movie | null>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [selectedSceneId, setSelectedSceneId] = useState<string>("")
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (authLoading) return
@@ -35,12 +36,12 @@ export default function StoryboardsPage() {
     }
 
     if (!movieId) {
-      router.push('/movies')
+      setLoading(false)
       return
     }
 
     void loadMovieAndScenes()
-  }, [authLoading, ready, userId, movieId, router])
+  }, [authLoading, ready, userId, movieId])
 
   const loadMovieAndScenes = async () => {
     if (!movieId || !ready || !userId) return
@@ -83,7 +84,39 @@ export default function StoryboardsPage() {
   }
 
   if (!movieId) {
-    return null
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="text-center py-12">
+            <ImageIcon className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No project selected</h3>
+            <p className="text-muted-foreground mb-4">
+              Choose a project to view and manage its storyboards
+            </p>
+
+            <div className="max-w-md mx-auto mb-6">
+              <ProjectSelector
+                onProjectChange={(newProjectId) => {
+                  if (newProjectId) {
+                    router.push(`/storyboards?movie=${newProjectId}`)
+                  }
+                }}
+                placeholder="Select a project..."
+                showCreateNew={true}
+              />
+            </div>
+
+            <Link href="/movies">
+              <Button className="gradient-button text-white">
+                <ArrowLeft className="mr-2 h-5 w-5" />
+                Back to Movies
+              </Button>
+            </Link>
+          </div>
+        </main>
+      </div>
+    )
   }
 
   if (authLoading || loading) {

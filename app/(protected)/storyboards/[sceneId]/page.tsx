@@ -35,6 +35,7 @@ import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { SavedPromptsService } from "@/lib/saved-prompts-service"
 import { PreferencesService } from "@/lib/preferences-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { AvatarImagesService, type AvatarImageRecord } from "@/lib/avatar-images-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
@@ -42,6 +43,7 @@ import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
 
@@ -324,6 +326,8 @@ export default function SceneStoryboardsPage() {
   const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
   const [quickInsertingKey, setQuickInsertingKey] = useState<string | null>(null)
   const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
+  const [storyboardImages, setStoryboardImages] = useState<Map<string, StoryboardImage[]>>(new Map())
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
   const [fullImageTitle, setFullImageTitle] = useState("")
@@ -344,6 +348,7 @@ export default function SceneStoryboardsPage() {
   const [userApiKeys, setUserApiKeys] = useState<any>({})
   const [showDescriptionDialog, setShowDescriptionDialog] = useState(false)
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
+  const [projectAvatarImages, setProjectAvatarImages] = useState<AvatarImageRecord[]>([])
   const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
   const [linkImageDialogOpen, setLinkImageDialogOpen] = useState(false)
   const [linkingStoryboard, setLinkingStoryboard] = useState<Storyboard | null>(null)
@@ -950,10 +955,69 @@ export default function SceneStoryboardsPage() {
     loadProjectAssets()
   }, [sceneInfo?.project_id, ready, userId])
 
-  const linkedProjectImageGroups = useMemo(
-    () => buildLinkedAssetGroups(projectImageAssets, locations, characters),
-    [projectImageAssets, locations, characters],
+  // Load avatar studio images for reference linking
+  useEffect(() => {
+    const loadAvatarImages = async () => {
+      if (!sceneInfo?.project_id || !ready || !userId) {
+        setProjectAvatarImages([])
+        return
+      }
+      try {
+        const images = await AvatarImagesService.listImagesForProject(sceneInfo.project_id)
+        setProjectAvatarImages(images.filter((img) => img.image_url))
+      } catch (error) {
+        console.error("Error loading avatar images:", error)
+        setProjectAvatarImages([])
+      }
+    }
+    void loadAvatarImages()
+  }, [sceneInfo?.project_id, ready, userId])
+
+  const avatarImageAssets = useMemo(
+    () =>
+      projectAvatarImages.map(
+        (row) =>
+          ({
+            id: `avatar-${row.id}`,
+            user_id: row.user_id,
+            project_id: row.project_id,
+            character_id: row.character_id ?? undefined,
+            title: `${row.angle_label} avatar`,
+            content_type: "image",
+            content_url: row.image_url,
+            prompt: row.prompt ?? undefined,
+            version: 1,
+            is_latest_version: true,
+            metadata: {
+              type: "avatar",
+              avatar_angle: row.angle_id,
+              avatar_source: row.source,
+            },
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+          }) satisfies Asset,
+      ),
+    [projectAvatarImages],
   )
+
+  const linkableImageAssets = useMemo(
+    () => [...projectImageAssets, ...avatarImageAssets],
+    [projectImageAssets, avatarImageAssets],
+  )
+
+  const linkedProjectImageGroups = useMemo(() => {
+    const groups = buildLinkedAssetGroups(linkableImageAssets, locations, characters)
+    const avatarOnly = avatarImageAssets.filter(
+      (asset) => !groups.some((group) => group.assets.some((a) => a.id === asset.id)),
+    )
+    if (avatarOnly.length > 0) {
+      groups.unshift({
+        label: "Avatar Studio",
+        assets: avatarOnly,
+      })
+    }
+    return groups
+  }, [linkableImageAssets, avatarImageAssets, locations, characters])
 
   const filteredLinkImageGroups = useMemo(() => {
     const term = linkImageSearch.trim().toLowerCase()
@@ -980,6 +1044,138 @@ export default function SceneStoryboardsPage() {
 
   const orderedStoryboards = useMemo(() => sortStoryboardRows(storyboards), [storyboards])
 
+  const loadStoryboardImages = async (storyboardId: string): Promise<StoryboardImage[]> => {
+    try {
+      const response = await fetch(`/api/storyboard-images?storyboardId=${storyboardId}`)
+      const result = await response.json()
+      if (response.ok && result.success) {
+        const images = (result.data || []) as StoryboardImage[]
+        setStoryboardImages((prev) => {
+          const next = new Map(prev)
+          next.set(storyboardId, images)
+          return next
+        })
+        return images
+      }
+    } catch (error) {
+      console.error("Error loading storyboard images:", error)
+    }
+    return []
+  }
+
+  const loadAllStoryboardImages = async (storyboardIds: string[]) => {
+    await Promise.all(storyboardIds.map((id) => loadStoryboardImages(id)))
+  }
+
+  const saveStoryboardImage = async (
+    storyboardId: string,
+    imageUrl: string,
+    options?: {
+      isDefault?: boolean
+      generationPrompt?: string
+      generationModel?: string
+      imageName?: string
+    },
+  ) => {
+    const isDefault = options?.isDefault ?? true
+    const response = await fetch("/api/storyboard-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        storyboardId,
+        imageUrl,
+        isDefault,
+        generationPrompt: options?.generationPrompt,
+        generationModel: options?.generationModel,
+        imageName: options?.imageName,
+      }),
+    })
+    const result = await response.json()
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || "Failed to save storyboard image")
+    }
+
+    if (isDefault) {
+      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(storyboardId, imageUrl)
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === storyboardId ? updatedStoryboard : sb)),
+      )
+    }
+
+    await loadStoryboardImages(storyboardId)
+    return result.data as StoryboardImage
+  }
+
+  const handleSelectStoryboardImage = async (image: StoryboardImage) => {
+    try {
+      const response = await fetch("/api/storyboard-images", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageId: image.id, isDefault: true }),
+      })
+      const result = await response.json()
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to select image")
+      }
+
+      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(
+        image.storyboard_id,
+        image.image_url,
+      )
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === image.storyboard_id ? updatedStoryboard : sb)),
+      )
+      await loadStoryboardImages(image.storyboard_id)
+    } catch (error) {
+      toast({
+        title: "Could not select image",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleDeleteStoryboardImage = async (image: StoryboardImage) => {
+    setDeletingImageId(image.id)
+    try {
+      const response = await fetch(`/api/storyboard-images?imageId=${image.id}`, {
+        method: "DELETE",
+      })
+      const result = await response.json()
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Failed to delete image")
+      }
+
+      const refreshed = await loadStoryboardImages(image.storyboard_id)
+      const nextDefault = refreshed.find((img) => img.is_default) || refreshed[0]
+
+      setStoryboards((prev) =>
+        prev.map((sb) => {
+          if (sb.id !== image.storyboard_id) return sb
+          return {
+            ...sb,
+            image_url: nextDefault?.image_url || undefined,
+          }
+        }),
+      )
+
+      toast({
+        title: "Image deleted",
+        description: nextDefault
+          ? "Another image is now shown for this shot."
+          : "This shot no longer has an image.",
+      })
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete image.",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingImageId(null)
+    }
+  }
+
   const openLinkImageDialog = (storyboard: Storyboard) => {
     setLinkingStoryboard(storyboard)
     setSelectedLinkAssetId(null)
@@ -994,13 +1190,9 @@ export default function SceneStoryboardsPage() {
 
     setIsLinkingImage(true)
     try {
-      const updated = await StoryboardsService.updateStoryboardImage(
-        linkingStoryboard.id,
-        asset.content_url,
-      )
-      setStoryboards((prev) =>
-        prev.map((sb) => (sb.id === linkingStoryboard.id ? updated : sb)),
-      )
+      await saveStoryboardImage(linkingStoryboard.id, asset.content_url, {
+        imageName: asset.title,
+      })
       setLinkImageDialogOpen(false)
       setLinkingStoryboard(null)
       toast({
@@ -1069,23 +1261,52 @@ export default function SceneStoryboardsPage() {
       height?: number
     },
   ) => {
-    const width = options?.width ?? (config.service === "runway" ? 1280 : 1536)
-    const height = options?.height ?? (config.service === "runway" ? 720 : 1024)
+    return requestImageGenerationWithReferences(prompt, {
+      service: config.service,
+      model: config.apiModel,
+      apiKey: "configured",
+      referenceFile: options?.referenceFile,
+      styleReferenceFiles: options?.styleReferenceFiles,
+      width: options?.width,
+      height: options?.height,
+      supportsReference: config.supportsReference,
+    })
+  }
 
-    if (config.supportsReference && options?.referenceFile) {
+  const requestImageGenerationWithReferences = async (
+    prompt: string,
+    options: {
+      service: string
+      model?: string
+      apiKey: string
+      referenceFile?: File
+      styleReferenceFiles?: File[]
+      width?: number
+      height?: number
+      supportsReference?: boolean
+    },
+  ) => {
+    const width = options.width ?? (options.service === "runway" ? 1280 : 1536)
+    const height = options.height ?? (options.service === "runway" ? 720 : 1024)
+    const canUseReference =
+      Boolean(options.supportsReference) &&
+      Boolean(options.referenceFile)
+
+    if (canUseReference && options.referenceFile) {
       const formData = new FormData()
       formData.append("prompt", prompt)
-      formData.append("model", config.apiModel)
-      formData.append("service", config.service)
+      if (options.model) formData.append("model", options.model)
+      formData.append("service", options.service)
       formData.append("width", String(width))
       formData.append("height", String(height))
-      formData.append("apiKey", "configured")
+      formData.append("apiKey", options.apiKey)
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
+      formData.append("autoSaveToBucket", "true")
       for (const styleFile of options.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
-      if (config.service === "runway") {
+      if (options.service === "runway") {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
       }
 
@@ -1100,10 +1321,10 @@ export default function SceneStoryboardsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt,
-        service: config.service,
-        apiKey: "configured",
+        service: options.service,
+        apiKey: options.apiKey,
         userId,
-        model: config.apiModel,
+        model: options.model,
         width,
         height,
         autoSaveToBucket: true,
@@ -1120,7 +1341,44 @@ export default function SceneStoryboardsPage() {
   }
 
   const findStyleLinkAsset = (assetId: string) =>
-    projectImageAssets.find((a) => a.id === assetId)
+    linkableImageAssets.find((a) => a.id === assetId)
+
+  const getAvatarImagesForCharacter = (characterId?: string | null) => {
+    if (!characterId) return []
+    return projectAvatarImages.filter(
+      (img) => img.character_id === characterId && img.image_url,
+    )
+  }
+
+  const getAvatarLinkAssetIds = (characterId?: string | null) =>
+    getAvatarImagesForCharacter(characterId)
+      .map((img) => `avatar-${img.id}`)
+      .slice(0, MAX_LINKED_REFERENCE_IMAGES)
+
+  const buildAvatarReferenceFiles = async (characterId?: string | null) => {
+    const images = getAvatarImagesForCharacter(characterId).slice(
+      0,
+      MAX_LINKED_REFERENCE_IMAGES,
+    )
+    return Promise.all(
+      images.map((img, index) =>
+        referenceUrlToFile(img.image_url, `avatar-ref-${img.angle_id}-${index}.png`),
+      ),
+    )
+  }
+
+  const resolveStoryboardForGeneration = (storyboardId: string) => {
+    const storyboard = storyboards.find((sb) => sb.id === storyboardId)
+    if (!storyboard) return null
+    if (editingStoryboard?.id !== storyboardId) return storyboard
+    return {
+      ...storyboard,
+      character_id: formData.character_id ?? storyboard.character_id,
+      location_id: formData.location_id ?? storyboard.location_id,
+      title: formData.title || storyboard.title,
+      description: formData.description || storyboard.description,
+    }
+  }
 
   const buildStoryboardEditPrompt = (userDirection: string, storyboard: Storyboard) => {
     let prompt = userDirection.trim()
@@ -1129,6 +1387,21 @@ export default function SceneStoryboardsPage() {
     }
     return prompt.slice(0, 990)
   }
+
+  const buildStoryboardCreatePrompt = (userDirection: string, storyboard: Storyboard) => {
+    const shotContext = buildQuickShotImagePrompt(storyboard)
+    const parts = [userDirection.trim(), shotContext].filter(Boolean)
+    let prompt = parts.join(". ")
+    if (!/storyboard/i.test(prompt)) {
+      prompt += ", cinematic storyboard style"
+    }
+    return prompt.slice(0, 990)
+  }
+
+  const hasPrimaryReferenceForEdit = (
+    storyboard: Storyboard,
+    uploadedReference?: File | null,
+  ) => Boolean(uploadedReference || storyboard.image_url)
 
   const handleInlineShotReferenceSelect = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -1179,6 +1452,13 @@ export default function SceneStoryboardsPage() {
   const openReferenceEditDialog = (storyboard: Storyboard) => {
     setReferenceEditStoryboard(storyboard)
     clearInlineReferenceEditState()
+    const characterId =
+      editingStoryboard?.id === storyboard.id
+        ? formData.character_id ?? storyboard.character_id
+        : storyboard.character_id
+    if (characterId) {
+      setInlineStyleLinkAssetIds(getAvatarLinkAssetIds(characterId))
+    }
     setReferenceEditDialogOpen(true)
   }
 
@@ -1192,26 +1472,19 @@ export default function SceneStoryboardsPage() {
     const direction = inlineCustomShotPrompt.trim()
     if (!direction) {
       toast({
-        title: "Describe your edit",
-        description: 'Enter what you want, e.g. "warmer lighting" or "wider framing".',
+        title: "Description required",
+        description: 'Enter what you want, e.g. "wide shot in a rainy alley" or "warmer lighting".',
         variant: "destructive",
       })
       return
     }
 
-    const storyboard = storyboards.find((sb) => sb.id === storyboardId)
+    const storyboard = resolveStoryboardForGeneration(storyboardId)
     if (!storyboard || !userId) return
 
-    if (!inlineShotReferenceFile && !storyboard.image_url) {
-      toast({
-        title: "Reference image required",
-        description: "Link or generate a shot image first, or upload a reference to edit from.",
-        variant: "destructive",
-      })
-      return
-    }
+    const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
 
-    const styleReferenceFiles: File[] = []
+    let styleReferenceFiles: File[] = []
     for (const assetId of inlineStyleLinkAssetIds) {
       const styleAsset = findStyleLinkAsset(assetId)
       if (styleAsset?.content_url) {
@@ -1224,25 +1497,42 @@ export default function SceneStoryboardsPage() {
       }
     }
 
+    if (styleReferenceFiles.length === 0 && storyboard.character_id) {
+      styleReferenceFiles = await buildAvatarReferenceFiles(storyboard.character_id)
+    }
+
     setIsGeneratingReferenceEdit(true)
-    setReferenceEditProgress("Editing image...")
+    setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
     try {
-      const config = requireLockedImageConfig({ withReferenceImage: true })
-      const prompt = buildStoryboardEditPrompt(direction, storyboard)
+      const config = isCreateMode
+        ? requireLockedImageConfig()
+        : requireLockedImageConfig({ withReferenceImage: true })
+      const prompt = isCreateMode
+        ? buildStoryboardCreatePrompt(direction, storyboard)
+        : buildStoryboardEditPrompt(direction, storyboard)
 
       let referenceFile: File | undefined
       if (config.supportsReference) {
-        referenceFile =
-          inlineShotReferenceFile ??
-          (await referenceUrlToFile(
-            storyboard.image_url!,
-            `storyboard-ref-${storyboard.id}.png`,
-          ))
+        if (!isCreateMode) {
+          referenceFile =
+            inlineShotReferenceFile ??
+            (await referenceUrlToFile(
+              storyboard.image_url!,
+              `storyboard-ref-${storyboard.id}.png`,
+            ))
+        } else if (inlineShotReferenceFile) {
+          referenceFile = inlineShotReferenceFile
+        } else if (styleReferenceFiles.length > 0) {
+          referenceFile = styleReferenceFiles[0]
+        }
       }
 
       const response = await requestLockedImageGeneration(prompt, config, {
         referenceFile,
-        styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
+        styleReferenceFiles:
+          config.supportsReference && referenceFile
+            ? styleReferenceFiles.filter((file) => file !== referenceFile)
+            : undefined,
       })
 
       if (!response.ok) {
@@ -1256,25 +1546,30 @@ export default function SceneStoryboardsPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(
-        storyboardId,
-        imageUrlToUse,
-      )
+      const existingImages = storyboardImages.get(storyboardId) ?? []
+      const hasExisting =
+        existingImages.length > 0 || Boolean(storyboard.image_url)
 
-      setStoryboards((prev) =>
-        prev.map((sb) => (sb.id === storyboardId ? updatedStoryboard : sb)),
-      )
+      await saveStoryboardImage(storyboardId, imageUrlToUse, {
+        isDefault: !hasExisting,
+        generationPrompt: prompt,
+      })
 
       if (editingStoryboard?.id === storyboardId) {
         setFormData((prev) => ({ ...prev, image_url: imageUrlToUse }))
-        setEditingStoryboard(updatedStoryboard)
+        const refreshed = storyboards.find((sb) => sb.id === storyboardId)
+        if (refreshed) {
+          setEditingStoryboard({ ...refreshed, image_url: imageUrlToUse })
+        }
       }
 
       clearInlineReferenceEditState()
       closeReferenceEditDialog()
       toast({
-        title: "Image edited",
-        description: "The storyboard shot image was updated with your edit.",
+        title: isCreateMode ? "Image created" : "Image edited",
+        description: isCreateMode
+          ? "Your new shot image was generated and added to the gallery."
+          : "A new version was added to this shot's image gallery.",
       })
     } catch (error) {
       toast({
@@ -1295,7 +1590,17 @@ export default function SceneStoryboardsPage() {
     storyboard: Storyboard,
     idPrefix: string,
     inDialog = false,
-  ) => (
+  ) => {
+    const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
+    const lockedModel = getLockedImageModelLabel()
+    const lockedConfig = getLockedImageConfig(
+      isCreateMode ? undefined : { withReferenceImage: true },
+    )
+    const canSubmit =
+      Boolean(inlineCustomShotPrompt.trim()) &&
+      Boolean(isCreateMode ? getLockedImageConfig() : lockedConfig?.supportsReference)
+
+    return (
     <div
       className={
         inDialog
@@ -1306,14 +1611,19 @@ export default function SceneStoryboardsPage() {
       {!inDialog && (
         <div className="flex items-center gap-2">
           <Wand2 className="h-4 w-4 text-violet-500" />
-          <h3 className="text-sm font-medium">Reference Image Edit</h3>
+          <h3 className="text-sm font-medium">
+            {isCreateMode ? "Generate Image" : "Reference Image Edit"}
+          </h3>
         </div>
       )}
       <p className="text-xs text-muted-foreground">
-        Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
-        {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
-          ? " Describe changes below and optionally link another project image as a second reference."
-          : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+        {isCreateMode
+          ? `Create a new shot image with your locked model (${lockedModel || "lock one in AI Settings"}). Describe the scene below — shot details are included automatically.`
+          : `Edit using your locked model (${lockedModel || "lock one in AI Settings"}).${
+              getLockedImageConfig({ withReferenceImage: true })?.supportsReference
+                ? " Describe changes below and optionally link another project image as a second reference."
+                : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."
+            }`}
       </p>
       {isGeneratingReferenceEdit && referenceEditProgress ? (
         <p className="text-xs text-muted-foreground flex items-center gap-2">
@@ -1323,13 +1633,17 @@ export default function SceneStoryboardsPage() {
       ) : null}
       <div className="space-y-2">
         <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
-          Describe your edit
+          {isCreateMode ? "Describe the image" : "Describe your edit"}
         </Label>
         <Textarea
           id={`${idPrefix}-inline-edit`}
           value={inlineCustomShotPrompt}
           onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
-          placeholder='e.g., warmer lighting, wider framing, add rain, closer on the character'
+          placeholder={
+            isCreateMode
+              ? "e.g., wide shot of a detective in a rainy neon alley, moody cinematic lighting"
+              : 'e.g., warmer lighting, wider framing, add rain, closer on the character'
+          }
           className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
           disabled={isGeneratingReferenceEdit}
         />
@@ -1396,7 +1710,9 @@ export default function SceneStoryboardsPage() {
               ? "Using your uploaded image as the primary reference."
               : storyboard.image_url
                 ? "Uses the current shot image if you don't upload one."
-                : "Upload a reference or link an image to this shot first."}
+                : isCreateMode
+                  ? "Optional — upload a reference or link character/location images below to guide the look."
+                  : "Upload a reference or link an image to this shot first."}
           </p>
         </div>
         <div className="space-y-2">
@@ -1407,8 +1723,12 @@ export default function SceneStoryboardsPage() {
             </Label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Adds more images as references from characters, locations, or project assets.
+            Adds more images as references from characters, locations, avatar studio, or project assets.
             Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
+            {storyboard.character_id &&
+            getAvatarImagesForCharacter(storyboard.character_id).length > 0
+              ? " This character's avatar images are pre-selected when available."
+              : ""}
           </p>
           {isLoadingProjectAssets ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -1473,29 +1793,25 @@ export default function SceneStoryboardsPage() {
         <Button
           size="sm"
           onClick={() => handleGenerateStoryboardReferenceEdit(storyboard.id)}
-          disabled={
-            isGeneratingReferenceEdit ||
-            !inlineCustomShotPrompt.trim() ||
-            !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
-            (!inlineShotReferenceFile && !storyboard.image_url)
-          }
+          disabled={isGeneratingReferenceEdit || !canSubmit}
           className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
         >
           {isGeneratingReferenceEdit && inlineCustomShotPrompt.trim() ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Editing...
+              {isCreateMode ? "Generating..." : "Editing..."}
             </>
           ) : (
             <>
               <Wand2 className="h-4 w-4" />
-              Edit Image
+              {isCreateMode ? "Generate Image" : "Edit Image"}
             </>
           )}
         </Button>
       </div>
     </div>
-  )
+    )
+  }
 
   // Update current scene index when sceneId or allScenes changes
   useEffect(() => {
@@ -1912,6 +2228,7 @@ export default function SceneStoryboardsPage() {
       const sceneStoryboards = await StoryboardsService.getStoryboardsBySceneOrdered(sceneId)
       console.log("🎬 Storyboards fetched for scene:", sceneStoryboards)
       setStoryboards(sceneStoryboards)
+      void loadAllStoryboardImages(sceneStoryboards.map((sb) => sb.id))
       setIsLoadingStoryboards(false)
     } catch (error) {
       console.error("🎬 Error fetching storyboards:", error)
@@ -1929,7 +2246,9 @@ export default function SceneStoryboardsPage() {
       shotNumber: getNextShotNumber(),
       shotType: "wide",
       cameraAngle: "eye-level",
-      movement: "static"
+      movement: "static",
+      characterId: null,
+      locationId: null,
     })
   }
 
@@ -2550,7 +2869,8 @@ export default function SceneStoryboardsPage() {
       // Get the selected character details if a character is selected for this shot and option is enabled
       let characterDetailsText = ""
       let masterPromptText = ""
-      const storyboard = storyboards.find(sb => sb.id === storyboardId)
+      const storyboard = resolveStoryboardForGeneration(storyboardId)
+      if (!storyboard) return
       if (useCharacterDetails && storyboard?.character_id) {
         const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
         if (selectedCharacter) {
@@ -2567,8 +2887,12 @@ export default function SceneStoryboardsPage() {
             selectedCharacter.hair_color_current && `Hair: ${selectedCharacter.hair_color_current} (${selectedCharacter.hair_length})`,
             selectedCharacter.face_shape && `Face shape: ${selectedCharacter.face_shape}`,
             selectedCharacter.usual_clothing_style && `Clothing style: ${selectedCharacter.usual_clothing_style}`,
-            selectedCharacter.typical_color_palette?.length > 0 && `Color palette: ${selectedCharacter.typical_color_palette.join(', ')}`,
-            selectedCharacter.personality?.traits?.length > 0 && `Personality traits: ${selectedCharacter.personality.traits.join(', ')}`,
+            selectedCharacter.typical_color_palette && selectedCharacter.typical_color_palette.length > 0
+              ? `Color palette: ${selectedCharacter.typical_color_palette.join(', ')}`
+              : null,
+            selectedCharacter.personality?.traits && selectedCharacter.personality.traits.length > 0
+              ? `Personality traits: ${selectedCharacter.personality.traits.join(', ')}`
+              : null,
           ].filter(Boolean).join(', ')
           
           if (characterDetails) {
@@ -2598,12 +2922,16 @@ export default function SceneStoryboardsPage() {
             selectedLocation.city && `City: ${selectedLocation.city}`,
             selectedLocation.state && `State: ${selectedLocation.state}`,
             selectedLocation.country && `Country: ${selectedLocation.country}`,
-            selectedLocation.time_of_day?.length > 0 && `Time of day: ${selectedLocation.time_of_day.join(', ')}`,
+            selectedLocation.time_of_day && selectedLocation.time_of_day.length > 0
+              ? `Time of day: ${selectedLocation.time_of_day.join(', ')}`
+              : null,
             selectedLocation.atmosphere && `Atmosphere: ${selectedLocation.atmosphere}`,
             selectedLocation.mood && `Mood: ${selectedLocation.mood}`,
             selectedLocation.visual_description && `Visual description: ${selectedLocation.visual_description}`,
             selectedLocation.lighting_notes && `Lighting: ${selectedLocation.lighting_notes}`,
-            selectedLocation.key_features?.length > 0 && `Key features: ${selectedLocation.key_features.join(', ')}`,
+            selectedLocation.key_features && selectedLocation.key_features.length > 0
+              ? `Key features: ${selectedLocation.key_features.join(', ')}`
+              : null,
           ].filter(Boolean).join(', ')
           
           if (locationDetails) {
@@ -2635,33 +2963,56 @@ export default function SceneStoryboardsPage() {
         enhancedPrompt = `${enhancedPrompt}, storyboard style`
       }
 
-      // Debug: Log the request body
-      const requestBody: any = {
-        prompt: enhancedPrompt,
-        service: serviceToUse,
-        apiKey: apiKey,
-        userId: userId,
-        autoSaveToBucket: true,
-        width: 1536,
-        height: 1024,
-      }
-      
-      // Add model parameter if we have one (for GPT Image support)
-      if (modelToUse) {
-        requestBody.model = modelToUse
-      }
-      console.log('🎬 Request body being sent:', requestBody)
-      console.log('🎬 Service value type:', typeof serviceToUse)
-      console.log('🎬 Service value:', JSON.stringify(serviceToUse))
-      console.log('🎬 Full request body JSON:', JSON.stringify(requestBody))
+      const avatarRefFiles = storyboard.character_id
+        ? await buildAvatarReferenceFiles(storyboard.character_id)
+        : []
+      const lockedImageConfig =
+        imagesSetting?.is_locked && imagesSetting.locked_model
+          ? getLockedImageConfig({ withReferenceImage: avatarRefFiles.length > 0 })
+          : null
+      const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
+      const supportsReference =
+        lockedImageConfig?.supportsReference ||
+        displayModelSupportsReferenceImage(modelLabel)
 
-      const response = await fetch('/api/ai/generate-image', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      })
+      let response: Response
+      if (avatarRefFiles.length > 0 && supportsReference) {
+        const generationConfig = lockedImageConfig ?? {
+          service: serviceToUse,
+          apiModel: modelToUse,
+          supportsReference: true,
+        }
+        response = await requestImageGenerationWithReferences(enhancedPrompt, {
+          service: generationConfig.service,
+          model: generationConfig.apiModel,
+          apiKey,
+          referenceFile: avatarRefFiles[0],
+          styleReferenceFiles: avatarRefFiles.slice(1),
+          supportsReference: true,
+        })
+      } else {
+        const requestBody: Record<string, unknown> = {
+          prompt: enhancedPrompt,
+          service: serviceToUse,
+          apiKey: apiKey,
+          userId: userId,
+          autoSaveToBucket: true,
+          width: 1536,
+          height: 1024,
+        }
+
+        if (modelToUse) {
+          requestBody.model = modelToUse
+        }
+
+        response = await fetch('/api/ai/generate-image', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+        })
+      }
 
       if (!response.ok) {
         const errorData = await response.json()
@@ -2682,19 +3033,27 @@ export default function SceneStoryboardsPage() {
           usingUrl: imageUrlToUse
         })
         
-        // Update the storyboard with the generated image
-        const updatedStoryboard = await StoryboardsService.updateStoryboardImage(storyboardId, imageUrlToUse)
-        
-        // Update local state
-        setStoryboards(prev => prev.map(sb => 
-          sb.id === storyboardId ? updatedStoryboard : sb
-        ))
+        // Add to gallery without replacing the current main image
+        const existingImages = storyboardImages.get(storyboardId) ?? []
+        const currentStoryboard = storyboards.find((sb) => sb.id === storyboardId)
+        const hasExisting =
+          existingImages.length > 0 || Boolean(currentStoryboard?.image_url)
+
+        await saveStoryboardImage(storyboardId, imageUrlToUse, {
+          isDefault: !hasExisting,
+          generationPrompt: enhancedPrompt,
+          generationModel: modelToUse,
+        })
 
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
-            ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to the storyboard shot.",
+          description: hasExisting
+            ? "New image added below. Click a thumbnail to use it as the main shot image."
+            : avatarRefFiles.length > 0
+              ? `Image generated using ${avatarRefFiles.length} avatar reference${avatarRefFiles.length === 1 ? "" : "s"}.`
+              : result.savedToBucket
+                ? "Image generated and saved to your bucket!"
+                : "Image added to this shot.",
         })
 
         if (!isQuick) {
@@ -2779,17 +3138,20 @@ export default function SceneStoryboardsPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const updatedStoryboard = await StoryboardsService.updateStoryboardImage(
-        storyboard.id,
-        imageUrlToUse,
-      )
-      setStoryboards((prev) =>
-        prev.map((sb) => (sb.id === storyboard.id ? updatedStoryboard : sb)),
-      )
+      const existingImages = storyboardImages.get(storyboard.id) ?? []
+      const hasExisting = existingImages.length > 0 || Boolean(storyboard.image_url)
+
+      await saveStoryboardImage(storyboard.id, imageUrlToUse, {
+        isDefault: !hasExisting,
+        generationPrompt: prompt,
+        imageName: "Landscape redo",
+      })
 
       toast({
         title: "Landscape image ready",
-        description: "Redid this shot at 1536×1024 widescreen.",
+        description: hasExisting
+          ? "New landscape version added below. Click a thumbnail to use it."
+          : "Redid this shot at 1536×1024 widescreen.",
       })
     } catch (error) {
       toast({
@@ -3800,7 +4162,7 @@ export default function SceneStoryboardsPage() {
                 <div>
                   <Label htmlFor="character_id">Character (Optional)</Label>
                   <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to automatically include their details when generating images
+                    Select a character to include their details and Avatar Studio images as references when generating
                   </p>
                   <Select 
                     value={formData.character_id || "none"} 
@@ -4087,7 +4449,7 @@ export default function SceneStoryboardsPage() {
                 <div>
                   <Label htmlFor="edit-character_id">Character (Optional)</Label>
                   <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to automatically include their details when generating images
+                    Select a character to include their details and Avatar Studio images as references when generating
                   </p>
                   <Select 
                     value={formData.character_id || "none"} 
@@ -4711,6 +5073,14 @@ export default function SceneStoryboardsPage() {
                     )}
                   </div>
                 )}
+
+                <StoryboardShotImages
+                  images={storyboardImages.get(storyboard.id) ?? []}
+                  activeImageUrl={storyboard.image_url}
+                  onSelect={handleSelectStoryboardImage}
+                  onDelete={handleDeleteStoryboardImage}
+                  deletingImageId={deletingImageId}
+                />
                 
                 <div className="space-y-2">
                   {storyboard.description?.trim() ? (
@@ -4878,7 +5248,11 @@ export default function SceneStoryboardsPage() {
                       variant="ghost"
                       size="sm"
                       className="h-8 w-8 p-0 flex-shrink-0 hover:text-violet-500"
-                      title="Edit image from reference"
+                      title={
+                        storyboard.image_url
+                          ? "Edit image from reference"
+                          : "Generate image with AI"
+                      }
                       onClick={() => {
                         setShowEditForm(false)
                         setEditingStoryboard(null)
@@ -5194,12 +5568,17 @@ export default function SceneStoryboardsPage() {
           <DialogHeader className="pb-2">
             <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
               <Wand2 className="h-5 w-5 text-violet-500" />
-              Edit Image
+              {referenceEditStoryboard &&
+              !hasPrimaryReferenceForEdit(referenceEditStoryboard, inlineShotReferenceFile)
+                ? "Generate Image"
+                : "Edit Image"}
             </DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
               {referenceEditStoryboard
-                ? `Reference edit for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
-                : "Edit this storyboard shot using a reference image."}
+                ? hasPrimaryReferenceForEdit(referenceEditStoryboard, inlineShotReferenceFile)
+                  ? `Reference edit for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
+                  : `Create an image for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
+                : "Create or edit this storyboard shot image."}
             </DialogDescription>
           </DialogHeader>
 

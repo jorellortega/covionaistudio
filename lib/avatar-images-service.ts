@@ -123,6 +123,23 @@ export class AvatarImagesService {
     return created as AvatarSet
   }
 
+  static async listImagesForCharacter(
+    projectId: string,
+    characterId: string,
+  ): Promise<AvatarImageRecord[]> {
+    await this.ensureAuthenticated()
+    const { data, error } = await getSupabaseClient()
+      .from('avatar_images')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('character_id', characterId)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true })
+
+    if (error) throw error
+    return (data || []) as AvatarImageRecord[]
+  }
+
   static async listImagesForProject(projectId: string): Promise<AvatarImageRecord[]> {
     await this.ensureAuthenticated()
     const { data, error } = await getSupabaseClient()

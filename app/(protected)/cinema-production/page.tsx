@@ -95,6 +95,10 @@ import {
   resolveLeonardoMotionControlId,
   resolveLeonardoMotionControlUUID,
 } from "@/lib/leonardo-motion-controls"
+import { LinkAudioPanel } from "@/components/linked-audio-picker"
+import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
+import { muxVideoWithAudios } from "@/lib/mux-video-audio"
+import "@/lib/linked-audio-debug"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -301,6 +305,7 @@ interface ShotGenerationState {
   startFrameImageUrl?: string | null // URL to storyboard image for start frame
   endFrameImageUrl?: string | null // URL to storyboard image for end frame
   savedAudioOptionId?: string | null // asset id or session-dialogue / session-sfx
+  linkedVideoAudioOptionIds?: string[] // audio tracks muxed for preview + download
 }
 
 interface StoryboardVideo {
@@ -317,10 +322,20 @@ interface StoryboardVideo {
   updated_at: string
 }
 
+function shotAudioBaseName(storyboard: Storyboard): string {
+  const num = displayShotNumber(storyboard)
+  const title = storyboard.title?.trim()
+  if (title) {
+    return `Shot ${num} — ${title}`
+  }
+  return `Shot ${num}`
+}
+
 function suggestAudioSaveName(
   type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx",
   storyboard: Storyboard,
   prompt: string,
+  naming?: { sampleIndex?: number; sampleCount?: number },
 ): string {
   const shotLabel = `S${storyboard.shot_number}`
   const cleaned = prompt.trim().replace(/^["']+|["']+$/g, "")
@@ -333,7 +348,13 @@ function suggestAudioSaveName(
     return snippet ? `${shotLabel} Music ${snippet}${ellipsis}` : `${shotLabel} Music`
   }
   if (type === "mirelo-sfx") {
-    return snippet ? `${shotLabel} Mirelo ${snippet}${ellipsis}` : `${shotLabel} Mirelo SFX`
+    const base = shotAudioBaseName(storyboard)
+    const sampleCount = naming?.sampleCount ?? 1
+    const sampleIndex = naming?.sampleIndex ?? 0
+    if (sampleCount > 1) {
+      return `${base} (${sampleIndex + 1})`
+    }
+    return base
   }
   return snippet ? `${shotLabel} SFX ${snippet}${ellipsis}` : `${shotLabel} SFX`
 }
@@ -492,6 +513,9 @@ function SessionAudioClipList({
   onSave,
   onRemove,
   savingClipId,
+  linkedAudioOptionIds,
+  onToggleLinkToVideo,
+  canLinkToVideo = true,
 }: {
   clips: SessionAudioClip[]
   getSaveName: (clip: SessionAudioClip) => string
@@ -500,6 +524,9 @@ function SessionAudioClipList({
   onSave?: (clip: SessionAudioClip, saveName: string) => Promise<void>
   onRemove?: (clipId: string) => void
   savingClipId?: string | null
+  linkedAudioOptionIds?: string[]
+  onToggleLinkToVideo?: (clipId: string) => void
+  canLinkToVideo?: boolean
 }) {
   if (!clips.length) return null
 
@@ -510,24 +537,52 @@ function SessionAudioClipList({
       </Label>
       {[...clips].reverse().map((clip) => {
         const saveName = getSaveName(clip)
+        const linkOptionId = sessionAudioOptionId(clip.id)
+        const isLinkedToVideo = linkedAudioOptionIds?.includes(linkOptionId) ?? false
         return (
           <div key={clip.id} className="rounded-lg border border-border p-3 space-y-2">
             <div className="flex items-start justify-between gap-2">
               <p className="text-xs text-muted-foreground line-clamp-2 flex-1">{clip.prompt}</p>
-              {onRemove && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-7 p-0 shrink-0"
-                  onClick={() => onRemove(clip.id)}
-                  title="Remove clip"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
+              <div className="flex items-center gap-1 shrink-0">
+                {isLinkedToVideo ? (
+                  <Badge variant="secondary" className="text-[10px] gap-1">
+                    <Link2 className="h-3 w-3" />
+                    Linked
+                  </Badge>
+                ) : null}
+                {onRemove && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 shrink-0"
+                    onClick={() => onRemove(clip.id)}
+                    title="Remove clip"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
             </div>
             <audio controls src={clip.audioUrl} className="w-full" />
+            {onToggleLinkToVideo ? (
+              <Button
+                type="button"
+                size="sm"
+                variant={isLinkedToVideo ? "secondary" : "outline"}
+                className="w-full"
+                disabled={!canLinkToVideo}
+                onClick={() => onToggleLinkToVideo(clip.id)}
+              >
+                <Link2 className="h-4 w-4 mr-2" />
+                {isLinkedToVideo ? "Linked to Video" : "Link to Video"}
+              </Button>
+            ) : null}
+            {!canLinkToVideo && onToggleLinkToVideo ? (
+              <p className="text-[11px] text-muted-foreground">
+                Generate a video on this shot to link audio for preview and export.
+              </p>
+            ) : null}
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">Save as</Label>
               <Input
@@ -600,6 +655,9 @@ function SoundEffectGenerator({
   onDownloadError,
   onPromptAssist,
   promptAssistLoading,
+  linkedAudioOptionIds,
+  onToggleLinkToVideo,
+  canLinkToVideo,
 }: { 
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -617,6 +675,9 @@ function SoundEffectGenerator({
   onDownloadError?: (message: string) => void
   onPromptAssist?: () => Promise<string | null>
   promptAssistLoading?: boolean
+  linkedAudioOptionIds?: string[]
+  onToggleLinkToVideo?: (clipId: string) => void
+  canLinkToVideo?: boolean
 }) {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState<number | undefined>(undefined)
@@ -720,6 +781,9 @@ function SoundEffectGenerator({
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
+          linkedAudioOptionIds={linkedAudioOptionIds}
+          onToggleLinkToVideo={onToggleLinkToVideo}
+          canLinkToVideo={canLinkToVideo}
         />
       )}
     </div>
@@ -744,6 +808,9 @@ function StableAudioGenerator({
   onDownloadError,
   onPromptAssist,
   promptAssistLoading,
+  linkedAudioOptionIds,
+  onToggleLinkToVideo,
+  canLinkToVideo,
 }: {
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -765,6 +832,9 @@ function StableAudioGenerator({
   onDownloadError?: (message: string) => void
   onPromptAssist?: () => Promise<string | null>
   promptAssistLoading?: boolean
+  linkedAudioOptionIds?: string[]
+  onToggleLinkToVideo?: (clipId: string) => void
+  canLinkToVideo?: boolean
 }) {
   const [prompt, setPrompt] = useState("")
   const [duration, setDuration] = useState(30)
@@ -813,8 +883,8 @@ function StableAudioGenerator({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="2.5">Stable Audio 2.5 (20 cr)</SelectItem>
-              <SelectItem value="3.0">Stable Audio 3.0 (26 cr, async)</SelectItem>
+              <SelectItem value="2.5">v2.5 (20 cr)</SelectItem>
+              <SelectItem value="3.0">v3.0 (26 cr, async)</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -843,13 +913,9 @@ function StableAudioGenerator({
       </div>
       {!hasApiKey && (
         <p className="text-xs text-amber-600 dark:text-amber-500">
-          Add your Stability API key in{" "}
+          Add your music API key in{" "}
           <Link href="/setup-ai" className="underline underline-offset-2">
             Setup AI
-          </Link>{" "}
-          or test at{" "}
-          <Link href="/stability-ai-test" className="underline underline-offset-2">
-            /stability-ai-test
           </Link>
           .
         </p>
@@ -867,7 +933,7 @@ function StableAudioGenerator({
         ) : (
           <>
             <Music className="h-4 w-4 mr-2" />
-            Generate Stable Audio
+            Generate Music
           </>
         )}
       </Button>
@@ -880,6 +946,9 @@ function StableAudioGenerator({
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
+          linkedAudioOptionIds={linkedAudioOptionIds}
+          onToggleLinkToVideo={onToggleLinkToVideo}
+          canLinkToVideo={canLinkToVideo}
         />
       )}
     </div>
@@ -978,6 +1047,9 @@ function MireloSfxGenerator({
   onError,
   videoDurationMs: preloadedDurationMs = null,
   loadingVideoDuration: preloadedLoading = false,
+  linkedAudioOptionIds,
+  onToggleLinkToVideo,
+  canLinkToVideo,
 }: {
   storyboard: Storyboard
   clips: SessionAudioClip[]
@@ -1001,6 +1073,9 @@ function MireloSfxGenerator({
   onError?: (message: string) => void
   videoDurationMs?: number | null
   loadingVideoDuration?: boolean
+  linkedAudioOptionIds?: string[]
+  onToggleLinkToVideo?: (clipId: string) => void
+  canLinkToVideo?: boolean
 }) {
   const [durationSec, setDurationSec] = useState(10)
   const [startOffsetSec, setStartOffsetSec] = useState(0)
@@ -1048,7 +1123,7 @@ function MireloSfxGenerator({
         </p>
       ) : (
         <p className="text-xs text-amber-600 dark:text-amber-500">
-          Generate a video for this shot first — Mirelo creates SFX synced to the video.
+          Generate a video for this shot first — SFX will be synced to the video.
         </p>
       )}
       <div className="grid grid-cols-2 gap-2">
@@ -1103,13 +1178,9 @@ function MireloSfxGenerator({
       </div>
       {!hasApiKey && (
         <p className="text-xs text-amber-600 dark:text-amber-500">
-          Add your Mirelo API key in{" "}
+          Add your video SFX API key in{" "}
           <Link href="/setup-ai" className="underline underline-offset-2">
             Setup AI
-          </Link>{" "}
-          or test at{" "}
-          <Link href="/mirelo-ai-test" className="underline underline-offset-2">
-            /mirelo-ai-test
           </Link>
           .
         </p>
@@ -1153,7 +1224,7 @@ function MireloSfxGenerator({
         ) : (
           <>
             <AudioWaveform className="h-4 w-4 mr-2" />
-            Generate Video SFX (Mirelo)
+            Generate Video SFX
           </>
         )}
       </Button>
@@ -1166,6 +1237,9 @@ function MireloSfxGenerator({
           onSave={onSaveAudio}
           onRemove={onRemoveClip}
           savingClipId={savingClipId}
+          linkedAudioOptionIds={linkedAudioOptionIds}
+          onToggleLinkToVideo={onToggleLinkToVideo}
+          canLinkToVideo={canLinkToVideo}
         />
       )}
     </div>
@@ -1309,6 +1383,8 @@ export default function CinemaProductionPage() {
   const [dialogueVoiceByStoryboard, setDialogueVoiceByStoryboard] = useState<Map<string, string>>(new Map())
   const [audioSaveNames, setAudioSaveNames] = useState<Map<string, string>>(new Map())
   const [klingLipSyncingId, setKlingLipSyncingId] = useState<string | null>(null)
+  const [muxingVideoId, setMuxingVideoId] = useState<string | null>(null)
+  const [deletingAudioOptionId, setDeletingAudioOptionId] = useState<string | null>(null)
 
   const getAudioSaveNameForClip = useCallback(
     (storyboard: Storyboard, clip: SessionAudioClip) => {
@@ -1319,11 +1395,17 @@ export default function CinemaProductionPage() {
   )
 
   const setDefaultAudioSaveName = useCallback(
-    (storyboard: Storyboard, clipId: string, type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx", prompt: string) => {
+    (
+      storyboard: Storyboard,
+      clipId: string,
+      type: "dialogue" | "sound-effect" | "stable-audio" | "mirelo-sfx",
+      prompt: string,
+      naming?: { sampleIndex?: number; sampleCount?: number },
+    ) => {
       const key = audioSaveNameKey(storyboard.id, clipId)
       setAudioSaveNames((prev) => {
         const next = new Map(prev)
-        next.set(key, suggestAudioSaveName(type, storyboard, prompt))
+        next.set(key, suggestAudioSaveName(type, storyboard, prompt, naming))
         return next
       })
     },
@@ -2013,18 +2095,18 @@ export default function CinemaProductionPage() {
 
   const getAudioOptionsForStoryboard = (storyboardId: string): StoryboardAudioOption[] => {
     const options: StoryboardAudioOption[] = []
+    const seenUrls = new Set<string>()
     const storyboard = storyboards.find((s) => s.id === storyboardId)
     const sessionClips = [...(sessionAudioClips.get(storyboardId) || [])].reverse()
     for (const clip of sessionClips) {
-      if (!clip.audioUrl) continue
+      if (!clip.audioUrl || seenUrls.has(clip.audioUrl)) continue
+      seenUrls.add(clip.audioUrl)
       const typeLabel =
         clip.type === "dialogue"
           ? "Dialogue"
           : clip.type === "stable-audio"
             ? "Music"
-            : clip.type === "mirelo-sfx"
-              ? "Mirelo SFX"
-              : "SFX"
+            : "SFX"
       const name =
         storyboard && audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))
           ? audioSaveNames.get(audioSaveNameKey(storyboardId, clip.id))!
@@ -2047,7 +2129,8 @@ export default function CinemaProductionPage() {
     }
     const saved = storyboardSavedAudio.get(storyboardId) || []
     for (const asset of saved) {
-      if (!asset.content_url) continue
+      if (!asset.content_url || seenUrls.has(asset.content_url)) continue
+      seenUrls.add(asset.content_url)
       const typeLabel =
         asset.metadata?.type === "dialogue"
           ? "Dialogue"
@@ -2056,7 +2139,7 @@ export default function CinemaProductionPage() {
             : asset.metadata?.type === "stable-audio"
               ? "Music"
               : asset.metadata?.type === "mirelo-sfx"
-                ? "Mirelo SFX"
+                ? "SFX"
                 : "Audio"
       options.push({
         id: asset.id,
@@ -2078,6 +2161,24 @@ export default function CinemaProductionPage() {
       return options.find((o) => o.id === optionId) ?? options[0]
     }
     return options[0]
+  }
+
+  const resolveLinkedAudiosForStoryboard = (
+    storyboardId: string,
+    optionIds: string[] | null | undefined,
+  ): StoryboardAudioOption[] => {
+    if (!optionIds?.length) return []
+    const options = getAudioOptionsForStoryboard(storyboardId)
+    return optionIds
+      .map((optionId) => options.find((option) => option.id === optionId))
+      .filter((option): option is StoryboardAudioOption => Boolean(option))
+  }
+
+  const getLinkedAudioUrls = (
+    storyboardId: string,
+    optionIds: string[] | null | undefined,
+  ): string[] => {
+    return resolveLinkedAudiosForStoryboard(storyboardId, optionIds).map((option) => option.url)
   }
 
   // Get filtered storyboards based on selection
@@ -2154,10 +2255,108 @@ export default function CinemaProductionPage() {
         startFrameImageUrl: null,
         endFrameImageUrl: null,
         savedAudioOptionId: null,
+        linkedVideoAudioOptionIds: [],
       }
       newMap.set(storyboardId, { ...current, ...updates })
       return newMap
     })
+  }
+
+  const toggleClipLinkToVideo = (storyboardId: string, clipId: string) => {
+    const optionId = sessionAudioOptionId(clipId)
+    setStoryboardGenerations((prev) => {
+      const newMap = new Map(prev)
+      const current = newMap.get(storyboardId) || {
+        shotId: storyboardId,
+        model: "",
+        prompt: "",
+        duration: "5s",
+        resolution: "1280x720",
+        uploadedFile: null,
+        startFrame: null,
+        endFrame: null,
+        filePreview: null,
+        startFramePreview: null,
+        endFramePreview: null,
+        isGenerating: false,
+        generatedVideoUrl: null,
+        generationStatus: null,
+        motionControl: "",
+        motionStrength: 2,
+        videoModelType: undefined,
+        videoDuration: undefined,
+        startFrameImageUrl: null,
+        endFrameImageUrl: null,
+        savedAudioOptionId: null,
+        linkedVideoAudioOptionIds: [],
+      }
+      const linked = [...(current.linkedVideoAudioOptionIds || [])]
+      const idx = linked.indexOf(optionId)
+      if (idx >= 0) linked.splice(idx, 1)
+      else linked.push(optionId)
+      newMap.set(storyboardId, { ...current, linkedVideoAudioOptionIds: linked })
+      return newMap
+    })
+  }
+
+  const handleDeleteAudioOption = async (storyboard: Storyboard, optionId: string) => {
+    const options = getAudioOptionsForStoryboard(storyboard.id)
+    const option = options.find((o) => o.id === optionId)
+    if (!option) return
+
+    if (!confirm(`Delete "${option.label}"? This cannot be undone.`)) return
+
+    setDeletingAudioOptionId(optionId)
+    try {
+      setStoryboardGenerations((prev) => {
+        const current = prev.get(storyboard.id)
+        if (!current) return prev
+        const linked = (current.linkedVideoAudioOptionIds || []).filter((id) => id !== optionId)
+        const unlink = linked.length !== (current.linkedVideoAudioOptionIds || []).length
+        const clearSaved = current.savedAudioOptionId === optionId
+        if (!unlink && !clearSaved) return prev
+        const newMap = new Map(prev)
+        newMap.set(storyboard.id, {
+          ...current,
+          ...(unlink ? { linkedVideoAudioOptionIds: linked } : {}),
+          ...(clearSaved ? { savedAudioOptionId: null } : {}),
+        })
+        return newMap
+      })
+
+      if (option.source === "saved") {
+        await AssetService.deleteAsset(option.id)
+        if (selectedSceneId) {
+          await loadSavedAudioForScene(selectedSceneId)
+        }
+      } else {
+        const clipId = option.id.replace(/^session-/, "")
+        removeSessionClip(storyboard.id, clipId)
+        const saved = (storyboardSavedAudio.get(storyboard.id) || []).find(
+          (asset) => asset.content_url === option.url,
+        )
+        if (saved) {
+          await AssetService.deleteAsset(saved.id)
+          if (selectedSceneId) {
+            await loadSavedAudioForScene(selectedSceneId)
+          }
+        }
+      }
+
+      toast({
+        title: "Audio deleted",
+        description: option.label,
+      })
+    } catch (error) {
+      console.error("Failed to delete audio:", error)
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete audio clip.",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingAudioOptionId(null)
+    }
   }
 
   const handleFileUpload = (
@@ -2530,8 +2729,8 @@ export default function CinemaProductionPage() {
       toast({
         title: 'Prompt Assist ready',
         description: storyboard.image_url
-          ? 'Built a Stable Audio music prompt from shot details + reference image.'
-          : 'Built a Stable Audio music prompt from shot details.',
+          ? 'Built a music prompt from shot details + reference image.'
+          : 'Built a music prompt from shot details.',
       })
       return prompt
     } catch (error) {
@@ -2770,6 +2969,12 @@ export default function CinemaProductionPage() {
     if (selected && list.some((v) => v.video_url === selected)) return selected
     const defaultVideo = list.find((v) => v.is_default)
     return defaultVideo?.video_url || list[0]?.video_url || null
+  }
+
+  const shotCanLinkAudioToVideo = (storyboardId: string, generation?: ShotGenerationState | null) => {
+    if (getActiveVideoUrl(storyboardId)) return true
+    if (generation?.generatedVideoUrl) return true
+    return (storyboardVideos.get(storyboardId)?.length ?? 0) > 0
   }
 
   const setActiveVideoUrl = (storyboardId: string, url: string) => {
@@ -3514,7 +3719,52 @@ export default function CinemaProductionPage() {
   }
 
   const handleDownloadVideo = async (videoUrl: string, storyboard: Storyboard) => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    const linkedAudios = resolveLinkedAudiosForStoryboard(
+      storyboard.id,
+      generation?.linkedVideoAudioOptionIds,
+    )
+
     try {
+      if (linkedAudios.length > 0) {
+        setMuxingVideoId(storyboard.id)
+        toast({
+          title: "Preparing export",
+          description:
+            linkedAudios.length > 1
+              ? `Mixing ${linkedAudios.length} audio tracks into video (video quality preserved)…`
+              : "Muxing audio into video (video quality preserved)…",
+        })
+
+        const videoResponse = await fetch(videoUrl)
+        if (!videoResponse.ok) {
+          throw new Error("Failed to fetch video")
+        }
+        const videoBlob = await videoResponse.blob()
+        const audioBlobs = await Promise.all(
+          linkedAudios.map((audio) => fetchAudioBlob(audio.url)),
+        )
+        const muxedBlob = await muxVideoWithAudios(videoBlob, audioBlobs)
+
+        const url = window.URL.createObjectURL(muxedBlob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = `${storyboard.title || "storyboard"}-shot-${storyboard.shot_number}-with-audio-${Date.now()}.mp4`
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+
+        toast({
+          title: "Download Started",
+          description:
+            linkedAudios.length > 1
+              ? `Exported with ${linkedAudios.length} linked audio tracks.`
+              : `Exported with "${linkedAudios[0].label}".`,
+        })
+        return
+      }
+
       const response = await fetch(videoUrl)
       const blob = await response.blob()
       const url = window.URL.createObjectURL(blob)
@@ -3533,9 +3783,11 @@ export default function CinemaProductionPage() {
       console.error('Error downloading video:', error)
       toast({
         title: "Download Failed",
-        description: "Failed to download video. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to download video. Please try again.",
         variant: "destructive",
       })
+    } finally {
+      setMuxingVideoId(null)
     }
   }
 
@@ -3834,15 +4086,18 @@ export default function CinemaProductionPage() {
       }
 
       addSessionClip(storyboard.id, clip)
+      const saveName = suggestAudioSaveName("dialogue", storyboard, text)
       setDefaultAudioSaveName(storyboard, clipId, "dialogue", text)
 
       updateStoryboardGeneration(storyboard.id, {
         savedAudioOptionId: sessionAudioOptionId(clipId),
       })
 
+      void autoSaveGeneratedAudio(storyboard, clipId, audioBlob, "dialogue", saveName, text)
+
       toast({
         title: "Dialogue Generated",
-        description: "New dialogue clip added. Generate again for another take.",
+        description: "New dialogue clip added and saved to storage.",
       })
     } catch (error) {
       console.error('Error generating dialogue:', error)
@@ -3919,11 +4174,14 @@ export default function CinemaProductionPage() {
       }
 
       addSessionClip(storyboard.id, clip)
+      const saveName = suggestAudioSaveName("sound-effect", storyboard, prompt)
       setDefaultAudioSaveName(storyboard, clipId, "sound-effect", prompt)
+
+      void autoSaveGeneratedAudio(storyboard, clipId, audioBlob, "sound-effect", saveName, prompt)
 
       toast({
         title: "Sound Effect Generated",
-        description: "New sound effect clip added.",
+        description: "New sound effect clip added and saved to storage.",
       })
     } catch (error) {
       console.error('Error generating sound effect:', error)
@@ -3946,7 +4204,7 @@ export default function CinemaProductionPage() {
     if (!userId || !userApiKeys.stability_api_key) {
       toast({
         title: "API Key Required",
-        description: "Please configure your Stability AI API key in Setup AI.",
+        description: "Please configure your music API key in Setup AI.",
         variant: "destructive",
       })
       return
@@ -3975,14 +4233,14 @@ export default function CinemaProductionPage() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}: Failed to generate Stable Audio`)
+        throw new Error(data.error || `HTTP ${response.status}: Failed to generate music`)
       }
 
       let audioDataUrl: string | undefined = data.audio
 
       if (data.async && data.id) {
         toast({
-          title: "Stable Audio started",
+          title: "Music generation started",
           description: "Async generation in progress — this can take a minute.",
         })
         const maxAttempts = 36
@@ -4001,26 +4259,27 @@ export default function CinemaProductionPage() {
           if (poll.status === 202) continue
           const pollData = await poll.json()
           if (!poll.ok) {
-            throw new Error(pollData.error || "Async Stable Audio failed")
+            throw new Error(pollData.error || "Async music generation failed")
           }
           audioDataUrl = pollData.audio
           break
         }
         if (!audioDataUrl) {
-          throw new Error("Timed out waiting for Stable Audio result")
+          throw new Error("Timed out waiting for music generation result")
         }
       }
 
       if (!audioDataUrl) {
-        throw new Error("No audio returned from Stability")
+        throw new Error("No audio returned from music generation")
       }
 
       // Prefer blob URL for session playback consistency with ElevenLabs clips
       let audioUrl = audioDataUrl
+      let stableAudioBlob: Blob | null = null
       try {
         const res = await fetch(audioDataUrl)
-        const blob = await res.blob()
-        audioUrl = URL.createObjectURL(blob)
+        stableAudioBlob = await res.blob()
+        audioUrl = URL.createObjectURL(stableAudioBlob)
       } catch {
         /* keep data URL */
       }
@@ -4034,17 +4293,22 @@ export default function CinemaProductionPage() {
       }
 
       addSessionClip(storyboard.id, clip)
+      const saveName = suggestAudioSaveName("stable-audio", storyboard, prompt)
       setDefaultAudioSaveName(storyboard, clipId, "stable-audio", prompt)
 
+      if (stableAudioBlob) {
+        void autoSaveGeneratedAudio(storyboard, clipId, stableAudioBlob, "stable-audio", saveName, prompt)
+      }
+
       toast({
-        title: "Stable Audio Generated",
-        description: "Music / ambience clip added. Save it to storage when ready.",
+        title: "Music Generated",
+        description: "Music / ambience clip added and saved to storage.",
       })
     } catch (error) {
-      console.error("Error generating Stable Audio:", error)
+      console.error("Error generating music:", error)
       toast({
         title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Failed to generate Stable Audio.",
+        description: error instanceof Error ? error.message : "Failed to generate music.",
         variant: "destructive",
       })
     } finally {
@@ -4060,7 +4324,7 @@ export default function CinemaProductionPage() {
     if (!userId || !userApiKeys.mirelo_api_key) {
       toast({
         title: "API Key Required",
-        description: "Please configure your Mirelo API key in Setup AI.",
+        description: "Please configure your video SFX API key in Setup AI.",
         variant: "destructive",
       })
       return
@@ -4100,14 +4364,14 @@ export default function CinemaProductionPage() {
       })
       const data = await response.json()
       if (!response.ok) {
-        throw new Error(data.error || "Mirelo request failed")
+        throw new Error(data.error || "Video SFX request failed")
       }
 
       let resultUrls: string[] = []
       if (typeof data.job_id === "string") {
         toast({
-          title: "Mirelo job started",
-          description: "Generating SFX from video — this may take a minute.",
+          title: "Generating video SFX",
+          description: "Creating SFX from video — this may take a minute.",
         })
         const maxAttempts = 120
         for (let i = 0; i < maxAttempts; i++) {
@@ -4131,24 +4395,21 @@ export default function CinemaProductionPage() {
             break
           }
           if (job.status === "errored") {
-            throw new Error(job.error?.message || "Mirelo job failed")
+            throw new Error(job.error?.message || "Video SFX generation failed")
           }
         }
         if (!resultUrls.length) {
-          throw new Error("Timed out waiting for Mirelo result")
+          throw new Error("Timed out waiting for video SFX result")
         }
       } else {
         resultUrls = Array.isArray(data.result_urls) ? (data.result_urls as string[]) : []
       }
 
       if (!resultUrls.length) {
-        throw new Error("No audio returned from Mirelo")
+        throw new Error("No audio returned from video SFX generation")
       }
 
-      const actionSnippet = storyboard.action?.trim().slice(0, 80) || ""
-      const basePrompt = actionSnippet
-        ? `Video SFX — Shot ${storyboard.shot_number}: ${actionSnippet}`
-        : `Video SFX — Shot ${storyboard.shot_number}`
+      const shotLabel = shotAudioBaseName(storyboard)
 
       for (let i = 0; i < resultUrls.length; i++) {
         const clipId = crypto.randomUUID()
@@ -4156,7 +4417,8 @@ export default function CinemaProductionPage() {
         const blob = await fetchAudioBlob(url)
         const audioUrl = URL.createObjectURL(blob)
 
-        const prompt = resultUrls.length > 1 ? `${basePrompt} (sample ${i + 1})` : basePrompt
+        const prompt =
+          resultUrls.length > 1 ? `${shotLabel} (${i + 1})` : shotLabel
         const clip: SessionAudioClip = {
           id: clipId,
           type: "mirelo-sfx",
@@ -4165,23 +4427,124 @@ export default function CinemaProductionPage() {
           createdAt: Date.now(),
         }
         addSessionClip(storyboard.id, clip)
-        setDefaultAudioSaveName(storyboard, clipId, "mirelo-sfx", prompt)
+        const saveName = suggestAudioSaveName("mirelo-sfx", storyboard, prompt, {
+          sampleIndex: i,
+          sampleCount: resultUrls.length,
+        })
+        setDefaultAudioSaveName(storyboard, clipId, "mirelo-sfx", prompt, {
+          sampleIndex: i,
+          sampleCount: resultUrls.length,
+        })
+        void autoSaveGeneratedAudio(storyboard, clipId, blob, "mirelo-sfx", saveName, prompt)
       }
 
       toast({
-        title: "Mirelo SFX Generated",
-        description: `${resultUrls.length} clip${resultUrls.length === 1 ? "" : "s"} added from storyboard video.`,
+        title: "Video SFX Generated",
+        description: `${resultUrls.length} clip${resultUrls.length === 1 ? "" : "s"} added and saved to storage.`,
       })
     } catch (error) {
       console.error("Error generating Mirelo SFX:", error)
       toast({
         title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Failed to generate Mirelo SFX.",
+        description: error instanceof Error ? error.message : "Failed to generate video SFX.",
         variant: "destructive",
       })
     } finally {
       setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
     }
+  }
+
+  const updateSessionClipUrl = useCallback((storyboardId: string, clipId: string, newUrl: string) => {
+    setSessionAudioClips((prev) => {
+      const clips = prev.get(storyboardId)
+      if (!clips) return prev
+      const next = new Map(prev)
+      next.set(
+        storyboardId,
+        clips.map((clip) => {
+          if (clip.id !== clipId) return clip
+          if (clip.audioUrl.startsWith("blob:")) {
+            URL.revokeObjectURL(clip.audioUrl)
+          }
+          return { ...clip, audioUrl: newUrl }
+        }),
+      )
+      return next
+    })
+  }, [])
+
+  const blobToBase64Payload = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        const result = reader.result as string
+        resolve(result.split(",")[1] || result)
+      }
+      reader.onerror = () => reject(new Error("Failed to read audio blob"))
+      reader.readAsDataURL(blob)
+    })
+
+  const saveAudioToBucket = async (
+    audioBlob: Blob,
+    storyboard: Storyboard,
+    type: SessionAudioClip["type"],
+    saveName: string,
+    prompt: string,
+  ): Promise<{ assetId: string; publicUrl: string } | null> => {
+    if (!userId || !selectedProjectId || !selectedSceneId) return null
+
+    try {
+      const audioBlobForApi = await blobToBase64Payload(audioBlob)
+      const saveResponse = await fetch("/api/ai/save-audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audioBlob: audioBlobForApi,
+          fileName: sanitizeAudioFileName(saveName),
+          audioTitle: saveName,
+          projectId: selectedProjectId,
+          sceneId: selectedSceneId,
+          userId,
+          metadata: {
+            storyboard_id: storyboard.id,
+            shot_number: storyboard.shot_number,
+            type,
+            prompt,
+          },
+        }),
+      })
+
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to save audio")
+      }
+
+      const saveResult = await saveResponse.json()
+      const assetId = saveResult.data?.asset?.id as string | undefined
+      const publicUrl = saveResult.data?.storage_url as string | undefined
+      if (selectedSceneId) {
+        await loadSavedAudioForScene(selectedSceneId)
+      }
+      if (!assetId || !publicUrl) return null
+      return { assetId, publicUrl }
+    } catch (error) {
+      console.warn("Failed to save audio to bucket:", error)
+      return null
+    }
+  }
+
+  const autoSaveGeneratedAudio = async (
+    storyboard: Storyboard,
+    clipId: string,
+    audioBlob: Blob,
+    type: SessionAudioClip["type"],
+    saveName: string,
+    prompt: string,
+  ) => {
+    const saved = await saveAudioToBucket(audioBlob, storyboard, type, saveName, prompt)
+    if (!saved) return
+    updateSessionClipUrl(storyboard.id, clipId, saved.publicUrl)
+    console.log("✅ Auto-saved generated audio to bucket:", saved.publicUrl)
   }
 
   // Save audio to storage
@@ -4213,64 +4576,35 @@ export default function CinemaProductionPage() {
 
     try {
       const audioBlob = await fetchAudioBlob(audioUrl)
-      
-      // Convert blob to base64 for API
-      const reader = new FileReader()
-      reader.onloadend = async () => {
-        const base64Audio = reader.result as string
-        const audioBlobForApi = base64Audio.split(',')[1] // Remove data:audio/mpeg;base64, prefix
-        
-        const saveResponse = await fetch('/api/ai/save-audio', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            audioBlob: audioBlobForApi,
-            fileName: sanitizeAudioFileName(displayName),
-            audioTitle: displayName,
-            projectId: selectedProjectId,
-            sceneId: selectedSceneId,
-            userId: userId,
-            metadata: {
-              storyboard_id: storyboard.id,
-              shot_number: storyboard.shot_number,
-              type: type,
-              prompt: prompt
-            }
-          })
-        })
-        
-        if (!saveResponse.ok) {
-          const errorData = await saveResponse.json().catch(() => ({}))
-          throw new Error(errorData.error || 'Failed to save audio')
-        }
-        
-        const saveResult = await saveResponse.json()
-        const newAssetId = saveResult.data?.asset?.id as string | undefined
-
-        toast({
-          title: "Audio Saved",
-          description: `${
-            type === "dialogue"
-              ? "Dialogue"
-              : type === "stable-audio"
-                ? "Stable Audio"
-                : type === "mirelo-sfx"
-                  ? "Mirelo SFX"
-                  : "Sound effect"
-          } audio has been saved to storage.`,
-        })
-        if (selectedSceneId) {
-          await loadSavedAudioForScene(selectedSceneId)
-        }
-        if (storyboard?.id && newAssetId) {
-          updateStoryboardGeneration(storyboard.id, {
-            savedAudioOptionId: newAssetId,
-          })
-        }
+      const saved = await saveAudioToBucket(audioBlob, storyboard, type, displayName, prompt)
+      if (!saved) {
+        throw new Error("Failed to save audio to storage")
       }
-      reader.readAsDataURL(audioBlob)
+
+      const sessionClip = (sessionAudioClips.get(storyboard.id) || []).find(
+        (clip) => clip.audioUrl === audioUrl,
+      )
+      if (sessionClip) {
+        updateSessionClipUrl(storyboard.id, sessionClip.id, saved.publicUrl)
+      }
+
+      toast({
+        title: "Audio Saved",
+        description: `${
+          type === "dialogue"
+            ? "Dialogue"
+            : type === "stable-audio"
+              ? "Music"
+              : type === "mirelo-sfx"
+                ? "Video SFX"
+                : "Sound effect"
+        } audio has been saved to storage.`,
+      })
+      if (storyboard.id) {
+        updateStoryboardGeneration(storyboard.id, {
+          savedAudioOptionId: saved.assetId,
+        })
+      }
     } catch (error) {
       console.error('Error saving audio:', error)
       toast({
@@ -6713,18 +7047,33 @@ export default function CinemaProductionPage() {
                           const generatedVideoInDb = generation.generatedVideoUrl && videos.some(v => v.video_url === generation.generatedVideoUrl)
                           const totalVideoCount = videos.length + (generation.generatedVideoUrl && !generatedVideoInDb ? 1 : 0)
                           const hasMultipleVideos = totalVideoCount > 1
+                          const gridAudioOptions = getAudioOptionsForStoryboard(storyboard.id)
+                          const gridLinkedAudioUrls = getLinkedAudioUrls(
+                            storyboard.id,
+                            generation.linkedVideoAudioOptionIds,
+                          )
+                          const gridLinkedCount = gridLinkedAudioUrls.length
                           
                           return displayVideoUrl ? (
                             <div className="space-y-2">
                               <div className="relative">
-                                <video 
-                                  src={displayVideoUrl} 
-                                  controls 
+                                <VideoWithLinkedAudio
+                                  videoUrl={displayVideoUrl}
+                                  audioUrls={gridLinkedAudioUrls}
                                   className="w-full rounded-md bg-muted"
                                   preload="metadata"
                                   playsInline
                                   onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                 />
+                                {gridLinkedCount > 0 ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="absolute bottom-2 left-2 text-[10px] gap-1 pointer-events-none"
+                                  >
+                                    <Link2 className="h-3 w-3" />
+                                    {gridLinkedCount === 1 ? "Linked audio" : `${gridLinkedCount} linked`}
+                                  </Badge>
+                                ) : null}
                                 {hasMultipleVideos && (
                                   <Button
                                     size="sm"
@@ -6745,10 +7094,15 @@ export default function CinemaProductionPage() {
                                   size="sm"
                                   variant="outline"
                                   className="flex-1"
+                                  disabled={muxingVideoId === storyboard.id}
                                   onClick={() => handleDownloadVideo(displayVideoUrl, storyboard)}
                                 >
-                                  <Download className="h-3 w-3 mr-1" />
-                                  Download
+                                  {muxingVideoId === storyboard.id ? (
+                                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                  ) : (
+                                    <Download className="h-3 w-3 mr-1" />
+                                  )}
+                                  {gridLinkedCount > 0 ? "Export" : "Download"}
                                 </Button>
                                 <Button
                                   size="sm"
@@ -6760,6 +7114,22 @@ export default function CinemaProductionPage() {
                                   Save
                                 </Button>
                               </div>
+                              {gridAudioOptions.length > 0 ? (
+                                <LinkAudioPanel
+                                  compact
+                                  options={gridAudioOptions}
+                                  selectedIds={generation.linkedVideoAudioOptionIds || []}
+                                  onChange={(ids) =>
+                                    updateStoryboardGeneration(storyboard.id, {
+                                      linkedVideoAudioOptionIds: ids,
+                                    })
+                                  }
+                                  onDelete={(optionId) =>
+                                    void handleDeleteAudioOption(storyboard, optionId)
+                                  }
+                                  deletingOptionId={deletingAudioOptionId}
+                                />
+                              ) : null}
                             </div>
                           ) : (
                           <Button
@@ -6986,19 +7356,36 @@ export default function CinemaProductionPage() {
                                   allVideos.findIndex((v) => v.video_url === displayVideoUrl),
                                 )
                                 const hasMultipleVideos = allVideos.length > 1
+                                const detailAudioOptions = getAudioOptionsForStoryboard(storyboard.id)
+                                const detailLinkedAudioUrls = getLinkedAudioUrls(
+                                  storyboard.id,
+                                  generation.linkedVideoAudioOptionIds,
+                                )
+                                const detailLinkedCount = detailLinkedAudioUrls.length
                                 
                                 return displayVideoUrl ? (
                                   <div className="space-y-2">
                                     <div className="relative">
-                                      <video 
-                                        src={displayVideoUrl}
-                                        controls 
+                                      <VideoWithLinkedAudio
+                                        key={`${displayVideoUrl}-${detailLinkedAudioUrls.join(",")}`}
+                                        videoUrl={displayVideoUrl}
+                                        audioUrls={detailLinkedAudioUrls}
                                         preload="metadata"
                                         playsInline
                                         className="w-full rounded-md bg-muted aspect-video object-cover"
-                                        key={displayVideoUrl}
                                         onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                       />
+                                      {detailLinkedCount > 0 ? (
+                                        <Badge
+                                          variant="secondary"
+                                          className="absolute bottom-2 left-2 text-[10px] gap-1 z-10 pointer-events-none"
+                                        >
+                                          <Link2 className="h-3 w-3" />
+                                          {detailLinkedCount === 1
+                                            ? "Linked audio"
+                                            : `${detailLinkedCount} tracks linked`}
+                                        </Badge>
+                                      ) : null}
                                       {hasMultipleVideos && (
                                         <>
                                           <Button
@@ -7045,10 +7432,15 @@ export default function CinemaProductionPage() {
                                         size="sm"
                                         variant="outline"
                                         className="flex-1"
+                                        disabled={muxingVideoId === storyboard.id}
                                         onClick={() => handleDownloadVideo(displayVideoUrl, storyboard)}
                                       >
-                                        <Download className="h-4 w-4 mr-2" />
-                                        Download Video
+                                        {muxingVideoId === storyboard.id ? (
+                                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                        ) : (
+                                          <Download className="h-4 w-4 mr-2" />
+                                        )}
+                                        {detailLinkedCount > 0 ? "Export with Audio" : "Download Video"}
                                       </Button>
                                       <Button
                                         size="sm"
@@ -7060,6 +7452,21 @@ export default function CinemaProductionPage() {
                                         Save to Storage
                                       </Button>
                                     </div>
+                                    {detailAudioOptions.length > 0 ? (
+                                      <LinkAudioPanel
+                                        options={detailAudioOptions}
+                                        selectedIds={generation.linkedVideoAudioOptionIds || []}
+                                        onChange={(ids) =>
+                                          updateStoryboardGeneration(storyboard.id, {
+                                            linkedVideoAudioOptionIds: ids,
+                                          })
+                                        }
+                                        onDelete={(optionId) =>
+                                          void handleDeleteAudioOption(storyboard, optionId)
+                                        }
+                                        deletingOptionId={deletingAudioOptionId}
+                                      />
+                                    ) : null}
                                     {(() => {
                                       const lipSyncAudioOptions = getAudioOptionsForStoryboard(
                                         storyboard.id,
@@ -7363,7 +7770,9 @@ export default function CinemaProductionPage() {
                             videoModelType: undefined,
                             videoDuration: undefined,
                             startFrameImageUrl: null,
-                            endFrameImageUrl: null
+                            endFrameImageUrl: null,
+                            savedAudioOptionId: null,
+                            linkedVideoAudioOptionIds: [],
                           }
                           const defaultPrompt = buildPromptFromStoryboard(storyboard)
                           const fileRequirement = generation.model ? getModelFileRequirement(generation.model) : 'none'
@@ -8367,6 +8776,19 @@ export default function CinemaProductionPage() {
                         })()}
 
                         {/* Audio Generation Section */}
+                        {(() => {
+                          const generation = storyboardGenerations.get(storyboard.id) || {
+                            shotId: storyboard.id,
+                            linkedVideoAudioOptionIds: [],
+                          }
+                          const linkToVideoProps = {
+                            linkedAudioOptionIds: generation.linkedVideoAudioOptionIds || [],
+                            canLinkToVideo: shotCanLinkAudioToVideo(storyboard.id, generation),
+                            onToggleLinkToVideo: (clipId: string) =>
+                              toggleClipLinkToVideo(storyboard.id, clipId),
+                          }
+
+                          return (
                         <div className="mt-6 pt-6 border-t">
                           <div className="flex items-center gap-2 mb-3">
                             <Volume2 className="h-5 w-5" />
@@ -8593,6 +9015,7 @@ export default function CinemaProductionPage() {
                                 }}
                                 onRemove={(clipId) => removeSessionClip(storyboard.id, clipId)}
                                 savingClipId={savingAudioClipId}
+                                {...linkToVideoProps}
                               />
                             </div>
                           </AudioGeneratorSection>
@@ -8640,13 +9063,16 @@ export default function CinemaProductionPage() {
                                   variant: "destructive",
                                 })
                               }}
+                              linkedAudioOptionIds={linkToVideoProps.linkedAudioOptionIds}
+                              canLinkToVideo={linkToVideoProps.canLinkToVideo}
+                              onToggleLinkToVideo={linkToVideoProps.onToggleLinkToVideo}
                             />
                           </AudioGeneratorSection>
 
                           <AudioGeneratorSection
-                            title="Music / Ambience (Stable Audio)"
+                            title="Music / Ambience"
                             icon={Music}
-                            description="Generate cinematic music and ambience with Stability AI. Dialogue and SFX still use ElevenLabs."
+                            description="Generate cinematic music and ambience for this shot."
                             clipCount={getSessionClipsForStoryboard(storyboard.id, "stable-audio").length}
                           >
                             <StableAudioGenerator
@@ -8687,13 +9113,16 @@ export default function CinemaProductionPage() {
                                   variant: "destructive",
                                 })
                               }}
+                              linkedAudioOptionIds={linkToVideoProps.linkedAudioOptionIds}
+                              canLinkToVideo={linkToVideoProps.canLinkToVideo}
+                              onToggleLinkToVideo={linkToVideoProps.onToggleLinkToVideo}
                             />
                           </AudioGeneratorSection>
 
                           <AudioGeneratorSection
-                            title="Video SFX (Mirelo)"
+                            title="Video SFX"
                             icon={AudioWaveform}
-                            description="Generate sound effects synced to this shot's video with Mirelo AI. Requires a generated video on the shot."
+                            description="Generate sound effects synced to this shot's video. Requires a generated video on the shot."
                             clipCount={getSessionClipsForStoryboard(storyboard.id, "mirelo-sfx").length}
                           >
                             <MireloSfxGenerator
@@ -8750,10 +9179,15 @@ export default function CinemaProductionPage() {
                                   variant: "destructive",
                                 })
                               }}
+                              linkedAudioOptionIds={linkToVideoProps.linkedAudioOptionIds}
+                              canLinkToVideo={linkToVideoProps.canLinkToVideo}
+                              onToggleLinkToVideo={linkToVideoProps.onToggleLinkToVideo}
                             />
                           </AudioGeneratorSection>
                           </div>
                         </div>
+                          )
+                        })()}
                       </div>
                     </CardContent>
                   </Card>
