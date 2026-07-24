@@ -14,7 +14,19 @@ export async function POST(request: NextRequest) {
       isDefault,
     } = await request.json()
 
+    console.log("[storyboard-images] POST", {
+      storyboardId,
+      imageUrl: imageUrl?.slice?.(0, 80),
+      isDefault,
+      generationModel,
+      hasPrompt: Boolean(generationPrompt),
+    })
+
     if (!storyboardId || !imageUrl) {
+      console.error("[storyboard-images] Missing required fields", {
+        storyboardId: Boolean(storyboardId),
+        imageUrl: Boolean(imageUrl),
+      })
       return NextResponse.json(
         { error: 'Missing required fields: storyboardId, imageUrl' },
         { status: 400 },
@@ -68,9 +80,15 @@ export async function POST(request: NextRequest) {
       .single()
 
     if (error) {
-      console.error('Error saving storyboard image:', error)
+      console.error('[storyboard-images] insert error:', error)
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
+
+    console.log("[storyboard-images] saved", {
+      storyboardId,
+      imageId: data?.id,
+      isDefault: isDefault ?? false,
+    })
 
     if (isDefault) {
       await supabase

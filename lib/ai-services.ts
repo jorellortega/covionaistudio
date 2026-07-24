@@ -42,6 +42,38 @@ interface EditImageRequest {
   size?: string
 }
 
+function detectImageMimeFromBuffer(buffer: Buffer): string | null {
+  if (buffer.length < 12) return null
+
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
+    return "image/png"
+  }
+
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg"
+  }
+
+  if (
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
+  ) {
+    return "image/webp"
+  }
+
+  return null
+}
+
 interface GenerateVideoRequest {
   prompt: string
   duration: string
@@ -456,12 +488,34 @@ export class OpenAIService {
       console.log("🖼️ IMAGE EDIT - Model:", request.model)
       console.log("🖼️ IMAGE EDIT - Prompt:", request.prompt)
 
+      const imageFiles = [request.file, ...(request.additionalFiles ?? [])]
+      const validatedFiles: File[] = []
+
+      for (let index = 0; index < imageFiles.length; index++) {
+        const file = imageFiles[index]
+        const buffer = Buffer.from(await file.arrayBuffer())
+        const mime = detectImageMimeFromBuffer(buffer)
+        if (!mime) {
+          const preview = buffer.subarray(0, 64).toString("utf8").replace(/\s+/g, " ").trim()
+          console.error("🖼️ IMAGE EDIT - Invalid reference file:", {
+            index,
+            name: file.name,
+            declaredType: file.type,
+            preview,
+          })
+          throw new Error(
+            `Invalid reference image ${index + 1} (${file.name}): expected PNG/JPEG/WebP but got ${file.type || preview || "unknown"}`,
+          )
+        }
+
+        validatedFiles.push(new File([buffer], file.name, { type: mime }))
+      }
+
       const formData = new FormData()
       formData.append("model", request.model)
       formData.append("prompt", request.prompt)
-      formData.append("image[]", request.file, request.file.name)
-      for (const extra of request.additionalFiles ?? []) {
-        formData.append("image[]", extra, extra.name)
+      for (const validatedFile of validatedFiles) {
+        formData.append("image[]", validatedFile, validatedFile.name)
       }
       if (request.size) {
         formData.append("size", request.size)

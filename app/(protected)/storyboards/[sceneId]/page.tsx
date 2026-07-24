@@ -54,12 +54,20 @@ import {
 } from "@/lib/storyboard-assignments"
 import {
   buildQuickShotImagePrompt,
-  collectStoryboardReferenceUrls,
+  collectStoryboardReferenceSources,
   enrichPromptWithAssignments,
   getStoryboardAssignmentContext,
+  loadStoryboardReferenceFiles,
   maxReferenceImagesForModel,
   urlsToReferenceFiles,
+  type StoryboardReferenceLoadFailure,
 } from "@/lib/storyboard-image-generation"
+import {
+  debugStoryboardImage,
+  formatStoryboardImageDebug,
+  getLastStoryboardImageDebug,
+} from "@/lib/storyboard-image-debug"
+import { StoryboardReferenceIssues } from "@/components/storyboard-reference-issues"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -316,6 +324,9 @@ export default function SceneStoryboardsPage() {
   const [quickInsertingKey, setQuickInsertingKey] = useState<string | null>(null)
   const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
   const [storyboardImages, setStoryboardImages] = useState<Map<string, StoryboardImage[]>>(new Map())
+  const [referenceIssuesByStoryboardId, setReferenceIssuesByStoryboardId] = useState<
+    Map<string, StoryboardReferenceLoadFailure[]>
+  >(() => new Map())
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
@@ -1067,6 +1078,13 @@ export default function SceneStoryboardsPage() {
     },
   ) => {
     const isDefault = options?.isDefault ?? true
+    debugStoryboardImage("save-start", {
+      storyboardId,
+      imageUrl: imageUrl.slice(0, 80),
+      isDefault,
+      generationModel: options?.generationModel,
+    })
+
     const response = await fetch("/api/storyboard-images", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1081,6 +1099,11 @@ export default function SceneStoryboardsPage() {
     })
     const result = await response.json()
     if (!response.ok || !result.success) {
+      debugStoryboardImage("error", {
+        step: "save-storyboard-image",
+        status: response.status,
+        error: result.error || "Failed to save storyboard image",
+      })
       throw new Error(result.error || "Failed to save storyboard image")
     }
 
@@ -1092,6 +1115,11 @@ export default function SceneStoryboardsPage() {
     }
 
     await loadStoryboardImages(storyboardId)
+    debugStoryboardImage("save-complete", {
+      storyboardId,
+      imageId: result.data?.id,
+      isDefault,
+    })
     return result.data as StoryboardImage
   }
 
@@ -1281,6 +1309,18 @@ export default function SceneStoryboardsPage() {
       Boolean(options.supportsReference) &&
       Boolean(options.referenceFile)
 
+    debugStoryboardImage("request-sent", {
+      service: options.service,
+      model: options.model,
+      width,
+      height,
+      canUseReference,
+      referenceFileSize: options.referenceFile?.size,
+      styleReferenceCount: options.styleReferenceFiles?.length ?? 0,
+      promptLength: prompt.length,
+      apiKeyMode: options.apiKey === "configured" ? "configured" : "profile",
+    })
+
     if (canUseReference && options.referenceFile) {
       const formData = new FormData()
       formData.append("prompt", prompt)
@@ -1307,7 +1347,9 @@ export default function SceneStoryboardsPage() {
 
     return fetch("/api/ai/generate-image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({
         prompt,
         service: options.service,
@@ -1480,8 +1522,14 @@ export default function SceneStoryboardsPage() {
   }
 
   const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
+    debugStoryboardImage("reference-edit-start", { storyboardId })
+
     const direction = inlineCustomShotPrompt.trim()
     if (!direction) {
+      debugStoryboardImage("validation-failed", {
+        reason: "empty-reference-edit-direction",
+        storyboardId,
+      })
       toast({
         title: "Description required",
         description: 'Enter what you want, e.g. "wide shot in a rainy alley" or "warmer lighting".',
@@ -1491,7 +1539,13 @@ export default function SceneStoryboardsPage() {
     }
 
     const storyboard = resolveStoryboardForGeneration(storyboardId)
-    if (!storyboard || !userId) return
+    if (!storyboard || !userId) {
+      debugStoryboardImage("validation-failed", {
+        reason: !storyboard ? "storyboard-not-found" : "missing-user-id",
+        storyboardId,
+      })
+      return
+    }
 
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
@@ -1510,7 +1564,7 @@ export default function SceneStoryboardsPage() {
     }
 
     if (styleReferenceFiles.length === 0 && (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)) {
-      const refUrls = collectStoryboardReferenceUrls({
+      const refSources = collectStoryboardReferenceSources({
         characterIds: assignmentContext.characterIds,
         locationIds: assignmentContext.locationIds,
         characters,
@@ -1518,7 +1572,7 @@ export default function SceneStoryboardsPage() {
         avatarImages: projectAvatarImages,
         maxImages: MAX_LINKED_REFERENCE_IMAGES,
       })
-      styleReferenceFiles = await urlsToReferenceFiles(refUrls)
+      styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files
     }
 
     setIsGeneratingReferenceEdit(true)
@@ -1557,10 +1611,25 @@ export default function SceneStoryboardsPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        debugStoryboardImage("error", {
+          step: "reference-edit",
+          storyboardId,
+          status: response.status,
+          error: errorData.error || "Failed to edit image from reference",
+        })
         throw new Error(errorData.error || "Failed to edit image from reference")
       }
 
       const result = await response.json()
+      debugStoryboardImage("response-received", {
+        storyboardId,
+        mode: "reference-edit",
+        success: result.success,
+        hasImageUrl: Boolean(result.imageUrl),
+        hasBucketUrl: Boolean(result.bucketUrl),
+        error: result.error,
+      })
+
       if (!result.success || !result.imageUrl) {
         throw new Error("Failed to edit image from reference")
       }
@@ -1592,12 +1661,20 @@ export default function SceneStoryboardsPage() {
           : "A new version was added to this shot's image gallery.",
       })
     } catch (error) {
+      debugStoryboardImage("error", {
+        step: "reference-edit",
+        storyboardId,
+        message: error instanceof Error ? error.message : String(error),
+      })
       toast({
         title: "Edit failed",
-        description: getImageGenerationErrorMessage(
-          error,
-          "Could not edit the storyboard image.",
-        ),
+        description: [
+          getImageGenerationErrorMessage(
+            error,
+            "Could not edit the storyboard image.",
+          ),
+          formatStoryboardImageDebug(getLastStoryboardImageDebug()),
+        ].join(" — "),
         variant: "destructive",
       })
     } finally {
@@ -2835,12 +2912,22 @@ export default function SceneStoryboardsPage() {
   }
 
   const quickGenerateShotImage = async (storyboard: Storyboard) => {
+    debugStoryboardImage("quick-start", {
+      storyboardId: storyboard.id,
+      shotNumber: storyboard.shot_number,
+      title: storyboard.title,
+    })
+
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
     const prompt = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
     })
     if (!prompt.trim()) {
+      debugStoryboardImage("validation-failed", {
+        reason: "empty-quick-prompt",
+        storyboardId: storyboard.id,
+      })
       toast({
         title: "No shot details",
         description: "Add a description, action, or shot details before generating.",
@@ -2848,6 +2935,14 @@ export default function SceneStoryboardsPage() {
       })
       return
     }
+
+    debugStoryboardImage("prompt-built", {
+      mode: "quick",
+      storyboardId: storyboard.id,
+      promptLength: prompt.length,
+      characterIds: assignmentContext.characterIds,
+      locationIds: assignmentContext.locationIds,
+    })
 
     await generateShotImage(storyboard.id, prompt, {
       quick: true,
@@ -2871,7 +2966,20 @@ export default function SceneStoryboardsPage() {
       options?.includeCharacterDetails ?? includeCharacterDetails
     const useMasterPrompt = options?.includeMasterPrompt ?? includeMasterPrompt
 
+    debugStoryboardImage("generate-start", {
+      storyboardId,
+      isQuick,
+      promptLength: prompt.trim().length,
+      userId: userId ?? null,
+      useCharacterDetails,
+      useMasterPrompt,
+    })
+
     if (!prompt.trim() || !userId) {
+      debugStoryboardImage("validation-failed", {
+        reason: !prompt.trim() ? "empty-prompt" : "missing-user-id",
+        storyboardId,
+      })
       toast({
         title: "Missing Information",
         description: "Please enter a prompt for the AI image generation.",
@@ -2889,35 +2997,52 @@ export default function SceneStoryboardsPage() {
       
       // Get the AI settings for images tab
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
+      const isLockedModel = Boolean(imagesSetting?.is_locked && imagesSetting.locked_model)
       
       // Determine which service to use - locked model takes precedence
       let serviceToUse = selectedAIService
       let modelToUse: string | undefined = undefined
       
-      if (imagesSetting?.is_locked && imagesSetting.locked_model) {
-        serviceToUse = mapDisplayModelToService(imagesSetting.locked_model)
-        modelToUse = normalizeDisplayModelToApiId(imagesSetting.locked_model)
-        console.log('🎬 Using locked model from AI settings:', imagesSetting.locked_model)
-        console.log('🎬 Mapped to service identifier:', serviceToUse)
-        console.log('🎬 Normalized model for API:', modelToUse)
+      if (isLockedModel) {
+        serviceToUse = mapDisplayModelToService(imagesSetting!.locked_model!)
+        modelToUse = normalizeDisplayModelToApiId(imagesSetting!.locked_model!)
       } else {
         // Safety check: ensure we have a valid service
         if (!serviceToUse || !['dalle', 'openart', 'runway', 'leonardo'].includes(serviceToUse)) {
-          console.warn('🎬 Invalid service selected, falling back to dalle:', serviceToUse)
           serviceToUse = 'dalle'
         }
       }
+
+      debugStoryboardImage("service-resolved", {
+        storyboardId,
+        serviceToUse,
+        modelToUse,
+        isLockedModel,
+        lockedModel: imagesSetting?.locked_model,
+        selectedAIService,
+      })
       
-      // Debug: Log the selected service
-      console.log('🎬 Selected AI service:', serviceToUse)
-      console.log('🎬 Service type:', typeof serviceToUse)
-      console.log('🎬 Using locked model:', imagesSetting?.is_locked)
-      console.log('🎬 Locked model value:', imagesSetting?.locked_model)
-      console.log('🎬 Model to use:', modelToUse)
-      
-      // Get the API key for the selected service
-      const apiKey = getApiKeyForService(serviceToUse)
+      // Locked models resolve API keys server-side (system or user settings).
+      let apiKey: string | null | undefined
+      if (isLockedModel) {
+        apiKey = "configured"
+      } else {
+        apiKey = getApiKeyForService(serviceToUse)
+      }
+
+      debugStoryboardImage("api-key-check", {
+        storyboardId,
+        serviceToUse,
+        apiKeyMode: apiKey === "configured" ? "configured" : apiKey ? "profile" : "missing",
+        hasUserProfile: Boolean(userProfile),
+      })
+
       if (!apiKey) {
+        debugStoryboardImage("validation-failed", {
+          reason: "missing-api-key",
+          storyboardId,
+          serviceToUse,
+        })
         toast({
           title: "API Key Required",
           description: `Please configure your ${serviceToUse.toUpperCase()} API key in your profile settings.`,
@@ -2927,7 +3052,26 @@ export default function SceneStoryboardsPage() {
       }
 
       const storyboard = resolveStoryboardForGeneration(storyboardId)
-      if (!storyboard) return
+      if (!storyboard) {
+        debugStoryboardImage("validation-failed", {
+          reason: "storyboard-not-found",
+          storyboardId,
+          knownStoryboardIds: storyboards.map((sb) => sb.id),
+        })
+        toast({
+          title: "Shot not found",
+          description: "Could not find this storyboard shot. Refresh the page and try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      debugStoryboardImage("storyboard-resolved", {
+        storyboardId,
+        title: storyboard.title,
+        characterIds: getStoryboardCharacterIds(storyboard),
+        locationIds: getStoryboardLocationIds(storyboard),
+      })
 
       const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
 
@@ -2952,7 +3096,7 @@ export default function SceneStoryboardsPage() {
 
       const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
       const refLimit = maxReferenceImagesForModel(modelToUse)
-      const referenceUrls = collectStoryboardReferenceUrls({
+      const referenceSources = collectStoryboardReferenceSources({
         characterIds: assignmentContext.characterIds,
         locationIds: assignmentContext.locationIds,
         characters,
@@ -2960,7 +3104,44 @@ export default function SceneStoryboardsPage() {
         avatarImages: projectAvatarImages,
         maxImages: refLimit,
       })
-      const referenceFiles = referenceUrls.length > 0 ? await urlsToReferenceFiles(referenceUrls) : []
+      const referenceLoad =
+        referenceSources.length > 0
+          ? await loadStoryboardReferenceFiles(referenceSources)
+          : { files: [], loaded: [], failed: [] as StoryboardReferenceLoadFailure[] }
+      const referenceFiles = referenceLoad.files
+
+      if (referenceLoad.failed.length > 0) {
+        setReferenceIssuesByStoryboardId((prev) => {
+          const next = new Map(prev)
+          next.set(storyboardId, referenceLoad.failed)
+          return next
+        })
+        debugStoryboardImage("validation-failed", {
+          reason: referenceFiles.length === 0 ? "all-reference-images-invalid" : "some-reference-images-invalid",
+          storyboardId,
+          referenceUrlCount: referenceSources.length,
+          loadedReferenceCount: referenceFiles.length,
+          failedReferences: referenceLoad.failed.map((issue) => ({
+            label: issue.label,
+            error: issue.error,
+          })),
+        })
+        toast({
+          title: `${referenceLoad.failed.length} reference image${referenceLoad.failed.length === 1 ? "" : "s"} couldn't load`,
+          description:
+            referenceFiles.length > 0
+              ? `Used ${referenceFiles.length} valid reference${referenceFiles.length === 1 ? "" : "s"}. See the warning on this shot for what to fix.`
+              : "No valid references were found. Generation continued with text only — see the warning on this shot.",
+          variant: "destructive",
+        })
+      } else {
+        setReferenceIssuesByStoryboardId((prev) => {
+          if (!prev.has(storyboardId)) return prev
+          const next = new Map(prev)
+          next.delete(storyboardId)
+          return next
+        })
+      }
 
       if (referenceFiles.length > 0) {
         enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
@@ -2972,6 +3153,15 @@ export default function SceneStoryboardsPage() {
           referenceCount: referenceFiles.length,
         })
       }
+
+      debugStoryboardImage("prompt-built", {
+        storyboardId,
+        mode: isQuick ? "quick" : "manual",
+        enhancedPromptLength: enhancedPrompt.length,
+        referenceUrlCount: referenceSources.length,
+        referenceFileCount: referenceFiles.length,
+        useExactPrompt,
+      })
 
       const lockedImageConfig =
         imagesSetting?.is_locked && imagesSetting.locked_model
@@ -2997,6 +3187,15 @@ export default function SceneStoryboardsPage() {
           supportsReference: true,
         })
       } else {
+        debugStoryboardImage("request-sent", {
+          storyboardId,
+          transport: "json",
+          service: serviceToUse,
+          model: modelToUse,
+          supportsReference,
+          skippedReferencesBecauseUnsupported: referenceFiles.length > 0 && !supportsReference,
+        })
+
         const requestBody: Record<string, unknown> = {
           prompt: enhancedPrompt,
           service: serviceToUse,
@@ -3020,24 +3219,34 @@ export default function SceneStoryboardsPage() {
         })
       }
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
+      const responseText = await response.text()
+      let result: Record<string, unknown> = {}
+      try {
+        result = responseText ? JSON.parse(responseText) : {}
+      } catch {
+        result = { rawBody: responseText.slice(0, 500) }
       }
 
-      const result = await response.json()
+      debugStoryboardImage("response-received", {
+        storyboardId,
+        ok: response.ok,
+        status: response.status,
+        success: result.success,
+        hasImageUrl: Boolean(result.imageUrl),
+        hasBucketUrl: Boolean(result.bucketUrl),
+        savedToBucket: result.savedToBucket,
+        error: result.error,
+      })
+
+      if (!response.ok) {
+        throw new Error(
+          typeof result.error === "string" ? result.error : 'Failed to generate image',
+        )
+      }
       
       if (result.success && result.imageUrl) {
         // Use bucket URL if available, otherwise fall back to original URL
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
-        
-        console.log('🎬 Image generation result:', {
-          success: result.success,
-          originalUrl: result.imageUrl,
-          bucketUrl: result.bucketUrl,
-          savedToBucket: result.savedToBucket,
-          usingUrl: imageUrlToUse
-        })
+        const imageUrlToUse = (result.bucketUrl || result.imageUrl) as string
         
         // Add to gallery without replacing the current main image
         const existingImages = storyboardImages.get(storyboardId) ?? []
@@ -3057,6 +3266,8 @@ export default function SceneStoryboardsPage() {
             ? "New image added below. Click a thumbnail to use it as the main shot image."
             : referenceFiles.length > 0
               ? `Image generated using ${referenceFiles.length} reference image${referenceFiles.length === 1 ? "" : "s"} (characters & locations).`
+              : referenceLoad.failed.length > 0
+                ? "Image generated without valid reference images. See the warning on this shot to fix broken links."
               : result.savedToBucket
                 ? "Image generated and saved to your bucket!"
                 : "Image added to this shot.",
@@ -3073,13 +3284,24 @@ export default function SceneStoryboardsPage() {
           }
         }
       } else {
-        throw new Error('Failed to generate image')
+        throw new Error(
+          typeof result.error === "string"
+            ? result.error
+            : 'Failed to generate image — API returned success without an image URL',
+        )
       }
     } catch (error) {
-      console.error('Error generating shot image:', error)
+      const debugEntry = debugStoryboardImage("error", {
+        storyboardId,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      console.error('Error generating shot image:', error, debugEntry)
       toast({
         title: "Generation Failed",
-        description: error instanceof Error ? error.message : "Failed to generate AI image",
+        description: [
+          error instanceof Error ? error.message : "Failed to generate AI image",
+          formatStoryboardImageDebug(getLastStoryboardImageDebug()),
+        ].join(" — "),
         variant: "destructive"
       })
     } finally {
@@ -4999,6 +5221,19 @@ export default function SceneStoryboardsPage() {
                   onDelete={handleDeleteStoryboardImage}
                   deletingImageId={deletingImageId}
                 />
+
+                {(referenceIssuesByStoryboardId.get(storyboard.id) ?? []).length > 0 ? (
+                  <StoryboardReferenceIssues
+                    issues={referenceIssuesByStoryboardId.get(storyboard.id) ?? []}
+                    onDismiss={() =>
+                      setReferenceIssuesByStoryboardId((prev) => {
+                        const next = new Map(prev)
+                        next.delete(storyboard.id)
+                        return next
+                      })
+                    }
+                  />
+                ) : null}
                 
                 <div className="space-y-2">
                   {storyboard.description?.trim() ? (

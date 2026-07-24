@@ -113,6 +113,7 @@ import {
   urlsToReferenceFiles,
 } from "@/lib/storyboard-image-generation"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
+import { LinkAudioPanel } from "@/components/linked-audio-picker"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
 

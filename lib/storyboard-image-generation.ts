@@ -5,9 +5,37 @@ import type { Storyboard } from "./storyboards-service"
 import { getStoryboardCharacterIds, getStoryboardLocationIds } from "./storyboard-assignments"
 import { referenceUrlToFile } from "./project-image-linking"
 import { isGPTImage2ApiModel } from "./image-model-utils"
+import { debugStoryboardImage } from "./storyboard-image-debug"
 
 /** GPT Image 2 edits API supports up to 16 reference images per request. */
 export const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16
+
+export type StoryboardReferenceSourceType =
+  | "character_portrait"
+  | "character_reference"
+  | "avatar_angle"
+  | "location_image"
+  | "location_reference"
+
+export interface StoryboardReferenceSource {
+  url: string
+  label: string
+  sourceType: StoryboardReferenceSourceType
+  entityId?: string
+  entityName?: string
+}
+
+export interface StoryboardReferenceLoadFailure extends StoryboardReferenceSource {
+  error: string
+  fixHint: string
+  filename: string
+}
+
+export interface StoryboardReferenceLoadResult {
+  files: File[]
+  loaded: StoryboardReferenceSource[]
+  failed: StoryboardReferenceLoadFailure[]
+}
 
 export function maxReferenceImagesForModel(apiModel?: string | null): number {
   if (apiModel && isGPTImage2ApiModel(apiModel)) return GPT_IMAGE_MAX_REFERENCE_IMAGES
@@ -103,6 +131,108 @@ export function buildLocationDetailsText(location: Location): string {
     .join(", ")
 }
 
+export function collectStoryboardReferenceSources(options: {
+  characterIds: string[]
+  locationIds: string[]
+  characters: Character[]
+  locations: Location[]
+  avatarImages: AvatarImageRecord[]
+  maxImages: number
+}): StoryboardReferenceSource[] {
+  const { characterIds, locationIds, characters, locations, avatarImages, maxImages } = options
+  const sources: StoryboardReferenceSource[] = []
+  const seen = new Set<string>()
+
+  const addSource = (source: StoryboardReferenceSource) => {
+    if (!source.url || seen.has(source.url) || sources.length >= maxImages) return
+    seen.add(source.url)
+    sources.push(source)
+  }
+
+  const avatarsForCharacter = (characterId: string) =>
+    avatarImages.filter((img) => img.character_id === characterId && img.image_url)
+
+  for (const characterId of characterIds) {
+    const character = characters.find((c) => c.id === characterId)
+    const name = character?.name || "Character"
+    const avatars = avatarsForCharacter(characterId)
+    const front = avatars.find((a) => a.angle_id === "front")
+    const primaryAvatar = front ?? avatars[0]
+
+    if (primaryAvatar?.image_url) {
+      addSource({
+        url: primaryAvatar.image_url,
+        label: `${name} · Avatar (${primaryAvatar.angle_id || "angle"})`,
+        sourceType: "avatar_angle",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+
+    if (character?.image_url) {
+      addSource({
+        url: character.image_url,
+        label: `${name} · Portrait`,
+        sourceType: "character_portrait",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+
+    for (const [index, ref] of (character?.reference_images ?? []).entries()) {
+      addSource({
+        url: ref,
+        label: `${name} · Reference image ${index + 1}`,
+        sourceType: "character_reference",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+  }
+
+  for (const locationId of locationIds) {
+    const location = locations.find((l) => l.id === locationId)
+    const name = location?.name || "Location"
+
+    if (location?.image_url) {
+      addSource({
+        url: location.image_url,
+        label: `${name} · Cover image`,
+        sourceType: "location_image",
+        entityId: locationId,
+        entityName: name,
+      })
+    }
+
+    for (const [index, ref] of (location?.reference_images ?? []).entries()) {
+      addSource({
+        url: ref,
+        label: `${name} · Reference image ${index + 1}`,
+        sourceType: "location_reference",
+        entityId: locationId,
+        entityName: name,
+      })
+    }
+  }
+
+  for (const characterId of characterIds) {
+    const character = characters.find((c) => c.id === characterId)
+    const name = character?.name || "Character"
+    for (const avatar of avatarsForCharacter(characterId)) {
+      if (!avatar.image_url || seen.has(avatar.image_url)) continue
+      addSource({
+        url: avatar.image_url,
+        label: `${name} · Avatar (${avatar.angle_id || "angle"})`,
+        sourceType: "avatar_angle",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+  }
+
+  return sources.slice(0, maxImages)
+}
+
 export function collectStoryboardReferenceUrls(options: {
   characterIds: string[]
   locationIds: string[]
@@ -111,58 +241,126 @@ export function collectStoryboardReferenceUrls(options: {
   avatarImages: AvatarImageRecord[]
   maxImages: number
 }): string[] {
-  const { characterIds, locationIds, characters, locations, avatarImages, maxImages } = options
-  const urls: string[] = []
-  const seen = new Set<string>()
+  return collectStoryboardReferenceSources(options).map((source) => source.url)
+}
 
-  const addUrl = (url?: string | null) => {
-    if (!url || seen.has(url) || urls.length >= maxImages) return
-    seen.add(url)
-    urls.push(url)
+export function referenceFilenameFromUrl(url: string): string {
+  try {
+    const pathname = new URL(url).pathname
+    return decodeURIComponent(pathname.split("/").pop() || url)
+  } catch {
+    return url
   }
+}
 
-  const avatarsForCharacter = (characterId: string) =>
-    avatarImages.filter((img) => img.character_id === characterId && img.image_url)
+export function humanizeReferenceLoadError(error: string): string {
+  if (error.includes("(400)")) return "File not found in storage (400)"
+  if (error.includes("(404)")) return "File not found (404)"
+  if (error.includes("(403)")) return "Access denied (403)"
+  if (error.toLowerCase().includes("text/html") || error.includes("not a valid image")) {
+    return "URL returned a web page, not an image file"
+  }
+  return error
+}
 
-  for (const characterId of characterIds) {
-    const avatars = avatarsForCharacter(characterId)
-    const front = avatars.find((a) => a.angle_id === "front")
-    addUrl(front?.image_url ?? avatars[0]?.image_url)
+export function getReferenceFixHint(source: StoryboardReferenceSource, error: string): string {
+  const name = source.entityName || "this item"
 
-    const character = characters.find((c) => c.id === characterId)
-    addUrl(character?.image_url)
-    for (const ref of character?.reference_images ?? []) {
-      addUrl(ref)
+  if (error.includes("(400)") || error.includes("(404)")) {
+    switch (source.sourceType) {
+      case "avatar_angle":
+        return `Open Avatars, select ${name}, and re-generate or re-upload the ${source.label.split("·").pop()?.trim() || "angle"}.`
+      case "character_portrait":
+        return `Open Characters, select ${name}, and upload or generate a new portrait image.`
+      case "character_reference":
+        return `Open Characters, select ${name}, and replace reference image ${source.label.split(" ").pop()}.`
+      case "location_image":
+        return `Open Locations, select ${name}, and upload or generate a new cover image.`
+      case "location_reference":
+        return `Open Locations, select ${name}, and replace the broken reference image.`
+      default:
+        return "Re-upload or replace the image link in storage."
     }
   }
 
-  for (const locationId of locationIds) {
-    const location = locations.find((l) => l.id === locationId)
-    addUrl(location?.image_url)
-    for (const ref of location?.reference_images ?? []) {
-      addUrl(ref)
-    }
+  if (error.toLowerCase().includes("text/html") || error.includes("not a valid image")) {
+    return `Replace this link with a direct image file URL on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page.`
   }
 
-  for (const characterId of characterIds) {
-    for (const avatar of avatarsForCharacter(characterId)) {
-      addUrl(avatar.image_url)
-    }
-  }
+  return `Check the image on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page for ${name}.`
+}
 
-  return urls.slice(0, maxImages)
+export async function loadStoryboardReferenceFiles(
+  sources: StoryboardReferenceSource[],
+): Promise<StoryboardReferenceLoadResult> {
+  const results = await Promise.all(
+    sources.map(async (source, index) => {
+      try {
+        const file = await referenceUrlToFile(source.url, `storyboard-ref-${index}.png`)
+        return { source, file }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        debugStoryboardImage("references-collected", {
+          skippedReferenceUrl: source.url,
+          skippedLabel: source.label,
+          error: message,
+        })
+        return {
+          source,
+          file: null,
+          error: message,
+          fixHint: getReferenceFixHint(source, message),
+        }
+      }
+    }),
+  )
+
+  const loaded = results.flatMap((result) =>
+    result.file ? [{ source: result.source, file: result.file }] : [],
+  )
+  const failed = results.flatMap((result) =>
+    result.file || !("error" in result)
+      ? []
+      : [
+          {
+            ...result.source,
+            error: result.error,
+            fixHint: result.fixHint,
+            filename: referenceFilenameFromUrl(result.source.url),
+          },
+        ],
+  )
+
+  debugStoryboardImage("references-collected", {
+    requestedUrls: sources.length,
+    loadedFiles: loaded.length,
+    skippedCount: failed.length,
+    fileSizes: loaded.map((entry) => entry.file.size),
+    fileTypes: loaded.map((entry) => entry.file.type),
+    skipped: failed.map((entry) => ({
+      label: entry.label,
+      url: entry.url,
+      error: entry.error,
+      fixHint: entry.fixHint,
+    })),
+  })
+
+  return {
+    files: loaded.map((entry) => entry.file),
+    loaded: loaded.map((entry) => entry.source),
+    failed,
+  }
 }
 
 export async function urlsToReferenceFiles(urls: string[]): Promise<File[]> {
-  const files: File[] = []
-  for (let index = 0; index < urls.length; index++) {
-    try {
-      files.push(await referenceUrlToFile(urls[index], `storyboard-ref-${index}.png`))
-    } catch (error) {
-      console.warn("[storyboard-image-generation] skipped reference URL:", urls[index], error)
-    }
-  }
-  return files
+  const result = await loadStoryboardReferenceFiles(
+    urls.map((url, index) => ({
+      url,
+      label: `Reference ${index + 1}`,
+      sourceType: "character_reference",
+    })),
+  )
+  return result.files
 }
 
 export function enrichPromptWithAssignments(
