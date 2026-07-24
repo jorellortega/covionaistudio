@@ -1041,7 +1041,11 @@ async function resolveVideoDurationMs(videoUrl: string): Promise<number> {
   try {
     return await probeVideoDurationMs(videoUrl)
   } catch {
-    return probeVideoDurationMsServer(videoUrl)
+    try {
+      return await probeVideoDurationMsServer(videoUrl)
+    } catch (error) {
+      throw error instanceof Error ? error : new Error("Could not read video duration")
+    }
   }
 }
 
@@ -1368,6 +1372,9 @@ export default function CinemaProductionPage() {
         videoDurationCacheRef.current[url] = ms
         setVideoDurationByUrl((current) => ({ ...current, [url]: ms }))
       })
+      .catch(() => {
+        // Optional preload — duration is resolved again when generating SFX.
+      })
       .finally(() => {
         videoDurationInflightRef.current.delete(url)
         setVideoDurationLoadingUrls((loading) => {
@@ -1683,6 +1690,8 @@ export default function CinemaProductionPage() {
 
   // Preload video durations for Mirelo SFX as soon as shot videos are known.
   useEffect(() => {
+    if (!ready || !userId) return
+
     const urls = new Set<string>()
     storyboardVideos.forEach((videos) => {
       videos.forEach((video) => {
@@ -1693,7 +1702,7 @@ export default function CinemaProductionPage() {
       if (url) urls.add(url)
     })
     urls.forEach((url) => preloadVideoDuration(url))
-  }, [storyboardVideos, selectedVideoUrlByStoryboard, preloadVideoDuration])
+  }, [storyboardVideos, selectedVideoUrlByStoryboard, preloadVideoDuration, ready, userId])
 
   // Update selected video when dialog opens (only on initial open, not on every render)
   useEffect(() => {

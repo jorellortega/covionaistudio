@@ -1,5 +1,3 @@
-/** Probe MP4 duration from a buffer by walking atoms for mvhd. */
-
 function readMp4DurationMs(buffer: Buffer): number | null {
   const walk = (start: number, end: number): number | null => {
     let offset = start
@@ -42,7 +40,55 @@ function readMp4DurationMs(buffer: Buffer): number | null {
   return walk(0, buffer.length)
 }
 
+function parseSupabaseStorageUrl(url: string): { bucket: string; path: string } | null {
+  try {
+    const parsed = new URL(url)
+    if (!parsed.host.endsWith('.supabase.co')) return null
+    const match = parsed.pathname.match(/\/storage\/v1\/object\/(?:public\/|sign\/)?([^/]+)\/(.+)/)
+    if (!match?.[1] || !match?.[2]) return null
+    return {
+      bucket: match[1],
+      path: decodeURIComponent(match[2]),
+    }
+  } catch {
+    return null
+  }
+}
+
+async function probeSupabaseStorageVideoDurationMs(videoUrl: string): Promise<number | null> {
+  const parsed = parseSupabaseStorageUrl(videoUrl)
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!parsed || !serviceKey) return null
+
+  const { createClient } = await import('@supabase/supabase-js')
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    serviceKey,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    },
+  )
+
+  const { data, error } = await supabase.storage.from(parsed.bucket).download(parsed.path)
+  if (error || !data) return null
+
+  return readMp4DurationMs(Buffer.from(await data.arrayBuffer()))
+}
+
 export async function probeRemoteVideoDurationMs(videoUrl: string): Promise<number> {
+  try {
+    return await probeRemoteVideoDurationViaHttp(videoUrl)
+  } catch (httpError) {
+    const storageDurationMs = await probeSupabaseStorageVideoDurationMs(videoUrl)
+    if (storageDurationMs) return storageDurationMs
+    throw httpError instanceof Error ? httpError : new Error('Failed to probe video duration')
+  }
+}
+
+async function probeRemoteVideoDurationViaHttp(videoUrl: string): Promise<number> {
   const headResponse = await fetch(videoUrl, { method: 'HEAD', cache: 'no-store' })
   const contentLength = Number(headResponse.headers.get('content-length') || 0)
 
