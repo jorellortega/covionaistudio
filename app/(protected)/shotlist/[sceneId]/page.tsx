@@ -41,6 +41,7 @@ import { LocationsService, type Location } from "@/lib/locations-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
+import { ShotListService } from "@/lib/shot-list-service"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 
@@ -188,6 +189,9 @@ export default function SceneShotListPage() {
   const [sceneScript, setSceneScript] = useState<string>("")
   const [sceneInfo, setSceneInfo] = useState<SceneInfo | null>(null)
   const [syncRefreshKey, setSyncRefreshKey] = useState(0)
+  const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
+  const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
+  const [isAssigningShotEntities, setIsAssigningShotEntities] = useState(false)
   const sceneNumberForSync = useMemo(() => {
     if (sceneInfo?.scene_number) return sceneInfo.scene_number
     const raw = sceneInfo?.metadata?.sceneNumber
@@ -661,6 +665,224 @@ export default function SceneShotListPage() {
   // Get current page content
   const getCurrentPageScript = () => {
     return scriptPages[currentScriptPage - 1] || ""
+  }
+
+  const getAllScreenplayContent = () => sceneScript
+
+  const resolveScriptsAiConfig = async () => {
+    const settings = await AISettingsService.getUserSettings(userId!)
+    const scriptsSetting = settings.find((s) => s.tab_type === "scripts")
+    const lockedModel = scriptsSetting?.locked_model || "ChatGPT"
+    const normalizedService =
+      lockedModel.toLowerCase().includes("gpt") ||
+      lockedModel.toLowerCase().includes("openai") ||
+      lockedModel.toLowerCase().includes("chatgpt")
+        ? "openai"
+        : lockedModel.toLowerCase().includes("claude") ||
+            lockedModel.toLowerCase().includes("anthropic")
+          ? "anthropic"
+          : "openai"
+    const modelToUse =
+      scriptsSetting?.selected_model ||
+      (normalizedService === "openai" ? "gpt-4o" : "claude-3-5-sonnet-20241022")
+    return { normalizedService, modelToUse }
+  }
+
+  const saveGeneratedShots = async (shots: Array<Record<string, unknown>>) => {
+    const savedShots = await ShotListService.bulkCreateShotLists(
+      shots.map((shot) => ({
+        ...shot,
+        scene_id: sceneId,
+        project_id: sceneInfo?.project_id,
+      })),
+    )
+    setShotListRefreshKey((prev) => prev + 1)
+    return savedShots
+  }
+
+  const generateShotListFromPage = async () => {
+    if (!sceneId || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const pageContent = getCurrentPageScript()
+    if (!pageContent.trim()) {
+      toast({
+        title: "Error",
+        description: "No screenplay content on this page to generate a shot list from.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingShotList(true)
+      const { normalizedService, modelToUse } = await resolveScriptsAiConfig()
+
+      const response = await fetch("/api/scenes/generate-shot-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sceneId,
+          screenplayContent: pageContent,
+          pageNumber: currentScriptPage,
+          service: normalizedService,
+          model: modelToUse,
+          userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to generate shot list")
+      }
+
+      const result = await response.json()
+      if (result.success && result.shots?.length > 0) {
+        const savedShots = await saveGeneratedShots(result.shots)
+        toast({
+          title: "Shot List Generated!",
+          description: `Created ${savedShots.length} shots from page ${currentScriptPage}.`,
+        })
+      } else {
+        throw new Error(result.error || "No shots returned from AI")
+      }
+    } catch (error) {
+      console.error("Error generating shot list from page:", error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate shot list.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShotList(false)
+    }
+  }
+
+  const generateShotListFromScreenplay = async () => {
+    if (!sceneId || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene ID or user ID missing",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const allScreenplayContent = getAllScreenplayContent()
+    if (!allScreenplayContent.trim()) {
+      toast({
+        title: "Error",
+        description: "No screenplay content to generate a shot list from. Show the script or add screenplay text to this scene.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsGeneratingShotList(true)
+      const { normalizedService, modelToUse } = await resolveScriptsAiConfig()
+
+      toast({
+        title: "Generating shot list…",
+        description: "Creating shots from the full scene screenplay.",
+      })
+
+      const response = await fetch("/api/scenes/generate-shot-list", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sceneId,
+          screenplayContent: allScreenplayContent,
+          pageNumber: null,
+          service: normalizedService,
+          model: modelToUse,
+          userId,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to generate shot list")
+      }
+
+      const result = await response.json()
+      if (result.success && result.shots?.length > 0) {
+        const savedShots = await saveGeneratedShots(result.shots)
+        toast({
+          title: "Shot List Generated!",
+          description: `Created ${savedShots.length} shots from the screenplay.`,
+        })
+      } else {
+        throw new Error(result.error || "No shots returned from AI")
+      }
+    } catch (error) {
+      console.error("Error generating shot list from screenplay:", error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to generate shot list.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsGeneratingShotList(false)
+    }
+  }
+
+  const handleAutoAssignShotEntities = async () => {
+    if (!sceneId || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene or user not ready.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (shots.length === 0) {
+      toast({
+        title: "No shots yet",
+        description: "Generate or add shots first, then auto-assign characters and locations.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsAssigningShotEntities(true)
+      const response = await fetch("/api/scenes/assign-shot-list-entities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sceneId, userId }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to assign characters and locations")
+      }
+
+      setShotListRefreshKey((prev) => prev + 1)
+      toast({
+        title: "Assignments updated",
+        description:
+          result.updatedCount > 0
+            ? `Filled characters and locations on ${result.updatedCount} shot${result.updatedCount === 1 ? "" : "s"}.`
+            : "All shots already had matching assignments, or no matches were found.",
+      })
+    } catch (error) {
+      console.error("Error auto-assigning shot entities:", error)
+      toast({
+        title: "Assignment failed",
+        description: error instanceof Error ? error.message : "Could not assign characters and locations.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsAssigningShotEntities(false)
+    }
   }
 
   // Get character offset for current page (for adjusting text ranges)
@@ -3370,16 +3592,75 @@ export default function SceneShotListPage() {
         <div className="mt-8 sm:mt-12">
           <Card>
             <CardHeader>
-              <CardTitle>Shot List</CardTitle>
-              <CardDescription>
-                Break down this scene into individual shots with detailed technical specifications
-              </CardDescription>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <CardTitle>Shot List</CardTitle>
+                  <CardDescription>
+                    Break down this scene into individual shots with detailed technical specifications.
+                    {shots.length > 0
+                      ? " Use Fill Characters & Locations to auto-assign existing shots from your project lists."
+                      : sceneScript.trim()
+                        ? " Generate from the full screenplay or just the current script page."
+                        : " Add screenplay text to this scene to generate shots with AI."}
+                  </CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2 shrink-0">
+                  {shots.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={isAssigningShotEntities || isGeneratingShotList}
+                      onClick={() => void handleAutoAssignShotEntities()}
+                    >
+                      {isAssigningShotEntities ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Wand2 className="h-4 w-4 mr-2" />
+                      )}
+                      Fill Characters & Locations
+                    </Button>
+                  ) : null}
+                  {sceneScript.trim() ? (
+                    <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isGeneratingShotList || isAssigningShotEntities || !getCurrentPageScript().trim()}
+                      onClick={() => void generateShotListFromPage()}
+                    >
+                      {isGeneratingShotList ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <FileText className="h-4 w-4 mr-2" />
+                      )}
+                      From This Page
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isGeneratingShotList || isAssigningShotEntities}
+                      onClick={() => void generateShotListFromScreenplay()}
+                      className="bg-gradient-to-r from-blue-500 to-purple-500 hover:opacity-90"
+                    >
+                      {isGeneratingShotList ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4 mr-2" />
+                      )}
+                      Generate from Screenplay
+                    </Button>
+                    </>
+                  ) : null}
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               <ShotListComponent
                 sceneId={sceneId}
                 projectId={sceneInfo?.project_id}
-                refreshKey={syncRefreshKey}
+                refreshKey={syncRefreshKey + shotListRefreshKey}
                 onShotsChange={(loadedShots) => {
                   setShots(loadedShots)
                 }}

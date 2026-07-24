@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
+import { isContentPolicyError, CONTENT_BLOCKED_MESSAGE, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT, GPT_IMAGE_MAX_REFERENCE_IMAGES } from '@/lib/image-model-utils'
 import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
 import {
@@ -743,14 +744,16 @@ export async function POST(request: NextRequest) {
       if (error.message.includes('copyrighted material') || 
           error.message.includes('explicit content') ||
           error.message.includes('content policy') ||
-          error.message.includes('violates our usage policy')) {
-        errorMessage = error.message // Use the user-friendly message we set
+          error.message.includes('violates our usage policy') ||
+          isContentPolicyError(error.message)) {
+        errorMessage = CONTENT_BLOCKED_MESSAGE
       } else if (error.message.includes('OpenAI API error')) {
         // Check if it's a content policy issue
         if (error.message.toLowerCase().includes('content') || 
             error.message.toLowerCase().includes('policy') ||
-            error.message.toLowerCase().includes('safety')) {
-          errorMessage = 'This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.'
+            error.message.toLowerCase().includes('safety') ||
+            isContentPolicyError(error.message)) {
+          errorMessage = CONTENT_BLOCKED_MESSAGE
         } else {
           errorMessage = 'Image generation failed. Please check your API key and try again.'
         }
@@ -763,13 +766,19 @@ export async function POST(request: NextRequest) {
       }
     }
     
+    const contentBlocked =
+      errorMessage === CONTENT_BLOCKED_MESSAGE ||
+      isContentPolicyError(errorMessage) ||
+      (error instanceof Error && isContentPolicyError(error.message))
+
     return NextResponse.json(
       { 
         error: errorMessage,
         success: false,
+        contentBlocked,
         details: error instanceof Error ? error.message : 'Unknown error'
       },
-      { status: 500 }
+      { status: contentBlocked ? 422 : 500 }
     )
   }
 }

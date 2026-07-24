@@ -1,3 +1,4 @@
+import { isContentPolicyError, CONTENT_BLOCKED_MESSAGE } from '@/lib/content-policy-utils'
 import { RUNWAY } from '@/lib/runway-config'
 import {
   DEFAULT_CINEMATIC_IMAGE_SIZE,
@@ -291,6 +292,9 @@ export class OpenAIService {
             (errorJson.error as { message?: string } | undefined)?.message ||
             errorText ||
             "Unknown error"
+          if (isContentPolicyError(errorMessage)) {
+            throw new Error(CONTENT_BLOCKED_MESSAGE)
+          }
           throw new Error(`API Error (${response.status}): ${errorMessage}`)
         }
 
@@ -460,15 +464,8 @@ export class OpenAIService {
           
           // Check for content policy violations
           const errorMessage = errorJson.error?.message || errorText || 'Unknown error'
-          if (errorMessage.toLowerCase().includes('content policy') || 
-              errorMessage.toLowerCase().includes('safety') ||
-              errorMessage.toLowerCase().includes('content_filter') ||
-              errorMessage.toLowerCase().includes('violates our usage policy') ||
-              errorMessage.toLowerCase().includes('not allowed') ||
-              errorMessage.toLowerCase().includes('sensitive content') ||
-              errorJson.error?.code === 'content_filter' ||
-              response.status === 400) {
-            throw new Error('This content may contain copyrighted material or explicit content that cannot be generated. Please try a different description or modify your treatment content.')
+          if (isContentPolicyError(errorMessage)) {
+            throw new Error(CONTENT_BLOCKED_MESSAGE)
           }
           
           throw new Error(`OpenAI API error: ${response.status} - ${errorMessage}`)

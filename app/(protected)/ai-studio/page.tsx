@@ -55,6 +55,7 @@ import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
+import { isContentPolicyError } from "@/lib/content-policy-utils"
 
 // Real data types
 interface Scene {
@@ -823,7 +824,10 @@ export default function AIStudioPage() {
     }
   }, [toast])
 
-  const handleGenerate = async (type: string) => {
+  const handleGenerate = async (
+    type: string,
+    options?: { promptOverride?: string; skipEnhancement?: boolean },
+  ) => {
     // Check if we have the required API key for the selected model
     if (!userId) {
       alert("Please log in to use AI features")
@@ -1097,7 +1101,10 @@ export default function AIStudioPage() {
             return
           }
           
-          const enhancedPrompt = enhancePromptWithScript(imagePrompt, 'image')
+          const baseImagePrompt = options?.promptOverride ?? imagePrompt
+          const enhancedPrompt = options?.skipEnhancement
+            ? baseImagePrompt
+            : enhancePromptWithScript(baseImagePrompt, 'image')
           console.log(`🚀 IMAGE GENERATION - Final Prompt Sent to ${selectedModel}:`)
           console.log(`🚀 IMAGE GENERATION - ${enhancedPrompt}`)
           console.log(`🚀 IMAGE GENERATION - Shot: ${selectedShot || "(none - optional)"}`)
@@ -1224,8 +1231,8 @@ export default function AIStudioPage() {
           setImagePrompt("") // Clear the prompt after successful generation
         } else {
           // Check if it's a content policy violation
-          if (response.error?.includes('content_policy_violation') || response.error?.includes('safety system')) {
-            handleContentViolation('image', imagePrompt)
+          if (response?.error && isContentPolicyError(response.error)) {
+            handleContentViolation('image', enhancedPrompt)
           } else {
             toast({
               title: "Image Generation Failed",
@@ -1995,7 +2002,7 @@ export default function AIStudioPage() {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       
       // Check if it's a content policy violation
-      if (errorMessage.includes('content_policy_violation') || errorMessage.includes('safety system')) {
+      if (isContentPolicyError(errorMessage)) {
         // Determine the content type based on the current state
         let contentType: 'script' | 'image' | 'video' | 'audio' = 'script'
         let prompt = ''
@@ -4996,6 +5003,22 @@ export default function AIStudioPage() {
           onTryDifferentAI={handleTryDifferentAI}
           contentType={contentViolationData?.type || 'script'}
           originalPrompt={contentViolationData?.prompt || ''}
+          onRetryWithPrompt={
+            contentViolationData?.type === 'image'
+              ? async (prompt) => {
+                  setImagePrompt(prompt)
+                  await handleGenerate('image', {
+                    promptOverride: prompt,
+                    skipEnhancement: true,
+                  })
+                }
+              : undefined
+          }
+          onPromptUpdated={
+            contentViolationData?.type === 'image'
+              ? (prompt) => setImagePrompt(prompt)
+              : undefined
+          }
         />
       </main>
     </div>

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
+import {
+  applyShotListAssignments,
+  formatAssignmentPromptSection,
+} from '@/lib/shot-list-assignment-utils'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
@@ -106,6 +110,22 @@ export async function POST(request: NextRequest) {
 
     const projectId = (scene.timelines as any)?.project_id
 
+    const [{ data: projectCharacters }, { data: projectLocations }] = await Promise.all([
+      projectId
+        ? supabaseServer.from('characters').select('id, name').eq('project_id', projectId)
+        : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+      projectId
+        ? supabaseServer.from('locations').select('id, name').eq('project_id', projectId)
+        : Promise.resolve({ data: [] as Array<{ id: string; name: string }> }),
+    ])
+
+    const characterCatalog = projectCharacters ?? []
+    const locationCatalog = projectLocations ?? []
+    const assignmentPromptSection = formatAssignmentPromptSection(
+      characterCatalog,
+      locationCatalog,
+    )
+
     // Get API key
     let actualApiKey = ''
     const serviceToUse = service || 'openai'
@@ -171,8 +191,9 @@ For each shot, provide:
 - description: Brief description of what the shot shows
 - action: What happens in this shot
 - dialogue: Key dialogue if any (can be empty string)
-- characters: Array of character names in the shot
+- characters: Array of character names in the shot (use exact names from AVAILABLE CHARACTERS when provided)
 - duration_seconds: Estimated duration in seconds (number)
+- location: Location name for this shot (use exact name from AVAILABLE LOCATIONS when provided)
 
 Return ONLY a valid JSON array. Example format:
 [
@@ -185,15 +206,17 @@ Return ONLY a valid JSON array. Example format:
     "dialogue": "",
     "characters": ["Character1"],
     "duration_seconds": 5,
+    "location": "Location Name",
     "visual_notes": "",
-    "location": "",
     "time_of_day": ""
   }
 ]
 
-IMPORTANT: Return ONLY the JSON array, no markdown, no code blocks, no explanations.`
+IMPORTANT: Return ONLY the JSON array, no markdown, no code blocks, no explanations.${assignmentPromptSection}`
 
     const userPrompt = `Analyze this screenplay content and create a comprehensive shot list. Break down the scene into individual shots that would be needed to film it. Consider camera movements, angles, and shot types that best serve the story.
+
+For each shot, assign the correct characters and location from the project lists when they appear. Use exact names.
 
 SCREENPLAY CONTENT:
 ${screenplayContent}
@@ -574,30 +597,36 @@ Generate a shot list as a JSON array. Each shot should be detailed and specific 
     }
 
     // Validate and format shot list data
-    const formattedShots = shotListData.map((shot, index) => ({
-      scene_id: sceneId,
-      project_id: projectId,
-      shot_number: index + 1,
-      shot_type: normalizeShotType(shot.shot_type),
-      camera_angle: normalizeCameraAngle(shot.camera_angle),
-      movement: normalizeMovement(shot.movement),
-      lens: shot.lens || undefined,
-      framing: shot.framing || undefined,
-      duration_seconds: shot.duration_seconds || undefined,
-      description: shot.description || '',
-      action: shot.action || '',
-      dialogue: shot.dialogue || undefined,
-      visual_notes: shot.visual_notes || undefined,
-      audio_notes: shot.audio_notes || undefined,
-      props: shot.props || undefined,
-      characters: shot.characters || [],
-      location: shot.location || undefined,
-      time_of_day: shot.time_of_day || undefined,
-      lighting_notes: shot.lighting_notes || undefined,
-      camera_notes: shot.camera_notes || undefined,
-      status: 'planned' as const,
-      sequence_order: index + 1,
-    }))
+    const formattedShots = shotListData.map((shot, index) =>
+      applyShotListAssignments(
+        {
+          scene_id: sceneId,
+          project_id: projectId,
+          shot_number: index + 1,
+          shot_type: normalizeShotType(shot.shot_type),
+          camera_angle: normalizeCameraAngle(shot.camera_angle),
+          movement: normalizeMovement(shot.movement),
+          lens: shot.lens || undefined,
+          framing: shot.framing || undefined,
+          duration_seconds: shot.duration_seconds || undefined,
+          description: shot.description || '',
+          action: shot.action || '',
+          dialogue: shot.dialogue || undefined,
+          visual_notes: shot.visual_notes || undefined,
+          audio_notes: shot.audio_notes || undefined,
+          props: shot.props || undefined,
+          characters: shot.characters || [],
+          location: shot.location || undefined,
+          time_of_day: shot.time_of_day || undefined,
+          lighting_notes: shot.lighting_notes || undefined,
+          camera_notes: shot.camera_notes || undefined,
+          status: 'planned' as const,
+          sequence_order: index + 1,
+        },
+        characterCatalog,
+        locationCatalog,
+      ),
+    )
 
     return NextResponse.json({
       success: true,

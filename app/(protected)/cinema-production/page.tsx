@@ -109,7 +109,8 @@ import {
   collectStoryboardReferenceUrls,
   enrichPromptWithAssignments,
   getStoryboardAssignmentContext,
-  maxReferenceImagesForModel,
+  storyboardReferenceImageLimit,
+  SINGLE_FRAME_STORYBOARD_INSTRUCTION,
   urlsToReferenceFiles,
 } from "@/lib/storyboard-image-generation"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
@@ -479,6 +480,15 @@ interface SessionAudioClip {
 
 function sessionAudioOptionId(clipId: string) {
   return `session-${clipId}`
+}
+
+function getStoryboardDialogueText(storyboard: Storyboard): string {
+  return (
+    storyboard.dialogue?.trim() ||
+    storyboard.action?.trim() ||
+    storyboard.script_text_snippet?.trim() ||
+    ""
+  )
 }
 
 function audioSaveNameKey(storyboardId: string, clipId: string) {
@@ -1410,6 +1420,7 @@ export default function CinemaProductionPage() {
   const [dialogueVoiceByStoryboard, setDialogueVoiceByStoryboard] = useState<Map<string, string>>(new Map())
   const [audioSaveNames, setAudioSaveNames] = useState<Map<string, string>>(new Map())
   const [klingLipSyncingId, setKlingLipSyncingId] = useState<string | null>(null)
+  const [replacingNativeDialogueId, setReplacingNativeDialogueId] = useState<string | null>(null)
   const [muxingVideoId, setMuxingVideoId] = useState<string | null>(null)
   const [deletingAudioOptionId, setDeletingAudioOptionId] = useState<string | null>(null)
 
@@ -1516,6 +1527,15 @@ export default function CinemaProductionPage() {
       return dialogueVoiceOptions[0]?.voice_id || ""
     },
     [dialogueVoiceByStoryboard, projectCharacters, dialogueVoiceOptions],
+  )
+
+  const getCharacterVoiceLabel = useCallback(
+    (storyboard: Storyboard): string => {
+      const voiceId = getDialogueVoiceId(storyboard)
+      const voice = dialogueVoiceOptions.find((option) => option.voice_id === voiceId)
+      return voice?.characterName || voice?.name || "Character"
+    },
+    [dialogueVoiceOptions, getDialogueVoiceId],
   )
 
   useEffect(() => {
@@ -2953,7 +2973,7 @@ export default function CinemaProductionPage() {
         throw new Error("Please lock GPT Image 2 in AI Settings → Images first.")
       }
 
-      const refLimit = maxReferenceImagesForModel(config.apiModel)
+      const refLimit = storyboardReferenceImageLimit(config.apiModel)
       const referenceUrls = collectStoryboardReferenceUrls({
         characterIds: assignmentContext.characterIds,
         locationIds: assignmentContext.locationIds,
@@ -2962,8 +2982,9 @@ export default function CinemaProductionPage() {
         avatarImages: projectAvatarImages,
         maxImages: refLimit,
       })
-      const referenceFiles =
+      const referenceFiles = (
         referenceUrls.length > 0 ? await urlsToReferenceFiles(referenceUrls) : []
+      ).slice(0, refLimit)
 
       let enhancedPrompt = enrichPromptWithAssignments(basePrompt, {
         characterNames: assignmentContext.characterNames,
@@ -2973,7 +2994,7 @@ export default function CinemaProductionPage() {
         masterPrompts: assignmentContext.masterPrompts,
         referenceCount: referenceFiles.length,
       })
-      enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still`
+      enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
 
       const response = await requestLockedImageGeneration(
         enhancedPrompt,
@@ -3803,7 +3824,14 @@ export default function CinemaProductionPage() {
     }
   }
 
-  const handleKlingLipSync = async (storyboard: Storyboard) => {
+  const handleKlingLipSync = async (
+    storyboard: Storyboard,
+    options?: {
+      audioOverride?: StoryboardAudioOption
+      manageLoading?: boolean
+      successDescription?: string
+    },
+  ) => {
     const generation = storyboardGenerations.get(storyboard.id)
     const videoUrl = getActiveVideoUrl(storyboard.id) || generation?.generatedVideoUrl
     if (!videoUrl) {
@@ -3815,10 +3843,9 @@ export default function CinemaProductionPage() {
       return
     }
 
-    const audioOption = resolveSelectedAudioForStoryboard(
-      storyboard.id,
-      generation?.savedAudioOptionId,
-    )
+    const audioOption =
+      options?.audioOverride ??
+      resolveSelectedAudioForStoryboard(storyboard.id, generation?.savedAudioOptionId)
     if (!audioOption) {
       toast({
         title: "Audio required",
@@ -3828,7 +3855,9 @@ export default function CinemaProductionPage() {
       return
     }
 
-    setKlingLipSyncingId(storyboard.id)
+    if (options?.manageLoading !== false) {
+      setKlingLipSyncingId(storyboard.id)
+    }
     updateStoryboardGeneration(storyboard.id, {
       generationStatus: "Preparing Kling lip sync…",
     })
@@ -3879,7 +3908,9 @@ export default function CinemaProductionPage() {
 
       toast({
         title: "Lip sync complete",
-        description: `Applied "${audioOption.label}" to your Kling video.`,
+        description:
+          options?.successDescription ||
+          `Applied "${audioOption.label}" to your Kling video.`,
       })
     } catch (error) {
       console.error("Kling lip sync error:", error)
@@ -3891,8 +3922,152 @@ export default function CinemaProductionPage() {
         description: error instanceof Error ? error.message : "Could not apply lip sync.",
         variant: "destructive",
       })
+      throw error
     } finally {
-      setKlingLipSyncingId(null)
+      if (options?.manageLoading !== false) {
+        setKlingLipSyncingId(null)
+      }
+    }
+  }
+
+  const createDialogueAudioClip = async (
+    storyboard: Storyboard,
+    text: string,
+    voiceId: string,
+  ): Promise<{ clipId: string; optionId: string; url: string; label: string }> => {
+    if (!userId || !userApiKeys.elevenlabs_api_key) {
+      throw new Error("Configure your ElevenLabs API key in Settings.")
+    }
+
+    const trimmed = text.trim()
+    if (!trimmed) {
+      throw new Error("Add dialogue text to this shot first.")
+    }
+
+    const audioKey = `${storyboard.id}-dialogue`
+    const clipId = crypto.randomUUID()
+    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
+
+    try {
+      const response = await fetch("/api/ai/text-to-speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: trimmed,
+          voiceId,
+          apiKey: userApiKeys.elevenlabs_api_key,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate speech`)
+      }
+
+      const audioBlob = await response.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+      const clip: SessionAudioClip = {
+        id: clipId,
+        type: "dialogue",
+        prompt: trimmed,
+        audioUrl,
+        createdAt: Date.now(),
+      }
+
+      addSessionClip(storyboard.id, clip)
+      const saveName = suggestAudioSaveName("dialogue", storyboard, trimmed)
+      setDefaultAudioSaveName(storyboard, clipId, "dialogue", trimmed)
+
+      const optionId = sessionAudioOptionId(clipId)
+      updateStoryboardGeneration(storyboard.id, {
+        savedAudioOptionId: optionId,
+      })
+
+      void autoSaveGeneratedAudio(storyboard, clipId, audioBlob, "dialogue", saveName, trimmed)
+
+      return {
+        clipId,
+        optionId,
+        url: audioUrl,
+        label: `Dialogue: ${saveName}`,
+      }
+    } finally {
+      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
+    }
+  }
+
+  const handleReplaceNativeDialogueWithCharacterVoice = async (storyboard: Storyboard) => {
+    const generation = storyboardGenerations.get(storyboard.id)
+    const videoUrl = getActiveVideoUrl(storyboard.id) || generation?.generatedVideoUrl
+    if (!videoUrl) {
+      toast({
+        title: "Video required",
+        description: "Generate a Kling video first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const voiceId = getDialogueVoiceId(storyboard)
+    if (!voiceId) {
+      toast({
+        title: "Character voice required",
+        description: "Assign an ElevenLabs voice to a character on this shot.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const dialogueText = getStoryboardDialogueText(storyboard)
+    if (!dialogueText) {
+      toast({
+        title: "Dialogue text required",
+        description: "Add spoken lines in Dialogue below (or shot action/dialogue fields).",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const characterLabel = getCharacterVoiceLabel(storyboard)
+    setReplacingNativeDialogueId(storyboard.id)
+    updateStoryboardGeneration(storyboard.id, {
+      generationStatus: `Generating ${characterLabel}'s voice…`,
+    })
+
+    try {
+      const clip = await createDialogueAudioClip(storyboard, dialogueText, voiceId)
+
+      updateStoryboardGeneration(storyboard.id, {
+        generationStatus: "Applying lip sync to replace native dialogue…",
+        savedAudioOptionId: clip.optionId,
+      })
+
+      await handleKlingLipSync(
+        storyboard,
+        {
+          audioOverride: {
+            id: clip.optionId,
+            label: clip.label,
+            url: clip.url,
+            source: "session-dialogue",
+          },
+          manageLoading: false,
+          successDescription: `Replaced native Kling dialogue with ${characterLabel}'s voice. Add SFX with Mirelo and link audio to export.`,
+        },
+      )
+    } catch (error) {
+      if (!(error instanceof Error && error.message.includes("lip sync"))) {
+        console.error("Replace native dialogue error:", error)
+      }
+      if (error instanceof Error && !error.message.includes("lip sync")) {
+        toast({
+          title: "Could not replace dialogue",
+          description: error.message,
+          variant: "destructive",
+        })
+      }
+    } finally {
+      setReplacingNativeDialogueId(null)
     }
   }
 
@@ -4212,15 +4387,6 @@ export default function CinemaProductionPage() {
 
   // Generate dialogue audio (text-to-speech)
   const handleGenerateDialogue = async (storyboard: Storyboard, text: string, voiceId?: string) => {
-    if (!userId || !userApiKeys.elevenlabs_api_key) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your ElevenLabs API key in Settings.",
-        variant: "destructive",
-      })
-      return
-    }
-
     const resolvedVoiceId = voiceId || getDialogueVoiceId(storyboard)
     if (!resolvedVoiceId) {
       toast({
@@ -4231,61 +4397,19 @@ export default function CinemaProductionPage() {
       return
     }
 
-    const audioKey = `${storyboard.id}-dialogue`
-    const clipId = crypto.randomUUID()
-    setAudioGenerating((prev) => new Map(prev).set(audioKey, true))
-
     try {
-      const response = await fetch('/api/ai/text-to-speech', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          voiceId: resolvedVoiceId,
-          apiKey: userApiKeys.elevenlabs_api_key,
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || `HTTP ${response.status}: Failed to generate speech`)
-      }
-
-      const audioBlob = await response.blob()
-      const audioUrl = URL.createObjectURL(audioBlob)
-      const clip: SessionAudioClip = {
-        id: clipId,
-        type: "dialogue",
-        prompt: text,
-        audioUrl,
-        createdAt: Date.now(),
-      }
-
-      addSessionClip(storyboard.id, clip)
-      const saveName = suggestAudioSaveName("dialogue", storyboard, text)
-      setDefaultAudioSaveName(storyboard, clipId, "dialogue", text)
-
-      updateStoryboardGeneration(storyboard.id, {
-        savedAudioOptionId: sessionAudioOptionId(clipId),
-      })
-
-      void autoSaveGeneratedAudio(storyboard, clipId, audioBlob, "dialogue", saveName, text)
-
+      await createDialogueAudioClip(storyboard, text, resolvedVoiceId)
       toast({
         title: "Dialogue Generated",
         description: "New dialogue clip added and saved to storage.",
       })
     } catch (error) {
-      console.error('Error generating dialogue:', error)
+      console.error("Error generating dialogue:", error)
       toast({
         title: "Generation Failed",
         description: error instanceof Error ? error.message : "Failed to generate dialogue.",
         variant: "destructive",
       })
-    } finally {
-      setAudioGenerating((prev) => new Map(prev).set(audioKey, false))
     }
   }
 
@@ -7675,6 +7799,51 @@ export default function CinemaProductionPage() {
                                         </>
                                       )}
                                     </div>
+                                    <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2">
+                                      <div className="flex items-center gap-2">
+                                        <AudioWaveform className="h-4 w-4 text-violet-500" />
+                                        <p className="text-sm font-medium">Replace native Kling dialogue</p>
+                                      </div>
+                                      <p className="text-xs text-muted-foreground">
+                                        Generates ElevenLabs speech with your character&apos;s voice and applies Kling lip sync to this video. Add SFX with Mirelo separately, then link audio for export.
+                                      </p>
+                                      <Button
+                                        size="sm"
+                                        className="w-full gap-1.5"
+                                        disabled={
+                                          replacingNativeDialogueId === storyboard.id ||
+                                          klingLipSyncingId === storyboard.id ||
+                                          !getDialogueVoiceId(storyboard) ||
+                                          !getStoryboardDialogueText(storyboard) ||
+                                          !userApiKeys.elevenlabs_api_key
+                                        }
+                                        onClick={() =>
+                                          void handleReplaceNativeDialogueWithCharacterVoice(storyboard)
+                                        }
+                                      >
+                                        {replacingNativeDialogueId === storyboard.id ? (
+                                          <>
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            Replacing dialogue…
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Wand2 className="h-4 w-4" />
+                                            Use {getCharacterVoiceLabel(storyboard)} Voice
+                                          </>
+                                        )}
+                                      </Button>
+                                      {!getStoryboardDialogueText(storyboard) ? (
+                                        <p className="text-xs text-amber-600 dark:text-amber-500">
+                                          Add dialogue in the Audio section below, or fill in this shot&apos;s action/dialogue field.
+                                        </p>
+                                      ) : null}
+                                      {!getDialogueVoiceId(storyboard) ? (
+                                        <p className="text-xs text-amber-600 dark:text-amber-500">
+                                          Assign an ElevenLabs voice to a character on this shot.
+                                        </p>
+                                      ) : null}
+                                    </div>
                                     <div className="flex gap-2">
                                       <Button
                                         size="sm"
@@ -9237,8 +9406,8 @@ export default function CinemaProductionPage() {
                               </div>
                               <p className="text-xs text-muted-foreground">
                                 Prompt Assist fills the spoken line plus tone tags (e.g. [tired][softly])
-                                from shot action, dialogue, and the image. After you generate a Kling video,
-                                use Apply Lip Sync to Video below the video player to sync this clip.
+                                from shot action, dialogue, and the image. After a Kling video with native audio,
+                                use <strong>Use [Character] Voice</strong> above the player to replace it in one step.
                               </p>
                               <SessionAudioClipList
                                 clips={getSessionClipsForStoryboard(storyboard.id, "dialogue")}

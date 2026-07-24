@@ -43,6 +43,8 @@ import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { ContentViolationDialog } from "@/components/content-violation-dialog"
+import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
@@ -58,7 +60,8 @@ import {
   enrichPromptWithAssignments,
   getStoryboardAssignmentContext,
   loadStoryboardReferenceFiles,
-  maxReferenceImagesForModel,
+  storyboardReferenceImageLimit,
+  SINGLE_FRAME_STORYBOARD_INSTRUCTION,
   urlsToReferenceFiles,
   type StoryboardReferenceLoadFailure,
 } from "@/lib/storyboard-image-generation"
@@ -327,6 +330,15 @@ export default function SceneStoryboardsPage() {
   const [referenceIssuesByStoryboardId, setReferenceIssuesByStoryboardId] = useState<
     Map<string, StoryboardReferenceLoadFailure[]>
   >(() => new Map())
+  const [contentBlockedDialog, setContentBlockedDialog] = useState<{
+    prompt: string
+    storyboardId: string
+    options?: {
+      quick?: boolean
+      includeCharacterDetails?: boolean
+      includeMasterPrompt?: boolean
+    }
+  } | null>(null)
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const [fullImageViewerOpen, setFullImageViewerOpen] = useState(false)
   const [fullImageUrl, setFullImageUrl] = useState<string | null>(null)
@@ -1005,6 +1017,11 @@ export default function SceneStoryboardsPage() {
     [projectImageAssets, avatarImageAssets],
   )
 
+  const characterImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.character_id && a.content_url),
+    [projectImageAssets],
+  )
+
   const linkedProjectImageGroups = useMemo(() => {
     const groups = buildLinkedAssetGroups(linkableImageAssets, locations, characters)
     const avatarOnly = avatarImageAssets.filter(
@@ -1570,9 +1587,13 @@ export default function SceneStoryboardsPage() {
         characters,
         locations,
         avatarImages: projectAvatarImages,
-        maxImages: MAX_LINKED_REFERENCE_IMAGES,
+        characterAssets: characterImageAssets,
+        maxImages: storyboardReferenceImageLimit(),
       })
-      styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files
+      styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files.slice(
+        0,
+        storyboardReferenceImageLimit(),
+      )
     }
 
     setIsGeneratingReferenceEdit(true)
@@ -2959,12 +2980,15 @@ export default function SceneStoryboardsPage() {
       quick?: boolean
       includeCharacterDetails?: boolean
       includeMasterPrompt?: boolean
+      skipEnrichment?: boolean
     },
   ) => {
     const isQuick = options?.quick ?? false
     const useCharacterDetails =
       options?.includeCharacterDetails ?? includeCharacterDetails
     const useMasterPrompt = options?.includeMasterPrompt ?? includeMasterPrompt
+    const skipEnrichment = options?.skipEnrichment ?? false
+    let generationPrompt = prompt.trim()
 
     debugStoryboardImage("generate-start", {
       storyboardId,
@@ -3076,9 +3100,12 @@ export default function SceneStoryboardsPage() {
       const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
 
       // Prepare the enhanced prompt for storyboard shots
-      let enhancedPrompt = prompt.trim()
+      let enhancedPrompt = generationPrompt
 
-      if (useMasterPrompt || useCharacterDetails || assignmentContext.locationDetails.length > 0) {
+      if (
+        !skipEnrichment &&
+        (useMasterPrompt || useCharacterDetails || assignmentContext.locationDetails.length > 0)
+      ) {
         enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
           characterNames: useCharacterDetails ? assignmentContext.characterNames : [],
           locationNames: assignmentContext.locationNames,
@@ -3090,25 +3117,28 @@ export default function SceneStoryboardsPage() {
       }
 
       // Only add minimal enhancement if user hasn't chosen exact prompt
-      if (!useExactPrompt) {
-        enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still`
+      if (!skipEnrichment && !useExactPrompt) {
+        enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
       }
 
+      generationPrompt = enhancedPrompt
+
       const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
-      const refLimit = maxReferenceImagesForModel(modelToUse)
+      const refLimit = storyboardReferenceImageLimit(modelToUse)
       const referenceSources = collectStoryboardReferenceSources({
         characterIds: assignmentContext.characterIds,
         locationIds: assignmentContext.locationIds,
         characters,
         locations,
         avatarImages: projectAvatarImages,
+        characterAssets: characterImageAssets,
         maxImages: refLimit,
       })
       const referenceLoad =
         referenceSources.length > 0
           ? await loadStoryboardReferenceFiles(referenceSources)
           : { files: [], loaded: [], failed: [] as StoryboardReferenceLoadFailure[] }
-      const referenceFiles = referenceLoad.files
+      const referenceFiles = referenceLoad.files.slice(0, refLimit)
 
       if (referenceLoad.failed.length > 0) {
         setReferenceIssuesByStoryboardId((prev) => {
@@ -3143,7 +3173,7 @@ export default function SceneStoryboardsPage() {
         })
       }
 
-      if (referenceFiles.length > 0) {
+      if (!skipEnrichment && referenceFiles.length > 0) {
         enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
           characterNames: assignmentContext.characterNames,
           locationNames: assignmentContext.locationNames,
@@ -3153,6 +3183,8 @@ export default function SceneStoryboardsPage() {
           referenceCount: referenceFiles.length,
         })
       }
+
+      generationPrompt = enhancedPrompt
 
       debugStoryboardImage("prompt-built", {
         storyboardId,
@@ -3239,9 +3271,17 @@ export default function SceneStoryboardsPage() {
       })
 
       if (!response.ok) {
-        throw new Error(
-          typeof result.error === "string" ? result.error : 'Failed to generate image',
-        )
+        const errorMessage =
+          typeof result.error === "string" ? result.error : "Failed to generate image"
+        if (isContentBlockedResponse(result)) {
+          setContentBlockedDialog({
+            prompt: generationPrompt,
+            storyboardId,
+            options: { quick: isQuick, includeCharacterDetails: useCharacterDetails, includeMasterPrompt: useMasterPrompt },
+          })
+          return
+        }
+        throw new Error(errorMessage)
       }
       
       if (result.success && result.imageUrl) {
@@ -3284,22 +3324,41 @@ export default function SceneStoryboardsPage() {
           }
         }
       } else {
-        throw new Error(
+        const errorMessage =
           typeof result.error === "string"
             ? result.error
-            : 'Failed to generate image — API returned success without an image URL',
-        )
+            : "Failed to generate image — API returned success without an image URL"
+        if (isContentBlockedResponse(result)) {
+          setContentBlockedDialog({
+            prompt: generationPrompt,
+            storyboardId,
+            options: { quick: isQuick, includeCharacterDetails: useCharacterDetails, includeMasterPrompt: useMasterPrompt },
+          })
+          return
+        }
+        throw new Error(errorMessage)
       }
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
       const debugEntry = debugStoryboardImage("error", {
         storyboardId,
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMessage,
       })
       console.error('Error generating shot image:', error, debugEntry)
+
+      if (isContentPolicyError(errorMessage)) {
+        setContentBlockedDialog({
+          prompt: generationPrompt,
+          storyboardId,
+          options: { quick: isQuick, includeCharacterDetails: useCharacterDetails, includeMasterPrompt: useMasterPrompt },
+        })
+        return
+      }
+
       toast({
         title: "Generation Failed",
         description: [
-          error instanceof Error ? error.message : "Failed to generate AI image",
+          errorMessage,
           formatStoryboardImageDebug(getLastStoryboardImageDebug()),
         ].join(" — "),
         variant: "destructive"
@@ -5803,6 +5862,29 @@ export default function SceneStoryboardsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <ContentViolationDialog
+        isOpen={Boolean(contentBlockedDialog)}
+        onClose={() => setContentBlockedDialog(null)}
+        contentType="image"
+        originalPrompt={contentBlockedDialog?.prompt || ""}
+        onPromptUpdated={(rewritten) => {
+          setAiImagePrompt(rewritten)
+          setAiImagePromptFull(rewritten)
+        }}
+        onRetryWithPrompt={async (rewritten) => {
+          if (!contentBlockedDialog) return
+          const { storyboardId: blockedStoryboardId, options } = contentBlockedDialog
+          setContentBlockedDialog(null)
+          await generateShotImage(blockedStoryboardId, rewritten, {
+            ...options,
+            skipEnrichment: true,
+          })
+        }}
+        onTryDifferentPrompt={() => {
+          document.getElementById("storyboard-image-prompt")?.focus()
+        }}
+      />
     </div>
   )
   

@@ -28,12 +28,27 @@ export default function NewCreativePage() {
 
   const linkedProject = useMemo(() => {
     const ws = workspaces.find((w) => w.id === activeWorkspaceId)
-    if (!ws?.project_id) return null
-    const movie = movies.find((m) => m.id === ws.project_id)
-    return {
-      id: ws.project_id,
-      name: movie?.name || "Movie Project",
+    if (!ws) return null
+
+    if (ws.project_id) {
+      const movie = movies.find((m) => m.id === ws.project_id)
+      return {
+        id: ws.project_id,
+        name: movie?.name || "Movie Project",
+      }
     }
+
+    const titleMatch = movies.find(
+      (m) =>
+        ws.title?.trim() &&
+        ws.title.trim() !== "Untitled Project" &&
+        m.name.trim().toLowerCase() === ws.title.trim().toLowerCase(),
+    )
+    if (titleMatch) {
+      return { id: titleMatch.id, name: titleMatch.name }
+    }
+
+    return null
   }, [workspaces, activeWorkspaceId, movies])
 
   const loadWorkspaces = useCallback(async () => {

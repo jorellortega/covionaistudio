@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
 import { CREATIVE_CHAT_SYSTEM_PROMPT } from '@/lib/creative-chat-prompt'
-import { detectImageRequest, buildImagePromptInstruction } from '@/lib/creative-chat-utils'
+import { detectImageRequest, buildImagePromptInstruction, buildImagePromptText } from '@/lib/creative-chat-utils'
 import {
   mapDisplayModelToService,
   normalizeDisplayModelToApiId,
@@ -264,11 +264,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
 
       if (!imagePrompt) {
-        const recentContext = (history || [])
-          .slice(-4)
-          .map((m) => m.content)
-          .join(' ')
-        imagePrompt = `Cinematic film still, ${message.trim()}. ${recentContext}`.slice(0, 500)
+        imagePrompt = buildImagePromptText(history || [], message.trim())
       }
 
       const imageUrl = await generateImageFromConversation(

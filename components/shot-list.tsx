@@ -36,14 +36,23 @@ import {
   Clock,
   Loader2,
   Save,
+  Wand2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { useAuth } from "@/components/AuthProvider"
 import { ShotListService, type ShotList, type CreateShotListData } from "@/lib/shot-list-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { sortShotListRows } from "@/lib/shot-list-order"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { resolveCharacterName, resolveLocationName } from "@/lib/shot-list-assignment-utils"
 
 interface ShotListProps {
   sceneId?: string
@@ -67,6 +76,7 @@ export function ShotListComponent({
   showCreateStoryboardButton = false,
 }: ShotListProps) {
   const { toast } = useToast()
+  const { userId } = useAuth()
   const [shots, setShots] = useState<ShotList[]>([])
   const [loading, setLoading] = useState(false)
   const [showDialog, setShowDialog] = useState(false)
@@ -74,6 +84,7 @@ export function ShotListComponent({
   const [deletingShot, setDeletingShot] = useState<ShotList | null>(null)
   const [saving, setSaving] = useState(false)
   const [updatingShotId, setUpdatingShotId] = useState<string | null>(null)
+  const [assigningShotId, setAssigningShotId] = useState<string | null>(null)
 
   const [formData, setFormData] = useState<CreateShotListData>({
     shot_type: 'wide',
@@ -144,12 +155,26 @@ export function ShotListComponent({
 
   const namesToCharacterIds = (names: string[]) =>
     names
-      .map((name) => characters.find((character) => character.name === name)?.id)
+      .map((name) => {
+        const exact = characters.find((character) => character.name === name)?.id
+        if (exact) return exact
+        const resolved = resolveCharacterName(name, characters)
+        return resolved
+          ? characters.find((character) => character.name === resolved)?.id
+          : undefined
+      })
       .filter((id): id is string => Boolean(id))
 
   const namesToLocationIds = (names: string[]) =>
     names
-      .map((name) => locations.find((location) => location.name === name)?.id)
+      .map((name) => {
+        const exact = locations.find((location) => location.name === name)?.id
+        if (exact) return exact
+        const resolved = resolveLocationName(name, locations)
+        return resolved
+          ? locations.find((location) => location.name === resolved)?.id
+          : undefined
+      })
       .filter((id): id is string => Boolean(id))
 
   const resetPickerState = () => {
@@ -344,6 +369,65 @@ export function ShotListComponent({
     }
   }
 
+  const handleAutoAssignShot = async (shot: ShotList) => {
+    const resolvedSceneId = sceneId ?? shot.scene_id
+    if (!resolvedSceneId || !userId) {
+      toast({
+        title: "Error",
+        description: "Scene or user not ready.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (characters.length === 0 && locations.length === 0) {
+      toast({
+        title: "Nothing to assign",
+        description: "Add characters and locations to this project first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setAssigningShotId(shot.id)
+    try {
+      const response = await fetch("/api/scenes/assign-shot-list-entities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sceneId: resolvedSceneId,
+          userId,
+          shotId: shot.id,
+        }),
+      })
+
+      const result = await response.json()
+      if (!response.ok) {
+        throw new Error(result.error || "Failed to assign characters and locations")
+      }
+
+      await loadShotLists()
+
+      toast({
+        title: result.updatedCount > 0 ? "Assignments updated" : "No changes",
+        description:
+          result.updatedCount > 0
+            ? `Filled characters and locations for shot ${shot.shot_number}.`
+            : "No matching characters or locations were found for this shot.",
+      })
+    } catch (error) {
+      console.error("Error auto-assigning shot:", error)
+      toast({
+        title: "Assignment failed",
+        description:
+          error instanceof Error ? error.message : "Could not assign characters and locations.",
+        variant: "destructive",
+      })
+    } finally {
+      setAssigningShotId(null)
+    }
+  }
+
   const handleDelete = async () => {
     if (!deletingShot) return
 
@@ -494,6 +578,34 @@ export function ShotListComponent({
 
                     {projectId && (characters.length > 0 || locations.length > 0) && (
                       <div className="flex flex-wrap items-center gap-1">
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 w-7 p-0 text-violet-500 hover:text-violet-400 hover:bg-violet-500/10"
+                                disabled={
+                                  assigningShotId === shot.id ||
+                                  updatingShotId === shot.id ||
+                                  !sceneId && !shot.scene_id
+                                }
+                                onClick={() => void handleAutoAssignShot(shot)}
+                              >
+                                {assigningShotId === shot.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Wand2 className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              Fill characters & locations with AI
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+
                         {characters.length > 0 && (
                           <AssignmentBadgePicker
                             kind="character"
@@ -506,7 +618,7 @@ export function ShotListComponent({
                             onSelectedIdsChange={(ids) => {
                               void applyShotPatch(shot, { characters: characterIdsToNames(ids) })
                             }}
-                            disabled={updatingShotId === shot.id}
+                            disabled={updatingShotId === shot.id || assigningShotId === shot.id}
                           />
                         )}
 
@@ -522,11 +634,11 @@ export function ShotListComponent({
                             onSelectedIdsChange={(ids) => {
                               void applyShotPatch(shot, buildLocationPatch(shot, locationIdsToNames(ids)))
                             }}
-                            disabled={updatingShotId === shot.id}
+                            disabled={updatingShotId === shot.id || assigningShotId === shot.id}
                           />
                         )}
 
-                        {updatingShotId === shot.id && (
+                        {(updatingShotId === shot.id || assigningShotId === shot.id) && (
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         )}
                       </div>

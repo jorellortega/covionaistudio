@@ -23,7 +23,6 @@ import {
 } from "@/components/ui/dialog"
 import {
   Image as ImageIcon,
-  FileText,
   Trash2,
   Tag,
   Link2,
@@ -31,7 +30,11 @@ import {
   Pencil,
   Sparkles,
   X,
+  User,
+  MapPin,
+  ExternalLink,
 } from "lucide-react"
+import Link from "next/link"
 import { cn } from "@/lib/utils"
 import type { CreativeArtifact, ArtifactType } from "@/lib/creative-workspace-types"
 import { ProjectSelector } from "@/components/project-selector"
@@ -86,6 +89,71 @@ const TYPE_COLORS: Record<ArtifactType, string> = {
   other: "bg-muted text-muted-foreground",
 }
 
+function isCharacterArtifact(artifact: CreativeArtifact): boolean {
+  return (
+    artifact.artifact_type === "character" ||
+    typeof artifact.metadata?.character_id === "string" ||
+    !!artifact.metadata?.avatar_image_id
+  )
+}
+
+function isLocationArtifact(artifact: CreativeArtifact): boolean {
+  return (
+    artifact.artifact_type === "location" ||
+    typeof artifact.metadata?.location_id === "string"
+  )
+}
+
+function dedupeCharacterArtifacts(artifacts: CreativeArtifact[]): CreativeArtifact[] {
+  const seenCharacterIds = new Map<string, CreativeArtifact>()
+  const result: CreativeArtifact[] = []
+
+  for (const artifact of artifacts) {
+    const characterId =
+      typeof artifact.metadata?.character_id === "string"
+        ? artifact.metadata.character_id
+        : null
+
+    if (!characterId) {
+      result.push(artifact)
+      continue
+    }
+
+    const existing = seenCharacterIds.get(characterId)
+    if (!existing) {
+      seenCharacterIds.set(characterId, artifact)
+      result.push(artifact)
+      continue
+    }
+
+    const existingIsImage = !!existing.content?.startsWith("http")
+    const currentIsImage = !!artifact.content?.startsWith("http")
+    if (!existingIsImage && currentIsImage) {
+      const idx = result.indexOf(existing)
+      if (idx >= 0) result[idx] = artifact
+      seenCharacterIds.set(characterId, artifact)
+    }
+  }
+
+  return result
+}
+
+function partitionArtifacts(artifacts: CreativeArtifact[]) {
+  const characterArtifacts = dedupeCharacterArtifacts(artifacts.filter(isCharacterArtifact))
+  const locationArtifacts = artifacts.filter(isLocationArtifact)
+  const imageArtifacts = artifacts.filter(
+    (a) =>
+      !isCharacterArtifact(a) &&
+      !isLocationArtifact(a) &&
+      (a.artifact_type === "image" ||
+        a.artifact_type === "cover" ||
+        (a.content?.startsWith("http") &&
+          a.artifact_type !== "document" &&
+          a.artifact_type !== "treatment")),
+  )
+  return { characterArtifacts, locationArtifacts, imageArtifacts }
+}
+
 export function ArtifactPanel({
   artifacts,
   workspaceId,
@@ -115,8 +183,7 @@ export function ArtifactPanel({
   const [renaming, setRenaming] = useState(false)
   const [suggestingNameId, setSuggestingNameId] = useState<string | null>(null)
 
-  const imageArtifacts = artifacts.filter((a) => a.artifact_type === "image" || a.artifact_type === "cover" || (a.content?.startsWith("http") && a.artifact_type !== "document" && a.artifact_type !== "treatment"))
-  const docArtifacts = artifacts.filter((a) => !imageArtifacts.includes(a))
+  const { characterArtifacts, locationArtifacts, imageArtifacts } = partitionArtifacts(artifacts)
 
   const loadProjectLinks = async (projectId: string) => {
     setLoadingLinks(true)
@@ -517,19 +584,23 @@ export function ArtifactPanel({
         <div className="border-b border-border p-3">
           <h2 className="text-sm font-medium">Created Assets</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Images, treatments, and documents from your chat
+            Images, characters, and locations from your chat
           </p>
         </div>
 
         <Tabs defaultValue="images" className="flex flex-col flex-1 min-h-0">
-          <TabsList className="mx-3 mt-2 grid grid-cols-2">
-            <TabsTrigger value="images" className="text-xs">
+          <TabsList className="mx-3 mt-2 grid grid-cols-3">
+            <TabsTrigger value="images" className="text-xs px-1.5">
               <ImageIcon className="h-3 w-3 mr-1" />
               Images ({imageArtifacts.length})
             </TabsTrigger>
-            <TabsTrigger value="documents" className="text-xs">
-              <FileText className="h-3 w-3 mr-1" />
-              Docs ({docArtifacts.length})
+            <TabsTrigger value="characters" className="text-xs px-1.5">
+              <User className="h-3 w-3 mr-1" />
+              Characters ({characterArtifacts.length})
+            </TabsTrigger>
+            <TabsTrigger value="locations" className="text-xs px-1.5">
+              <MapPin className="h-3 w-3 mr-1" />
+              Locations ({locationArtifacts.length})
             </TabsTrigger>
           </TabsList>
 
@@ -547,15 +618,56 @@ export function ArtifactPanel({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="documents" className="flex-1 min-h-0 mt-0">
+          <TabsContent value="characters" className="flex-1 min-h-0 mt-0">
             <ScrollArea className="h-[calc(100vh-220px)]">
               <div className="p-3 pb-6 space-y-3">
-                {docArtifacts.length === 0 ? (
+                {linkedProjectId && (
+                  <div className="flex gap-2">
+                    <Link
+                      href={`/characters?movie=${linkedProjectId}`}
+                      className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                    >
+                      Characters
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                    <Link
+                      href={`/avatars?projectId=${linkedProjectId}`}
+                      className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                    >
+                      Avatars
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </div>
+                )}
+                {characterArtifacts.length === 0 ? (
                   <p className="text-xs text-muted-foreground text-center py-8">
-                    Save treatments, character notes, and story docs from chat messages.
+                    Character profiles and portraits appear here when you save from chat.
                   </p>
                 ) : (
-                  docArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                  characterArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="locations" className="flex-1 min-h-0 mt-0">
+            <ScrollArea className="h-[calc(100vh-220px)]">
+              <div className="p-3 pb-6 space-y-3">
+                {linkedProjectId && (
+                  <Link
+                    href={`/locations?movie=${linkedProjectId}`}
+                    className="flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    Open Locations
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                )}
+                {locationArtifacts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Location profiles and reference images appear here when you save from chat.
+                  </p>
+                ) : (
+                  locationArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
                 )}
               </div>
             </ScrollArea>

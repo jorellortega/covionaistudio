@@ -44,17 +44,54 @@ import {
   Film,
   ExternalLink,
   Link2,
+  MapPin,
+  UserCircle,
 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
 import type { CreativeMessage, ArtifactType, CreativeArtifact } from "@/lib/creative-workspace-types"
-import { detectTreatmentContent, parseTreatmentFields } from "@/lib/creative-chat-utils"
+import {
+  detectTreatmentContent,
+  detectCharacterContent,
+  detectLocationContent,
+  parseTreatmentFields,
+  parseCharacterFields,
+  parseLocationFields,
+  resolveCreativeMessageContext,
+  buildImagePromptText,
+  detectImageRequest,
+} from "@/lib/creative-chat-utils"
 import { SaveTreatmentDialog } from "@/components/creative-workspace/save-treatment-dialog"
+import { SaveCharacterDialog } from "@/components/creative-workspace/save-character-dialog"
+import { SaveLocationDialog } from "@/components/creative-workspace/save-location-dialog"
+import { SaveAvatarImageDialog } from "@/components/creative-workspace/save-avatar-image-dialog"
 import { LinkProjectDialog } from "@/components/creative-workspace/link-project-dialog"
 import { useAuthReady } from "@/components/auth-hooks"
 import { useToast } from "@/hooks/use-toast"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { mapDisplayModelToService, normalizeDisplayModelToApiId, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT } from "@/lib/image-model-utils"
+import { ContentViolationDialog } from "@/components/content-violation-dialog"
+import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
+
+function getImageGeneratedDescription(
+  content: string,
+  context?: { isCharacter: boolean; isLocation: boolean },
+): string {
+  const isCharacter = detectCharacterContent(content) || context?.isCharacter
+  const isLocation = (!isCharacter && detectLocationContent(content)) || context?.isLocation
+  if (isCharacter) {
+    return "Image ready — use Save to Character or Save as Avatar."
+  }
+  if (isLocation) {
+    return "Image ready — use Save to Location."
+  }
+  return "Your image is now in the chat and the Images panel."
+}
+
+interface DialogTarget {
+  message: CreativeMessage
+  contextContent: string
+}
 
 const QUICK_PROMPTS = [
   "Help me develop a character with a detailed visual description",
@@ -91,7 +128,7 @@ interface ChatPanelProps {
 }
 
 function getMessageImages(messageId: string, artifacts: CreativeArtifact[]): string[] {
-  return artifacts
+  const urls = artifacts
     .filter(
       (a) =>
         a.message_id === messageId &&
@@ -99,6 +136,7 @@ function getMessageImages(messageId: string, artifacts: CreativeArtifact[]): str
         (a.content.startsWith("http") || a.content.startsWith("data:image/")),
     )
     .map((a) => a.content!)
+  return [...new Set(urls)]
 }
 
 export function ChatPanel({
@@ -123,6 +161,9 @@ export function ChatPanel({
   const [isGeneratingImage, setIsGeneratingImage] = useState<string | null>(null)
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
   const [treatmentDialog, setTreatmentDialog] = useState<CreativeMessage | null>(null)
+  const [characterDialog, setCharacterDialog] = useState<DialogTarget | null>(null)
+  const [locationDialog, setLocationDialog] = useState<DialogTarget | null>(null)
+  const [avatarDialog, setAvatarDialog] = useState<DialogTarget | null>(null)
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false)
   const [showDeleteWorkspace, setShowDeleteWorkspace] = useState(false)
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false)
@@ -134,6 +175,10 @@ export function ChatPanel({
   const [isSaving, setIsSaving] = useState(false)
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleInput, setTitleInput] = useState(workspaceTitle)
+  const [contentBlockedDialog, setContentBlockedDialog] = useState<{
+    message: CreativeMessage
+    prompt: string
+  } | null>(null)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -190,9 +235,10 @@ export function ChatPanel({
       ])
 
       if (data.imageGenerated) {
+        const assistantContent = data.assistantMessage?.content || ""
         toast({
           title: "Image generated",
-          description: "Your image is now in the chat and the Images panel.",
+          description: getImageGeneratedDescription(assistantContent),
         })
         onArtifactCreated(data.artifact)
       }
@@ -248,11 +294,24 @@ export function ChatPanel({
     }
   }
 
-  const openSaveDialog = (message: CreativeMessage) => {
+  const openSaveDialog = (message: CreativeMessage, contextContent?: string) => {
+    const source = contextContent || message.content
+    const isCharacter = detectCharacterContent(source)
+    const isLocation = !isCharacter && detectLocationContent(source)
+    const parsedCharacter = isCharacter ? parseCharacterFields(source, workspaceTitle) : null
+    const parsedLocation = isLocation ? parseLocationFields(source, workspaceTitle) : null
     setSaveDialog({ message, content: message.content })
-    setSaveTitle(workspaceTitle !== "Untitled Project" ? `${workspaceTitle} - Note` : "Saved Document")
-    setSaveLabel("")
-    setSaveType("document")
+    setSaveTitle(
+      parsedCharacter?.name
+        ? `${parsedCharacter.name} - Character`
+        : parsedLocation?.name
+          ? `${parsedLocation.name} - Location`
+          : workspaceTitle !== "Untitled Project"
+            ? `${workspaceTitle} - Note`
+            : "Saved Document",
+    )
+    setSaveLabel(parsedCharacter?.name || parsedLocation?.name || "")
+    setSaveType(isCharacter ? "character" : isLocation ? "location" : "document")
   }
 
   const handleSaveArtifact = async () => {
@@ -288,11 +347,24 @@ export function ChatPanel({
     }
   }
 
-  const handleGenerateImage = async (message: CreativeMessage) => {
+  const handleGenerateImage = async (
+    message: CreativeMessage,
+    promptOverride?: string,
+  ) => {
     if (!workspaceId || !userId) return
     setIsGeneratingImage(message.id)
 
     try {
+      const messageIndex = messages.findIndex((m) => m.id === message.id)
+      const history = messages
+        .slice(0, messageIndex + 1)
+        .map((m) => ({ role: m.role, content: m.content }))
+      const priorUserImage = [...history].reverse().find(
+        (m) => m.role === "user" && detectImageRequest(m.content),
+      )
+      const userMessage = priorUserImage?.content || message.content
+      const imagePrompt = promptOverride ?? buildImagePromptText(history, userMessage)
+
       const imagesSetting = await AISettingsService.getOrCreateDefaultTabSetting('images')
       const displayModel =
         imagesSetting.is_locked && imagesSetting.locked_model
@@ -303,7 +375,7 @@ export function ChatPanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: `Cinematic film still, ${message.content.slice(0, 500)}`,
+          prompt: imagePrompt,
           service: mapDisplayModelToService(displayModel),
           apiKey: "configured",
           userId,
@@ -314,12 +386,17 @@ export function ChatPanel({
         }),
       })
 
+      const err = await res.json().catch(() => ({}))
+
       if (!res.ok) {
-        const err = await res.json()
+        if (isContentBlockedResponse(err)) {
+          setContentBlockedDialog({ message, prompt: imagePrompt })
+          return
+        }
         throw new Error(err.error || "Image generation failed")
       }
 
-      const data = await res.json()
+      const data = err
       const imageUrl = data.imageUrl || data.url || data.image
 
       if (!imageUrl) throw new Error("No image returned")
@@ -332,19 +409,41 @@ export function ChatPanel({
           title: `Image - ${new Date().toLocaleDateString()}`,
           content: imageUrl,
           message_id: message.id.startsWith("temp-") ? null : message.id,
-          metadata: { prompt: message.content.slice(0, 500) },
+          metadata: { prompt: imagePrompt.slice(0, 500) },
         }),
       })
 
       if (!artifactRes.ok) throw new Error("Failed to save image")
 
       const artifactData = await artifactRes.json()
-      toast({ title: "Image generated", description: "Your image is now in the chat and the Images panel." })
+      const ctx = messageIndex >= 0
+        ? resolveCreativeMessageContext(message, messageIndex, messages, workspaceTitle)
+        : undefined
+      toast({
+        title: "Image generated",
+        description: getImageGeneratedDescription(message.content, ctx),
+      })
       onArtifactCreated(artifactData.artifact)
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to generate image"
+      if (isContentPolicyError(errorMessage)) {
+        const messageIndex = messages.findIndex((m) => m.id === message.id)
+        const history = messages
+          .slice(0, messageIndex + 1)
+          .map((m) => ({ role: m.role, content: m.content }))
+        const priorUserImage = [...history].reverse().find(
+          (m) => m.role === "user" && detectImageRequest(m.content),
+        )
+        const userMessage = priorUserImage?.content || message.content
+        setContentBlockedDialog({
+          message,
+          prompt: promptOverride ?? buildImagePromptText(history, userMessage),
+        })
+        return
+      }
       toast({
         title: "Image generation failed",
-        description: error instanceof Error ? error.message : "Failed to generate image",
+        description: errorMessage,
         variant: "destructive",
       })
     } finally {
@@ -505,9 +604,20 @@ export function ChatPanel({
               </div>
             </div>
           ) : (
-            messages.map((message) => {
+            messages.map((message, messageIndex) => {
               const messageImages = message.role === "assistant" ? getMessageImages(message.id, artifacts) : []
+              const messageContext = message.role === "assistant"
+                ? resolveCreativeMessageContext(message, messageIndex, messages, workspaceTitle)
+                : { isCharacter: false, isLocation: false, contextContent: message.content }
               const isTreatment = message.role === "assistant" && detectTreatmentContent(message.content)
+              const isCharacter = message.role === "assistant" && messageContext.isCharacter
+              const isLocation = message.role === "assistant" && messageContext.isLocation
+              const openCharacterDialog = () =>
+                setCharacterDialog({ message, contextContent: messageContext.contextContent })
+              const openLocationDialog = () =>
+                setLocationDialog({ message, contextContent: messageContext.contextContent })
+              const openAvatarDialog = () =>
+                setAvatarDialog({ message, contextContent: messageContext.contextContent })
               return (
               <div
                 key={message.id}
@@ -561,6 +671,53 @@ export function ChatPanel({
                       </Button>
                     </div>
                   )}
+                  {isCharacter && (
+                    <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span>
+                        Character detected — save profile
+                        {messageImages.length > 0 ? " or avatar image" : ""}
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={openCharacterDialog}
+                        >
+                          <User className="h-3 w-3 mr-1" />
+                          Save to Character
+                        </Button>
+                        {messageImages.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs border-emerald-500/40"
+                            onClick={openAvatarDialog}
+                          >
+                            <UserCircle className="h-3 w-3 mr-1" />
+                            Save as Avatar
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {isLocation && (
+                    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span>
+                        Location detected — save to Location
+                        {messageImages.length > 0 ? " with image" : ""}
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={openLocationDialog}
+                        >
+                          <MapPin className="h-3 w-3 mr-1" />
+                          Save to Location
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   {message.role === "assistant" && (
                     <div className="flex flex-wrap gap-1">
                       {isTreatment && (
@@ -574,11 +731,44 @@ export function ChatPanel({
                           Save to Movie
                         </Button>
                       )}
+                      {isCharacter && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-emerald-600 dark:text-emerald-400"
+                          onClick={openCharacterDialog}
+                        >
+                          <User className="h-3 w-3 mr-1" />
+                          Save to Character
+                        </Button>
+                      )}
+                      {messageImages.length > 0 && isCharacter && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-violet-600 dark:text-violet-400"
+                          onClick={openAvatarDialog}
+                        >
+                          <UserCircle className="h-3 w-3 mr-1" />
+                          Save as Avatar
+                        </Button>
+                      )}
+                      {isLocation && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-amber-600 dark:text-amber-400"
+                          onClick={openLocationDialog}
+                        >
+                          <MapPin className="h-3 w-3 mr-1" />
+                          Save to Location
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-7 text-xs text-muted-foreground"
-                        onClick={() => openSaveDialog(message)}
+                        onClick={() => openSaveDialog(message, messageContext.contextContent)}
                       >
                         <Save className="h-3 w-3 mr-1" />
                         Save
@@ -713,6 +903,76 @@ export function ChatPanel({
         />
       )}
 
+      {characterDialog && workspaceId && (
+        <SaveCharacterDialog
+          open={!!characterDialog}
+          onOpenChange={(open) => !open && setCharacterDialog(null)}
+          workspaceId={workspaceId}
+          workspaceTitle={workspaceTitle}
+          messageId={characterDialog.message.id}
+          parsed={parseCharacterFields(characterDialog.contextContent, workspaceTitle)}
+          imageUrls={getMessageImages(characterDialog.message.id, artifacts)}
+          linkedProjectId={linkedProject?.id}
+          linkedProjectName={linkedProject?.name}
+          onSaved={({ updated, projectId, projectName, characterName }) => {
+            toast({
+              title: updated ? "Character updated" : "Character saved",
+              description: `${characterName} saved to ${projectName}. Open Characters or Avatars to edit.`,
+            })
+            onProjectLinked(projectId, projectName)
+            onArtifactCreated()
+            setCharacterDialog(null)
+          }}
+        />
+      )}
+
+      {locationDialog && workspaceId && (
+        <SaveLocationDialog
+          open={!!locationDialog}
+          onOpenChange={(open) => !open && setLocationDialog(null)}
+          workspaceId={workspaceId}
+          workspaceTitle={workspaceTitle}
+          messageId={locationDialog.message.id}
+          parsed={parseLocationFields(locationDialog.contextContent, workspaceTitle)}
+          imageUrls={getMessageImages(locationDialog.message.id, artifacts)}
+          linkedProjectId={linkedProject?.id}
+          linkedProjectName={linkedProject?.name}
+          onSaved={({ updated, projectId, projectName, locationName }) => {
+            toast({
+              title: updated ? "Location updated" : "Location saved",
+              description: `${locationName} saved to ${projectName}. Open Locations to edit.`,
+            })
+            onProjectLinked(projectId, projectName)
+            onArtifactCreated()
+            setLocationDialog(null)
+          }}
+        />
+      )}
+
+      {avatarDialog && workspaceId && (
+        <SaveAvatarImageDialog
+          open={!!avatarDialog}
+          onOpenChange={(open) => !open && setAvatarDialog(null)}
+          workspaceId={workspaceId}
+          workspaceTitle={workspaceTitle}
+          messageId={avatarDialog.message.id}
+          imageUrls={getMessageImages(avatarDialog.message.id, artifacts)}
+          suggestedCharacterName={parseCharacterFields(avatarDialog.contextContent, workspaceTitle).name}
+          prompt={avatarDialog.contextContent}
+          linkedProjectId={linkedProject?.id}
+          linkedProjectName={linkedProject?.name}
+          onSaved={({ projectId, projectName, characterName, angleLabel }) => {
+            toast({
+              title: "Avatar image saved",
+              description: `${characterName} — ${angleLabel} saved to Avatars for ${projectName}.`,
+            })
+            onProjectLinked(projectId, projectName)
+            onArtifactCreated()
+            setAvatarDialog(null)
+          }}
+        />
+      )}
+
       <Dialog open={!!saveDialog} onOpenChange={(open) => !open && setSaveDialog(null)}>
         <DialogContent>
           <DialogHeader>
@@ -783,6 +1043,19 @@ export function ChatPanel({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <ContentViolationDialog
+        isOpen={Boolean(contentBlockedDialog)}
+        onClose={() => setContentBlockedDialog(null)}
+        contentType="image"
+        originalPrompt={contentBlockedDialog?.prompt || ""}
+        onRetryWithPrompt={async (rewritten) => {
+          if (!contentBlockedDialog) return
+          const { message: blockedMessage } = contentBlockedDialog
+          setContentBlockedDialog(null)
+          await handleGenerateImage(blockedMessage, rewritten)
+        }}
+      />
     </div>
   )
 }

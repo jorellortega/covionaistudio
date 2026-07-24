@@ -1,3 +1,4 @@
+import type { Asset } from "./asset-service"
 import type { AvatarImageRecord } from "./avatar-images-service"
 import type { Character } from "./characters-service"
 import type { Location } from "./locations-service"
@@ -10,9 +11,13 @@ import { debugStoryboardImage } from "./storyboard-image-debug"
 /** GPT Image 2 edits API supports up to 16 reference images per request. */
 export const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16
 
+/** Storyboard shots need one frame — more refs tend to produce collages/grids. */
+export const STORYBOARD_MAX_REFERENCE_IMAGES = 3
+
 export type StoryboardReferenceSourceType =
   | "character_portrait"
   | "character_reference"
+  | "character_asset"
   | "avatar_angle"
   | "location_image"
   | "location_reference"
@@ -40,6 +45,10 @@ export interface StoryboardReferenceLoadResult {
 export function maxReferenceImagesForModel(apiModel?: string | null): number {
   if (apiModel && isGPTImage2ApiModel(apiModel)) return GPT_IMAGE_MAX_REFERENCE_IMAGES
   return 6
+}
+
+export function storyboardReferenceImageLimit(apiModel?: string | null): number {
+  return Math.min(maxReferenceImagesForModel(apiModel), STORYBOARD_MAX_REFERENCE_IMAGES)
 }
 
 export function buildQuickShotImagePrompt(
@@ -137,9 +146,19 @@ export function collectStoryboardReferenceSources(options: {
   characters: Character[]
   locations: Location[]
   avatarImages: AvatarImageRecord[]
+  /** Linked project assets (character_id set) — used when portrait/reference URLs are stale */
+  characterAssets?: Asset[]
   maxImages: number
 }): StoryboardReferenceSource[] {
-  const { characterIds, locationIds, characters, locations, avatarImages, maxImages } = options
+  const {
+    characterIds,
+    locationIds,
+    characters,
+    locations,
+    avatarImages,
+    characterAssets = [],
+    maxImages,
+  } = options
   const sources: StoryboardReferenceSource[] = []
   const seen = new Set<string>()
 
@@ -174,6 +193,18 @@ export function collectStoryboardReferenceSources(options: {
         url: character.image_url,
         label: `${name} · Portrait`,
         sourceType: "character_portrait",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+
+    for (const asset of characterAssets.filter(
+      (a) => a.character_id === characterId && a.content_type === "image" && a.content_url,
+    )) {
+      addSource({
+        url: asset.content_url!,
+        label: `${name} · ${asset.title?.trim() || "Gallery image"}`,
+        sourceType: "character_asset",
         entityId: characterId,
         entityName: name,
       })
@@ -274,6 +305,8 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
         return `Open Characters, select ${name}, and upload or generate a new portrait image.`
       case "character_reference":
         return `Open Characters, select ${name}, and replace reference image ${source.label.split(" ").pop()}.`
+      case "character_asset":
+        return `Open Characters, select ${name}, and re-upload or replace the gallery image "${source.label.split("·").pop()?.trim() || "image"}".`
       case "location_image":
         return `Open Locations, select ${name}, and upload or generate a new cover image.`
       case "location_reference":
@@ -363,6 +396,9 @@ export async function urlsToReferenceFiles(urls: string[]): Promise<File[]> {
   return result.files
 }
 
+export const SINGLE_FRAME_STORYBOARD_INSTRUCTION =
+  "Generate ONE single unified cinematic storyboard frame for this shot. Do NOT create a collage, grid, contact sheet, split-screen, storyboard panel layout, or multi-image composite."
+
 export function enrichPromptWithAssignments(
   prompt: string,
   options: {
@@ -386,7 +422,9 @@ export function enrichPromptWithAssignments(
         : null,
     ].filter(Boolean)
     if (refParts.length > 0) {
-      enhanced = `${enhanced}. Use the attached reference image(s) for ${refParts.join(" and ")}.`
+      enhanced = `${enhanced}. Use the attached reference image(s) only as visual inspiration for ${refParts.join(" and ")}. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
+    } else {
+      enhanced = `${enhanced}. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
     }
   }
 
