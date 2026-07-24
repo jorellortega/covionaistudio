@@ -4,6 +4,11 @@ import {
 } from './shot-list-order'
 import type { ShotList, CreateShotListData } from './shot-list-service'
 import type { Storyboard, CreateStoryboardData } from './storyboards-service'
+import {
+  characterNamesForStoryboard,
+  locationNamesForStoryboard,
+  buildStoryboardAssignmentPatch,
+} from './storyboard-assignments'
 import { ShotListService } from './shot-list-service'
 import { StoryboardsService } from './storyboards-service'
 import { getSupabaseClient } from './supabase'
@@ -75,6 +80,8 @@ export type SceneSyncData = {
   linkedOrphanCount: number
   /** project character id → display name (for storyboard character_id → shot list characters[]) */
   characterNamesById: Record<string, string>
+  /** project location id → display name */
+  locationNamesById: Record<string, string>
 }
 
 export type SyncUndoEntry = {
@@ -141,8 +148,8 @@ function characterNameForStoryboard(
   storyboard: Storyboard,
   characterNamesById?: Record<string, string>
 ): string | undefined {
-  if (!storyboard.character_id || !characterNamesById) return undefined
-  return characterNamesById[storyboard.character_id]
+  const names = characterNamesForStoryboard(storyboard, characterNamesById)
+  return names[0]
 }
 
 function logSceneSync(message: string, data?: unknown) {
@@ -219,6 +226,7 @@ export async function loadSceneSyncData(sceneId: string, projectId?: string): Pr
   const shots = display.shots
 
   let characterNamesById: Record<string, string> = {}
+  let locationNamesById: Record<string, string> = {}
   const pid = (await resolveProjectIdForScene(sceneId, projectId)) ?? storyboards[0]?.project_id
   if (pid) {
     try {
@@ -227,6 +235,13 @@ export async function loadSceneSyncData(sceneId: string, projectId?: string): Pr
       characterNamesById = Object.fromEntries(chars.map((c) => [c.id, c.name]))
     } catch (e) {
       logSceneSync('could not load characters for sync', e)
+    }
+    try {
+      const { LocationsService } = await import('./locations-service')
+      const locs = await LocationsService.getLocations(pid)
+      locationNamesById = Object.fromEntries(locs.map((l) => [l.id, l.name]))
+    } catch (e) {
+      logSceneSync('could not load locations for sync', e)
     }
   }
 
@@ -241,6 +256,7 @@ export async function loadSceneSyncData(sceneId: string, projectId?: string): Pr
     shotNumbers: sceneShots.map((s) => s.shot_number),
     storyboardIdsOnScene: sceneShots.map((s) => s.storyboard_id).filter(Boolean),
     charactersLoaded: Object.keys(characterNamesById).length,
+    locationsLoaded: Object.keys(locationNamesById).length,
   })
 
   return {
@@ -250,6 +266,7 @@ export async function loadSceneSyncData(sceneId: string, projectId?: string): Pr
     sceneShotCount: sceneShots.length,
     linkedOrphanCount: display.linkedOrphanCount,
     characterNamesById,
+    locationNamesById,
   }
 }
 
@@ -567,13 +584,14 @@ async function upsertShotListFromStoryboard(options: {
   projectId?: string
   storyboard: Storyboard
   characterNamesById?: Record<string, string>
+  locationNamesById?: Record<string, string>
   undo: SyncUndoEntry
 }): Promise<'created' | 'updated' | 'reattached'> {
-  const { sceneId, projectId, storyboard, characterNamesById, undo } = options
+  const { sceneId, projectId, storyboard, characterNamesById, locationNamesById, undo } = options
   const payload = {
     scene_id: sceneId,
     project_id: projectId,
-    ...storyboardToShotUpdates(storyboard, undefined, characterNamesById),
+    ...storyboardToShotUpdates(storyboard, undefined, characterNamesById, locationNamesById),
     status: 'planned' as const,
   }
 
@@ -629,9 +647,10 @@ async function ensureStoryboardShotListCoverage(options: {
   pairs: MatchedPair[]
   includeKeys?: Set<string>
   characterNamesById?: Record<string, string>
+  locationNamesById?: Record<string, string>
   undo: SyncUndoEntry
 }): Promise<number> {
-  const { sceneId, projectId, storyboards, pairs, includeKeys, characterNamesById, undo } = options
+  const { sceneId, projectId, storyboards, pairs, includeKeys, characterNamesById, locationNamesById, undo } = options
   const shouldApply = (key: string) => !includeKeys || includeKeys.has(key)
 
   const sceneShots = await ShotListService.getShotListsByScene(sceneId)
@@ -655,6 +674,7 @@ async function ensureStoryboardShotListCoverage(options: {
       projectId,
       storyboard,
       characterNamesById,
+      locationNamesById,
       undo,
     })
     coveredByStoryboardId.add(storyboard.id)
@@ -733,9 +753,11 @@ async function repairSceneShotListLinks(options: {
 function storyboardToShotUpdates(
   storyboard: Storyboard,
   _overrides?: Partial<CreateShotListData>,
-  characterNamesById?: Record<string, string>
+  characterNamesById?: Record<string, string>,
+  locationNamesById?: Record<string, string>,
 ): Partial<CreateShotListData> {
-  const characterName = characterNameForStoryboard(storyboard, characterNamesById)
+  const characterNames = characterNamesForStoryboard(storyboard, characterNamesById)
+  const locationNames = locationNamesForStoryboard(storyboard, locationNamesById)
   const content: Partial<CreateShotListData> = {
     shot_type: storyboard.shot_type,
     camera_angle: storyboard.camera_angle,
@@ -747,19 +769,37 @@ function storyboardToShotUpdates(
     shot_number: storyboard.shot_number,
     sequence_order: Number(storyboard.shot_number),
     storyboard_id: storyboard.id,
-  }
-  if (characterName) {
-    content.characters = [characterName]
-  } else {
-    content.characters = []
+    characters: characterNames,
+    location: locationNames[0] ?? '',
+    metadata: { locations: locationNames },
   }
   return content
 }
 
 function shotToStoryboardUpdates(
   shot: ShotList,
-  overrides?: Partial<CreateStoryboardData>
+  overrides?: Partial<CreateStoryboardData>,
+  characterNamesById?: Record<string, string>,
+  locationNamesById?: Record<string, string>,
 ): Partial<CreateStoryboardData> {
+  const characterNameToId = characterNamesById
+    ? Object.fromEntries(Object.entries(characterNamesById).map(([id, name]) => [name, id]))
+    : {}
+  const locationNameToId = locationNamesById
+    ? Object.fromEntries(Object.entries(locationNamesById).map(([id, name]) => [name, id]))
+    : {}
+  const shotLocationNames = Array.isArray(shot.metadata?.locations) && shot.metadata.locations.length > 0
+    ? shot.metadata.locations.filter((name): name is string => typeof name === 'string' && !!name)
+    : shot.location
+      ? [shot.location]
+      : []
+  const characterIds = (shot.characters || [])
+    .map((name) => characterNameToId[name])
+    .filter((id): id is string => Boolean(id))
+  const locationIds = shotLocationNames
+    .map((name) => locationNameToId[name])
+    .filter((id): id is string => Boolean(id))
+
   const content: Partial<CreateStoryboardData> = {
     title: shot.description || `Shot ${shot.shot_number}`,
     description: shot.description || shot.action || '',
@@ -775,6 +815,7 @@ function shotToStoryboardUpdates(
     ...content,
     shot_number: shot.shot_number,
     sequence_order: shot.sequence_order ?? shot.shot_number,
+    ...buildStoryboardAssignmentPatch(characterIds, locationIds),
   }
 }
 
@@ -783,7 +824,7 @@ export function previewSceneSync(
   shots: ShotList[],
   storyboards: Storyboard[],
   aiPlan?: AISyncPlan | null,
-  syncMeta?: Pick<SceneSyncData, 'sceneShotCount' | 'linkedOrphanCount' | 'sceneShots' | 'characterNamesById'> & {
+  syncMeta?: Pick<SceneSyncData, 'sceneShotCount' | 'linkedOrphanCount' | 'sceneShots' | 'characterNamesById' | 'locationNamesById'> & {
     sceneId?: string
   }
 ): SyncPreview {
@@ -793,6 +834,7 @@ export function previewSceneSync(
   const linkedOrphanCount = syncMeta?.linkedOrphanCount ?? 0
   const sceneId = syncMeta?.sceneId
   const characterNamesById = syncMeta?.characterNamesById
+  const locationNamesById = syncMeta?.locationNamesById
 
   const onSceneByStoryboard = new Map<string, ShotList>()
   for (const row of sceneShots) {
@@ -830,7 +872,7 @@ export function previewSceneSync(
         sceneShots,
         usedSceneShotIds
       )
-      const next = storyboardToShotUpdates(storyboard, undefined, characterNamesById)
+      const next = storyboardToShotUpdates(storyboard, undefined, characterNamesById, locationNamesById)
 
       if (onScene) {
         usedSceneShotIds.add(onScene.id)
@@ -899,7 +941,7 @@ export function previewSceneSync(
   } else {
     for (const pair of pairs) {
       if (pair.shot && pair.storyboard) {
-        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
+        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates, characterNamesById, locationNamesById)
         const hasImage = Boolean(pair.storyboard.image_url)
         preview.updates.push({
           key: pairUpdateKey(pair.shot, pair.storyboard),
@@ -923,7 +965,7 @@ export function previewSceneSync(
           ),
         })
       } else if (pair.shot) {
-        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
+        const next = shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates, characterNamesById, locationNamesById)
         preview.creates.push({
           key: pairCreateFromShotKey(pair.shot),
           kind: 'create',
@@ -965,6 +1007,7 @@ export async function applySceneSync(options: {
   includeKeys?: Set<string>
   aiPlan?: AISyncPlan | null
   characterNamesById?: Record<string, string>
+  locationNamesById?: Record<string, string>
 }): Promise<SyncUndoEntry> {
   const {
     direction,
@@ -977,6 +1020,7 @@ export async function applySceneSync(options: {
     includeKeys,
     aiPlan,
     characterNamesById,
+    locationNamesById,
   } = options
   const pairs = resolveSyncPairs(shots, storyboards, direction, aiPlan)
   const undo: SyncUndoEntry = {
@@ -1011,7 +1055,7 @@ export async function applySceneSync(options: {
         await ShotListService.updateShotList(onScene.id, {
           scene_id: sceneId,
           project_id: resolvedProjectId ?? onScene.project_id,
-          ...storyboardToShotUpdates(storyboard, undefined, characterNamesById),
+          ...storyboardToShotUpdates(storyboard, undefined, characterNamesById, locationNamesById),
         })
         logSceneSync('updated on-scene shot', {
           shotId: onScene.id,
@@ -1030,6 +1074,7 @@ export async function applySceneSync(options: {
         projectId: resolvedProjectId,
         storyboard,
         characterNamesById,
+        locationNamesById,
         undo,
       })
     }
@@ -1041,6 +1086,7 @@ export async function applySceneSync(options: {
       pairs,
       includeKeys,
       characterNamesById,
+      locationNamesById,
       undo,
     })
     if (ensured > 0) {
@@ -1064,7 +1110,7 @@ export async function applySceneSync(options: {
         undo.updatedStoryboards.push({ id: pair.storyboard.id, before: { ...pair.storyboard } })
         await StoryboardsService.updateStoryboard(
           pair.storyboard.id,
-          shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates)
+          shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates, characterNamesById, locationNamesById)
         )
         if (pair.shot.storyboard_id !== pair.storyboard.id) {
           undo.updatedShots.push({ id: pair.shot.id, before: { ...pair.shot } })
@@ -1078,7 +1124,7 @@ export async function applySceneSync(options: {
           project_id: projectId,
           scene_number: sceneNumber,
           status: 'draft',
-          ...shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates),
+          ...shotToStoryboardUpdates(pair.shot, pair.storyboardUpdates, characterNamesById, locationNamesById),
         } as CreateStoryboardData)
         undo.createdStoryboardIds.push(created.id)
         undo.updatedShots.push({ id: pair.shot.id, before: { ...pair.shot } })

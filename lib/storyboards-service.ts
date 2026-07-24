@@ -25,6 +25,7 @@ export interface Storyboard {
   script_text_snippet?: string
   sequence_order?: number
   status: 'draft' | 'in-progress' | 'review' | 'approved' | 'rejected' | 'completed'
+  metadata?: Record<string, unknown> | null
   created_at: string
   updated_at: string
 }
@@ -50,10 +51,12 @@ export interface CreateStoryboardData {
   script_text_snippet?: string
   sequence_order?: number
   status?: 'draft' | 'in-progress' | 'review' | 'approved' | 'rejected' | 'completed'
+  metadata?: Record<string, unknown> | null
 }
 
 export interface UpdateStoryboardData extends Partial<CreateStoryboardData> {
   ai_generated?: boolean
+  metadata?: Record<string, unknown> | null
 }
 
 export class StoryboardsService {
@@ -155,6 +158,7 @@ export class StoryboardsService {
         script_text_snippet: storyboardData.script_text_snippet || null,
         sequence_order: storyboardData.sequence_order || shotNumber, // Use shot_number as sequence_order if not provided
         status: storyboardData.status || 'draft',
+        metadata: storyboardData.metadata || {},
         ai_generated: false
       }
 

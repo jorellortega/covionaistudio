@@ -46,6 +46,20 @@ import { ImageSizeBadge } from "@/components/image-size-badge"
 import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
+import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
+import {
+  buildStoryboardAssignmentPatch,
+  getStoryboardCharacterIds,
+  getStoryboardLocationIds,
+} from "@/lib/storyboard-assignments"
+import {
+  buildQuickShotImagePrompt,
+  collectStoryboardReferenceUrls,
+  enrichPromptWithAssignments,
+  getStoryboardAssignmentContext,
+  maxReferenceImagesForModel,
+  urlsToReferenceFiles,
+} from "@/lib/storyboard-image-generation"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -106,34 +120,6 @@ function parseScriptSelection(text: string): { dialogue?: string; action?: strin
     dialogue: dialogueLines.length > 0 ? dialogueLines.join('\n') : undefined,
     action: actionLines.length > 0 ? actionLines.join('\n') : undefined,
   }
-}
-
-/** Build an image prompt from storyboard shot fields for one-click generation */
-function buildQuickShotImagePrompt(storyboard: Storyboard): string {
-  const actionText =
-    storyboard.action?.trim() &&
-    storyboard.action.trim() !== storyboard.description?.trim()
-      ? storyboard.action.trim()
-      : null
-
-  const parts = [
-    storyboard.title?.trim() ? `Shot: ${storyboard.title.trim()}` : null,
-    storyboard.shot_type ? `${storyboard.shot_type} shot` : null,
-    storyboard.camera_angle ? `${storyboard.camera_angle} angle` : null,
-    storyboard.movement && storyboard.movement !== "static"
-      ? `${storyboard.movement} camera`
-      : null,
-    storyboard.description?.trim() || null,
-    actionText ? `Action: ${actionText}` : null,
-    storyboard.visual_notes?.trim()
-      ? `Visual notes: ${storyboard.visual_notes.trim()}`
-      : null,
-    storyboard.dialogue?.trim()
-      ? `Dialogue context: ${storyboard.dialogue.trim()}`
-      : null,
-  ].filter(Boolean)
-
-  return parts.join(", ")
 }
 
 export default function SceneStoryboardsPage() {
@@ -308,6 +294,9 @@ export default function SceneStoryboardsPage() {
   // Edit form state
   const [showEditForm, setShowEditForm] = useState(false)
   const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
+  const [formCharacterIds, setFormCharacterIds] = useState<string[]>([])
+  const [formLocationIds, setFormLocationIds] = useState<string[]>([])
+  const [updatingAssignmentStoryboardId, setUpdatingAssignmentStoryboardId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   
@@ -380,8 +369,8 @@ export default function SceneStoryboardsPage() {
     shotType: "wide",
     cameraAngle: "eye-level",
     movement: "static",
-    characterId: null as string | null,
-    locationId: null as string | null
+    characterIds: [] as string[],
+    locationIds: [] as string[],
   })
   const [editingShotDetails, setEditingShotDetails] = useState(false)
   const [tempShotDetails, setTempShotDetails] = useState({
@@ -389,8 +378,8 @@ export default function SceneStoryboardsPage() {
     shotType: "wide",
     cameraAngle: "eye-level",
     movement: "static",
-    characterId: null as string | null,
-    locationId: null as string | null
+    characterIds: [] as string[],
+    locationIds: [] as string[],
   })
   
   // Ref to track current selection
@@ -1371,12 +1360,29 @@ export default function SceneStoryboardsPage() {
     const storyboard = storyboards.find((sb) => sb.id === storyboardId)
     if (!storyboard) return null
     if (editingStoryboard?.id !== storyboardId) return storyboard
+    const characterIds =
+      formCharacterIds.length > 0
+        ? formCharacterIds
+        : getStoryboardCharacterIds(storyboard)
+    const locationIds =
+      formLocationIds.length > 0 ? formLocationIds : getStoryboardLocationIds(storyboard)
     return {
       ...storyboard,
-      character_id: formData.character_id ?? storyboard.character_id,
-      location_id: formData.location_id ?? storyboard.location_id,
+      character_id: characterIds[0] ?? formData.character_id ?? storyboard.character_id,
+      location_id: locationIds[0] ?? formData.location_id ?? storyboard.location_id,
+      metadata: {
+        ...(storyboard.metadata || {}),
+        character_ids: characterIds,
+        location_ids: locationIds,
+      },
       title: formData.title || storyboard.title,
       description: formData.description || storyboard.description,
+      action: formData.action || storyboard.action,
+      shot_type: formData.shot_type || storyboard.shot_type,
+      camera_angle: formData.camera_angle || storyboard.camera_angle,
+      movement: formData.movement || storyboard.movement,
+      dialogue: formData.dialogue || storyboard.dialogue,
+      visual_notes: formData.visual_notes || storyboard.visual_notes,
     }
   }
 
@@ -1389,7 +1395,11 @@ export default function SceneStoryboardsPage() {
   }
 
   const buildStoryboardCreatePrompt = (userDirection: string, storyboard: Storyboard) => {
-    const shotContext = buildQuickShotImagePrompt(storyboard)
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+    const shotContext = buildQuickShotImagePrompt(storyboard, {
+      characterNames: assignmentContext.characterNames,
+      locationNames: assignmentContext.locationNames,
+    })
     const parts = [userDirection.trim(), shotContext].filter(Boolean)
     let prompt = parts.join(". ")
     if (!/storyboard/i.test(prompt)) {
@@ -1452,12 +1462,13 @@ export default function SceneStoryboardsPage() {
   const openReferenceEditDialog = (storyboard: Storyboard) => {
     setReferenceEditStoryboard(storyboard)
     clearInlineReferenceEditState()
-    const characterId =
-      editingStoryboard?.id === storyboard.id
-        ? formData.character_id ?? storyboard.character_id
-        : storyboard.character_id
-    if (characterId) {
-      setInlineStyleLinkAssetIds(getAvatarLinkAssetIds(characterId))
+    const resolved = resolveStoryboardForGeneration(storyboard.id) ?? storyboard
+    const characterIds = getStoryboardCharacterIds(resolved)
+    const avatarAssetIds = characterIds.flatMap((characterId) =>
+      getAvatarLinkAssetIds(characterId),
+    )
+    if (avatarAssetIds.length > 0) {
+      setInlineStyleLinkAssetIds(avatarAssetIds.slice(0, MAX_LINKED_REFERENCE_IMAGES))
     }
     setReferenceEditDialogOpen(true)
   }
@@ -1482,6 +1493,7 @@ export default function SceneStoryboardsPage() {
     const storyboard = resolveStoryboardForGeneration(storyboardId)
     if (!storyboard || !userId) return
 
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
 
     let styleReferenceFiles: File[] = []
@@ -1497,8 +1509,16 @@ export default function SceneStoryboardsPage() {
       }
     }
 
-    if (styleReferenceFiles.length === 0 && storyboard.character_id) {
-      styleReferenceFiles = await buildAvatarReferenceFiles(storyboard.character_id)
+    if (styleReferenceFiles.length === 0 && (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)) {
+      const refUrls = collectStoryboardReferenceUrls({
+        characterIds: assignmentContext.characterIds,
+        locationIds: assignmentContext.locationIds,
+        characters,
+        locations,
+        avatarImages: projectAvatarImages,
+        maxImages: MAX_LINKED_REFERENCE_IMAGES,
+      })
+      styleReferenceFiles = await urlsToReferenceFiles(refUrls)
     }
 
     setIsGeneratingReferenceEdit(true)
@@ -2095,13 +2115,12 @@ export default function SceneStoryboardsPage() {
         action: parsedAction || (!parsedDialogue ? textToUse : undefined),
         visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
-        character_id: shotDetails.characterId || null,
-        location_id: shotDetails.locationId || null,
         project_id: sceneInfo?.project_id || "",
         script_text_start: textRange && textRange.start !== null ? textRange.start : undefined,
         script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
         script_text_snippet: textRange ? textToUse : undefined,
-        sequence_order: nextShotNumber
+        sequence_order: nextShotNumber,
+        ...buildStoryboardAssignmentPatch(shotDetails.characterIds, shotDetails.locationIds),
       }
       
       console.log("🎬 Creating storyboard with data:", storyboardData)
@@ -2247,8 +2266,8 @@ export default function SceneStoryboardsPage() {
       shotType: "wide",
       cameraAngle: "eye-level",
       movement: "static",
-      characterId: null,
-      locationId: null,
+      characterIds: [],
+      locationIds: [],
     })
   }
 
@@ -2338,7 +2357,8 @@ export default function SceneStoryboardsPage() {
         visual_notes: formData.visual_notes?.trim() || undefined,
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || sceneProjectId,
-        scene_id: sceneId
+        scene_id: sceneId,
+        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds),
       }
 
       const newStoryboard = await StoryboardsService.createStoryboard(cleanFormData)
@@ -2400,7 +2420,12 @@ export default function SceneStoryboardsPage() {
         visual_notes: formData.visual_notes?.trim() || undefined,
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || sceneProjectId,
-        scene_id: sceneId
+        scene_id: sceneId,
+        ...buildStoryboardAssignmentPatch(
+          formCharacterIds,
+          formLocationIds,
+          editingStoryboard.metadata,
+        ),
       }
 
       const updatedStoryboard = await StoryboardsService.updateStoryboard(editingStoryboard.id, cleanFormData)
@@ -2573,6 +2598,8 @@ export default function SceneStoryboardsPage() {
       project_id: "",
       scene_id: sceneId
     })
+    setFormCharacterIds([])
+    setFormLocationIds([])
     setAiPrompt("")
     setSelectedAIService("dalle")
     setEditingStoryboard(null)
@@ -2581,6 +2608,35 @@ export default function SceneStoryboardsPage() {
     setIncludeCharacterDetails(false)
     setIncludeMasterPrompt(false)
     setUseExactPrompt(true)
+  }
+
+  const syncFormAssignmentsFromStoryboard = (storyboard: Storyboard) => {
+    setFormCharacterIds(getStoryboardCharacterIds(storyboard))
+    setFormLocationIds(getStoryboardLocationIds(storyboard))
+  }
+
+  const applyStoryboardAssignments = async (
+    storyboard: Storyboard,
+    characterIds: string[],
+    locationIds: string[],
+  ) => {
+    setUpdatingAssignmentStoryboardId(storyboard.id)
+    try {
+      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, storyboard.metadata)
+      const updated = await StoryboardsService.updateStoryboard(storyboard.id, patch)
+      setStoryboards((prev) =>
+        sortStoryboardRows(prev.map((existing) => (existing.id === storyboard.id ? updated : existing))),
+      )
+    } catch (error) {
+      console.error("Error updating storyboard assignments:", error)
+      toast({
+        title: "Error",
+        description: "Failed to update character/location assignments.",
+        variant: "destructive",
+      })
+    } finally {
+      setUpdatingAssignmentStoryboardId(null)
+    }
   }
 
 
@@ -2779,7 +2835,11 @@ export default function SceneStoryboardsPage() {
   }
 
   const quickGenerateShotImage = async (storyboard: Storyboard) => {
-    const prompt = buildQuickShotImagePrompt(storyboard)
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+    const prompt = buildQuickShotImagePrompt(storyboard, {
+      characterNames: assignmentContext.characterNames,
+      locationNames: assignmentContext.locationNames,
+    })
     if (!prompt.trim()) {
       toast({
         title: "No shot details",
@@ -2791,8 +2851,8 @@ export default function SceneStoryboardsPage() {
 
     await generateShotImage(storyboard.id, prompt, {
       quick: true,
-      includeCharacterDetails: Boolean(storyboard.character_id),
-      includeMasterPrompt: Boolean(storyboard.character_id),
+      includeCharacterDetails: assignmentContext.characterIds.length > 0,
+      includeMasterPrompt: assignmentContext.characterIds.length > 0,
     })
   }
 
@@ -2866,117 +2926,63 @@ export default function SceneStoryboardsPage() {
         return
       }
 
-      // Get the selected character details if a character is selected for this shot and option is enabled
-      let characterDetailsText = ""
-      let masterPromptText = ""
       const storyboard = resolveStoryboardForGeneration(storyboardId)
       if (!storyboard) return
-      if (useCharacterDetails && storyboard?.character_id) {
-        const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
-        if (selectedCharacter) {
-          const characterDetails = [
-            selectedCharacter.name && `Character name: ${selectedCharacter.name}`,
-            selectedCharacter.age && `Age: ${selectedCharacter.age}`,
-            selectedCharacter.gender && `Gender: ${selectedCharacter.gender}`,
-            selectedCharacter.archetype && `Archetype: ${selectedCharacter.archetype}`,
-            selectedCharacter.description && `Description: ${selectedCharacter.description}`,
-            selectedCharacter.height && `Height: ${selectedCharacter.height}`,
-            selectedCharacter.build && `Build: ${selectedCharacter.build}`,
-            selectedCharacter.skin_tone && `Skin tone: ${selectedCharacter.skin_tone}`,
-            selectedCharacter.eye_color && `Eye color: ${selectedCharacter.eye_color}`,
-            selectedCharacter.hair_color_current && `Hair: ${selectedCharacter.hair_color_current} (${selectedCharacter.hair_length})`,
-            selectedCharacter.face_shape && `Face shape: ${selectedCharacter.face_shape}`,
-            selectedCharacter.usual_clothing_style && `Clothing style: ${selectedCharacter.usual_clothing_style}`,
-            selectedCharacter.typical_color_palette && selectedCharacter.typical_color_palette.length > 0
-              ? `Color palette: ${selectedCharacter.typical_color_palette.join(', ')}`
-              : null,
-            selectedCharacter.personality?.traits && selectedCharacter.personality.traits.length > 0
-              ? `Personality traits: ${selectedCharacter.personality.traits.join(', ')}`
-              : null,
-          ].filter(Boolean).join(', ')
-          
-          if (characterDetails) {
-            characterDetailsText = ` Character details: ${characterDetails}.`
-          }
-        }
-      }
-      
-      // Get master prompt if option is enabled and character has one
-      if (useMasterPrompt && storyboard?.character_id) {
-        const selectedCharacter = characters.find(c => c.id === storyboard.character_id)
-        if (selectedCharacter?.master_prompt) {
-          masterPromptText = ` Master prompt: ${selectedCharacter.master_prompt}.`
-        }
-      }
-      
-      // Get the selected location details if a location is selected for this shot
-      let locationDetailsText = ""
-      if (storyboard?.location_id) {
-        const selectedLocation = locations.find(l => l.id === storyboard.location_id)
-        if (selectedLocation) {
-          const locationDetails = [
-            selectedLocation.name && `Location name: ${selectedLocation.name}`,
-            selectedLocation.type && `Type: ${selectedLocation.type}`,
-            selectedLocation.description && `Description: ${selectedLocation.description}`,
-            selectedLocation.address && `Address: ${selectedLocation.address}`,
-            selectedLocation.city && `City: ${selectedLocation.city}`,
-            selectedLocation.state && `State: ${selectedLocation.state}`,
-            selectedLocation.country && `Country: ${selectedLocation.country}`,
-            selectedLocation.time_of_day && selectedLocation.time_of_day.length > 0
-              ? `Time of day: ${selectedLocation.time_of_day.join(', ')}`
-              : null,
-            selectedLocation.atmosphere && `Atmosphere: ${selectedLocation.atmosphere}`,
-            selectedLocation.mood && `Mood: ${selectedLocation.mood}`,
-            selectedLocation.visual_description && `Visual description: ${selectedLocation.visual_description}`,
-            selectedLocation.lighting_notes && `Lighting: ${selectedLocation.lighting_notes}`,
-            selectedLocation.key_features && selectedLocation.key_features.length > 0
-              ? `Key features: ${selectedLocation.key_features.join(', ')}`
-              : null,
-          ].filter(Boolean).join(', ')
-          
-          if (locationDetails) {
-            locationDetailsText = ` Location details: ${locationDetails}.`
-          }
-        }
-      }
-      
-      // Prepare the enhanced prompt for storyboard shots - keep it minimal
+
+      const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+
+      // Prepare the enhanced prompt for storyboard shots
       let enhancedPrompt = prompt.trim()
-      
-      // Add master prompt if enabled and available
-      if (masterPromptText) {
-        enhancedPrompt = `${enhancedPrompt}${masterPromptText}`
-      }
-      
-      // Add character details if enabled and available
-      if (characterDetailsText) {
-        enhancedPrompt = `${enhancedPrompt}${characterDetailsText}`
-      }
-      
-      // Add location details if available
-      if (locationDetailsText) {
-        enhancedPrompt = `${enhancedPrompt}${locationDetailsText}`
-      }
-      
-      // Only add minimal enhancement if user hasn't chosen exact prompt
-      if (!useExactPrompt) {
-        enhancedPrompt = `${enhancedPrompt}, storyboard style`
+
+      if (useMasterPrompt || useCharacterDetails || assignmentContext.locationDetails.length > 0) {
+        enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
+          characterNames: useCharacterDetails ? assignmentContext.characterNames : [],
+          locationNames: assignmentContext.locationNames,
+          characterDetails: useCharacterDetails ? assignmentContext.characterDetails : [],
+          locationDetails: assignmentContext.locationDetails,
+          masterPrompts: useMasterPrompt ? assignmentContext.masterPrompts : [],
+          referenceCount: 0,
+        })
       }
 
-      const avatarRefFiles = storyboard.character_id
-        ? await buildAvatarReferenceFiles(storyboard.character_id)
-        : []
+      // Only add minimal enhancement if user hasn't chosen exact prompt
+      if (!useExactPrompt) {
+        enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still`
+      }
+
+      const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
+      const refLimit = maxReferenceImagesForModel(modelToUse)
+      const referenceUrls = collectStoryboardReferenceUrls({
+        characterIds: assignmentContext.characterIds,
+        locationIds: assignmentContext.locationIds,
+        characters,
+        locations,
+        avatarImages: projectAvatarImages,
+        maxImages: refLimit,
+      })
+      const referenceFiles = referenceUrls.length > 0 ? await urlsToReferenceFiles(referenceUrls) : []
+
+      if (referenceFiles.length > 0) {
+        enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
+          characterNames: assignmentContext.characterNames,
+          locationNames: assignmentContext.locationNames,
+          characterDetails: [],
+          locationDetails: [],
+          masterPrompts: [],
+          referenceCount: referenceFiles.length,
+        })
+      }
+
       const lockedImageConfig =
         imagesSetting?.is_locked && imagesSetting.locked_model
-          ? getLockedImageConfig({ withReferenceImage: avatarRefFiles.length > 0 })
+          ? getLockedImageConfig({ withReferenceImage: referenceFiles.length > 0 })
           : null
-      const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
       const supportsReference =
         lockedImageConfig?.supportsReference ||
         displayModelSupportsReferenceImage(modelLabel)
 
       let response: Response
-      if (avatarRefFiles.length > 0 && supportsReference) {
+      if (referenceFiles.length > 0 && supportsReference) {
         const generationConfig = lockedImageConfig ?? {
           service: serviceToUse,
           apiModel: modelToUse,
@@ -2986,8 +2992,8 @@ export default function SceneStoryboardsPage() {
           service: generationConfig.service,
           model: generationConfig.apiModel,
           apiKey,
-          referenceFile: avatarRefFiles[0],
-          styleReferenceFiles: avatarRefFiles.slice(1),
+          referenceFile: referenceFiles[0],
+          styleReferenceFiles: referenceFiles.slice(1),
           supportsReference: true,
         })
       } else {
@@ -3049,8 +3055,8 @@ export default function SceneStoryboardsPage() {
           title: "Image Generated!",
           description: hasExisting
             ? "New image added below. Click a thumbnail to use it as the main shot image."
-            : avatarRefFiles.length > 0
-              ? `Image generated using ${avatarRefFiles.length} avatar reference${avatarRefFiles.length === 1 ? "" : "s"}.`
+            : referenceFiles.length > 0
+              ? `Image generated using ${referenceFiles.length} reference image${referenceFiles.length === 1 ? "" : "s"} (characters & locations).`
               : result.savedToBucket
                 ? "Image generated and saved to your bucket!"
                 : "Image added to this shot.",
@@ -3620,76 +3626,40 @@ export default function SceneStoryboardsPage() {
                         </Button>
                       </div>
                     </div>
-                    {/* Character Selector */}
                     {characters.length > 0 && (
                       <div>
-                        <Label htmlFor="character-selector" className="text-xs text-blue-300">Character (Optional)</Label>
-                        <Select 
-                          value={shotDetails.characterId || "none"} 
-                          onValueChange={(value) => {
-                            setShotDetails(prev => ({ ...prev, characterId: value === "none" ? null : value }))
+                        <Label className="text-xs text-blue-300">Character / Avatar (Optional)</Label>
+                        <AssignmentBadgePicker
+                          kind="character"
+                          items={characters.map((character) => ({
+                            id: character.id,
+                            name: character.name,
+                            subtitle: character.archetype ?? undefined,
+                          }))}
+                          selectedIds={shotDetails.characterIds}
+                          onSelectedIdsChange={(ids) => {
+                            setShotDetails((prev) => ({ ...prev, characterIds: ids }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                            id="character-selector"
-                          >
-                            <SelectValue placeholder="Select a character..." />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="none">
-                              <span className="text-muted-foreground">No character selected</span>
-                            </SelectItem>
-                            {characters.map((char) => (
-                              <SelectItem key={char.id} value={char.id}>
-                                <div className="flex flex-col">
-                                  <span className="font-medium">{char.name}</span>
-                                  {char.archetype && (
-                                    <span className="text-xs text-muted-foreground">{char.archetype}</span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </div>
                     )}
-                    {/* Location Selector */}
                     {locations.length > 0 && (
                       <div>
-                        <Label htmlFor="location-selector" className="text-xs text-blue-300">Location (Optional)</Label>
-                        <Select 
-                          value={shotDetails.locationId || "none"} 
-                          onValueChange={(value) => {
-                            setShotDetails(prev => ({ ...prev, locationId: value === "none" ? null : value }))
+                        <Label className="text-xs text-blue-300">Location (Optional)</Label>
+                        <AssignmentBadgePicker
+                          kind="location"
+                          items={locations.map((location) => ({
+                            id: location.id,
+                            name: location.name,
+                            subtitle: location.type ?? undefined,
+                          }))}
+                          selectedIds={shotDetails.locationIds}
+                          onSelectedIdsChange={(ids) => {
+                            setShotDetails((prev) => ({ ...prev, locationIds: ids }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                            id="location-selector"
-                          >
-                            <SelectValue placeholder="Select a location..." />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="none">
-                              <span className="text-muted-foreground">No location selected</span>
-                            </SelectItem>
-                            {locations.map((loc) => (
-                              <SelectItem key={loc.id} value={loc.id}>
-                                <div className="flex flex-col">
-                                  <span className="font-medium">{loc.name}</span>
-                                  {loc.type && (
-                                    <span className="text-xs text-muted-foreground">{loc.type}</span>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </div>
                     )}
                     <div className="flex items-center justify-between">
@@ -4157,69 +4127,43 @@ export default function SceneStoryboardsPage() {
                 </div>
               </div>
 
-              {/* Character Selector */}
               {characters.length > 0 && (
-                <div>
-                  <Label htmlFor="character_id">Character (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to include their details and Avatar Studio images as references when generating
+                <div className="space-y-2">
+                  <Label>Character / Avatar (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign characters to include their details and Avatar Studio images when generating
                   </p>
-                  <Select 
-                    value={formData.character_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="character_id">
-                      <SelectValue placeholder="Select a character..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No character selected</span>
-                      </SelectItem>
-                      {characters.map((char) => (
-                        <SelectItem key={char.id} value={char.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{char.name}</span>
-                            {char.archetype && (
-                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AssignmentBadgePicker
+                    kind="character"
+                    items={characters.map((character) => ({
+                      id: character.id,
+                      name: character.name,
+                      subtitle: character.archetype ?? undefined,
+                    }))}
+                    selectedIds={formCharacterIds}
+                    onSelectedIdsChange={setFormCharacterIds}
+                    disabled={isCreating}
+                  />
                 </div>
               )}
 
-              {/* Location Selector */}
               {locations.length > 0 && (
-                <div>
-                  <Label htmlFor="location_id">Location (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a location to automatically include location details when generating images
+                <div className="space-y-2">
+                  <Label>Location (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign locations to include their details when generating images
                   </p>
-                  <Select 
-                    value={formData.location_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="location_id">
-                      <SelectValue placeholder="Select a location..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No location selected</span>
-                      </SelectItem>
-                      {locations.map((loc) => (
-                        <SelectItem key={loc.id} value={loc.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{loc.name}</span>
-                            {loc.type && (
-                              <span className="text-xs text-muted-foreground">{loc.type}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AssignmentBadgePicker
+                    kind="location"
+                    items={locations.map((location) => ({
+                      id: location.id,
+                      name: location.name,
+                      subtitle: location.type ?? undefined,
+                    }))}
+                    selectedIds={formLocationIds}
+                    onSelectedIdsChange={setFormLocationIds}
+                    disabled={isCreating}
+                  />
                 </div>
               )}
 
@@ -4444,69 +4388,43 @@ export default function SceneStoryboardsPage() {
                 </div>
               </div>
 
-              {/* Character Selector */}
               {characters.length > 0 && (
-                <div>
-                  <Label htmlFor="edit-character_id">Character (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a character to include their details and Avatar Studio images as references when generating
+                <div className="space-y-2">
+                  <Label>Character / Avatar (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign characters to include their details and Avatar Studio images when generating
                   </p>
-                  <Select 
-                    value={formData.character_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, character_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="edit-character_id">
-                      <SelectValue placeholder="Select a character..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No character selected</span>
-                      </SelectItem>
-                      {characters.map((char) => (
-                        <SelectItem key={char.id} value={char.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{char.name}</span>
-                            {char.archetype && (
-                              <span className="text-xs text-muted-foreground">{char.archetype}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AssignmentBadgePicker
+                    kind="character"
+                    items={characters.map((character) => ({
+                      id: character.id,
+                      name: character.name,
+                      subtitle: character.archetype ?? undefined,
+                    }))}
+                    selectedIds={formCharacterIds}
+                    onSelectedIdsChange={setFormCharacterIds}
+                    disabled={isUpdating}
+                  />
                 </div>
               )}
 
-              {/* Location Selector */}
               {locations.length > 0 && (
-                <div>
-                  <Label htmlFor="edit-location_id">Location (Optional)</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Select a location to automatically include location details when generating images
+                <div className="space-y-2">
+                  <Label>Location (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign locations to include their details when generating images
                   </p>
-                  <Select 
-                    value={formData.location_id || "none"} 
-                    onValueChange={(value) => setFormData(prev => ({ ...prev, location_id: value === "none" ? null : value }))}
-                  >
-                    <SelectTrigger id="edit-location_id">
-                      <SelectValue placeholder="Select a location..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">
-                        <span className="text-muted-foreground">No location selected</span>
-                      </SelectItem>
-                      {locations.map((loc) => (
-                        <SelectItem key={loc.id} value={loc.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{loc.name}</span>
-                            {loc.type && (
-                              <span className="text-xs text-muted-foreground">{loc.type}</span>
-                            )}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <AssignmentBadgePicker
+                    kind="location"
+                    items={locations.map((location) => ({
+                      id: location.id,
+                      name: location.name,
+                      subtitle: location.type ?? undefined,
+                    }))}
+                    selectedIds={formLocationIds}
+                    onSelectedIdsChange={setFormLocationIds}
+                    disabled={isUpdating}
+                  />
                 </div>
               )}
 
@@ -5110,6 +5028,52 @@ export default function SceneStoryboardsPage() {
                       </p>
                     </div>
                   ) : null}
+
+                  {(characters.length > 0 || locations.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      {characters.length > 0 && (
+                        <AssignmentBadgePicker
+                          kind="character"
+                          items={characters.map((character) => ({
+                            id: character.id,
+                            name: character.name,
+                            subtitle: character.archetype ?? undefined,
+                          }))}
+                          selectedIds={getStoryboardCharacterIds(storyboard)}
+                          onSelectedIdsChange={(ids) => {
+                            void applyStoryboardAssignments(
+                              storyboard,
+                              ids,
+                              getStoryboardLocationIds(storyboard),
+                            )
+                          }}
+                          disabled={updatingAssignmentStoryboardId === storyboard.id}
+                        />
+                      )}
+                      {locations.length > 0 && (
+                        <AssignmentBadgePicker
+                          kind="location"
+                          items={locations.map((location) => ({
+                            id: location.id,
+                            name: location.name,
+                            subtitle: location.type ?? undefined,
+                          }))}
+                          selectedIds={getStoryboardLocationIds(storyboard)}
+                          onSelectedIdsChange={(ids) => {
+                            void applyStoryboardAssignments(
+                              storyboard,
+                              getStoryboardCharacterIds(storyboard),
+                              ids,
+                            )
+                          }}
+                          disabled={updatingAssignmentStoryboardId === storyboard.id}
+                        />
+                      )}
+                      {updatingAssignmentStoryboardId === storyboard.id && (
+                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                      )}
+                    </div>
+                  )}
                   
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline" className="text-xs flex-shrink-0">
@@ -5206,6 +5170,7 @@ export default function SceneStoryboardsPage() {
                           project_id: storyboard.project_id || "",
                           scene_id: sceneId
                         })
+                        syncFormAssignmentsFromStoryboard(storyboard)
                         // Pre-fill AI prompt with shot details
                         setAiImagePrompt(buildQuickShotImagePrompt(storyboard))
                         setShowEditForm(true)
@@ -5288,6 +5253,7 @@ export default function SceneStoryboardsPage() {
                           project_id: storyboard.project_id || "",
                           scene_id: sceneId
                         })
+                        syncFormAssignmentsFromStoryboard(storyboard)
                         // Preserve the current AI service selection
                         // Don't reset selectedAIService here
                         setShowEditForm(true)

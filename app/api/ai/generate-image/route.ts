@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
-import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT } from '@/lib/image-model-utils'
+import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT, GPT_IMAGE_MAX_REFERENCE_IMAGES } from '@/lib/image-model-utils'
 import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
 import {
   buildRunwayReferenceImagesFromFiles,
@@ -379,7 +379,9 @@ export async function POST(request: NextRequest) {
     if (file && isGPTImage2ApiModel(imageModelForRequest)) {
       console.log('🖼️ API ROUTE - GPT Image 2 edit with reference file(s)')
       const additionalFiles =
-        styleReferenceFiles.length > 0 ? styleReferenceFiles.slice(0, 5) : undefined
+        styleReferenceFiles.length > 0
+          ? styleReferenceFiles.slice(0, GPT_IMAGE_MAX_REFERENCE_IMAGES - 1)
+          : undefined
       const editResponse = await OpenAIService.editImageWithReference({
         prompt,
         model: imageModelForRequest,

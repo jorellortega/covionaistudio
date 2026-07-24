@@ -54,7 +54,7 @@ import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { MovieService, type Movie } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
-import { displayShotNumber } from "@/lib/shot-list-order"
+import { displayShotNumber, sortStoryboardRows } from "@/lib/shot-list-order"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import {
@@ -95,7 +95,23 @@ import {
   resolveLeonardoMotionControlId,
   resolveLeonardoMotionControlUUID,
 } from "@/lib/leonardo-motion-controls"
-import { LinkAudioPanel } from "@/components/linked-audio-picker"
+import { AvatarImagesService, type AvatarImageRecord } from "@/lib/avatar-images-service"
+import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
+import { SceneSyncControls } from "@/components/scene-sync-controls"
+import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
+import {
+  buildStoryboardAssignmentPatch,
+  getStoryboardCharacterIds,
+  getStoryboardLocationIds,
+} from "@/lib/storyboard-assignments"
+import {
+  buildQuickShotImagePrompt,
+  collectStoryboardReferenceUrls,
+  enrichPromptWithAssignments,
+  getStoryboardAssignmentContext,
+  maxReferenceImagesForModel,
+  urlsToReferenceFiles,
+} from "@/lib/storyboard-image-generation"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
@@ -1303,6 +1319,9 @@ export default function CinemaProductionPage() {
   const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
   const [projectLocations, setProjectLocations] = useState<Location[]>([])
+  const [projectAvatarImages, setProjectAvatarImages] = useState<AvatarImageRecord[]>([])
+  const [updatingAssignmentStoryboardId, setUpdatingAssignmentStoryboardId] = useState<string | null>(null)
+  const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
   const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
   const [savedStylePrompts, setSavedStylePrompts] = useState<SavedPrompt[]>([])
   const [isLoadingStylePrompts, setIsLoadingStylePrompts] = useState(false)
@@ -1481,8 +1500,8 @@ export default function CinemaProductionPage() {
       const manual = dialogueVoiceByStoryboard.get(storyboard.id)
       if (manual) return manual
 
-      if (storyboard.character_id) {
-        const character = projectCharacters.find((c) => c.id === storyboard.character_id)
+      for (const characterId of getStoryboardCharacterIds(storyboard)) {
+        const character = projectCharacters.find((c) => c.id === characterId)
         if (character?.elevenlabs_voice_id) return character.elevenlabs_voice_id
       }
 
@@ -1537,22 +1556,26 @@ export default function CinemaProductionPage() {
       if (!selectedProjectId || !ready || !userId) {
         setProjectImageAssets([])
         setProjectLocations([])
+        setProjectAvatarImages([])
         return
       }
       setIsLoadingProjectAssets(true)
       try {
-        const [assets, locs] = await Promise.all([
+        const [assets, locs, avatarImages] = await Promise.all([
           AssetService.getAssetsForProject(selectedProjectId),
           LocationsService.getLocations(selectedProjectId),
+          AvatarImagesService.listImagesForProject(selectedProjectId),
         ])
         const imageAssets = assets.filter((a) => a.content_type === "image" && a.content_url)
         setProjectImageAssets(imageAssets)
         setProjectLocations(locs)
+        setProjectAvatarImages(avatarImages)
         setShotReferenceFrames(shotFramesFromAssets(imageAssets))
       } catch (error) {
         console.error("Error loading project assets for image edit:", error)
         setProjectImageAssets([])
         setProjectLocations([])
+        setProjectAvatarImages([])
         setShotReferenceFrames(new Map())
       } finally {
         setIsLoadingProjectAssets(false)
@@ -1604,6 +1627,18 @@ export default function CinemaProductionPage() {
     [projectImageAssets, projectLocations, projectCharacters],
   )
 
+  const selectedScene = useMemo(
+    () => scenes.find((scene) => scene.id === selectedSceneId) ?? null,
+    [scenes, selectedSceneId],
+  )
+
+  const sceneNumberForSync = useMemo(() => {
+    const raw = selectedScene?.metadata?.sceneNumber
+    if (raw == null) return selectedScene?.order_index ?? 1
+    const parsed = typeof raw === "string" ? parseInt(raw, 10) : raw
+    return Number.isNaN(parsed) ? selectedScene?.order_index ?? 1 : parsed
+  }, [selectedScene])
+
   useEffect(() => {
     if (selectedSceneId && ready) {
       loadStoryboards()
@@ -1612,6 +1647,14 @@ export default function CinemaProductionPage() {
       setSelectedStoryboardId("")
       setSelectedStoryboard(null)
     }
+  }, [selectedSceneId, ready])
+
+  useEffect(() => {
+    const reload = () => {
+      if (selectedSceneId && ready) void loadStoryboards()
+    }
+    window.addEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
+    return () => window.removeEventListener(SCENE_SYNC_APPLIED_EVENT, reload)
   }, [selectedSceneId, ready])
 
   useEffect(() => {
@@ -2403,34 +2446,43 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const applyStoryboardAssignments = async (
+    storyboard: Storyboard,
+    characterIds: string[],
+    locationIds: string[],
+  ) => {
+    setUpdatingAssignmentStoryboardId(storyboard.id)
+    try {
+      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, storyboard.metadata)
+      const updated = await StoryboardsService.updateStoryboard(storyboard.id, patch)
+      setStoryboards((prev) =>
+        sortStoryboardRows(prev.map((existing) => (existing.id === storyboard.id ? updated : existing))),
+      )
+    } catch (error) {
+      console.error("Error updating storyboard assignments:", error)
+      toast({
+        title: "Error",
+        description: "Failed to update character/location assignments.",
+        variant: "destructive",
+      })
+    } finally {
+      setUpdatingAssignmentStoryboardId(null)
+    }
+  }
+
   const buildPromptFromStoryboard = (storyboard: Storyboard): string => {
-    const parts: string[] = []
-
-    const camera = [
-      storyboard.shot_type ? `${storyboard.shot_type} shot` : null,
-      storyboard.camera_angle ? `${storyboard.camera_angle} angle` : null,
-      storyboard.movement
-        ? storyboard.movement.toLowerCase() === 'static'
-          ? 'static camera'
-          : `${storyboard.movement} camera movement`
-        : null,
-    ].filter(Boolean)
-    if (camera.length) parts.push(camera.join(', '))
-
-    if (storyboard.description?.trim()) parts.push(storyboard.description.trim())
-    if (storyboard.action?.trim()) parts.push(`Action: ${storyboard.action.trim()}`)
-    if (storyboard.visual_notes?.trim()) parts.push(`Visual: ${storyboard.visual_notes.trim()}`)
-    if (storyboard.dialogue?.trim()) parts.push(`Dialogue: ${storyboard.dialogue.trim()}`)
-
-    const character = storyboard.character_id
-      ? projectCharacters.find((c) => c.id === storyboard.character_id)
-      : null
-    if (character?.name) parts.push(`Character: ${character.name}`)
-
-    return (
-      parts.join('. ') ||
-      `Shot ${storyboard.shot_number}: ${storyboard.shot_type} ${storyboard.camera_angle} ${storyboard.movement}`
+    const assignmentContext = getStoryboardAssignmentContext(
+      storyboard,
+      projectCharacters,
+      projectLocations,
     )
+    const prompt = buildQuickShotImagePrompt(storyboard, {
+      characterNames: assignmentContext.characterNames,
+      locationNames: assignmentContext.locationNames,
+    })
+    if (prompt.trim()) return prompt
+
+    return `Shot ${storyboard.shot_number}: ${storyboard.shot_type} ${storyboard.camera_angle} ${storyboard.movement}`
   }
 
   const getShotImageChoicesForPromptAssist = (
@@ -2513,9 +2565,15 @@ export default function CinemaProductionPage() {
 
   const handlePromptAssist = async (storyboard: Storyboard) => {
     const generation = storyboardGenerations.get(storyboard.id)
-    const character = storyboard.character_id
-      ? projectCharacters.find((c) => c.id === storyboard.character_id)
-      : null
+    const assignmentContext = getStoryboardAssignmentContext(
+      storyboard,
+      projectCharacters,
+      projectLocations,
+    )
+    const characterName =
+      assignmentContext.characterNames.length > 0
+        ? assignmentContext.characterNames.join(", ")
+        : null
     const selectedUrls = getPromptAssistSelectedUrls(storyboard, generation)
     const startImageUrl = selectedUrls[0] || null
     const endImageUrl = selectedUrls[1] || null
@@ -2536,7 +2594,7 @@ export default function CinemaProductionPage() {
           movement: storyboard.movement,
           shotNumber: storyboard.shot_number,
           sceneNumber: storyboard.scene_number,
-          characterName: character?.name ?? null,
+          characterName,
           imageUrl: startImageUrl,
           startImageUrl,
           endImageUrl,
@@ -2595,9 +2653,11 @@ export default function CinemaProductionPage() {
 
   const buildAudioAssistPayload = (storyboard: Storyboard, kind: 'dialogue' | 'sound-effect' | 'stable-audio') => {
     const generation = storyboardGenerations.get(storyboard.id)
-    const character = storyboard.character_id
-      ? projectCharacters.find((c) => c.id === storyboard.character_id)
-      : null
+    const assignmentContext = getStoryboardAssignmentContext(
+      storyboard,
+      projectCharacters,
+      projectLocations,
+    )
     const imageUrl =
       generation?.filePreview ||
       generation?.startFramePreview ||
@@ -2617,7 +2677,10 @@ export default function CinemaProductionPage() {
       movement: storyboard.movement,
       shotNumber: storyboard.shot_number,
       sceneNumber: storyboard.scene_number,
-      characterName: character?.name ?? null,
+      characterName:
+        assignmentContext.characterNames.length > 0
+          ? assignmentContext.characterNames.join(", ")
+          : null,
       imageUrl,
       userId,
     }
@@ -2849,6 +2912,111 @@ export default function CinemaProductionPage() {
       return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
     }
     return error.message
+  }
+
+  const quickGenerateShotImage = async (storyboard: Storyboard) => {
+    if (!userId) return
+
+    const assignmentContext = getStoryboardAssignmentContext(
+      storyboard,
+      projectCharacters,
+      projectLocations,
+    )
+    const basePrompt = buildQuickShotImagePrompt(storyboard, {
+      characterNames: assignmentContext.characterNames,
+      locationNames: assignmentContext.locationNames,
+    })
+    if (!basePrompt.trim()) {
+      toast({
+        title: "No shot details",
+        description: "Add a description, action, or shot details before generating.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setQuickGeneratingShotIds((prev) => new Set(prev).add(storyboard.id))
+    try {
+      const config =
+        getLockedImageConfig({ withReferenceImage: true }) ?? getLockedImageConfig()
+      if (!config) {
+        throw new Error("Please lock GPT Image 2 in AI Settings → Images first.")
+      }
+
+      const refLimit = maxReferenceImagesForModel(config.apiModel)
+      const referenceUrls = collectStoryboardReferenceUrls({
+        characterIds: assignmentContext.characterIds,
+        locationIds: assignmentContext.locationIds,
+        characters: projectCharacters,
+        locations: projectLocations,
+        avatarImages: projectAvatarImages,
+        maxImages: refLimit,
+      })
+      const referenceFiles =
+        referenceUrls.length > 0 ? await urlsToReferenceFiles(referenceUrls) : []
+
+      let enhancedPrompt = enrichPromptWithAssignments(basePrompt, {
+        characterNames: assignmentContext.characterNames,
+        locationNames: assignmentContext.locationNames,
+        characterDetails: assignmentContext.characterDetails,
+        locationDetails: assignmentContext.locationDetails,
+        masterPrompts: assignmentContext.masterPrompts,
+        referenceCount: referenceFiles.length,
+      })
+      enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still`
+
+      const response = await requestLockedImageGeneration(
+        enhancedPrompt,
+        config,
+        referenceFiles.length > 0
+          ? {
+              referenceFile: referenceFiles[0],
+              styleReferenceFiles: referenceFiles.slice(1),
+            }
+          : undefined,
+      )
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error || "Failed to generate image")
+      }
+
+      const result = await response.json()
+      if (!result.success || !result.imageUrl) {
+        throw new Error("Failed to generate image")
+      }
+
+      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const updated = await StoryboardsService.updateStoryboardImage(storyboard.id, imageUrlToUse)
+      setStoryboards((prev) =>
+        prev.map((existing) => (existing.id === storyboard.id ? updated : existing)),
+      )
+      await persistShotReferenceFrame(storyboard, {
+        url: imageUrlToUse,
+        label: "Generated shot",
+      })
+      setShotPreviewImage(storyboard.id, imageUrlToUse)
+
+      toast({
+        title: "Image generated",
+        description:
+          referenceFiles.length > 0
+            ? `Created shot image using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"} from characters and locations.`
+            : "Created shot image from shot details.",
+      })
+    } catch (error) {
+      toast({
+        title: "Generation failed",
+        description: getImageGenerationErrorMessage(error, "Could not generate the shot image."),
+        variant: "destructive",
+      })
+    } finally {
+      setQuickGeneratingShotIds((prev) => {
+        const next = new Set(prev)
+        next.delete(storyboard.id)
+        return next
+      })
+    }
   }
 
   const clearImageEditReference = () => {
@@ -6421,30 +6589,38 @@ export default function CinemaProductionPage() {
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               {selectedSceneId ? (
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/storyboards/${selectedSceneId}`}>
+                <>
+                  <SceneSyncControls
+                    sceneId={selectedSceneId}
+                    projectId={selectedProjectId}
+                    sceneNumber={sceneNumberForSync}
+                    primaryDirection="storyboards-to-shotlist"
+                    onSynced={() => void loadStoryboards()}
+                  />
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/storyboards/${selectedSceneId}`}>
+                      <FileText className="h-4 w-4 mr-2" />
+                      Storyboards
+                    </Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href={`/shotlist/${selectedSceneId}`}>
+                      <List className="h-4 w-4 mr-2" />
+                      Shot List
+                    </Link>
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="outline" size="sm" disabled title="Select a scene first">
                     <FileText className="h-4 w-4 mr-2" />
                     Storyboards
-                  </Link>
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" disabled title="Select a scene first">
-                  <FileText className="h-4 w-4 mr-2" />
-                  Storyboards
-                </Button>
-              )}
-              {selectedSceneId ? (
-                <Button variant="outline" size="sm" asChild>
-                  <Link href={`/shotlist/${selectedSceneId}`}>
+                  </Button>
+                  <Button variant="outline" size="sm" disabled title="Select a scene first">
                     <List className="h-4 w-4 mr-2" />
                     Shot List
-                  </Link>
-                </Button>
-              ) : (
-                <Button variant="outline" size="sm" disabled title="Select a scene first">
-                  <List className="h-4 w-4 mr-2" />
-                  Shot List
-                </Button>
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -7170,6 +7346,51 @@ export default function CinemaProductionPage() {
                           <CardDescription className="mt-2">
                             {storyboard.description || "No description"}
                           </CardDescription>
+                          {(projectCharacters.length > 0 || projectLocations.length > 0) && (
+                            <div className="flex flex-wrap items-center gap-1 mt-3">
+                              {projectCharacters.length > 0 && (
+                                <AssignmentBadgePicker
+                                  kind="character"
+                                  items={projectCharacters.map((character) => ({
+                                    id: character.id,
+                                    name: character.name,
+                                    subtitle: character.archetype ?? undefined,
+                                  }))}
+                                  selectedIds={getStoryboardCharacterIds(storyboard)}
+                                  onSelectedIdsChange={(ids) => {
+                                    void applyStoryboardAssignments(
+                                      storyboard,
+                                      ids,
+                                      getStoryboardLocationIds(storyboard),
+                                    )
+                                  }}
+                                  disabled={updatingAssignmentStoryboardId === storyboard.id}
+                                />
+                              )}
+                              {projectLocations.length > 0 && (
+                                <AssignmentBadgePicker
+                                  kind="location"
+                                  items={projectLocations.map((location) => ({
+                                    id: location.id,
+                                    name: location.name,
+                                    subtitle: location.type ?? undefined,
+                                  }))}
+                                  selectedIds={getStoryboardLocationIds(storyboard)}
+                                  onSelectedIdsChange={(ids) => {
+                                    void applyStoryboardAssignments(
+                                      storyboard,
+                                      getStoryboardCharacterIds(storyboard),
+                                      ids,
+                                    )
+                                  }}
+                                  disabled={updatingAssignmentStoryboardId === storyboard.id}
+                                />
+                              )}
+                              {updatingAssignmentStoryboardId === storyboard.id && (
+                                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                              )}
+                            </div>
+                          )}
                         </div>
                         <Badge className={
                           storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
@@ -7342,6 +7563,23 @@ export default function CinemaProductionPage() {
                                   <ImageIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
                                   <p className="text-muted-foreground">
                                     No image available for this storyboard.
+                                  </p>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white"
+                                    disabled={quickGeneratingShotIds.has(storyboard.id)}
+                                    onClick={() => void quickGenerateShotImage(storyboard)}
+                                  >
+                                    {quickGeneratingShotIds.has(storyboard.id) ? (
+                                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    ) : (
+                                      <Zap className="h-4 w-4 mr-2" />
+                                    )}
+                                    Quick Generate
+                                  </Button>
+                                  <p className="text-xs text-muted-foreground px-4">
+                                    Uses shot details plus character avatars and location images when assigned.
                                   </p>
                                 </div>
                               )
@@ -8845,22 +9083,26 @@ export default function CinemaProductionPage() {
                                   and assign it on the Characters page.
                                 </p>
                               )}
-                              {storyboard.character_id && (() => {
-                                const linkedCharacter = projectCharacters.find(
-                                  (c) => c.id === storyboard.character_id,
-                                )
-                                if (!linkedCharacter) return null
-                                if (linkedCharacter.elevenlabs_voice_name) {
-                                  return (
-                                    <p className="text-xs text-muted-foreground">
-                                      Shot character: {linkedCharacter.name} ({linkedCharacter.elevenlabs_voice_name})
-                                    </p>
-                                  )
-                                }
+                              {getStoryboardCharacterIds(storyboard).length > 0 && (() => {
+                                const linkedCharacters = getStoryboardCharacterIds(storyboard)
+                                  .map((id) => projectCharacters.find((c) => c.id === id))
+                                  .filter((c): c is Character => Boolean(c))
+                                if (linkedCharacters.length === 0) return null
+                                const withVoice = linkedCharacters.filter((c) => c.elevenlabs_voice_name)
+                                const withoutVoice = linkedCharacters.filter((c) => !c.elevenlabs_voice_name)
                                 return (
-                                  <p className="text-xs text-amber-600 dark:text-amber-500">
-                                    Shot character {linkedCharacter.name} has no voice assigned yet.
-                                  </p>
+                                  <div className="space-y-1">
+                                    {withVoice.length > 0 ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        Shot characters: {withVoice.map((c) => `${c.name} (${c.elevenlabs_voice_name})`).join(", ")}
+                                      </p>
+                                    ) : null}
+                                    {withoutVoice.map((character) => (
+                                      <p key={character.id} className="text-xs text-amber-600 dark:text-amber-500">
+                                        {character.name} has no voice assigned yet.
+                                      </p>
+                                    ))}
+                                  </div>
                                 )
                               })()}
                               <div className="flex gap-2">

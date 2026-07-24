@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useAuth } from "@/components/AuthProvider"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -14,36 +13,35 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { useAuthReady } from "@/components/auth-hooks"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { MovieService, type Movie } from "@/lib/movie-service"
+import { ProjectSelector } from "@/components/project-selector"
 
 export default function ShotListPage() {
-  const { session, loading: authLoading } = useAuth()
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const movieId = searchParams.get("movie")
-  const { ready, userId } = useAuthReady()
+  const { ready, userId, loading: authLoading } = useAuthReady()
   
   const [movie, setMovie] = useState<Movie | null>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [selectedSceneId, setSelectedSceneId] = useState<string>("")
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (authLoading) return
 
-    if (!session?.user) {
+    if (!ready || !userId) {
+      setLoading(false)
       return
     }
 
     if (!movieId) {
-      router.push('/movies')
+      setLoading(false)
       return
     }
 
-    if (ready && userId) {
-      loadMovieAndScenes()
-    }
-  }, [authLoading, session?.user, movieId, ready, userId, router])
+    void loadMovieAndScenes()
+  }, [authLoading, ready, userId, movieId])
 
   const loadMovieAndScenes = async () => {
     if (!movieId || !ready || !userId) return
@@ -82,10 +80,42 @@ export default function ShotListPage() {
   }
 
   if (!movieId) {
-    return null
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
+          <div className="text-center py-12">
+            <List className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-lg font-semibold mb-2">No project selected</h3>
+            <p className="text-muted-foreground mb-4">
+              Choose a project to view and manage its shot list
+            </p>
+
+            <div className="max-w-md mx-auto mb-6">
+              <ProjectSelector
+                onProjectChange={(newProjectId) => {
+                  if (newProjectId) {
+                    router.push(`/shotlist?movie=${newProjectId}`)
+                  }
+                }}
+                placeholder="Select a project..."
+                showCreateNew={true}
+              />
+            </div>
+
+            <Link href="/movies">
+              <Button className="gradient-button text-white">
+                <ArrowLeft className="mr-2 h-5 w-5" />
+                Back to Movies
+              </Button>
+            </Link>
+          </div>
+        </main>
+      </div>
+    )
   }
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <div className="min-h-screen bg-background">
         <Header />

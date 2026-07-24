@@ -47,6 +47,9 @@ export function isGPTImageApiModel(apiModel: string): boolean {
   )
 }
 
+/** GPT Image 2 edits API accepts up to 16 reference images per request. */
+export const GPT_IMAGE_MAX_REFERENCE_IMAGES = 16
+
 /** GPT Image 2 and DALL-E use /v1/images/generations */
 export function usesOpenAIImagesGenerationsApi(apiModel: string): boolean {
   return (

@@ -50,6 +50,14 @@ function directionLabel(direction: SyncDirection): string {
     : "Shot List → Storyboards"
 }
 
+function syncTargetName(direction: SyncDirection): string {
+  return direction === "storyboards-to-shotlist" ? "Shot List" : "Storyboards"
+}
+
+function syncSourceName(direction: SyncDirection): string {
+  return direction === "storyboards-to-shotlist" ? "Storyboards" : "Shot List"
+}
+
 function ChangeTable({ rows }: { rows: SyncFieldChange[] }) {
   if (rows.length === 0) {
     return <p className="text-xs text-muted-foreground italic">No field changes</p>
@@ -162,6 +170,7 @@ export function SceneSyncControls({
   const { toast } = useToast()
   const [undoCount, setUndoCount] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [previewingDirection, setPreviewingDirection] = useState<SyncDirection | null>(null)
   const [undoing, setUndoing] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState<DialogMode>("review")
@@ -197,9 +206,10 @@ export function SceneSyncControls({
 
   const runPreview = useCallback(async (direction: SyncDirection) => {
     setLoading(true)
+    setPreviewingDirection(direction)
     try {
       const syncData = await loadSceneSyncData(sceneId, projectId)
-      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount, characterNamesById } = syncData
+      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount, characterNamesById, locationNamesById } = syncData
       setPendingSyncData(syncData)
 
       let plan: AISyncPlan | null = null
@@ -231,6 +241,7 @@ export function SceneSyncControls({
         linkedOrphanCount,
         sceneShots,
         characterNamesById,
+        locationNamesById,
       })
       const keys = new Set([...nextPreview.creates, ...nextPreview.updates].map((item) => item.key))
       setPreview(nextPreview)
@@ -263,6 +274,13 @@ export function SceneSyncControls({
           description:
             "Each Shot # badge copies verbatim to the same shot list row. Grid order will be aligned after apply.",
         })
+      } else if (direction === "shotlist-to-storyboards") {
+        toast({
+          title: "Copy from shot list",
+          description: aiUsed
+            ? "AI matched shots to storyboards. Review field changes before applying."
+            : "Matched by links and shot numbers. Review before applying.",
+        })
       } else if (!aiUsed) {
         toast({
           title: "Using shot-number matching",
@@ -278,8 +296,9 @@ export function SceneSyncControls({
       })
     } finally {
       setLoading(false)
+      setPreviewingDirection(null)
     }
-  }, [sceneId, toast])
+  }, [sceneId, projectId, toast])
 
   const handleApply = async () => {
     if (!pendingDirection || !preview) return
@@ -303,7 +322,7 @@ export function SceneSyncControls({
         return
       }
 
-      const { shots, storyboards, sceneShots, sceneShotCount, characterNamesById } = pendingSyncData
+      const { shots, storyboards, sceneShots, sceneShotCount, characterNamesById, locationNamesById } = pendingSyncData
       console.log("[scene-sync] applying with cached data", {
         storyboards: storyboards.length,
         shots: shots.length,
@@ -323,6 +342,7 @@ export function SceneSyncControls({
         includeKeys: selectedKeys,
         aiPlan,
         characterNamesById,
+        locationNamesById,
       })
       const stack = pushUndoEntry(sceneId, undoEntry)
       setUndoCount(stack.length)
@@ -429,6 +449,9 @@ export function SceneSyncControls({
       ? "shotlist-to-storyboards"
       : "storyboards-to-shotlist"
 
+  const primarySyncLabel = `Sync to ${syncTargetName(primaryDirection)}`
+  const secondarySyncLabel = `Sync from ${syncSourceName(secondaryDirection)}`
+
   const nothingToApply = !preview || (preview.creates.length === 0 && preview.updates.length === 0)
 
   return (
@@ -442,26 +465,32 @@ export function SceneSyncControls({
             disabled={loading || undoing}
             onClick={() => void runPreview(primaryDirection)}
             className="text-xs sm:text-sm"
+            title={primarySyncLabel}
           >
-            {loading ? (
+            {loading && previewingDirection === primaryDirection ? (
               <Loader2 className="h-4 w-4 sm:mr-1.5 animate-spin" />
             ) : (
               <RefreshCw className="h-4 w-4 sm:mr-1.5" />
             )}
-            <span className="hidden sm:inline">
-              Sync to {primaryDirection === "storyboards-to-shotlist" ? "Shot List" : "Storyboards"}
-            </span>
-            <span className="sm:hidden">Sync</span>
+            <span className="hidden sm:inline">{primarySyncLabel}</span>
+            <span className="sm:hidden">To {syncTargetName(primaryDirection)}</span>
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             disabled={loading || undoing}
             onClick={() => void runPreview(secondaryDirection)}
-            className="text-xs text-muted-foreground"
+            className="text-xs sm:text-sm"
+            title={secondarySyncLabel}
           >
-            Other direction
+            {loading && previewingDirection === secondaryDirection ? (
+              <Loader2 className="h-4 w-4 sm:mr-1.5 animate-spin" />
+            ) : (
+              <ArrowLeft className="h-4 w-4 sm:mr-1.5" />
+            )}
+            <span className="hidden sm:inline">{secondarySyncLabel}</span>
+            <span className="sm:hidden">From {syncSourceName(secondaryDirection)}</span>
           </Button>
           <Button
             type="button"
