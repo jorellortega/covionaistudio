@@ -1,3 +1,6 @@
+/** Saved multi-angle reference sheet used as a single AI reference image. */
+export const AVATAR_REFERENCE_COLLAGE_ANGLE_ID = "reference_collage"
+
 export interface AvatarAngle {
   id: string
   label: string

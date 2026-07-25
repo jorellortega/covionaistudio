@@ -106,12 +106,11 @@ import {
 } from "@/lib/storyboard-assignments"
 import {
   buildQuickShotImagePrompt,
-  collectStoryboardReferenceUrls,
   enrichPromptWithAssignments,
   getStoryboardAssignmentContext,
+  loadAssignedStoryboardReferenceFiles,
   storyboardReferenceImageLimit,
   SINGLE_FRAME_STORYBOARD_INSTRUCTION,
-  urlsToReferenceFiles,
 } from "@/lib/storyboard-image-generation"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
 import { LinkAudioPanel } from "@/components/linked-audio-picker"
@@ -1655,6 +1654,11 @@ export default function CinemaProductionPage() {
     [projectImageAssets, projectLocations, projectCharacters],
   )
 
+  const characterImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.character_id && a.content_url),
+    [projectImageAssets],
+  )
+
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.id === selectedSceneId) ?? null,
     [scenes, selectedSceneId],
@@ -2944,6 +2948,46 @@ export default function CinemaProductionPage() {
     return error.message
   }
 
+  const loadStoryboardAssignmentReferences = async (
+    storyboard: Storyboard,
+    refLimit?: number,
+  ) => {
+    const assignmentContext = getStoryboardAssignmentContext(
+      storyboard,
+      projectCharacters,
+      projectLocations,
+    )
+    const limit =
+      refLimit ??
+      storyboardReferenceImageLimit(
+        getLockedImageConfig({ withReferenceImage: true })?.apiModel,
+      )
+
+    if (
+      assignmentContext.characterIds.length === 0 &&
+      assignmentContext.locationIds.length === 0
+    ) {
+      return { files: [], failed: [], assignmentContext, limit }
+    }
+
+    const result = await loadAssignedStoryboardReferenceFiles({
+      characterIds: assignmentContext.characterIds,
+      locationIds: assignmentContext.locationIds,
+      characters: projectCharacters,
+      locations: projectLocations,
+      avatarImages: projectAvatarImages,
+      characterAssets: characterImageAssets,
+      maxImages: limit,
+    })
+
+    return {
+      files: result.files.slice(0, limit),
+      failed: result.failed,
+      assignmentContext,
+      limit,
+    }
+  }
+
   const quickGenerateShotImage = async (storyboard: Storyboard) => {
     if (!userId) return
 
@@ -2974,17 +3018,21 @@ export default function CinemaProductionPage() {
       }
 
       const refLimit = storyboardReferenceImageLimit(config.apiModel)
-      const referenceUrls = collectStoryboardReferenceUrls({
-        characterIds: assignmentContext.characterIds,
-        locationIds: assignmentContext.locationIds,
-        characters: projectCharacters,
-        locations: projectLocations,
-        avatarImages: projectAvatarImages,
-        maxImages: refLimit,
-      })
-      const referenceFiles = (
-        referenceUrls.length > 0 ? await urlsToReferenceFiles(referenceUrls) : []
-      ).slice(0, refLimit)
+      const {
+        files: referenceFiles,
+        failed: failedReferences,
+      } = await loadStoryboardAssignmentReferences(storyboard, refLimit)
+
+      if (failedReferences.length > 0) {
+        toast({
+          title: `${failedReferences.length} reference image${failedReferences.length === 1 ? "" : "s"} couldn't load`,
+          description:
+            referenceFiles.length > 0
+              ? `Used ${referenceFiles.length} valid reference${referenceFiles.length === 1 ? "" : "s"}. Generation continued without the broken links.`
+              : "No valid character/location references loaded. Generating from shot text only.",
+          variant: "destructive",
+        })
+      }
 
       let enhancedPrompt = enrichPromptWithAssignments(basePrompt, {
         characterNames: assignmentContext.characterNames,
@@ -3423,6 +3471,34 @@ export default function CinemaProductionPage() {
               `style-ref-${styleAsset.id}.png`,
             ),
           )
+        }
+      }
+
+      if (styleReferenceFiles.length === 0) {
+        const assignmentContext = getStoryboardAssignmentContext(
+          storyboard,
+          projectCharacters,
+          projectLocations,
+        )
+        if (
+          assignmentContext.characterIds.length > 0 ||
+          assignmentContext.locationIds.length > 0
+        ) {
+          const { files, failed } = await loadStoryboardAssignmentReferences(
+            storyboard,
+            storyboardReferenceImageLimit(config.apiModel),
+          )
+          styleReferenceFiles.push(...files)
+          if (failed.length > 0) {
+            toast({
+              title: `${failed.length} reference image${failed.length === 1 ? "" : "s"} couldn't load`,
+              description:
+                files.length > 0
+                  ? `Used ${files.length} valid reference${files.length === 1 ? "" : "s"} for this edit.`
+                  : "No valid character/location references loaded for this edit.",
+              variant: "destructive",
+            })
+          }
         }
       }
 

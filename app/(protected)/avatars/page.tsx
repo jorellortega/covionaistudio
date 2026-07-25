@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
@@ -22,12 +22,15 @@ import {
 } from "@/lib/project-image-linking"
 import {
   AVATAR_ANGLES,
+  AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
   AVATAR_TURNAROUND_ANGLE_IDS,
   buildAvatarPrompt,
   buildAvatarEditPrompt,
   createCustomAvatarAngle,
   type AvatarAngle,
 } from "@/lib/avatar-angles"
+import { buildAvatarCollageBlob } from "@/lib/avatar-collage"
+import { StorageService } from "@/lib/storage-service"
 import {
   mapDisplayModelToService,
   normalizeDisplayModelToApiId,
@@ -74,6 +77,8 @@ import {
   Plus,
   Pencil,
   Trash2,
+  LayoutGrid,
+  Star,
 } from "lucide-react"
 
 type GenerationMode = "description" | "from_reference"
@@ -178,10 +183,63 @@ function buildGalleriesFromAvatarAssets(assets: Asset[]): AngleGalleries {
   return galleries
 }
 
+function mergeAngleGalleries(existing: AngleGalleries, incoming: AngleGalleries): AngleGalleries {
+  const merged: AngleGalleries = { ...existing }
+
+  for (const [angleId, incomingGallery] of Object.entries(incoming)) {
+    const current = merged[angleId] ?? { images: [], selectedIndex: 0 }
+    const seenUrls = new Set(current.images.map((img) => img.imageUrl))
+    const nextImages = [...current.images]
+
+    for (const image of incomingGallery.images) {
+      if (seenUrls.has(image.imageUrl)) continue
+      seenUrls.add(image.imageUrl)
+      nextImages.push(image)
+    }
+
+    merged[angleId] = {
+      images: nextImages,
+      selectedIndex:
+        nextImages.length > 0
+          ? Math.min(current.selectedIndex, nextImages.length - 1)
+          : 0,
+    }
+  }
+
+  return merged
+}
+
 function getAvatarGalleryStorageKey(projectId: string, userId: string) {
   return projectId
     ? `avatar-galleries-project-${projectId}`
     : `avatar-galleries-user-${userId}`
+}
+
+function loadCachedAngleGalleries(projectId: string, userId: string): AngleGalleries {
+  if (!userId) return {}
+  try {
+    const raw = localStorage.getItem(getAvatarGalleryStorageKey(projectId, userId))
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as AngleGalleries
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveCachedAngleGalleries(
+  projectId: string,
+  userId: string,
+  galleries: AngleGalleries,
+) {
+  if (!userId) return
+  const hasImages = Object.values(galleries).some((gallery) => gallery.images.length > 0)
+  if (!hasImages) return
+  try {
+    localStorage.setItem(getAvatarGalleryStorageKey(projectId, userId), JSON.stringify(galleries))
+  } catch {
+    // ignore quota errors
+  }
 }
 
 const createAvatarImage = (
@@ -246,6 +304,16 @@ export default function AvatarsPage() {
   const [shotFormLabel, setShotFormLabel] = useState("")
   const [shotFormPrompt, setShotFormPrompt] = useState("")
   const [galleriesHydrated, setGalleriesHydrated] = useState(false)
+  const [collagePreviewUrl, setCollagePreviewUrl] = useState<string | null>(null)
+  const [collagePreviewBlob, setCollagePreviewBlob] = useState<Blob | null>(null)
+  const [isBuildingCollage, setIsBuildingCollage] = useState(false)
+  const [isSavingCollage, setIsSavingCollage] = useState(false)
+  const [savedCollageUrl, setSavedCollageUrl] = useState<string | null>(null)
+  const [settingPortraitUrl, setSettingPortraitUrl] = useState<string | null>(null)
+  const [portraitPickDialogOpen, setPortraitPickDialogOpen] = useState(false)
+  const [pendingPortraitImageUrl, setPendingPortraitImageUrl] = useState<string | null>(null)
+  const hydrationKeyRef = useRef<string | null>(null)
+  const lastGalleryProjectRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!ready) return
@@ -285,90 +353,80 @@ export default function AvatarsPage() {
   }, [ready, projectId])
 
   useEffect(() => {
+    if (!userId) return
+    if (lastGalleryProjectRef.current === projectId) return
+
+    lastGalleryProjectRef.current = projectId
+    hydrationKeyRef.current = null
     setGalleriesHydrated(false)
-    setAngleGalleries({})
-    setProjectAvatarImages([])
-  }, [projectId, userId, linkedCharacterId])
+    setAngleGalleries(loadCachedAngleGalleries(projectId, userId))
+  }, [projectId, userId])
 
   useEffect(() => {
-    if (!ready || !userId || !projectId || galleriesHydrated || isLoadingImages) return
+    if (!ready || !userId || !projectId || isLoadingImages) return
 
+    const hydrationKey = `${projectId}:${userId}`
+    if (hydrationKeyRef.current === hydrationKey) return
+
+    let cancelled = false
     setIsLoadingAvatars(true)
+
     AvatarImagesService.listImagesForProject(projectId)
       .then((images) => {
+        if (cancelled) return
+
         setProjectAvatarImages(images)
-        const scoped = linkedCharacterId
-          ? images.filter((img) => img.character_id === linkedCharacterId)
-          : images.filter((img) => !img.character_id)
 
-        if (scoped.length > 0) {
-          setAngleGalleries(buildGalleriesFromAvatarImageRecords(scoped))
-          const nameFromRow = scoped.find((img) => img.metadata?.character_name)
-          const metaName =
-            typeof nameFromRow?.metadata?.character_name === "string"
-              ? nameFromRow.metadata.character_name
-              : null
-          if (metaName?.trim()) {
-            setCharacterName((prev) => prev || metaName)
-          }
-          setGalleriesHydrated(true)
-          return
-        }
-
+        const avatarRecords = images.filter(
+          (img) => img.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+        )
         const avatarAssets = projectImageAssets.filter(isAvatarAsset)
-        if (avatarAssets.length > 0) {
-          setAngleGalleries(buildGalleriesFromAvatarAssets(projectImageAssets))
-          const nameFromMeta = avatarAssets.find(
-            (a) => typeof a.metadata?.character_name === "string",
-          )?.metadata?.character_name
-          if (typeof nameFromMeta === "string" && nameFromMeta.trim()) {
-            setCharacterName((prev) => prev || nameFromMeta)
-          }
-          setGalleriesHydrated(true)
-          return
-        }
 
-        try {
-          const storageKey = getAvatarGalleryStorageKey(projectId, userId)
-          const raw = localStorage.getItem(storageKey)
-          if (raw) {
-            const parsed = JSON.parse(raw) as AngleGalleries
-            if (parsed && typeof parsed === "object") {
-              setAngleGalleries(parsed)
-            }
+        setAngleGalleries((prev) => {
+          let merged = mergeAngleGalleries(
+            prev,
+            buildGalleriesFromAvatarImageRecords(avatarRecords),
+          )
+          if (avatarAssets.length > 0) {
+            merged = mergeAngleGalleries(
+              merged,
+              buildGalleriesFromAvatarAssets(projectImageAssets),
+            )
           }
-        } catch {
-          // ignore corrupt local cache
-        }
-
+          saveCachedAngleGalleries(projectId, userId, merged)
+          return merged
+        })
+        hydrationKeyRef.current = hydrationKey
         setGalleriesHydrated(true)
+
+        const nameFromRow = avatarRecords.find((img) => img.metadata?.character_name)
+        const metaName =
+          typeof nameFromRow?.metadata?.character_name === "string"
+            ? nameFromRow.metadata.character_name
+            : null
+        if (metaName?.trim()) {
+          setCharacterName((prev) => prev || metaName)
+        }
       })
       .catch(() => {
-        setGalleriesHydrated(true)
+        if (!cancelled) {
+          hydrationKeyRef.current = hydrationKey
+          setGalleriesHydrated(true)
+        }
       })
-      .finally(() => setIsLoadingAvatars(false))
-  }, [
-    ready,
-    userId,
-    projectId,
-    linkedCharacterId,
-    projectImageAssets,
-    galleriesHydrated,
-    isLoadingImages,
-  ])
+      .finally(() => {
+        if (!cancelled) setIsLoadingAvatars(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [ready, userId, projectId, isLoadingImages, projectImageAssets])
 
   useEffect(() => {
-    if (!ready || !userId || !galleriesHydrated) return
-    const hasImages = Object.values(angleGalleries).some((g) => g.images.length > 0)
-    if (!hasImages) return
-
-    try {
-      const storageKey = getAvatarGalleryStorageKey(projectId, userId)
-      localStorage.setItem(storageKey, JSON.stringify(angleGalleries))
-    } catch {
-      // ignore quota errors
-    }
-  }, [angleGalleries, ready, userId, projectId, galleriesHydrated])
+    if (!userId) return
+    saveCachedAngleGalleries(projectId, userId, angleGalleries)
+  }, [angleGalleries, userId, projectId])
 
   useEffect(() => {
     if (!ready || !linkedCharacterId) {
@@ -1457,7 +1515,283 @@ export default function AvatarsPage() {
     [angleGalleries],
   )
 
+  const collageSourceItems = useMemo(
+    () =>
+      avatarShots
+        .map((angle) => {
+          const gallery = angleGalleries[angle.id]
+          if (!gallery?.images.length) return null
+          const image = gallery.images[gallery.selectedIndex] ?? gallery.images[0]
+          return {
+            label: angle.label,
+            imageUrl: image.imageUrl,
+          }
+        })
+        .filter((item): item is { label: string; imageUrl: string } => Boolean(item)),
+    [avatarShots, angleGalleries],
+  )
+
+  const savedCollageRecord = useMemo(() => {
+    const matches = projectAvatarImages.filter(
+      (img) => img.angle_id === AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+    )
+    if (linkedCharacterId) {
+      return matches.find((img) => img.character_id === linkedCharacterId) ?? null
+    }
+    return matches[0] ?? null
+  }, [projectAvatarImages, linkedCharacterId])
+
+  useEffect(() => {
+    setSavedCollageUrl(savedCollageRecord?.image_url ?? null)
+  }, [savedCollageRecord?.image_url])
+
+  useEffect(() => {
+    return () => {
+      if (collagePreviewUrl) URL.revokeObjectURL(collagePreviewUrl)
+    }
+  }, [collagePreviewUrl])
+
+  const handleBuildCollage = async () => {
+    if (collageSourceItems.length < 2) {
+      toast({
+        title: "Need more angles",
+        description: "Add at least 2 avatar views before building a reference collage.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsBuildingCollage(true)
+      const title = characterName.trim()
+        ? `${characterName.trim()} — Avatar Reference Sheet`
+        : "Avatar Reference Sheet"
+      const blob = await buildAvatarCollageBlob(collageSourceItems, { title })
+      const nextUrl = URL.createObjectURL(blob)
+      if (collagePreviewUrl) URL.revokeObjectURL(collagePreviewUrl)
+      setCollagePreviewUrl(nextUrl)
+      setCollagePreviewBlob(blob)
+      toast({
+        title: "Collage ready",
+        description: `Combined ${collageSourceItems.length} views into one reference sheet.`,
+      })
+    } catch (error) {
+      console.error("Failed to build avatar collage:", error)
+      toast({
+        title: "Collage failed",
+        description: error instanceof Error ? error.message : "Could not build collage.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsBuildingCollage(false)
+    }
+  }
+
+  const handleSaveCollage = async () => {
+    if (!projectId || !collagePreviewBlob) {
+      toast({
+        title: "Nothing to save",
+        description: "Generate the collage first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsSavingCollage(true)
+      const fileName = `${(characterName || "character").replace(/\s+/g, "-").toLowerCase()}-avatar-collage.png`
+      const file = new File([collagePreviewBlob], fileName, { type: "image/png" })
+      const stored = await StorageService.uploadFile({
+        file,
+        projectId,
+        fileType: "image",
+        metadata: {
+          type: "avatar_collage",
+          character_name: characterName || null,
+        },
+      })
+
+      let assetId: string | undefined
+      try {
+        const asset = await AssetService.createAsset({
+          project_id: projectId,
+          character_id: linkedCharacterId || null,
+          title: `${characterName || "Character"} — Avatar Reference Collage`,
+          content_type: "image",
+          content_url: stored.url,
+          prompt: "Multi-angle avatar reference collage",
+          metadata: {
+            type: "avatar",
+            avatar_angle: AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+            avatar_source: "collage",
+            character_name: characterName || null,
+          },
+        })
+        assetId = asset.id
+        setProjectImageAssets((prev) =>
+          prev.some((a) => a.id === asset.id) ? prev : [asset, ...prev],
+        )
+      } catch (assetError) {
+        console.error("Failed to save collage asset:", assetError)
+      }
+
+      if (savedCollageRecord) {
+        try {
+          await AvatarImagesService.deleteImage(savedCollageRecord.id)
+        } catch (deleteError) {
+          console.error("Failed to replace previous collage record:", deleteError)
+        }
+      }
+
+      const record = await AvatarImagesService.createImage({
+        project_id: projectId,
+        character_id: linkedCharacterId || null,
+        character_name: characterName || null,
+        description: description || null,
+        style,
+        angle_id: AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+        angle_label: "Reference Collage",
+        image_url: stored.url,
+        prompt: "Multi-angle avatar reference collage",
+        source: "generated",
+        asset_id: assetId ?? null,
+        metadata: {
+          character_name: characterName || null,
+          collage_angle_count: collageSourceItems.length,
+        },
+      })
+
+      setProjectAvatarImages((prev) => [
+        ...prev.filter((img) => img.id !== savedCollageRecord?.id),
+        record,
+      ])
+      setSavedCollageUrl(stored.url)
+
+      if (linkedCharacterId) {
+        const character = characters.find((c) => c.id === linkedCharacterId)
+        if (character) {
+          const refs = Array.isArray(character.reference_images)
+            ? character.reference_images.filter((url): url is string => !!url)
+            : []
+          const withoutOld = savedCollageRecord
+            ? refs.filter((url) => url !== savedCollageRecord.image_url)
+            : refs
+          const nextRefs = [stored.url, ...withoutOld.filter((url) => url !== stored.url)]
+          await CharactersService.updateCharacter(linkedCharacterId, {
+            reference_images: nextRefs,
+          })
+          setCharacters((prev) =>
+            prev.map((c) =>
+              c.id === linkedCharacterId ? { ...c, reference_images: nextRefs } : c,
+            ),
+          )
+        }
+      }
+
+      toast({
+        title: "Collage saved",
+        description: linkedCharacterId
+          ? "Saved to project and linked character. Storyboard generation will use this as the single character reference."
+          : "Saved to project. Link a character to use it as the single AI reference.",
+      })
+    } catch (error) {
+      console.error("Failed to save avatar collage:", error)
+      toast({
+        title: "Save failed",
+        description: error instanceof Error ? error.message : "Could not save collage.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingCollage(false)
+    }
+  }
+
+  const handleDownloadCollage = () => {
+    const url = collagePreviewUrl || savedCollageUrl
+    if (!url) return
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `${(characterName || "character").replace(/\s+/g, "-").toLowerCase()}-avatar-collage.png`
+    link.click()
+  }
+
+  const resolvePortraitCharacterId = (): string | null => {
+    if (linkedCharacterId) return linkedCharacterId
+
+    const trimmedName = characterName.trim().toLowerCase()
+    if (trimmedName) {
+      const byName = characters.find((c) => c.name.trim().toLowerCase() === trimmedName)
+      if (byName) return byName.id
+    }
+
+    if (characters.length === 1) return characters[0].id
+
+    return null
+  }
+
+  const handleSetPortrait = async (imageUrl: string, characterIdOverride?: string) => {
+    const resolvedCharacterId =
+      characterIdOverride ?? resolvePortraitCharacterId()
+
+    if (!resolvedCharacterId) {
+      if (!projectId) {
+        toast({
+          title: "Link a project",
+          description: "Select a movie project first, then link or choose a character.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      if (characters.length === 0) {
+        toast({
+          title: "No characters found",
+          description: "Create a character on the Characters page for this project first.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      setPendingPortraitImageUrl(imageUrl)
+      setPortraitPickDialogOpen(true)
+      return
+    }
+
+    const targetCharacter = characters.find((c) => c.id === resolvedCharacterId)
+
+    try {
+      setSettingPortraitUrl(imageUrl)
+      await CharactersService.updateCharacter(resolvedCharacterId, {
+        image_url: imageUrl,
+      })
+      if (targetCharacter?.name && !characterName.trim()) {
+        setCharacterName(targetCharacter.name)
+      }
+      setCharacters((prev) =>
+        prev.map((c) =>
+          c.id === resolvedCharacterId ? { ...c, image_url: imageUrl } : c,
+        ),
+      )
+      toast({
+        title: "Portrait set",
+        description: `${targetCharacter?.name || characterName || "Character"} now uses this view as the default portrait.`,
+      })
+    } catch (error) {
+      console.error("Failed to set character portrait:", error)
+      toast({
+        title: "Error",
+        description: "Failed to set default portrait.",
+        variant: "destructive",
+      })
+    } finally {
+      setSettingPortraitUrl(null)
+      setPortraitPickDialogOpen(false)
+      setPendingPortraitImageUrl(null)
+    }
+  }
+
   const hasAnyImages = totalImageCount > 0
+  const collageDisplayUrl = collagePreviewUrl || savedCollageUrl
 
   return (
     <div className="min-h-screen bg-background">
@@ -1956,6 +2290,10 @@ export default function AvatarsPage() {
                   const gallery = angleGalleries[angle.id]
                   const avatar = gallery?.images[gallery.selectedIndex]
                   const isLoading = generatingAngleId === angle.id
+                  const isDefaultPortrait = Boolean(
+                    avatar?.imageUrl &&
+                      characters.some((character) => character.image_url === avatar.imageUrl),
+                  )
 
                   return (
                     <Card key={angle.id} className="overflow-hidden">
@@ -1977,6 +2315,12 @@ export default function AvatarsPage() {
                             {avatar?.saved && (
                               <Badge variant="outline" className="text-xs">Saved</Badge>
                             )}
+                            {isDefaultPortrait && (
+                                <Badge className="text-[10px] bg-blue-500 hover:bg-blue-500">
+                                  <Star className="h-2.5 w-2.5 mr-0.5 fill-current" />
+                                  Portrait
+                                </Badge>
+                              )}
                           </div>
                         </div>
                       </CardHeader>
@@ -2078,6 +2422,35 @@ export default function AvatarsPage() {
                               Pick
                             </Button>
                             <Button
+                              variant={isDefaultPortrait ? "secondary" : "ghost"}
+                              size="sm"
+                              className={cn(
+                                "flex-1 min-w-[4.5rem] h-8 text-xs",
+                                isDefaultPortrait &&
+                                  "bg-blue-500/15 text-blue-400 hover:bg-blue-500/20",
+                              )}
+                              onClick={() => void handleSetPortrait(avatar.imageUrl)}
+                              disabled={
+                                isLoading ||
+                                isGeneratingAll ||
+                                imageEditUploading ||
+                                settingPortraitUrl === avatar.imageUrl
+                              }
+                              title="Set as character default portrait"
+                            >
+                              {settingPortraitUrl === avatar.imageUrl ? (
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                              ) : (
+                                <Star
+                                  className={cn(
+                                    "h-3 w-3 mr-1",
+                                    isDefaultPortrait && "fill-current text-blue-400",
+                                  )}
+                                />
+                              )}
+                              Portrait
+                            </Button>
+                            <Button
                               variant="ghost"
                               size="sm"
                               className="flex-1 min-w-[4.5rem] h-8 text-xs"
@@ -2104,6 +2477,85 @@ export default function AvatarsPage() {
                   )
                 })}
               </div>
+            )}
+
+            {hasAnyImages && (
+              <Card className="border-violet-500/20 bg-violet-500/5">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <LayoutGrid className="h-5 w-5 text-violet-400" />
+                    Reference Collage Sheet
+                  </CardTitle>
+                  <CardDescription>
+                    Combine your selected avatar views into one labeled image. Save it to use a
+                    single character reference in storyboards and AI generation instead of many angles.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {collageDisplayUrl ? (
+                    <div className="rounded-lg overflow-hidden border border-border bg-muted/30">
+                      <img
+                        src={collageDisplayUrl}
+                        alt="Avatar reference collage"
+                        className="w-full h-auto object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
+                      {collageSourceItems.length} angle{collageSourceItems.length === 1 ? "" : "s"} ready
+                      {collageSourceItems.length < 2
+                        ? " — add at least one more view to build a collage."
+                        : " — generate a single reference sheet from your selected views."}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => void handleBuildCollage()}
+                      disabled={isBuildingCollage || collageSourceItems.length < 2}
+                      className="bg-gradient-to-r from-violet-500 to-purple-500 hover:opacity-90"
+                    >
+                      {isBuildingCollage ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <LayoutGrid className="h-4 w-4 mr-2" />
+                      )}
+                      Generate Collage
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => void handleSaveCollage()}
+                      disabled={!collagePreviewBlob || !projectId || isSavingCollage}
+                    >
+                      {isSavingCollage ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Save className="h-4 w-4 mr-2" />
+                      )}
+                      Save to Project
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleDownloadCollage}
+                      disabled={!collageDisplayUrl}
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download
+                    </Button>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Uses the currently selected variant for each angle ({collageSourceItems.length}{" "}
+                    view{collageSourceItems.length === 1 ? "" : "s"}).
+                    {!projectId && " Link a project to save the collage."}
+                    {projectId && !linkedCharacterId && " Link a character so storyboards use this as the one reference."}
+                    {savedCollageUrl && !collagePreviewUrl && " Showing the last saved collage for this character."}
+                  </p>
+                </CardContent>
+              </Card>
             )}
           </div>
         </div>
@@ -2471,6 +2923,42 @@ export default function AvatarsPage() {
                 </Button>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={portraitPickDialogOpen} onOpenChange={setPortraitPickDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Choose character for portrait</DialogTitle>
+              <DialogDescription>
+                Pick which character should use this angle as their default portrait.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-2 py-2">
+              {characters.map((character) => (
+                <Button
+                  key={character.id}
+                  type="button"
+                  variant="outline"
+                  className="justify-start h-auto py-3"
+                  disabled={!pendingPortraitImageUrl || settingPortraitUrl !== null}
+                  onClick={() => {
+                    if (!pendingPortraitImageUrl) return
+                    void handleSetPortrait(pendingPortraitImageUrl, character.id)
+                  }}
+                >
+                  <Star className="h-4 w-4 mr-2 shrink-0" />
+                  <span className="text-left">
+                    <span className="block font-medium">{character.name}</span>
+                    {character.archetype ? (
+                      <span className="block text-xs text-muted-foreground">
+                        {character.archetype}
+                      </span>
+                    ) : null}
+                  </span>
+                </Button>
+              ))}
+            </div>
           </DialogContent>
         </Dialog>
       </main>

@@ -4,6 +4,7 @@ import type { Character } from "./characters-service"
 import type { Location } from "./locations-service"
 import type { Storyboard } from "./storyboards-service"
 import { getStoryboardCharacterIds, getStoryboardLocationIds } from "./storyboard-assignments"
+import { AVATAR_REFERENCE_COLLAGE_ANGLE_ID } from "./avatar-angles"
 import { referenceUrlToFile } from "./project-image-linking"
 import { isGPTImage2ApiModel } from "./image-model-utils"
 import { debugStoryboardImage } from "./storyboard-image-debug"
@@ -18,6 +19,7 @@ export type StoryboardReferenceSourceType =
   | "character_portrait"
   | "character_reference"
   | "character_asset"
+  | "character_collage"
   | "avatar_angle"
   | "location_image"
   | "location_reference"
@@ -140,7 +142,69 @@ export function buildLocationDetailsText(location: Location): string {
     .join(", ")
 }
 
-export function collectStoryboardReferenceSources(options: {
+function avatarBelongsToCharacter(
+  img: AvatarImageRecord,
+  characterId: string,
+  characterName?: string,
+): boolean {
+  if (img.character_id === characterId) return true
+  const name = characterName?.trim().toLowerCase()
+  if (!name) return false
+  if (img.character_name?.trim().toLowerCase() === name) return true
+  const metaName = img.metadata?.character_name
+  if (typeof metaName === "string" && metaName.trim().toLowerCase() === name) return true
+  return false
+}
+
+function isCollageAsset(asset: Asset): boolean {
+  return (
+    asset.metadata?.avatar_angle === AVATAR_REFERENCE_COLLAGE_ANGLE_ID ||
+    asset.metadata?.type === "avatar_collage"
+  )
+}
+
+function resolveCharacterCollageUrl(
+  characterId: string,
+  character: Character | undefined,
+  avatarImages: AvatarImageRecord[],
+  characterAssets: Asset[],
+): string | null {
+  const name = character?.name
+  const knownCollageUrls = new Set<string>()
+
+  for (const img of avatarImages) {
+    if (img.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID || !img.image_url) continue
+    if (!avatarBelongsToCharacter(img, characterId, name)) continue
+    knownCollageUrls.add(img.image_url)
+    return img.image_url
+  }
+
+  for (const asset of characterAssets) {
+    if (asset.character_id !== characterId || !asset.content_url || !isCollageAsset(asset)) {
+      continue
+    }
+    knownCollageUrls.add(asset.content_url)
+    return asset.content_url
+  }
+
+  for (const ref of character?.reference_images ?? []) {
+    if (!ref || knownCollageUrls.has(ref)) continue
+    const matchesAsset = characterAssets.some(
+      (asset) => asset.character_id === characterId && asset.content_url === ref && isCollageAsset(asset),
+    )
+    const matchesAvatar = avatarImages.some(
+      (img) =>
+        img.angle_id === AVATAR_REFERENCE_COLLAGE_ANGLE_ID &&
+        img.image_url === ref &&
+        avatarBelongsToCharacter(img, characterId, name),
+    )
+    if (matchesAsset || matchesAvatar) return ref
+  }
+
+  return null
+}
+
+export type CollectStoryboardReferenceOptions = {
   characterIds: string[]
   locationIds: string[]
   characters: Character[]
@@ -149,7 +213,11 @@ export function collectStoryboardReferenceSources(options: {
   /** Linked project assets (character_id set) — used when portrait/reference URLs are stale */
   characterAssets?: Asset[]
   maxImages: number
-}): StoryboardReferenceSource[] {
+}
+
+export function collectStoryboardReferenceSources(
+  options: CollectStoryboardReferenceOptions,
+): StoryboardReferenceSource[] {
   const {
     characterIds,
     locationIds,
@@ -168,38 +236,58 @@ export function collectStoryboardReferenceSources(options: {
     sources.push(source)
   }
 
-  const avatarsForCharacter = (characterId: string) =>
-    avatarImages.filter((img) => img.character_id === characterId && img.image_url)
+  const avatarsForCharacter = (characterId: string, characterName?: string) =>
+    avatarImages.filter(
+      (img) => img.image_url && avatarBelongsToCharacter(img, characterId, characterName),
+    )
 
   for (const characterId of characterIds) {
     const character = characters.find((c) => c.id === characterId)
     const name = character?.name || "Character"
-    const avatars = avatarsForCharacter(characterId)
-    const front = avatars.find((a) => a.angle_id === "front")
-    const primaryAvatar = front ?? avatars[0]
+    const collageUrl = resolveCharacterCollageUrl(
+      characterId,
+      character,
+      avatarImages,
+      characterAssets,
+    )
 
-    if (primaryAvatar?.image_url) {
+    if (collageUrl) {
       addSource({
-        url: primaryAvatar.image_url,
-        label: `${name} · Avatar (${primaryAvatar.angle_id || "angle"})`,
+        url: collageUrl,
+        label: `${name} · Avatar collage`,
+        sourceType: "character_collage",
+        entityId: characterId,
+        entityName: name,
+      })
+      continue
+    }
+
+    const sourceCountBefore = sources.length
+
+    const avatars = avatarsForCharacter(characterId, character?.name)
+    const front = avatars.find((a) => a.angle_id === "front")
+    const orderedAvatars = [
+      ...(front ? [front] : []),
+      ...avatars.filter((a) => a !== front && a.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID),
+    ]
+
+    for (const avatar of orderedAvatars) {
+      if (!avatar.image_url || seen.has(avatar.image_url)) continue
+      addSource({
+        url: avatar.image_url,
+        label: `${name} · Avatar (${avatar.angle_id || "angle"})`,
         sourceType: "avatar_angle",
         entityId: characterId,
         entityName: name,
       })
     }
 
-    if (character?.image_url) {
-      addSource({
-        url: character.image_url,
-        label: `${name} · Portrait`,
-        sourceType: "character_portrait",
-        entityId: characterId,
-        entityName: name,
-      })
-    }
-
     for (const asset of characterAssets.filter(
-      (a) => a.character_id === characterId && a.content_type === "image" && a.content_url,
+      (a) =>
+        a.character_id === characterId &&
+        a.content_type === "image" &&
+        a.content_url &&
+        !isCollageAsset(a),
     )) {
       addSource({
         url: asset.content_url!,
@@ -210,11 +298,24 @@ export function collectStoryboardReferenceSources(options: {
       })
     }
 
+    const portraitUrl = character?.image_url?.trim()
     for (const [index, ref] of (character?.reference_images ?? []).entries()) {
+      if (!ref || ref === portraitUrl) continue
       addSource({
         url: ref,
         label: `${name} · Reference image ${index + 1}`,
         sourceType: "character_reference",
+        entityId: characterId,
+        entityName: name,
+      })
+    }
+
+    const addedCharacterSources = sources.length > sourceCountBefore
+    if (!addedCharacterSources && portraitUrl) {
+      addSource({
+        url: portraitUrl,
+        label: `${name} · Portrait`,
+        sourceType: "character_portrait",
         entityId: characterId,
         entityName: name,
       })
@@ -246,33 +347,23 @@ export function collectStoryboardReferenceSources(options: {
     }
   }
 
-  for (const characterId of characterIds) {
-    const character = characters.find((c) => c.id === characterId)
-    const name = character?.name || "Character"
-    for (const avatar of avatarsForCharacter(characterId)) {
-      if (!avatar.image_url || seen.has(avatar.image_url)) continue
-      addSource({
-        url: avatar.image_url,
-        label: `${name} · Avatar (${avatar.angle_id || "angle"})`,
-        sourceType: "avatar_angle",
-        entityId: characterId,
-        entityName: name,
-      })
-    }
-  }
-
   return sources.slice(0, maxImages)
 }
 
-export function collectStoryboardReferenceUrls(options: {
-  characterIds: string[]
-  locationIds: string[]
-  characters: Character[]
-  locations: Location[]
-  avatarImages: AvatarImageRecord[]
-  maxImages: number
-}): string[] {
+export function collectStoryboardReferenceUrls(
+  options: CollectStoryboardReferenceOptions,
+): string[] {
   return collectStoryboardReferenceSources(options).map((source) => source.url)
+}
+
+export async function loadAssignedStoryboardReferenceFiles(
+  options: CollectStoryboardReferenceOptions,
+): Promise<StoryboardReferenceLoadResult> {
+  const sources = collectStoryboardReferenceSources(options)
+  if (sources.length === 0) {
+    return { files: [], loaded: [], failed: [] }
+  }
+  return loadStoryboardReferenceFiles(sources)
 }
 
 export function referenceFilenameFromUrl(url: string): string {
@@ -307,6 +398,8 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
         return `Open Characters, select ${name}, and replace reference image ${source.label.split(" ").pop()}.`
       case "character_asset":
         return `Open Characters, select ${name}, and re-upload or replace the gallery image "${source.label.split("·").pop()?.trim() || "image"}".`
+      case "character_collage":
+        return `Open Avatar Studio, regenerate the reference collage for ${name}, and save it to the project.`
       case "location_image":
         return `Open Locations, select ${name}, and upload or generate a new cover image.`
       case "location_reference":
@@ -317,7 +410,7 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
   }
 
   if (error.toLowerCase().includes("text/html") || error.includes("not a valid image")) {
-    return `Replace this link with a direct image file URL on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page.`
+    return `Replace this link with a direct image file URL on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "character_collage" ? "Avatar Studio" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page.`
   }
 
   return `Check the image on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page for ${name}.`
