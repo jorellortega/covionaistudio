@@ -1,6 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+
+async function resolveStoryboardImageAuth(
+  request: NextRequest,
+  userIdFromClient?: string,
+): Promise<{ supabase: SupabaseClient; userId: string } | null> {
+  const supabase = await createRouteSupabaseClient()
+  const user = await getRouteAuthUser(supabase, request)
+  if (user) {
+    return { supabase, userId: user.id }
+  }
+
+  if (!userIdFromClient || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return null
+  }
+
+  const admin = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } },
+  )
+
+  const { data: profile } = await admin
+    .from('users')
+    .select('id')
+    .eq('id', userIdFromClient)
+    .maybeSingle()
+
+  if (!profile) return null
+
+  return { supabase: admin, userId: userIdFromClient }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -12,6 +43,7 @@ export async function POST(request: NextRequest) {
       generationPrompt,
       metadata,
       isDefault,
+      userId: userIdFromClient,
     } = await request.json()
 
     console.log("[storyboard-images] POST", {
@@ -33,27 +65,22 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const auth = await resolveStoryboardImageAuth(request, userIdFromClient)
+    if (!auth) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { supabase, userId } = auth
+
+    const { data: storyboard, error: storyboardError } = await supabase
+      .from('storyboards')
+      .select('id, user_id')
+      .eq('id', storyboardId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (storyboardError || !storyboard) {
+      return NextResponse.json({ error: 'Storyboard not found or unauthorized' }, { status: 404 })
     }
 
     if (isDefault) {
@@ -61,14 +88,14 @@ export async function POST(request: NextRequest) {
         .from('storyboard_images')
         .update({ is_default: false })
         .eq('storyboard_id', storyboardId)
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
     }
 
     const { data, error } = await supabase
       .from('storyboard_images')
       .insert({
         storyboard_id: storyboardId,
-        user_id: user.id,
+        user_id: userId,
         image_url: imageUrl,
         image_name: imageName,
         generation_model: generationModel,
@@ -111,6 +138,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const storyboardId = searchParams.get('storyboardId')
+    const userIdFromClient = searchParams.get('userId') ?? undefined
 
     if (!storyboardId) {
       return NextResponse.json(
@@ -119,34 +147,18 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const auth = await resolveStoryboardImageAuth(request, userIdFromClient)
+    if (!auth) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const { supabase, userId } = auth
 
     const { data, error } = await supabase
       .from('storyboard_images')
       .select('*')
       .eq('storyboard_id', storyboardId)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -167,7 +179,7 @@ export async function GET(request: NextRequest) {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const { imageId, isDefault } = await request.json()
+    const { imageId, isDefault, userId: userIdFromClient } = await request.json()
 
     if (!imageId || typeof isDefault !== 'boolean') {
       return NextResponse.json(
@@ -176,34 +188,18 @@ export async function PATCH(request: NextRequest) {
       )
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const auth = await resolveStoryboardImageAuth(request, userIdFromClient)
+    if (!auth) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const { supabase, userId } = auth
 
     const { data: image, error: fetchError } = await supabase
       .from('storyboard_images')
       .select('storyboard_id, image_url')
       .eq('id', imageId)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .single()
 
     if (fetchError || !image) {
@@ -215,7 +211,7 @@ export async function PATCH(request: NextRequest) {
         .from('storyboard_images')
         .update({ is_default: false })
         .eq('storyboard_id', image.storyboard_id)
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .neq('id', imageId)
     }
 
@@ -223,7 +219,7 @@ export async function PATCH(request: NextRequest) {
       .from('storyboard_images')
       .update({ is_default: isDefault })
       .eq('id', imageId)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .select()
       .single()
 
@@ -253,39 +249,24 @@ export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const imageId = searchParams.get('imageId')
+    const userIdFromClient = searchParams.get('userId') ?? undefined
 
     if (!imageId) {
       return NextResponse.json({ error: 'Missing imageId parameter' }, { status: 400 })
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      },
-    )
-
-    const { data: { user }, error: authError } = await supabase.auth.getUser()
-    if (authError || !user) {
+    const auth = await resolveStoryboardImageAuth(request, userIdFromClient)
+    if (!auth) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const { supabase, userId } = auth
 
     const { data: image, error: fetchError } = await supabase
       .from('storyboard_images')
       .select('storyboard_id, image_url, is_default')
       .eq('id', imageId)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .single()
 
     if (fetchError || !image) {
@@ -296,7 +277,7 @@ export async function DELETE(request: NextRequest) {
       .from('storyboard_images')
       .delete()
       .eq('id', imageId)
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
 
     if (error) {
       console.error('Error deleting storyboard image:', error)
@@ -308,7 +289,7 @@ export async function DELETE(request: NextRequest) {
         .from('storyboard_images')
         .select('id, image_url')
         .eq('storyboard_id', image.storyboard_id)
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(1)
 

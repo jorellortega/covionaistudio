@@ -1062,9 +1062,25 @@ export default function SceneStoryboardsPage() {
 
   const orderedStoryboards = useMemo(() => sortStoryboardRows(storyboards), [storyboards])
 
+  const fetchStoryboardImagesApi = async (input: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers)
+    if (init?.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json")
+    }
+    const {
+      data: { session },
+    } = await getSupabaseClient().auth.getSession()
+    if (session?.access_token) {
+      headers.set("Authorization", `Bearer ${session.access_token}`)
+    }
+    return fetch(input, { ...init, headers, credentials: "include" })
+  }
+
   const loadStoryboardImages = async (storyboardId: string): Promise<StoryboardImage[]> => {
     try {
-      const response = await fetch(`/api/storyboard-images?storyboardId=${storyboardId}`)
+      const query = new URLSearchParams({ storyboardId })
+      if (userId) query.set("userId", userId)
+      const response = await fetchStoryboardImagesApi(`/api/storyboard-images?${query.toString()}`)
       const result = await response.json()
       if (response.ok && result.success) {
         const images = (result.data || []) as StoryboardImage[]
@@ -1103,13 +1119,14 @@ export default function SceneStoryboardsPage() {
       generationModel: options?.generationModel,
     })
 
-    const response = await fetch("/api/storyboard-images", {
+    const response = await fetchStoryboardImagesApi("/api/storyboard-images", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         storyboardId,
         imageUrl,
         isDefault,
+        userId,
         generationPrompt: options?.generationPrompt,
         generationModel: options?.generationModel,
         imageName: options?.imageName,
@@ -1143,10 +1160,10 @@ export default function SceneStoryboardsPage() {
 
   const handleSelectStoryboardImage = async (image: StoryboardImage) => {
     try {
-      const response = await fetch("/api/storyboard-images", {
+      const response = await fetchStoryboardImagesApi("/api/storyboard-images", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageId: image.id, isDefault: true }),
+        body: JSON.stringify({ imageId: image.id, isDefault: true, userId }),
       })
       const result = await response.json()
       if (!response.ok || !result.success) {
@@ -1173,9 +1190,14 @@ export default function SceneStoryboardsPage() {
   const handleDeleteStoryboardImage = async (image: StoryboardImage) => {
     setDeletingImageId(image.id)
     try {
-      const response = await fetch(`/api/storyboard-images?imageId=${image.id}`, {
+      const deleteQuery = new URLSearchParams({ imageId: image.id })
+      if (userId) deleteQuery.set("userId", userId)
+      const response = await fetchStoryboardImagesApi(
+        `/api/storyboard-images?${deleteQuery.toString()}`,
+        {
         method: "DELETE",
-      })
+        },
+      )
       const result = await response.json()
       if (!response.ok || !result.success) {
         throw new Error(result.error || "Failed to delete image")
