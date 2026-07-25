@@ -3118,23 +3118,39 @@ export default function CinemaProductionPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const updated = await StoryboardsService.updateStoryboardImage(storyboard.id, imageUrlToUse)
-      setStoryboards((prev) =>
-        prev.map((existing) => (existing.id === storyboard.id ? updated : existing)),
-      )
-      await persistShotReferenceFrame(storyboard, {
-        url: imageUrlToUse,
-        label: "Generated shot",
-      })
-      setShotPreviewImage(storyboard.id, imageUrlToUse)
+      const hadMainImage = Boolean(storyboard.image_url)
 
-      toast({
-        title: "Image generated",
-        description:
-          referenceFiles.length > 0
-            ? `Created shot image using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"} from characters and locations.`
-            : "Created shot image from shot details.",
-      })
+      if (hadMainImage) {
+        await persistShotReferenceFrame(storyboard, {
+          url: imageUrlToUse,
+          label: "Quick generated",
+        })
+        setShotPreviewImage(storyboard.id, imageUrlToUse)
+        toast({
+          title: "Image added to library",
+          description:
+            referenceFiles.length > 0
+              ? `New version saved using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"}. Main shot image unchanged — pick a thumb to preview or set as shot.`
+              : "New version saved to the frame library. Main shot image unchanged — pick a thumb to preview or set as shot.",
+        })
+      } else {
+        const updated = await StoryboardsService.updateStoryboardImage(storyboard.id, imageUrlToUse)
+        setStoryboards((prev) =>
+          prev.map((existing) => (existing.id === storyboard.id ? updated : existing)),
+        )
+        await persistShotReferenceFrame(storyboard, {
+          url: imageUrlToUse,
+          label: "Generated shot",
+        })
+        setShotPreviewImage(storyboard.id, imageUrlToUse)
+        toast({
+          title: "Image generated",
+          description:
+            referenceFiles.length > 0
+              ? `Created shot image using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"} from characters and locations.`
+              : "Created shot image from shot details.",
+        })
+      }
     } catch (error) {
       toast({
         title: "Generation failed",
@@ -8049,6 +8065,26 @@ export default function CinemaProductionPage() {
 
                       <div className="space-y-2">
                         <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            disabled={quickGeneratingShotIds.has(storyboard.id)}
+                            onClick={() => void quickGenerateShotImage(storyboard)}
+                            title={
+                              storyboard.image_url
+                                ? "Generate another image and add it to the frame library"
+                                : "Quick generate image from shot details"
+                            }
+                          >
+                            {quickGeneratingShotIds.has(storyboard.id) ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Zap className="h-3.5 w-3.5" />
+                            )}
+                            Quick Generate
+                          </Button>
                           <Button
                             type="button"
                             size="sm"

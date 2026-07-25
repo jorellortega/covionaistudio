@@ -5412,22 +5412,6 @@ export default function SceneStoryboardsPage() {
                       <Link2 className="h-4 w-4" />
                     </Button>
 
-                    {/* Quick one-click AI image generation */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
-                      title="Quick generate image from shot details"
-                      disabled={quickGeneratingShotIds.has(storyboard.id)}
-                      onClick={() => void quickGenerateShotImage(storyboard)}
-                    >
-                      {quickGeneratingShotIds.has(storyboard.id) ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Zap className="h-4 w-4" />
-                      )}
-                    </Button>
-
                     {/* Open AI generation form with prompt editor */}
                     <Button 
                       variant="ghost" 
@@ -5512,6 +5496,26 @@ export default function SceneStoryboardsPage() {
                       }}
                     >
                       <Wand2 className="h-4 w-4" />
+                    </Button>
+
+                    {/* Quick one-click AI image generation */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
+                      title={
+                        storyboard.image_url
+                          ? "Quick generate another image (adds to gallery)"
+                          : "Quick generate image from shot details"
+                      }
+                      disabled={quickGeneratingShotIds.has(storyboard.id)}
+                      onClick={() => void quickGenerateShotImage(storyboard)}
+                    >
+                      {quickGeneratingShotIds.has(storyboard.id) ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Zap className="h-4 w-4" />
+                      )}
                     </Button>
                     
                     <Button 
