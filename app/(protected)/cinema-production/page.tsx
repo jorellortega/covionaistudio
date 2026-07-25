@@ -2504,6 +2504,58 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const renderStoryboardAssignmentPickers = (storyboard: Storyboard) => {
+    if (!selectedProjectId || (projectCharacters.length === 0 && projectLocations.length === 0)) {
+      return null
+    }
+
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {projectCharacters.length > 0 && (
+          <AssignmentBadgePicker
+            kind="character"
+            items={projectCharacters.map((character) => ({
+              id: character.id,
+              name: character.name,
+              subtitle: character.archetype ?? undefined,
+            }))}
+            selectedIds={getStoryboardCharacterIds(storyboard)}
+            onSelectedIdsChange={(ids) => {
+              void applyStoryboardAssignments(
+                storyboard,
+                ids,
+                getStoryboardLocationIds(storyboard),
+              )
+            }}
+            disabled={updatingAssignmentStoryboardId === storyboard.id}
+          />
+        )}
+        {projectLocations.length > 0 && (
+          <AssignmentBadgePicker
+            kind="location"
+            items={projectLocations.map((location) => ({
+              id: location.id,
+              name: location.name,
+              subtitle: location.type ?? undefined,
+            }))}
+            selectedIds={getStoryboardLocationIds(storyboard)}
+            onSelectedIdsChange={(ids) => {
+              void applyStoryboardAssignments(
+                storyboard,
+                getStoryboardCharacterIds(storyboard),
+                ids,
+              )
+            }}
+            disabled={updatingAssignmentStoryboardId === storyboard.id}
+          />
+        )}
+        {updatingAssignmentStoryboardId === storyboard.id && (
+          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+        )}
+      </div>
+    )
+  }
+
   const buildPromptFromStoryboard = (storyboard: Storyboard): string => {
     const assignmentContext = getStoryboardAssignmentContext(
       storyboard,
@@ -7423,6 +7475,8 @@ export default function CinemaProductionPage() {
                           </div>
                         </div>
 
+                        {renderStoryboardAssignmentPickers(storyboard)}
+
                         {/* Video or Generate Button */}
                         {(() => {
                           const videos = storyboardVideos.get(storyboard.id) || []
@@ -7556,51 +7610,6 @@ export default function CinemaProductionPage() {
                           <CardDescription className="mt-2">
                             {storyboard.description || "No description"}
                           </CardDescription>
-                          {(projectCharacters.length > 0 || projectLocations.length > 0) && (
-                            <div className="flex flex-wrap items-center gap-1 mt-3">
-                              {projectCharacters.length > 0 && (
-                                <AssignmentBadgePicker
-                                  kind="character"
-                                  items={projectCharacters.map((character) => ({
-                                    id: character.id,
-                                    name: character.name,
-                                    subtitle: character.archetype ?? undefined,
-                                  }))}
-                                  selectedIds={getStoryboardCharacterIds(storyboard)}
-                                  onSelectedIdsChange={(ids) => {
-                                    void applyStoryboardAssignments(
-                                      storyboard,
-                                      ids,
-                                      getStoryboardLocationIds(storyboard),
-                                    )
-                                  }}
-                                  disabled={updatingAssignmentStoryboardId === storyboard.id}
-                                />
-                              )}
-                              {projectLocations.length > 0 && (
-                                <AssignmentBadgePicker
-                                  kind="location"
-                                  items={projectLocations.map((location) => ({
-                                    id: location.id,
-                                    name: location.name,
-                                    subtitle: location.type ?? undefined,
-                                  }))}
-                                  selectedIds={getStoryboardLocationIds(storyboard)}
-                                  onSelectedIdsChange={(ids) => {
-                                    void applyStoryboardAssignments(
-                                      storyboard,
-                                      getStoryboardCharacterIds(storyboard),
-                                      ids,
-                                    )
-                                  }}
-                                  disabled={updatingAssignmentStoryboardId === storyboard.id}
-                                />
-                              )}
-                              {updatingAssignmentStoryboardId === storyboard.id && (
-                                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                              )}
-                            </div>
-                          )}
                         </div>
                         <Badge className={
                           storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
@@ -8239,6 +8248,8 @@ export default function CinemaProductionPage() {
                           <p className="text-sm">{storyboard.visual_notes}</p>
                         </div>
                       )}
+
+                      {renderStoryboardAssignmentPickers(storyboard)}
 
                       {/* Video Generation Section */}
                       <div className="border-t pt-4 space-y-4">

@@ -283,6 +283,13 @@ export default function SceneStoryboardsPage() {
   const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
   const [locations, setLocations] = useState<Location[]>([])
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
+
+  const sceneProjectId = useMemo(() => {
+    if (sceneInfo?.project_id) return sceneInfo.project_id
+    const fromShot = storyboards.find((sb) => sb.project_id)?.project_id
+    return fromShot || undefined
+  }, [sceneInfo?.project_id, storyboards])
+
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [formData, setFormData] = useState<CreateStoryboardData>({
     title: "",
@@ -673,8 +680,8 @@ export default function SceneStoryboardsPage() {
       setIsLoadingPrompts(true)
       console.log("🎬 Loading saved prompts for user:", userId)
       
-      // Get the current project ID from scene info - we need to wait for it
-      const currentProjectId = sceneInfo?.project_id
+      // Get the current project ID from scene info or loaded storyboards
+      const currentProjectId = sceneProjectId
       console.log("🎬 Current project ID:", currentProjectId)
       
       // If no project ID yet, don't load prompts
@@ -896,22 +903,22 @@ export default function SceneStoryboardsPage() {
     loadAISettings()
   }, [ready, userId])
 
-  // Reload prompts when sceneInfo changes (after project_id is available)
+  // Reload prompts when project is resolved
   useEffect(() => {
-    if (sceneInfo?.project_id && userId) {
-      console.log("🎬 SceneInfo loaded with project_id, reloading prompts...")
+    if (sceneProjectId && userId) {
+      console.log("🎬 Scene project resolved, reloading prompts...")
       loadSavedPrompts()
     }
-  }, [sceneInfo?.project_id, userId])
+  }, [sceneProjectId, userId])
 
-  // Load characters when project_id is available
+  // Load characters when project is resolved
   useEffect(() => {
     const loadCharacters = async () => {
-      if (!sceneInfo?.project_id || !ready || !userId) return
+      if (!sceneProjectId || !ready || !userId) return
       
       setIsLoadingCharacters(true)
       try {
-        const chars = await CharactersService.getCharacters(sceneInfo.project_id)
+        const chars = await CharactersService.getCharacters(sceneProjectId)
         setCharacters(chars)
         console.log("🎬 Loaded characters for storyboards:", chars)
       } catch (error) {
@@ -922,16 +929,16 @@ export default function SceneStoryboardsPage() {
     }
     
     loadCharacters()
-  }, [sceneInfo?.project_id, ready, userId])
+  }, [sceneProjectId, ready, userId])
 
-  // Load locations when project_id is available
+  // Load locations when project is resolved
   useEffect(() => {
     const loadLocations = async () => {
-      if (!sceneInfo?.project_id || !ready || !userId) return
+      if (!sceneProjectId || !ready || !userId) return
       
       setIsLoadingLocations(true)
       try {
-        const locs = await LocationsService.getLocations(sceneInfo.project_id)
+        const locs = await LocationsService.getLocations(sceneProjectId)
         setLocations(locs)
         console.log("🎬 Loaded locations for storyboards:", locs)
       } catch (error) {
@@ -942,18 +949,18 @@ export default function SceneStoryboardsPage() {
     }
     
     loadLocations()
-  }, [sceneInfo?.project_id, ready, userId])
+  }, [sceneProjectId, ready, userId])
 
   // Load project image assets for linking to shots
   useEffect(() => {
     const loadProjectAssets = async () => {
-      if (!sceneInfo?.project_id || !ready || !userId) {
+      if (!sceneProjectId || !ready || !userId) {
         setProjectImageAssets([])
         return
       }
       setIsLoadingProjectAssets(true)
       try {
-        const assets = await AssetService.getAssetsForProject(sceneInfo.project_id)
+        const assets = await AssetService.getAssetsForProject(sceneProjectId)
         setProjectImageAssets(
           assets.filter((a) => a.content_type === "image" && a.content_url),
         )
@@ -965,17 +972,17 @@ export default function SceneStoryboardsPage() {
       }
     }
     loadProjectAssets()
-  }, [sceneInfo?.project_id, ready, userId])
+  }, [sceneProjectId, ready, userId])
 
   // Load avatar studio images for reference linking
   useEffect(() => {
     const loadAvatarImages = async () => {
-      if (!sceneInfo?.project_id || !ready || !userId) {
+      if (!sceneProjectId || !ready || !userId) {
         setProjectAvatarImages([])
         return
       }
       try {
-        const images = await AvatarImagesService.listImagesForProject(sceneInfo.project_id)
+        const images = await AvatarImagesService.listImagesForProject(sceneProjectId)
         setProjectAvatarImages(images.filter((img) => img.image_url))
       } catch (error) {
         console.error("Error loading avatar images:", error)
@@ -983,7 +990,7 @@ export default function SceneStoryboardsPage() {
       }
     }
     void loadAvatarImages()
-  }, [sceneInfo?.project_id, ready, userId])
+  }, [sceneProjectId, ready, userId])
 
   const avatarImageAssets = useMemo(
     () =>
@@ -1052,12 +1059,6 @@ export default function SceneStoryboardsPage() {
       }))
       .filter((group) => group.assets.length > 0)
   }, [linkedProjectImageGroups, linkImageSearch, locations, characters])
-
-  const sceneProjectId = useMemo(() => {
-    if (sceneInfo?.project_id) return sceneInfo.project_id
-    const fromShot = storyboards.find((sb) => sb.project_id)?.project_id
-    return fromShot || undefined
-  }, [sceneInfo?.project_id, storyboards])
 
   const orderedStoryboards = useMemo(() => sortStoryboardRows(storyboards), [storyboards])
 
@@ -1974,60 +1975,52 @@ export default function SceneStoryboardsPage() {
       let timelineName = "Unknown Timeline"
       let projectName = "Unknown Project"
       let projectId = ""
-      
+
+      const resolveProjectFromTimelineId = async (timelineId: string) => {
+        const { data: timeline } = await getSupabaseClient()
+          .from("timelines")
+          .select("id, name, project_id")
+          .eq("id", timelineId)
+          .maybeSingle()
+
+        if (!timeline?.project_id) return false
+
+        timelineName = timeline.name || timelineName
+        projectId = timeline.project_id
+        const project = await TimelineService.getMovieById(timeline.project_id)
+        if (project) {
+          projectName = project.name
+        }
+        return true
+      }
+
       try {
-        // Check if scene has project_id or timeline_id
-        const sceneProjectId = scene.project_id || (scene as any).timeline_id
-        console.log("🎬 Scene project_id:", scene.project_id)
-        console.log("🎬 Scene timeline_id:", (scene as any).timeline_id)
-        console.log("🎬 Using sceneProjectId:", sceneProjectId)
-        
-        if (sceneProjectId) {
-          // First try to get timeline directly by ID
-          console.log("🎬 Looking for timeline with ID:", sceneProjectId)
-          
-          // Query the timeline directly by ID
-          console.log("🎬 Querying timelines table for ID:", sceneProjectId)
-          const { data: timeline, error: timelineError } = await getSupabaseClient()
-            .from('timelines')
-            .select('*')
-            .eq('id', sceneProjectId)
-            .eq('user_id', userId)
-            .single()
-          
-          console.log("🎬 Timeline query result:", { timeline, error: timelineError })
-          
-          if (timelineError) {
-            console.log("🎬 Timeline lookup error:", timelineError)
-          } else if (timeline) {
-            timelineName = timeline.name
-            projectId = timeline.project_id
-            console.log("🎬 Found timeline:", timelineName, "for project:", projectId)
-            
-            // Get project name from timeline
-            const project = await TimelineService.getMovieById(timeline.project_id)
-            if (project) {
-              projectName = project.name
-              console.log("🎬 Found project:", projectName)
+        const timelineId = (scene as { timeline_id?: string }).timeline_id
+        if (timelineId && (await resolveProjectFromTimelineId(timelineId))) {
+          console.log("🎬 Resolved project from scene timeline_id:", projectId)
+        } else {
+          const sceneProjectId = scene.project_id || timelineId
+          console.log("🎬 Scene project_id:", scene.project_id)
+          console.log("🎬 Scene timeline_id:", timelineId)
+          console.log("🎬 Using sceneProjectId:", sceneProjectId)
+
+          if (sceneProjectId) {
+            if (!(await resolveProjectFromTimelineId(sceneProjectId))) {
+              try {
+                const directProject = await TimelineService.getMovieById(sceneProjectId)
+                if (directProject) {
+                  projectName = directProject.name
+                  projectId = directProject.id
+                  timelineName = "Main Timeline"
+                  console.log("🎬 Found direct project reference:", projectName)
+                }
+              } catch (directError) {
+                console.log("🎬 Direct project lookup also failed:", directError)
+              }
             }
           } else {
-            console.log("🎬 No timeline found, trying alternative approach...")
-            
-            // Alternative: try to get project directly from scene's project_id/timeline_id
-            try {
-              const directProject = await TimelineService.getMovieById(sceneProjectId)
-              if (directProject) {
-                projectName = directProject.name
-                projectId = directProject.id
-                timelineName = "Main Timeline"
-                console.log("🎬 Found direct project reference:", projectName)
-              }
-            } catch (directError) {
-              console.log("🎬 Direct project lookup also failed:", directError)
-            }
+            console.log("🎬 No project_id or timeline_id found in scene")
           }
-        } else {
-          console.log("🎬 No project_id or timeline_id found in scene")
         }
       } catch (error) {
         console.warn("Could not fetch timeline/project info:", error)
@@ -2213,7 +2206,7 @@ export default function SceneStoryboardsPage() {
         action: parsedAction || (!parsedDialogue ? textToUse : undefined),
         visual_notes: `Shot ${nextShotNumber} - ${shotDetails.shotType} ${shotDetails.cameraAngle} ${shotDetails.movement}`,
         scene_id: sceneId,
-        project_id: sceneInfo?.project_id || "",
+        project_id: sceneProjectId || "",
         script_text_start: textRange && textRange.start !== null ? textRange.start : undefined,
         script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
         script_text_snippet: textRange ? textToUse : undefined,
@@ -3463,11 +3456,11 @@ export default function SceneStoryboardsPage() {
           <nav className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs sm:text-sm text-muted-foreground overflow-x-auto">
             <Link href="/movies" className="hover:text-foreground whitespace-nowrap">Movies</Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground whitespace-nowrap break-words">
+            <Link href={`/timeline?movie=${sceneProjectId}`} className="hover:text-foreground whitespace-nowrap break-words">
               {sceneInfo?.project_name || "Unknown Project"}
             </Link>
             <span>/</span>
-            <Link href={`/timeline?movie=${sceneInfo?.project_id}`} className="hover:text-foreground whitespace-nowrap break-words">
+            <Link href={`/timeline?movie=${sceneProjectId}`} className="hover:text-foreground whitespace-nowrap break-words">
               {sceneInfo?.timeline_name || "Unknown Timeline"}
             </Link>
             <span>/</span>
@@ -3477,9 +3470,9 @@ export default function SceneStoryboardsPage() {
           </nav>
           <div className="flex flex-col items-start gap-2 sm:items-end sm:flex-shrink-0">
             <div className="flex flex-wrap items-center gap-2">
-              {sceneInfo?.project_id ? (
+              {sceneProjectId ? (
                 <Button variant="outline" size="sm" asChild className="h-8 text-xs sm:text-sm">
-                  <Link href={`/cinema-production?project=${sceneInfo.project_id}&scene=${sceneId}`}>
+                  <Link href={`/cinema-production?project=${sceneProjectId}&scene=${sceneId}`}>
                     <Video className="h-4 w-4 sm:mr-1.5" />
                     <span className="hidden sm:inline">Cinema Production</span>
                     <span className="sm:hidden">Production</span>
@@ -3490,7 +3483,7 @@ export default function SceneStoryboardsPage() {
             </div>
             <SceneSyncControls
               sceneId={sceneId}
-              projectId={sceneInfo?.project_id}
+              projectId={sceneProjectId}
               sceneNumber={sceneNumberForSync}
               primaryDirection="storyboards-to-shotlist"
               onSynced={() => {
@@ -5323,7 +5316,7 @@ export default function SceneStoryboardsPage() {
                     </div>
                   ) : null}
 
-                  {(characters.length > 0 || locations.length > 0) && (
+                  {sceneProjectId && (characters.length > 0 || locations.length > 0) && (
                     <div className="flex flex-wrap items-center gap-1">
                       {characters.length > 0 && (
                         <AssignmentBadgePicker
@@ -5368,7 +5361,7 @@ export default function SceneStoryboardsPage() {
                       )}
                     </div>
                   )}
-                  
+
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline" className="text-xs flex-shrink-0">
                       {storyboard.shot_type}
@@ -5694,13 +5687,13 @@ export default function SceneStoryboardsPage() {
                     ? "No images in this project yet. Generate some on the Characters or Locations pages first."
                     : "No images match your search."}
                 </p>
-                {projectImageAssets.length === 0 && sceneInfo?.project_id && (
+                {projectImageAssets.length === 0 && sceneProjectId && (
                   <div className="flex flex-wrap justify-center gap-2 pt-2">
                     <Button variant="outline" size="sm" asChild>
-                      <Link href={`/characters?movie=${sceneInfo.project_id}`}>Characters</Link>
+                      <Link href={`/characters?movie=${sceneProjectId}`}>Characters</Link>
                     </Button>
                     <Button variant="outline" size="sm" asChild>
-                      <Link href={`/locations?movie=${sceneInfo.project_id}`}>Locations</Link>
+                      <Link href={`/locations?movie=${sceneProjectId}`}>Locations</Link>
                     </Button>
                   </div>
                 )}
