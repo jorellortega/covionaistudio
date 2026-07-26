@@ -404,8 +404,10 @@ export default function SceneStoryboardsPage() {
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
-  const [isGeneratingReferenceEdit, setIsGeneratingReferenceEdit] = useState(false)
-  const [referenceEditProgress, setReferenceEditProgress] = useState("")
+  const [referenceEditingShotIds, setReferenceEditingShotIds] = useState<Set<string>>(() => new Set())
+  const [referenceEditProgressByShotId, setReferenceEditProgressByShotId] = useState<
+    Map<string, string>
+  >(() => new Map())
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -1532,6 +1534,8 @@ export default function SceneStoryboardsPage() {
     if (storyboard.title) {
       prompt += ` Shot: ${storyboard.title}.`
     }
+    prompt +=
+      " Edit the attached reference image only. Keep the same composition, subject, framing, camera angle, and environment — change only what is described above. Do not add new elements."
     return prompt.slice(0, 990)
   }
 
@@ -1604,12 +1608,15 @@ export default function SceneStoryboardsPage() {
     setReferenceEditStoryboard(storyboard)
     clearInlineReferenceEditState()
     const resolved = resolveStoryboardForGeneration(storyboard.id) ?? storyboard
-    const characterIds = getStoryboardCharacterIds(resolved)
-    const avatarAssetIds = characterIds.flatMap((characterId) =>
-      getAvatarLinkAssetIds(characterId),
-    )
-    if (avatarAssetIds.length > 0) {
-      setInlineStyleLinkAssetIds(avatarAssetIds.slice(0, MAX_LINKED_REFERENCE_IMAGES))
+    const isCreateMode = !hasPrimaryReferenceForEdit(resolved)
+    if (isCreateMode) {
+      const characterIds = getStoryboardCharacterIds(resolved)
+      const avatarAssetIds = characterIds.flatMap((characterId) =>
+        getAvatarLinkAssetIds(characterId),
+      )
+      if (avatarAssetIds.length > 0) {
+        setInlineStyleLinkAssetIds(avatarAssetIds.slice(0, MAX_LINKED_REFERENCE_IMAGES))
+      }
     }
     setReferenceEditDialogOpen(true)
   }
@@ -1618,6 +1625,31 @@ export default function SceneStoryboardsPage() {
     setReferenceEditDialogOpen(false)
     setReferenceEditStoryboard(null)
     clearInlineReferenceEditState()
+  }
+
+  const setReferenceEditProgressForShot = (storyboardId: string, progress: string) => {
+    setReferenceEditProgressByShotId((prev) => new Map(prev).set(storyboardId, progress))
+  }
+
+  const clearReferenceEditProgressForShot = (storyboardId: string) => {
+    setReferenceEditProgressByShotId((prev) => {
+      const next = new Map(prev)
+      next.delete(storyboardId)
+      return next
+    })
+  }
+
+  const startReferenceEditForShot = (storyboardId: string) => {
+    setReferenceEditingShotIds((prev) => new Set(prev).add(storyboardId))
+  }
+
+  const finishReferenceEditForShot = (storyboardId: string) => {
+    setReferenceEditingShotIds((prev) => {
+      const next = new Set(prev)
+      next.delete(storyboardId)
+      return next
+    })
+    clearReferenceEditProgressForShot(storyboardId)
   }
 
   const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
@@ -1629,6 +1661,8 @@ export default function SceneStoryboardsPage() {
     )
 
     const direction = inlineCustomShotPrompt.trim()
+    const shotReferenceFile = inlineShotReferenceFile
+    const styleLinkAssetIds = [...inlineStyleLinkAssetIds]
     if (!direction) {
       debugStoryboardImage("validation-failed", {
         reason: "empty-reference-edit-direction",
@@ -1665,7 +1699,7 @@ export default function SceneStoryboardsPage() {
     }
 
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
-    const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
+    const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, shotReferenceFile)
     const lockedConfigPreview = getLockedImageConfig(
       isCreateMode ? undefined : { withReferenceImage: true },
     )
@@ -1691,13 +1725,14 @@ export default function SceneStoryboardsPage() {
       return
     }
 
-    setIsGeneratingReferenceEdit(true)
-    setReferenceEditProgress(
+    startReferenceEditForShot(storyboardId)
+    setReferenceEditProgressForShot(
+      storyboardId,
       isCreateMode ? "Loading references..." : "Loading reference image...",
     )
     try {
       const styleReferenceUrls: string[] = []
-      for (const assetId of inlineStyleLinkAssetIds) {
+      for (const assetId of styleLinkAssetIds) {
         const styleAsset = findStyleLinkAsset(assetId)
         if (styleAsset?.content_url) {
           styleReferenceUrls.push(styleAsset.content_url)
@@ -1706,6 +1741,7 @@ export default function SceneStoryboardsPage() {
       }
 
       if (
+        isCreateMode &&
         styleReferenceUrls.length === 0 &&
         (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)
       ) {
@@ -1726,7 +1762,10 @@ export default function SceneStoryboardsPage() {
         styleReferenceUrls.push(...refSources.map((source) => source.url))
       }
 
-      setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
+      setReferenceEditProgressForShot(
+        storyboardId,
+        isCreateMode ? "Generating image..." : "Editing image...",
+      )
       const config = isCreateMode
         ? requireLockedImageConfig()
         : requireLockedImageConfig({ withReferenceImage: true })
@@ -1744,23 +1783,23 @@ export default function SceneStoryboardsPage() {
       let referenceFile: File | undefined
       if (config.supportsReference) {
         if (!isCreateMode) {
-          if (inlineShotReferenceFile) {
-            referenceFile = inlineShotReferenceFile
+          if (shotReferenceFile) {
+            referenceFile = shotReferenceFile
             pushStoryboardImageTrace(
               "ok",
               "Using uploaded primary reference",
-              `${inlineShotReferenceFile.size} bytes`,
+              `${shotReferenceFile.size} bytes`,
             )
           } else if (storyboard.image_url) {
             referenceImageUrl = storyboard.image_url
             pushStoryboardImageTrace("ok", "Using shot image URL as primary reference", referenceImageUrl.slice(0, 80))
           }
-        } else if (inlineShotReferenceFile) {
-          referenceFile = inlineShotReferenceFile
+        } else if (shotReferenceFile) {
+          referenceFile = shotReferenceFile
           pushStoryboardImageTrace(
             "ok",
             "Using uploaded primary reference",
-            `${inlineShotReferenceFile.size} bytes`,
+            `${shotReferenceFile.size} bytes`,
           )
         } else if (styleReferenceUrls.length > 0) {
           referenceImageUrl = styleReferenceUrls[0]
@@ -1869,7 +1908,8 @@ export default function SceneStoryboardsPage() {
       }
 
       clearInlineReferenceEditState()
-      closeReferenceEditDialog()
+      setReferenceEditDialogOpen(false)
+      setReferenceEditStoryboard(null)
       pushStoryboardImageTrace("ok", "Edit complete")
       toast({
         title: isCreateMode ? "Image created" : "Image edited",
@@ -1894,8 +1934,7 @@ export default function SceneStoryboardsPage() {
         variant: "destructive",
       })
     } finally {
-      setIsGeneratingReferenceEdit(false)
-      setReferenceEditProgress("")
+      finishReferenceEditForShot(storyboardId)
     }
   }
 
@@ -1905,6 +1944,8 @@ export default function SceneStoryboardsPage() {
     inDialog = false,
   ) => {
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
+    const isEditingThisShot = referenceEditingShotIds.has(storyboard.id)
+    const editProgress = referenceEditProgressByShotId.get(storyboard.id)
     const lockedModel = getLockedImageModelLabel()
     const lockedConfig = getLockedImageConfig(
       isCreateMode ? undefined : { withReferenceImage: true },
@@ -1935,15 +1976,20 @@ export default function SceneStoryboardsPage() {
           ? `Create a new shot image with your locked model (${lockedModel || "lock one in AI Settings"}). Describe the scene below — shot details are included automatically.`
           : `Edit using your locked model (${lockedModel || "lock one in AI Settings"}).${
               getLockedImageConfig({ withReferenceImage: true })?.supportsReference
-                ? " Describe changes below and optionally link another project image as a second reference."
+                ? " Only the current shot image is sent unless you manually link extras below."
                 : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."
             }`}
       </p>
       )}
-      {isGeneratingReferenceEdit && referenceEditProgress ? (
+      {isEditingThisShot && editProgress ? (
         <p className="text-xs text-muted-foreground flex items-center gap-2">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {referenceEditProgress}
+          {editProgress}
+          {inDialog ? (
+            <span className="text-muted-foreground/80">
+              — you can close this window and keep working
+            </span>
+          ) : null}
         </p>
       ) : null}
       <div className="space-y-2">
@@ -1960,7 +2006,7 @@ export default function SceneStoryboardsPage() {
               : 'e.g., warmer lighting, wider framing, add rain, closer on the character'
           }
           className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
-          disabled={isGeneratingReferenceEdit}
+          disabled={isEditingThisShot}
         />
         <div className="space-y-2">
           <Label htmlFor={`${idPrefix}-ref-upload`} className="text-xs text-muted-foreground">
@@ -1973,14 +2019,14 @@ export default function SceneStoryboardsPage() {
               accept="image/*"
               className="hidden"
               onChange={handleInlineShotReferenceSelect}
-              disabled={isGeneratingReferenceEdit}
+              disabled={isEditingThisShot}
             />
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="gap-2"
-              disabled={isGeneratingReferenceEdit}
+              disabled={isEditingThisShot}
               onClick={() =>
                 document.getElementById(`${idPrefix}-ref-upload`)?.click()
               }
@@ -2002,7 +2048,7 @@ export default function SceneStoryboardsPage() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8"
-                  disabled={isGeneratingReferenceEdit}
+                  disabled={isEditingThisShot}
                   onClick={clearInlineShotReference}
                   title="Remove uploaded reference"
                 >
@@ -2038,12 +2084,14 @@ export default function SceneStoryboardsPage() {
             </Label>
           </div>
           <p className="text-xs text-muted-foreground break-words">
-            Adds more images as references from characters, locations, avatar studio, or project assets.
-            Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
-            {storyboard.character_id &&
-            getAvatarImagesForCharacter(storyboard.character_id).length > 0
-              ? " This character's avatar images are pre-selected when available."
-              : ""}
+            {isCreateMode
+              ? `Adds more images as references from characters, locations, avatar studio, or project assets. Select up to ${MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.${
+                  storyboard.character_id &&
+                  getAvatarImagesForCharacter(storyboard.character_id).length > 0
+                    ? " This character's avatar images are pre-selected when available."
+                    : ""
+                }`
+              : `Optional — only select these if you want to blend in another look. Edits use the shot image above by default; character and location images are not sent unless you pick them here.`}
           </p>
           {isLoadingProjectAssets ? (
             <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -2066,7 +2114,7 @@ export default function SceneStoryboardsPage() {
                       <button
                         key={asset.id}
                         type="button"
-                        disabled={isGeneratingReferenceEdit}
+                        disabled={isEditingThisShot}
                         onClick={() => toggleInlineStyleLinkAsset(asset.id)}
                         className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
                           inlineStyleLinkAssetIds.includes(asset.id)
@@ -2097,7 +2145,7 @@ export default function SceneStoryboardsPage() {
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2 text-xs"
-                disabled={isGeneratingReferenceEdit}
+                disabled={isEditingThisShot}
                 onClick={clearInlineStyleLink}
               >
                 Clear all
@@ -2108,10 +2156,10 @@ export default function SceneStoryboardsPage() {
         <Button
           size="sm"
           onClick={() => handleGenerateStoryboardReferenceEdit(storyboard.id)}
-          disabled={isGeneratingReferenceEdit || !canSubmit}
+          disabled={isEditingThisShot || !canSubmit}
           className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
         >
-          {isGeneratingReferenceEdit && inlineCustomShotPrompt.trim() ? (
+          {isEditingThisShot ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
               {isCreateMode ? "Generating..." : "Editing..."}
@@ -5387,6 +5435,14 @@ export default function SceneStoryboardsPage() {
                       </div>
                     </button>
                     <ImageSizeBadge src={storyboard.image_url} />
+                    {referenceEditingShotIds.has(storyboard.id) ? (
+                      <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 pointer-events-none">
+                        <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
+                        <span className="mt-2 text-sm font-medium text-white">
+                          {referenceEditProgressByShotId.get(storyboard.id) || "Editing image…"}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="absolute top-2 right-2 z-10 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <Button
                         variant="secondary"
@@ -5436,10 +5492,21 @@ export default function SceneStoryboardsPage() {
                   </div>
                 ) : (
                   <div className="flex h-40 sm:h-48 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-muted/30 p-4">
-                    {quickGeneratingShotIds.has(storyboard.id) ? (
+                    {quickGeneratingShotIds.has(storyboard.id) ||
+                    referenceEditingShotIds.has(storyboard.id) ? (
                       <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                        <Loader2 className="h-8 w-8 animate-spin text-purple-500" />
-                        <span className="text-sm font-medium">Generating image…</span>
+                        <Loader2
+                          className={`h-8 w-8 animate-spin ${
+                            referenceEditingShotIds.has(storyboard.id)
+                              ? "text-violet-500"
+                              : "text-purple-500"
+                          }`}
+                        />
+                        <span className="text-sm font-medium">
+                          {referenceEditingShotIds.has(storyboard.id)
+                            ? referenceEditProgressByShotId.get(storyboard.id) || "Editing image…"
+                            : "Generating image…"}
+                        </span>
                       </div>
                     ) : (
                       <>
@@ -5667,7 +5734,7 @@ export default function SceneStoryboardsPage() {
                         disabled={
                           regeneratingLandscapeId === storyboard.id ||
                           isGeneratingShotImage ||
-                          isGeneratingReferenceEdit
+                          referenceEditingShotIds.has(storyboard.id)
                         }
                         onClick={() => void regenerateShotAtLandscapeSize(storyboard)}
                       >
@@ -5689,13 +5756,18 @@ export default function SceneStoryboardsPage() {
                           ? "Edit image from reference"
                           : "Generate image with AI"
                       }
+                      disabled={referenceEditingShotIds.has(storyboard.id)}
                       onClick={() => {
                         setShowEditForm(false)
                         setEditingStoryboard(null)
                         openReferenceEditDialog(storyboard)
                       }}
                     >
-                      <Wand2 className="h-4 w-4" />
+                      {referenceEditingShotIds.has(storyboard.id) ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Wand2 className="h-4 w-4" />
+                      )}
                     </Button>
 
                     {/* Quick one-click AI image generation */}
@@ -5708,10 +5780,14 @@ export default function SceneStoryboardsPage() {
                           ? "Quick generate another image (adds to gallery)"
                           : "Quick generate image from shot details"
                       }
-                      disabled={quickGeneratingShotIds.has(storyboard.id)}
+                      disabled={
+                        quickGeneratingShotIds.has(storyboard.id) ||
+                        referenceEditingShotIds.has(storyboard.id)
+                      }
                       onClick={() => void quickGenerateShotImage(storyboard)}
                     >
-                      {quickGeneratingShotIds.has(storyboard.id) ? (
+                      {quickGeneratingShotIds.has(storyboard.id) ||
+                      referenceEditingShotIds.has(storyboard.id) ? (
                         <Loader2 className="h-4 w-4 animate-spin" />
                       ) : (
                         <Zap className="h-4 w-4" />
@@ -6018,7 +6094,7 @@ export default function SceneStoryboardsPage() {
       <Dialog
         open={referenceEditDialogOpen}
         onOpenChange={(open) => {
-          if (!open && !isGeneratingReferenceEdit) closeReferenceEditDialog()
+          if (!open) closeReferenceEditDialog()
         }}
       >
         <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">

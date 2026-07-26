@@ -1244,6 +1244,8 @@ export default function SceneShotListPage() {
     if (storyboard.title) {
       prompt += ` Shot: ${storyboard.title}.`
     }
+    prompt +=
+      " Edit the attached reference image only. Keep the same composition, subject, framing, camera angle, and environment — change only what is described above. Do not add new elements."
     return prompt.slice(0, 990)
   }
 
