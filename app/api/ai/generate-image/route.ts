@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
+
+export const maxDuration = 300
 import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
 import { isContentPolicyError, CONTENT_BLOCKED_MESSAGE, isContentBlockedResponse } from "@/lib/content-policy-utils"

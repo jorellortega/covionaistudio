@@ -27,7 +27,7 @@ import {
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
 } from "@/lib/image-model-utils"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video, Bug } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -66,13 +66,37 @@ import {
   type StoryboardReferenceLoadFailure,
 } from "@/lib/storyboard-image-generation"
 import {
+  clearStoryboardImageTrace,
   debugStoryboardImage,
   formatStoryboardImageDebug,
   getLastStoryboardImageDebug,
+  pushStoryboardImageTrace,
+  traceAsyncStep,
 } from "@/lib/storyboard-image-debug"
 import { StoryboardReferenceIssues } from "@/components/storyboard-reference-issues"
+import { StoryboardReferenceEditDebug } from "@/components/storyboard-reference-edit-debug"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
+const IMAGE_GENERATION_FETCH_TIMEOUT_MS = 240_000
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = IMAGE_GENERATION_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await fetch(input, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -384,6 +408,7 @@ export default function SceneStoryboardsPage() {
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
   const [isGeneratingReferenceEdit, setIsGeneratingReferenceEdit] = useState(false)
   const [referenceEditProgress, setReferenceEditProgress] = useState("")
+  const [referenceEditDebugOpen, setReferenceEditDebugOpen] = useState(false)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -1379,13 +1404,13 @@ export default function SceneStoryboardsPage() {
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
       }
 
-      return fetch("/api/ai/generate-image", {
+      return fetchWithTimeout("/api/ai/generate-image", {
         method: "POST",
         body: formData,
       })
     }
 
-    return fetch("/api/ai/generate-image", {
+    return fetchWithTimeout("/api/ai/generate-image", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1562,7 +1587,14 @@ export default function SceneStoryboardsPage() {
   }
 
   const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
+    clearStoryboardImageTrace()
+    setReferenceEditDebugOpen(true)
     debugStoryboardImage("reference-edit-start", { storyboardId })
+    pushStoryboardImageTrace(
+      "info",
+      "Edit Image clicked",
+      typeof window !== "undefined" ? window.location.host : "server",
+    )
 
     const direction = inlineCustomShotPrompt.trim()
     if (!direction) {
@@ -1570,6 +1602,7 @@ export default function SceneStoryboardsPage() {
         reason: "empty-reference-edit-direction",
         storyboardId,
       })
+      pushStoryboardImageTrace("error", "Validation failed", "Description is empty")
       toast({
         title: "Description required",
         description: 'Enter what you want, e.g. "wide shot in a rainy alley" or "warmer lighting".',
@@ -1584,6 +1617,11 @@ export default function SceneStoryboardsPage() {
         reason: !storyboard ? "storyboard-not-found" : "missing-user-id",
         storyboardId,
       })
+      pushStoryboardImageTrace(
+        "error",
+        "Validation failed",
+        !storyboard ? "Storyboard not found" : "Missing user session",
+      )
       toast({
         title: "Edit failed",
         description: !storyboard
@@ -1596,6 +1634,30 @@ export default function SceneStoryboardsPage() {
 
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
+    const lockedConfigPreview = getLockedImageConfig(
+      isCreateMode ? undefined : { withReferenceImage: true },
+    )
+
+    pushStoryboardImageTrace(
+      "info",
+      "Config",
+      `mode=${isCreateMode ? "create" : "edit"}, model=${lockedConfigPreview?.lockedModel ?? "none"}, supportsRef=${lockedConfigPreview?.supportsReference ?? false}, styleLinks=${inlineStyleLinkAssetIds.length}`,
+    )
+
+    if (!isCreateMode && !lockedConfigPreview?.supportsReference) {
+      pushStoryboardImageTrace(
+        "error",
+        "Locked model cannot edit from reference",
+        lockedConfigPreview?.lockedModel ?? "No locked image model",
+      )
+      toast({
+        title: "Model not supported",
+        description:
+          "Your locked image model does not support reference editing. Lock GPT Image 2 or Runway ML in AI Settings.",
+        variant: "destructive",
+      })
+      return
+    }
 
     setIsGeneratingReferenceEdit(true)
     setReferenceEditProgress(
@@ -1607,9 +1669,14 @@ export default function SceneStoryboardsPage() {
         const styleAsset = findStyleLinkAsset(assetId)
         if (styleAsset?.content_url) {
           styleReferenceFiles.push(
-            await referenceUrlToFile(
-              styleAsset.content_url,
-              `style-ref-${styleAsset.id}.png`,
+            await traceAsyncStep(
+              `Load style reference ${styleAsset.id}`,
+              () =>
+                referenceUrlToFile(
+                  styleAsset.content_url!,
+                  `style-ref-${styleAsset.id}.png`,
+                ),
+              { warnOnSlowMs: 8000 },
             ),
           )
         }
@@ -1628,10 +1695,18 @@ export default function SceneStoryboardsPage() {
           characterAssets: characterImageAssets,
           maxImages: storyboardReferenceImageLimit(),
         })
-        styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files.slice(
-          0,
-          storyboardReferenceImageLimit(),
+        pushStoryboardImageTrace(
+          "info",
+          "Auto-loading assigned references",
+          `${refSources.length} source(s)`,
         )
+        styleReferenceFiles = (
+          await traceAsyncStep(
+            "Load assigned character/location references",
+            () => loadStoryboardReferenceFiles(refSources),
+            { warnOnSlowMs: 10000 },
+          )
+        ).files.slice(0, storyboardReferenceImageLimit())
       }
 
       setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
@@ -1642,42 +1717,95 @@ export default function SceneStoryboardsPage() {
         ? buildStoryboardCreatePrompt(direction, storyboard)
         : buildStoryboardEditPrompt(direction, storyboard)
 
+      pushStoryboardImageTrace(
+        "info",
+        "AI request prepared",
+        `service=${config.service}, model=${config.apiModel}, promptLen=${prompt.length}`,
+      )
+
       let referenceFile: File | undefined
       if (config.supportsReference) {
         if (!isCreateMode) {
           referenceFile =
             inlineShotReferenceFile ??
-            (await referenceUrlToFile(
-              storyboard.image_url!,
-              `storyboard-ref-${storyboard.id}.png`,
+            (await traceAsyncStep(
+              "Load primary shot reference image",
+              () =>
+                referenceUrlToFile(
+                  storyboard.image_url!,
+                  `storyboard-ref-${storyboard.id}.png`,
+                ),
+              { warnOnSlowMs: 10000 },
             ))
         } else if (inlineShotReferenceFile) {
           referenceFile = inlineShotReferenceFile
+          pushStoryboardImageTrace(
+            "ok",
+            "Using uploaded primary reference",
+            `${inlineShotReferenceFile.size} bytes`,
+          )
         } else if (styleReferenceFiles.length > 0) {
           referenceFile = styleReferenceFiles[0]
+          pushStoryboardImageTrace("ok", "Using first style file as primary reference")
         }
       }
 
-      const response = await requestLockedImageGeneration(prompt, config, {
-        referenceFile,
-        styleReferenceFiles:
-          config.supportsReference && referenceFile
-            ? styleReferenceFiles.filter((file) => file !== referenceFile)
-            : undefined,
-      })
+      if (!isCreateMode && config.supportsReference && !referenceFile) {
+        throw new Error("No reference image available for edit mode")
+      }
+
+      pushStoryboardImageTrace(
+        "info",
+        "Calling /api/ai/generate-image",
+        referenceFile
+          ? `ref=${referenceFile.size}B, extras=${styleReferenceFiles.filter((f) => f !== referenceFile).length}`
+          : "no reference file",
+      )
+
+      const response = await traceAsyncStep(
+        "AI image generation API",
+        () =>
+          requestLockedImageGeneration(prompt, config, {
+            referenceFile,
+            styleReferenceFiles:
+              config.supportsReference && referenceFile
+                ? styleReferenceFiles.filter((file) => file !== referenceFile)
+                : undefined,
+          }),
+        { warnOnSlowMs: 30000 },
+      )
+
+      const responseText = await traceAsyncStep("Read API response body", () => response.text())
+      let result: Record<string, unknown> = {}
+      try {
+        result = JSON.parse(responseText) as Record<string, unknown>
+      } catch {
+        pushStoryboardImageTrace(
+          "error",
+          "API returned non-JSON",
+          `status=${response.status}, body=${responseText.slice(0, 200)}`,
+        )
+        throw new Error(
+          response.ok
+            ? "Server returned an invalid response"
+            : `Server error ${response.status}: ${responseText.slice(0, 200) || "empty body"}`,
+        )
+      }
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
+        const apiError =
+          (typeof result.error === "string" && result.error) ||
+          "Failed to edit image from reference"
         debugStoryboardImage("error", {
           step: "reference-edit",
           storyboardId,
           status: response.status,
-          error: errorData.error || "Failed to edit image from reference",
+          error: apiError,
         })
-        throw new Error(errorData.error || "Failed to edit image from reference")
+        pushStoryboardImageTrace("error", `API HTTP ${response.status}`, apiError)
+        throw new Error(apiError)
       }
 
-      const result = await response.json()
       debugStoryboardImage("response-received", {
         storyboardId,
         mode: "reference-edit",
@@ -1688,18 +1816,26 @@ export default function SceneStoryboardsPage() {
       })
 
       if (!result.success || !result.imageUrl) {
-        throw new Error("Failed to edit image from reference")
+        const apiError =
+          (typeof result.error === "string" && result.error) ||
+          "Failed to edit image from reference"
+        pushStoryboardImageTrace("error", "API success=false", apiError)
+        throw new Error(apiError)
       }
 
-      const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const imageUrlToUse = String(result.bucketUrl || result.imageUrl)
+      pushStoryboardImageTrace("ok", "Image generated", imageUrlToUse.slice(0, 80))
+
       const existingImages = storyboardImages.get(storyboardId) ?? []
       const hasExisting =
         existingImages.length > 0 || Boolean(storyboard.image_url)
 
-      await saveStoryboardImage(storyboardId, imageUrlToUse, {
-        isDefault: !hasExisting,
-        generationPrompt: prompt,
-      })
+      await traceAsyncStep("Save image to storyboard gallery", () =>
+        saveStoryboardImage(storyboardId, imageUrlToUse, {
+          isDefault: !hasExisting,
+          generationPrompt: prompt,
+        }),
+      )
 
       if (editingStoryboard?.id === storyboardId) {
         setFormData((prev) => ({ ...prev, image_url: imageUrlToUse }))
@@ -1711,6 +1847,7 @@ export default function SceneStoryboardsPage() {
 
       clearInlineReferenceEditState()
       closeReferenceEditDialog()
+      pushStoryboardImageTrace("ok", "Edit complete")
       toast({
         title: isCreateMode ? "Image created" : "Image edited",
         description: isCreateMode
@@ -1718,11 +1855,13 @@ export default function SceneStoryboardsPage() {
           : "A new version was added to this shot's image gallery.",
       })
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
       debugStoryboardImage("error", {
         step: "reference-edit",
         storyboardId,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       })
+      pushStoryboardImageTrace("error", "Edit stopped", message)
       toast({
         title: "Edit failed",
         description: [
@@ -1730,7 +1869,7 @@ export default function SceneStoryboardsPage() {
             error,
             "Could not edit the storyboard image.",
           ),
-          formatStoryboardImageDebug(getLastStoryboardImageDebug()),
+          "Open the debug popup and copy the log if this keeps happening.",
         ].join(" — "),
         variant: "destructive",
       })
@@ -1962,6 +2101,24 @@ export default function SceneStoryboardsPage() {
             </>
           )}
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="gap-2 w-full sm:w-auto text-xs text-muted-foreground"
+          onClick={() => setReferenceEditDebugOpen(true)}
+        >
+          <Bug className="h-3.5 w-3.5" />
+          Debug log
+        </Button>
+        {!canSubmit && inlineCustomShotPrompt.trim() ? (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Button disabled:{" "}
+            {!lockedConfig?.supportsReference && !isCreateMode
+              ? "locked model does not support reference editing"
+              : "check AI Settings"}
+          </p>
+        ) : null}
       </div>
     </div>
     )
@@ -5894,6 +6051,13 @@ export default function SceneStoryboardsPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <StoryboardReferenceEditDebug
+        open={referenceEditDebugOpen}
+        onOpenChange={setReferenceEditDebugOpen}
+        isRunning={isGeneratingReferenceEdit}
+        currentStep={referenceEditProgress}
+      />
 
       <ContentViolationDialog
         isOpen={Boolean(contentBlockedDialog)}

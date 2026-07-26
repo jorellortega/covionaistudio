@@ -20,7 +20,74 @@ export type StoryboardImageDebugEntry = {
   ts: number
 }
 
+export type StoryboardImageTraceLevel = "info" | "ok" | "warn" | "error"
+
+export type StoryboardImageTraceLine = {
+  id: string
+  ts: number
+  level: StoryboardImageTraceLevel
+  message: string
+  detail?: string
+}
+
 let lastDebugEntry: StoryboardImageDebugEntry | null = null
+let traceLines: StoryboardImageTraceLine[] = []
+let traceIdCounter = 0
+const traceListeners = new Set<() => void>()
+
+function notifyTraceListeners() {
+  for (const listener of traceListeners) {
+    listener()
+  }
+}
+
+export function subscribeStoryboardImageTrace(listener: () => void): () => void {
+  traceListeners.add(listener)
+  return () => traceListeners.delete(listener)
+}
+
+export function getStoryboardImageTrace(): StoryboardImageTraceLine[] {
+  return traceLines
+}
+
+export function clearStoryboardImageTrace(): void {
+  traceLines = []
+  notifyTraceListeners()
+}
+
+export function pushStoryboardImageTrace(
+  level: StoryboardImageTraceLevel,
+  message: string,
+  detail?: string,
+): StoryboardImageTraceLine {
+  const line: StoryboardImageTraceLine = {
+    id: `trace-${++traceIdCounter}`,
+    ts: Date.now(),
+    level,
+    message,
+    detail,
+  }
+  traceLines = [...traceLines, line]
+  notifyTraceListeners()
+
+  if (isStoryboardImageDebugEnabled()) {
+    const prefix = `[storyboard-trace:${level}]`
+    if (detail) console.log(prefix, message, detail)
+    else console.log(prefix, message)
+  }
+
+  return line
+}
+
+export function formatStoryboardImageTrace(lines: StoryboardImageTraceLine[] = traceLines): string {
+  return lines
+    .map((line) => {
+      const time = new Date(line.ts).toISOString()
+      const detail = line.detail ? ` — ${line.detail}` : ""
+      return `[${time}] [${line.level.toUpperCase()}] ${line.message}${detail}`
+    })
+    .join("\n")
+}
 
 export function isStoryboardImageDebugEnabled(): boolean {
   if (typeof window === "undefined") {
@@ -102,4 +169,25 @@ export function formatStoryboardImageDebug(entry: StoryboardImageDebugEntry | nu
     }
   }
   return parts.join(" | ")
+}
+
+export async function traceAsyncStep<T>(
+  message: string,
+  fn: () => Promise<T>,
+  options?: { warnOnSlowMs?: number },
+): Promise<T> {
+  const started = Date.now()
+  pushStoryboardImageTrace("info", `→ ${message}`)
+  try {
+    const result = await fn()
+    const elapsed = Date.now() - started
+    const slow = options?.warnOnSlowMs && elapsed >= options.warnOnSlowMs
+    pushStoryboardImageTrace(slow ? "warn" : "ok", `✓ ${message}`, `${elapsed}ms`)
+    return result
+  } catch (error) {
+    const elapsed = Date.now() - started
+    const detail = error instanceof Error ? error.message : String(error)
+    pushStoryboardImageTrace("error", `✗ ${message}`, `${detail} (${elapsed}ms)`)
+    throw error
+  }
 }

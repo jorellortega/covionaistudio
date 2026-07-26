@@ -1,6 +1,7 @@
 import type { Asset } from "@/lib/asset-service"
 import type { Character } from "@/lib/characters-service"
 import type { Location } from "@/lib/locations-service"
+import { pushStoryboardImageTrace } from "@/lib/storyboard-image-debug"
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
 
@@ -68,9 +69,21 @@ async function fetchReferenceResponse(url: string): Promise<Response> {
   let direct: Response | null = null
   try {
     direct = await fetch(url)
-    if (direct.ok) return direct
-  } catch {
-    // Browser CORS/network errors throw — fall through to server proxy.
+    if (direct.ok) {
+      pushStoryboardImageTrace("ok", "Reference image fetched directly", url.slice(0, 80))
+      return direct
+    }
+    pushStoryboardImageTrace(
+      "warn",
+      "Direct fetch not OK, trying proxy",
+      `status=${direct.status}`,
+    )
+  } catch (error) {
+    pushStoryboardImageTrace(
+      "warn",
+      "Direct fetch failed (CORS/network), trying proxy",
+      error instanceof Error ? error.message : String(error),
+    )
   }
 
   // Missing files won't load via proxy either — skip the extra round trip.
@@ -79,7 +92,11 @@ async function fetchReferenceResponse(url: string): Promise<Response> {
     const proxy = await fetch(
       `/api/ai/proxy-download?url=${encodeURIComponent(url)}&filename=reference.png`,
     )
-    if (proxy.ok) return proxy
+    if (proxy.ok) {
+      pushStoryboardImageTrace("ok", "Reference image fetched via server proxy")
+      return proxy
+    }
+    pushStoryboardImageTrace("error", "Proxy fetch failed", `status=${proxy.status}`)
   }
 
   throw new Error(`Could not load reference image (${direct?.status ?? "network"})`)
