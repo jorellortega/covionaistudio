@@ -1649,15 +1649,56 @@ export default function CinemaProductionPage() {
     void loadStylePrompts()
   }, [selectedProjectId, ready, userId])
 
-  const linkedProjectImageGroups = useMemo(
-    () => buildLinkedAssetGroups(projectImageAssets, projectLocations, projectCharacters),
-    [projectImageAssets, projectLocations, projectCharacters],
-  )
+  const linkedProjectImageGroups = useMemo(() => {
+    const groups = buildLinkedAssetGroups(projectImageAssets, projectLocations, projectCharacters)
+    const avatarOnly = avatarImageAssets.filter(
+      (asset) => !groups.some((group) => group.assets.some((a) => a.id === asset.id)),
+    )
+    if (avatarOnly.length > 0) {
+      groups.unshift({ label: "Avatar Studio", assets: avatarOnly })
+    }
+    return groups
+  }, [projectImageAssets, avatarImageAssets, projectLocations, projectCharacters])
 
   const characterImageAssets = useMemo(
     () => projectImageAssets.filter((a) => a.character_id && a.content_url),
     [projectImageAssets],
   )
+
+  const avatarImageAssets = useMemo(
+    () =>
+      projectAvatarImages.map(
+        (row) =>
+          ({
+            id: `avatar-${row.id}`,
+            user_id: row.user_id,
+            project_id: row.project_id,
+            character_id: row.character_id ?? undefined,
+            title: `${row.angle_label} avatar`,
+            content_type: "image",
+            content_url: row.image_url,
+            prompt: row.prompt ?? undefined,
+            version: 1,
+            is_latest_version: true,
+            metadata: {
+              type: "avatar",
+              avatar_angle: row.angle_id,
+              avatar_source: row.source,
+            },
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+          }) satisfies Asset,
+      ),
+    [projectAvatarImages],
+  )
+
+  const linkableImageAssets = useMemo(
+    () => [...projectImageAssets, ...avatarImageAssets],
+    [projectImageAssets, avatarImageAssets],
+  )
+
+  const findImageEditStyleAsset = (assetId: string) =>
+    linkableImageAssets.find((asset) => asset.id === assetId)
 
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.id === selectedSceneId) ?? null,
@@ -2949,15 +2990,47 @@ export default function CinemaProductionPage() {
     config: NonNullable<ReturnType<typeof getLockedImageConfig>>,
     options?: {
       referenceFile?: File
+      referenceImageUrl?: string
       styleReferenceFiles?: File[]
+      styleReferenceUrls?: string[]
       width?: number
       height?: number
     },
   ) => {
     const width = options?.width ?? (config.service === "runway" ? 1280 : DEFAULT_CINEMATIC_IMAGE_WIDTH)
     const height = options?.height ?? (config.service === "runway" ? 720 : DEFAULT_CINEMATIC_IMAGE_HEIGHT)
+    const hasUrlReference = Boolean(options?.referenceImageUrl)
+    const hasFileReference = Boolean(options?.referenceFile)
+    const canUseReference =
+      config.supportsReference && (hasUrlReference || hasFileReference)
 
-    if (config.supportsReference && options?.referenceFile) {
+    if (canUseReference && hasUrlReference) {
+      return fetch("/api/ai/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          service: config.service,
+          apiKey: "configured",
+          userId,
+          model: config.apiModel,
+          width,
+          height,
+          autoSaveToBucket: true,
+          referenceImageUrl: options!.referenceImageUrl,
+          styleReferenceUrls:
+            options?.styleReferenceUrls && options.styleReferenceUrls.length > 0
+              ? options.styleReferenceUrls
+              : undefined,
+          seed:
+            config.service === "runway"
+              ? Math.floor(Math.random() * 2147483647)
+              : undefined,
+        }),
+      })
+    }
+
+    if (canUseReference && options?.referenceFile) {
       const formData = new FormData()
       formData.append("prompt", prompt)
       formData.append("model", config.apiModel)
@@ -3019,7 +3092,7 @@ export default function CinemaProductionPage() {
       assignmentContext.characterIds.length === 0 &&
       assignmentContext.locationIds.length === 0
     ) {
-      return { files: [], failed: [], assignmentContext, limit }
+      return { files: [], urls: [], failed: [], assignmentContext, limit }
     }
 
     const result = await loadAssignedStoryboardReferenceFiles({
@@ -3034,6 +3107,7 @@ export default function CinemaProductionPage() {
 
     return {
       files: result.files.slice(0, limit),
+      urls: result.loaded.map((source) => source.url).slice(0, limit),
       failed: result.failed,
       assignmentContext,
       limit,
@@ -3071,7 +3145,7 @@ export default function CinemaProductionPage() {
 
       const refLimit = storyboardReferenceImageLimit(config.apiModel)
       const {
-        files: referenceFiles,
+        urls: referenceUrls,
         failed: failedReferences,
       } = await loadStoryboardAssignmentReferences(storyboard, refLimit)
 
@@ -3079,8 +3153,8 @@ export default function CinemaProductionPage() {
         toast({
           title: `${failedReferences.length} reference image${failedReferences.length === 1 ? "" : "s"} couldn't load`,
           description:
-            referenceFiles.length > 0
-              ? `Used ${referenceFiles.length} valid reference${referenceFiles.length === 1 ? "" : "s"}. Generation continued without the broken links.`
+            referenceUrls.length > 0
+              ? `Used ${referenceUrls.length} valid reference${referenceUrls.length === 1 ? "" : "s"}. Generation continued without the broken links.`
               : "No valid character/location references loaded. Generating from shot text only.",
           variant: "destructive",
         })
@@ -3092,17 +3166,17 @@ export default function CinemaProductionPage() {
         characterDetails: assignmentContext.characterDetails,
         locationDetails: assignmentContext.locationDetails,
         masterPrompts: assignmentContext.masterPrompts,
-        referenceCount: referenceFiles.length,
+        referenceCount: referenceUrls.length,
       })
       enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
 
       const response = await requestLockedImageGeneration(
         enhancedPrompt,
         config,
-        referenceFiles.length > 0
+        referenceUrls.length > 0
           ? {
-              referenceFile: referenceFiles[0],
-              styleReferenceFiles: referenceFiles.slice(1),
+              referenceImageUrl: referenceUrls[0],
+              styleReferenceUrls: referenceUrls.slice(1),
             }
           : undefined,
       )
@@ -3129,8 +3203,8 @@ export default function CinemaProductionPage() {
         toast({
           title: "Image added to library",
           description:
-            referenceFiles.length > 0
-              ? `New version saved using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"}. Main shot image unchanged — pick a thumb to preview or set as shot.`
+            referenceUrls.length > 0
+              ? `New version saved using ${referenceUrls.length} reference${referenceUrls.length === 1 ? "" : "s"}. Main shot image unchanged — pick a thumb to preview or set as shot.`
               : "New version saved to the frame library. Main shot image unchanged — pick a thumb to preview or set as shot.",
         })
       } else {
@@ -3146,8 +3220,8 @@ export default function CinemaProductionPage() {
         toast({
           title: "Image generated",
           description:
-            referenceFiles.length > 0
-              ? `Created shot image using ${referenceFiles.length} reference${referenceFiles.length === 1 ? "" : "s"} from characters and locations.`
+            referenceUrls.length > 0
+              ? `Created shot image using ${referenceUrls.length} reference${referenceUrls.length === 1 ? "" : "s"} from characters and locations.`
               : "Created shot image from shot details.",
         })
       }
@@ -3529,20 +3603,15 @@ export default function CinemaProductionPage() {
       if (storyboard.title) prompt += ` Shot: ${storyboard.title}.`
       prompt = prompt.slice(0, 990)
 
-      const styleReferenceFiles: File[] = []
+      const styleReferenceUrls: string[] = []
       for (const assetId of imageEditStyleLinkAssetIds) {
-        const styleAsset = projectImageAssets.find((a) => a.id === assetId)
+        const styleAsset = findImageEditStyleAsset(assetId)
         if (styleAsset?.content_url) {
-          styleReferenceFiles.push(
-            await referenceUrlToFile(
-              styleAsset.content_url,
-              `style-ref-${styleAsset.id}.png`,
-            ),
-          )
+          styleReferenceUrls.push(styleAsset.content_url)
         }
       }
 
-      if (styleReferenceFiles.length === 0) {
+      if (styleReferenceUrls.length === 0) {
         const assignmentContext = getStoryboardAssignmentContext(
           storyboard,
           projectCharacters,
@@ -3552,17 +3621,17 @@ export default function CinemaProductionPage() {
           assignmentContext.characterIds.length > 0 ||
           assignmentContext.locationIds.length > 0
         ) {
-          const { files, failed } = await loadStoryboardAssignmentReferences(
+          const { urls, failed } = await loadStoryboardAssignmentReferences(
             storyboard,
             storyboardReferenceImageLimit(config.apiModel),
           )
-          styleReferenceFiles.push(...files)
+          styleReferenceUrls.push(...urls)
           if (failed.length > 0) {
             toast({
               title: `${failed.length} reference image${failed.length === 1 ? "" : "s"} couldn't load`,
               description:
-                files.length > 0
-                  ? `Used ${files.length} valid reference${files.length === 1 ? "" : "s"} for this edit.`
+                urls.length > 0
+                  ? `Used ${urls.length} valid reference${urls.length === 1 ? "" : "s"} for this edit.`
                   : "No valid character/location references loaded for this edit.",
               variant: "destructive",
             })
@@ -3570,19 +3639,27 @@ export default function CinemaProductionPage() {
         }
       }
 
+      let referenceImageUrl: string | undefined
       let referenceFile: File | undefined
       if (config.supportsReference) {
-        referenceFile =
-          imageEditReferenceFile ??
-          (await referenceUrlToFile(
-            storyboard.image_url!,
-            `cinema-edit-${storyboard.id}.png`,
-          ))
+        if (imageEditReferenceFile) {
+          referenceFile = imageEditReferenceFile
+        } else if (storyboard.image_url) {
+          referenceImageUrl = storyboard.image_url
+        }
       }
+
+      const extraStyleReferenceUrls = styleReferenceUrls.filter(
+        (url) => url !== referenceImageUrl,
+      )
 
       const response = await requestLockedImageGeneration(prompt, config, {
         referenceFile,
-        styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
+        referenceImageUrl,
+        styleReferenceUrls:
+          config.supportsReference && extraStyleReferenceUrls.length > 0
+            ? extraStyleReferenceUrls
+            : undefined,
       })
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
@@ -3658,13 +3735,8 @@ export default function CinemaProductionPage() {
         ` No text, no watermark.`
       ).slice(0, 990)
 
-      const referenceFile = await referenceUrlToFile(
-        storyboard.image_url,
-        `cinema-stylize-${storyboard.id}.png`,
-      )
-
       const response = await requestLockedImageGeneration(prompt, config, {
-        referenceFile: config.supportsReference ? referenceFile : undefined,
+        referenceImageUrl: storyboard.image_url,
       })
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
@@ -3728,11 +3800,6 @@ export default function CinemaProductionPage() {
       await ensureOriginalInLibrary(storyboard)
 
       const sourceUrl = getDisplayedShotImage(storyboard) || storyboard.image_url
-      const referenceFile = await referenceUrlToFile(
-        sourceUrl,
-        `cinema-landscape-ref-${storyboard.id}.png`,
-      )
-
       const promptParts = [
         "Recreate this exact image as a widescreen cinematic landscape frame (1536x1024).",
         "Keep the same subject, composition, lighting, colors, and style.",
@@ -3743,7 +3810,7 @@ export default function CinemaProductionPage() {
       const prompt = promptParts.join(" ").slice(0, 990)
 
       const response = await requestLockedImageGeneration(prompt, config, {
-        referenceFile,
+        referenceImageUrl: sourceUrl,
         width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
         height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
       })
@@ -3824,13 +3891,8 @@ export default function CinemaProductionPage() {
             } Photoreal cinematic still, no text, no watermark.`
       ).slice(0, 990)
 
-      const referenceFile = await referenceUrlToFile(
-        storyboard.image_url,
-        `frame-ref-${storyboard.id}.png`,
-      )
-
       const response = await requestLockedImageGeneration(prompt, config, {
-        referenceFile: config.supportsReference ? referenceFile : undefined,
+        referenceImageUrl: storyboard.image_url,
       })
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
