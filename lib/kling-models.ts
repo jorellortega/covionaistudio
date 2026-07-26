@@ -39,6 +39,20 @@ export function isNativeKlingModel(model: string): boolean {
   return (KLING_3_UI_MODELS as readonly string[]).includes(normalized)
 }
 
+/** Native audio defaults on for I2V models (user expectation for ambient/SFX). */
+export function getDefaultKlingNativeAudio(model: string): boolean {
+  const normalized = normalizeKlingUiModel(model)
+  return normalized === 'Kling 3.0 I2V' || normalized === 'Kling 3.0 I2V Extended'
+}
+
+export function resolveKlingNativeAudio(
+  model: string,
+  explicit?: boolean | null,
+): boolean {
+  if (explicit != null) return explicit
+  return getDefaultKlingNativeAudio(model)
+}
+
 export function isKlingOmniModel(model: string): boolean {
   const normalized = normalizeKlingUiModel(model)
   return normalized.includes('Omni')

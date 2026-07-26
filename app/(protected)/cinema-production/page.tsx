@@ -58,11 +58,13 @@ import { displayShotNumber, sortStoryboardRows } from "@/lib/shot-list-order"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import {
+  getDefaultKlingNativeAudio,
   getKlingModelConfig,
   isKlingMotionControlModel,
   isNativeKlingModel,
   KLING_V3_DURATIONS,
   normalizeKlingUiModel,
+  resolveKlingNativeAudio,
 } from "@/lib/kling-models"
 import { RUNWAY_GEN4_RATIOS, resolveRunwayOutputRatio } from "@/lib/runway-video-utils"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -2729,7 +2731,10 @@ export default function CinemaProductionPage() {
           motionControl: generation?.motionControl || null,
           motionStrength: generation?.motionStrength ?? null,
           duration: generation?.duration || null,
-          klingNativeAudio: generation?.klingNativeAudio ?? false,
+          klingNativeAudio: resolveKlingNativeAudio(
+            generation?.model || '',
+            generation?.klingNativeAudio,
+          ),
           currentPrompt: generation?.prompt?.trim() || null,
           userId,
         }),
@@ -6762,7 +6767,10 @@ export default function CinemaProductionPage() {
           startFrame: startFrameFile,
           endFrame: endFrameFile,
           resolution: generation.resolution,
-          klingNativeAudio: generation.klingNativeAudio ?? false,
+          klingNativeAudio: resolveKlingNativeAudio(
+            generation.model,
+            generation.klingNativeAudio,
+          ),
         })
 
         if (response.success) {
@@ -6966,117 +6974,108 @@ export default function CinemaProductionPage() {
           </div>
         </div>
 
-        {/* Project Selection */}
+        {/* Project, scene, and storyboard selection */}
         <Card className="cinema-card mb-6">
-          <CardHeader>
-            <CardTitle>Select Project</CardTitle>
-            <CardDescription>
-              Choose a project to load its storyboards
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a project..." />
-              </SelectTrigger>
-              <SelectContent>
-                {projects.map((project) => (
-                  <SelectItem key={project.id} value={project.id}>
-                    {project.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <CardContent className="pt-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2 min-w-0">
+                <Label htmlFor="cinema-production-project">Project</Label>
+                <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+                  <SelectTrigger id="cinema-production-project">
+                    <SelectValue placeholder="Select a project..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2 min-w-0">
+                <Label htmlFor="cinema-production-scene">Scene</Label>
+                {!selectedProjectId ? (
+                  <Select disabled>
+                    <SelectTrigger id="cinema-production-scene">
+                      <SelectValue placeholder="Select a project first" />
+                    </SelectTrigger>
+                  </Select>
+                ) : loadingScenes ? (
+                  <div className="flex h-10 items-center gap-2 text-muted-foreground text-sm px-3 border border-input rounded-md">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading scenes...
+                  </div>
+                ) : scenes.length === 0 ? (
+                  <div className="flex h-10 items-center text-sm text-muted-foreground px-3 border border-input rounded-md">
+                    No scenes found
+                  </div>
+                ) : (
+                  <Select value={selectedSceneId} onValueChange={setSelectedSceneId}>
+                    <SelectTrigger id="cinema-production-scene">
+                      <SelectValue placeholder="Select a scene..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {scenes.map((scene) => (
+                        <SelectItem key={scene.id} value={scene.id}>
+                          {scene.name || `Scene ${scene.order_index || 'Unknown'}`}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              <div className="space-y-2 min-w-0">
+                <Label htmlFor="cinema-production-storyboard">Storyboard (optional)</Label>
+                {!selectedSceneId ? (
+                  <Select disabled>
+                    <SelectTrigger id="cinema-production-storyboard">
+                      <SelectValue placeholder="Select a scene first" />
+                    </SelectTrigger>
+                  </Select>
+                ) : loadingStoryboards ? (
+                  <div className="flex h-10 items-center gap-2 text-muted-foreground text-sm px-3 border border-input rounded-md">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading storyboards...
+                  </div>
+                ) : storyboards.length === 0 ? (
+                  <div className="flex h-10 items-center text-sm text-muted-foreground px-3 border border-input rounded-md">
+                    No storyboards found
+                  </div>
+                ) : (
+                  <Select
+                    value={selectedStoryboardId || "all"}
+                    onValueChange={(value) => {
+                      if (value === "all") {
+                        setSelectedStoryboardId("")
+                        setSelectedStoryboard(null)
+                      } else {
+                        setSelectedStoryboardId(value)
+                        const storyboard = storyboards.find(s => s.id === value)
+                        setSelectedStoryboard(storyboard || null)
+                        console.log('🎬 Selected storyboard:', storyboard)
+                      }
+                    }}
+                  >
+                    <SelectTrigger id="cinema-production-storyboard">
+                      <SelectValue placeholder="All storyboards..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Storyboards ({storyboards.length})</SelectItem>
+                      {storyboards.map((storyboard) => (
+                        <SelectItem key={storyboard.id} value={storyboard.id}>
+                          {storyboard.title} - Shot {displayShotNumber(storyboard)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
-
-        {/* Scene Selection */}
-        {selectedProjectId && (
-          <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Select Scene</CardTitle>
-              <CardDescription>
-                Choose a scene to view its storyboard shots
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingScenes ? (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading scenes...
-                </div>
-              ) : scenes.length === 0 ? (
-                <p className="text-muted-foreground">
-                  No scenes found for this project.
-                </p>
-              ) : (
-                <Select value={selectedSceneId} onValueChange={setSelectedSceneId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a scene..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {scenes.map((scene) => (
-                      <SelectItem key={scene.id} value={scene.id}>
-                        {scene.name || `Scene ${scene.order_index || 'Unknown'}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* Storyboard Selection (Optional) */}
-        {selectedSceneId && (
-          <Card className="cinema-card mb-6">
-            <CardHeader>
-              <CardTitle>Filter Storyboard (Optional)</CardTitle>
-              <CardDescription>
-                Optionally filter to a specific storyboard, or leave blank to see all storyboards for this scene
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {loadingStoryboards ? (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Loading storyboards...
-                </div>
-              ) : storyboards.length === 0 ? (
-                <p className="text-muted-foreground">
-                  No storyboards found for this scene.
-                </p>
-              ) : (
-                <Select 
-                  value={selectedStoryboardId || "all"} 
-                  onValueChange={(value) => {
-                    if (value === "all") {
-                      setSelectedStoryboardId("")
-                      setSelectedStoryboard(null)
-                    } else {
-                      setSelectedStoryboardId(value)
-                      const storyboard = storyboards.find(s => s.id === value)
-                      setSelectedStoryboard(storyboard || null)
-                      console.log('🎬 Selected storyboard:', storyboard)
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="All storyboards..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Storyboards ({storyboards.length})</SelectItem>
-                    {storyboards.map((storyboard) => (
-                      <SelectItem key={storyboard.id} value={storyboard.id}>
-                        {storyboard.title} - Shot {displayShotNumber(storyboard)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </CardContent>
-          </Card>
-        )}
 
         {/* Storyboard Shots Display */}
         {selectedSceneId && (
@@ -8423,6 +8422,9 @@ export default function CinemaProductionPage() {
                                       klingCharacterOrientation: isMotionControl ? 'image' : undefined,
                                       klingMotionMode: isMotionControl ? 'pro' : undefined,
                                       klingKeepOriginalSound: isMotionControl ? true : undefined,
+                                      klingNativeAudio: isNativeKlingModel(newModel)
+                                        ? getDefaultKlingNativeAudio(newModel)
+                                        : undefined,
                                       savedAudioOptionId:
                                         newModel === "Hedra Character 3"
                                           ? audioOptions[0]?.id ?? null
@@ -8699,7 +8701,10 @@ export default function CinemaProductionPage() {
                                       <input
                                         id={`kling-audio-${storyboard.id}`}
                                         type="checkbox"
-                                        checked={generation.klingNativeAudio ?? false}
+                                        checked={resolveKlingNativeAudio(
+                                          generation.model,
+                                          generation.klingNativeAudio,
+                                        )}
                                         onChange={(e) =>
                                           updateStoryboardGeneration(storyboard.id, {
                                             klingNativeAudio: e.target.checked,
