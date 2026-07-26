@@ -27,7 +27,7 @@ import {
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
 } from "@/lib/image-model-utils"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video, Bug } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -66,7 +66,6 @@ import {
   type StoryboardReferenceLoadFailure,
 } from "@/lib/storyboard-image-generation"
 import {
-  clearStoryboardImageTrace,
   debugStoryboardImage,
   formatStoryboardImageDebug,
   getLastStoryboardImageDebug,
@@ -74,7 +73,6 @@ import {
   traceAsyncStep,
 } from "@/lib/storyboard-image-debug"
 import { StoryboardReferenceIssues } from "@/components/storyboard-reference-issues"
-import { StoryboardReferenceEditDebug } from "@/components/storyboard-reference-edit-debug"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 const IMAGE_GENERATION_FETCH_TIMEOUT_MS = 240_000
@@ -408,7 +406,6 @@ export default function SceneStoryboardsPage() {
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
   const [isGeneratingReferenceEdit, setIsGeneratingReferenceEdit] = useState(false)
   const [referenceEditProgress, setReferenceEditProgress] = useState("")
-  const [referenceEditDebugOpen, setReferenceEditDebugOpen] = useState(false)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -1624,8 +1621,6 @@ export default function SceneStoryboardsPage() {
   }
 
   const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
-    clearStoryboardImageTrace()
-    setReferenceEditDebugOpen(true)
     debugStoryboardImage("reference-edit-start", { storyboardId })
     pushStoryboardImageTrace(
       "info",
@@ -1892,13 +1887,10 @@ export default function SceneStoryboardsPage() {
       pushStoryboardImageTrace("error", "Edit stopped", message)
       toast({
         title: "Edit failed",
-        description: [
-          getImageGenerationErrorMessage(
-            error,
-            "Could not edit the storyboard image.",
-          ),
-          "Open the debug popup and copy the log if this keeps happening.",
-        ].join(" — "),
+        description: getImageGenerationErrorMessage(
+          error,
+          "Could not edit the storyboard image.",
+        ),
         variant: "destructive",
       })
     } finally {
@@ -2128,16 +2120,6 @@ export default function SceneStoryboardsPage() {
               {isCreateMode ? "Generate Image" : "Edit Image"}
             </>
           )}
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="gap-2 w-full sm:w-auto text-xs text-muted-foreground"
-          onClick={() => setReferenceEditDebugOpen(true)}
-        >
-          <Bug className="h-3.5 w-3.5" />
-          Debug log
         </Button>
         {!canSubmit && inlineCustomShotPrompt.trim() ? (
           <p className="text-xs text-amber-600 dark:text-amber-400">
@@ -6075,13 +6057,6 @@ export default function SceneStoryboardsPage() {
           )}
         </DialogContent>
       </Dialog>
-
-      <StoryboardReferenceEditDebug
-        open={referenceEditDebugOpen}
-        onOpenChange={setReferenceEditDebugOpen}
-        isRunning={isGeneratingReferenceEdit}
-        currentStep={referenceEditProgress}
-      />
 
       <ContentViolationDialog
         isOpen={Boolean(contentBlockedDialog)}
