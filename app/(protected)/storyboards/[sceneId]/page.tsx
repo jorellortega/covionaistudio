@@ -1338,7 +1338,9 @@ export default function SceneStoryboardsPage() {
     config: ReturnType<typeof requireLockedImageConfig>,
     options?: {
       referenceFile?: File
+      referenceImageUrl?: string
       styleReferenceFiles?: File[]
+      styleReferenceUrls?: string[]
       width?: number
       height?: number
     },
@@ -1348,7 +1350,9 @@ export default function SceneStoryboardsPage() {
       model: config.apiModel,
       apiKey: "configured",
       referenceFile: options?.referenceFile,
+      referenceImageUrl: options?.referenceImageUrl,
       styleReferenceFiles: options?.styleReferenceFiles,
+      styleReferenceUrls: options?.styleReferenceUrls,
       width: options?.width,
       height: options?.height,
       supportsReference: config.supportsReference,
@@ -1362,7 +1366,9 @@ export default function SceneStoryboardsPage() {
       model?: string
       apiKey: string
       referenceFile?: File
+      referenceImageUrl?: string
       styleReferenceFiles?: File[]
+      styleReferenceUrls?: string[]
       width?: number
       height?: number
       supportsReference?: boolean
@@ -1370,9 +1376,10 @@ export default function SceneStoryboardsPage() {
   ) => {
     const width = options.width ?? (options.service === "runway" ? 1280 : 1536)
     const height = options.height ?? (options.service === "runway" ? 720 : 1024)
+    const hasUrlReference = Boolean(options.referenceImageUrl)
+    const hasFileReference = Boolean(options.referenceFile)
     const canUseReference =
-      Boolean(options.supportsReference) &&
-      Boolean(options.referenceFile)
+      Boolean(options.supportsReference) && (hasUrlReference || hasFileReference)
 
     debugStoryboardImage("request-sent", {
       service: options.service,
@@ -1380,11 +1387,41 @@ export default function SceneStoryboardsPage() {
       width,
       height,
       canUseReference,
+      referenceMode: hasUrlReference ? "url" : hasFileReference ? "file" : "none",
       referenceFileSize: options.referenceFile?.size,
-      styleReferenceCount: options.styleReferenceFiles?.length ?? 0,
+      styleReferenceCount:
+        (options.styleReferenceUrls?.length ?? 0) + (options.styleReferenceFiles?.length ?? 0),
       promptLength: prompt.length,
       apiKeyMode: options.apiKey === "configured" ? "configured" : "profile",
     })
+
+    if (canUseReference && hasUrlReference) {
+      return fetchWithTimeout("/api/ai/generate-image", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+          service: options.service,
+          apiKey: options.apiKey,
+          userId,
+          model: options.model,
+          width,
+          height,
+          autoSaveToBucket: true,
+          referenceImageUrl: options.referenceImageUrl,
+          styleReferenceUrls:
+            options.styleReferenceUrls && options.styleReferenceUrls.length > 0
+              ? options.styleReferenceUrls
+              : undefined,
+          seed:
+            options.service === "runway"
+              ? Math.floor(Math.random() * 2147483647)
+              : undefined,
+        }),
+      })
+    }
 
     if (canUseReference && options.referenceFile) {
       const formData = new FormData()
@@ -1664,26 +1701,17 @@ export default function SceneStoryboardsPage() {
       isCreateMode ? "Loading references..." : "Loading reference image...",
     )
     try {
-      let styleReferenceFiles: File[] = []
+      const styleReferenceUrls: string[] = []
       for (const assetId of inlineStyleLinkAssetIds) {
         const styleAsset = findStyleLinkAsset(assetId)
         if (styleAsset?.content_url) {
-          styleReferenceFiles.push(
-            await traceAsyncStep(
-              `Load style reference ${styleAsset.id}`,
-              () =>
-                referenceUrlToFile(
-                  styleAsset.content_url!,
-                  `style-ref-${styleAsset.id}.png`,
-                ),
-              { warnOnSlowMs: 8000 },
-            ),
-          )
+          styleReferenceUrls.push(styleAsset.content_url)
+          pushStoryboardImageTrace("ok", `Style reference URL ${styleAsset.id}`, styleAsset.content_url.slice(0, 80))
         }
       }
 
       if (
-        styleReferenceFiles.length === 0 &&
+        styleReferenceUrls.length === 0 &&
         (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)
       ) {
         const refSources = collectStoryboardReferenceSources({
@@ -1697,16 +1725,10 @@ export default function SceneStoryboardsPage() {
         })
         pushStoryboardImageTrace(
           "info",
-          "Auto-loading assigned references",
+          "Auto-loading assigned reference URLs",
           `${refSources.length} source(s)`,
         )
-        styleReferenceFiles = (
-          await traceAsyncStep(
-            "Load assigned character/location references",
-            () => loadStoryboardReferenceFiles(refSources),
-            { warnOnSlowMs: 10000 },
-          )
-        ).files.slice(0, storyboardReferenceImageLimit())
+        styleReferenceUrls.push(...refSources.map((source) => source.url))
       }
 
       setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
@@ -1723,20 +1745,21 @@ export default function SceneStoryboardsPage() {
         `service=${config.service}, model=${config.apiModel}, promptLen=${prompt.length}`,
       )
 
+      let referenceImageUrl: string | undefined
       let referenceFile: File | undefined
       if (config.supportsReference) {
         if (!isCreateMode) {
-          referenceFile =
-            inlineShotReferenceFile ??
-            (await traceAsyncStep(
-              "Load primary shot reference image",
-              () =>
-                referenceUrlToFile(
-                  storyboard.image_url!,
-                  `storyboard-ref-${storyboard.id}.png`,
-                ),
-              { warnOnSlowMs: 10000 },
-            ))
+          if (inlineShotReferenceFile) {
+            referenceFile = inlineShotReferenceFile
+            pushStoryboardImageTrace(
+              "ok",
+              "Using uploaded primary reference",
+              `${inlineShotReferenceFile.size} bytes`,
+            )
+          } else if (storyboard.image_url) {
+            referenceImageUrl = storyboard.image_url
+            pushStoryboardImageTrace("ok", "Using shot image URL as primary reference", referenceImageUrl.slice(0, 80))
+          }
         } else if (inlineShotReferenceFile) {
           referenceFile = inlineShotReferenceFile
           pushStoryboardImageTrace(
@@ -1744,22 +1767,28 @@ export default function SceneStoryboardsPage() {
             "Using uploaded primary reference",
             `${inlineShotReferenceFile.size} bytes`,
           )
-        } else if (styleReferenceFiles.length > 0) {
-          referenceFile = styleReferenceFiles[0]
-          pushStoryboardImageTrace("ok", "Using first style file as primary reference")
+        } else if (styleReferenceUrls.length > 0) {
+          referenceImageUrl = styleReferenceUrls[0]
+          pushStoryboardImageTrace("ok", "Using first linked URL as primary reference")
         }
       }
 
-      if (!isCreateMode && config.supportsReference && !referenceFile) {
+      if (!isCreateMode && config.supportsReference && !referenceImageUrl && !referenceFile) {
         throw new Error("No reference image available for edit mode")
       }
+
+      const extraStyleReferenceUrls = styleReferenceUrls.filter(
+        (url) => url !== referenceImageUrl,
+      )
 
       pushStoryboardImageTrace(
         "info",
         "Calling /api/ai/generate-image",
-        referenceFile
-          ? `ref=${referenceFile.size}B, extras=${styleReferenceFiles.filter((f) => f !== referenceFile).length}`
-          : "no reference file",
+        referenceImageUrl
+          ? `primary=url, extras=${extraStyleReferenceUrls.length}`
+          : referenceFile
+            ? `primary=file ${referenceFile.size}B, extras=${extraStyleReferenceUrls.length}`
+            : "no reference",
       )
 
       const response = await traceAsyncStep(
@@ -1767,10 +1796,9 @@ export default function SceneStoryboardsPage() {
         () =>
           requestLockedImageGeneration(prompt, config, {
             referenceFile,
-            styleReferenceFiles:
-              config.supportsReference && referenceFile
-                ? styleReferenceFiles.filter((file) => file !== referenceFile)
-                : undefined,
+            referenceImageUrl,
+            styleReferenceUrls:
+              extraStyleReferenceUrls.length > 0 ? extraStyleReferenceUrls : undefined,
           }),
         { warnOnSlowMs: 30000 },
       )
@@ -3389,7 +3417,8 @@ export default function SceneStoryboardsPage() {
         displayModelSupportsReferenceImage(modelLabel)
 
       let response: Response
-      if (referenceFiles.length > 0 && supportsReference) {
+      const loadedReferenceUrls = referenceLoad.loaded.map((source) => source.url)
+      if (loadedReferenceUrls.length > 0 && supportsReference) {
         const generationConfig = lockedImageConfig ?? {
           service: serviceToUse,
           apiModel: modelToUse,
@@ -3399,8 +3428,8 @@ export default function SceneStoryboardsPage() {
           service: generationConfig.service,
           model: generationConfig.apiModel,
           apiKey,
-          referenceFile: referenceFiles[0],
-          styleReferenceFiles: referenceFiles.slice(1),
+          referenceImageUrl: loadedReferenceUrls[0],
+          styleReferenceUrls: loadedReferenceUrls.slice(1),
           supportsReference: true,
         })
       } else {
@@ -3579,11 +3608,6 @@ export default function SceneStoryboardsPage() {
         throw new Error("Lock GPT Image 2 or Runway in AI Settings to redo images at landscape size.")
       }
 
-      const referenceFile = await referenceUrlToFile(
-        storyboard.image_url,
-        `storyboard-landscape-ref-${storyboard.id}.png`,
-      )
-
       const promptParts = [
         "Recreate this exact image as a widescreen cinematic landscape frame (1536x1024).",
         "Keep the same subject, composition, lighting, colors, and style.",
@@ -3594,7 +3618,7 @@ export default function SceneStoryboardsPage() {
       const prompt = promptParts.join(" ").slice(0, 990)
 
       const response = await requestLockedImageGeneration(prompt, config, {
-        referenceFile,
+        referenceImageUrl: storyboard.image_url,
         width: 1536,
         height: 1024,
       })

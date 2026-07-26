@@ -181,6 +181,27 @@ export async function POST(request: NextRequest) {
       body = await request.json()
       console.log('JSON request received')
     }
+
+    // Resolve reference image URLs server-side (keeps request body small on Vercel)
+    if (!file && typeof body.referenceImageUrl === 'string' && body.referenceImageUrl.trim()) {
+      const { downloadReferenceUrlToFile } = await import('@/lib/server-reference-images')
+      file = await downloadReferenceUrlToFile(body.referenceImageUrl.trim(), 'reference.png')
+      console.log('Downloaded primary reference from URL, size:', file.size)
+    }
+    if (
+      styleReferenceFiles.length === 0 &&
+      Array.isArray(body.styleReferenceUrls) &&
+      body.styleReferenceUrls.length > 0
+    ) {
+      const { downloadReferenceUrlsToFiles } = await import('@/lib/server-reference-images')
+      const urls = body.styleReferenceUrls.filter(
+        (entry: unknown): entry is string => typeof entry === 'string' && !!entry.trim(),
+      )
+      if (urls.length > 0) {
+        styleReferenceFiles = await downloadReferenceUrlsToFiles(urls)
+        console.log(`Downloaded ${styleReferenceFiles.length} style reference(s) from URLs`)
+      }
+    }
     
     console.log('Request body:', { ...body, apiKey: body.apiKey ? `${body.apiKey.substring(0, 10)}...` : 'undefined' })
     
