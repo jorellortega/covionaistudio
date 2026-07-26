@@ -1929,6 +1929,7 @@ export default function SceneStoryboardsPage() {
           </h3>
         </div>
       )}
+      {!inDialog && (
       <p className="text-xs text-muted-foreground break-words">
         {isCreateMode
           ? `Create a new shot image with your locked model (${lockedModel || "lock one in AI Settings"}). Describe the scene below — shot details are included automatically.`
@@ -1938,6 +1939,7 @@ export default function SceneStoryboardsPage() {
                 : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."
             }`}
       </p>
+      )}
       {isGeneratingReferenceEdit && referenceEditProgress ? (
         <p className="text-xs text-muted-foreground flex items-center gap-2">
           <Loader2 className="h-3 w-3 animate-spin" />

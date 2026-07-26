@@ -9934,13 +9934,6 @@ export default function CinemaProductionPage() {
                 </div>
               )}
 
-              <p className="text-xs text-muted-foreground break-words">
-                Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
-                {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
-                  ? " Describe changes below and optionally link another project image as a second reference."
-                  : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
-              </p>
-
               {imageEditUploading && imageEditProgress ? (
                 <p className="text-xs text-muted-foreground flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" />
