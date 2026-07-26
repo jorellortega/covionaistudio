@@ -1649,17 +1649,6 @@ export default function CinemaProductionPage() {
     void loadStylePrompts()
   }, [selectedProjectId, ready, userId])
 
-  const linkedProjectImageGroups = useMemo(() => {
-    const groups = buildLinkedAssetGroups(projectImageAssets, projectLocations, projectCharacters)
-    const avatarOnly = avatarImageAssets.filter(
-      (asset) => !groups.some((group) => group.assets.some((a) => a.id === asset.id)),
-    )
-    if (avatarOnly.length > 0) {
-      groups.unshift({ label: "Avatar Studio", assets: avatarOnly })
-    }
-    return groups
-  }, [projectImageAssets, avatarImageAssets, projectLocations, projectCharacters])
-
   const characterImageAssets = useMemo(
     () => projectImageAssets.filter((a) => a.character_id && a.content_url),
     [projectImageAssets],
@@ -1691,6 +1680,17 @@ export default function CinemaProductionPage() {
       ),
     [projectAvatarImages],
   )
+
+  const linkedProjectImageGroups = useMemo(() => {
+    const groups = buildLinkedAssetGroups(projectImageAssets, projectLocations, projectCharacters)
+    const avatarOnly = avatarImageAssets.filter(
+      (asset) => !groups.some((group) => group.assets.some((a) => a.id === asset.id)),
+    )
+    if (avatarOnly.length > 0) {
+      groups.unshift({ label: "Avatar Studio", assets: avatarOnly })
+    }
+    return groups
+  }, [projectImageAssets, avatarImageAssets, projectLocations, projectCharacters])
 
   const linkableImageAssets = useMemo(
     () => [...projectImageAssets, ...avatarImageAssets],
