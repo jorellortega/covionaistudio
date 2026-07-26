@@ -1925,7 +1925,7 @@ export default function SceneStoryboardsPage() {
     <div
       className={
         inDialog
-          ? "space-y-3"
+          ? "space-y-3 min-w-0 w-full overflow-hidden"
           : "border border-violet-500/20 rounded-lg p-4 bg-violet-500/5 space-y-3"
       }
     >
@@ -1937,7 +1937,7 @@ export default function SceneStoryboardsPage() {
           </h3>
         </div>
       )}
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground break-words">
         {isCreateMode
           ? `Create a new shot image with your locked model (${lockedModel || "lock one in AI Settings"}). Describe the scene below — shot details are included automatically.`
           : `Edit using your locked model (${lockedModel || "lock one in AI Settings"}).${
@@ -2026,7 +2026,7 @@ export default function SceneStoryboardsPage() {
               </div>
             )}
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground break-words">
             {inlineShotReferenceFile
               ? "Using your uploaded image as the primary reference."
               : storyboard.image_url
@@ -2043,7 +2043,7 @@ export default function SceneStoryboardsPage() {
               Link existing image (optional)
             </Label>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground break-words">
             Adds more images as references from characters, locations, avatar studio, or project assets.
             Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
             {storyboard.character_id &&
@@ -2061,13 +2061,13 @@ export default function SceneStoryboardsPage() {
               No other images in this project yet. Generate character or location images to link here.
             </p>
           ) : (
-            <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+            <div className="space-y-3 max-h-48 overflow-y-auto overflow-x-hidden rounded-lg border border-border/60 p-2 min-w-0">
               {linkedProjectImageGroups.map((group) => (
-                <div key={group.label} className="space-y-1.5">
+                <div key={group.label} className="space-y-1.5 min-w-0">
                   <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
                     {group.label}
                   </p>
-                  <div className="flex gap-2 overflow-x-auto pb-1">
+                  <div className="flex flex-wrap gap-2">
                     {group.assets.map((asset) => (
                       <button
                         key={asset.id}
@@ -5218,7 +5218,7 @@ export default function SceneStoryboardsPage() {
                     </div>
                   )}
                   
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground break-words">
                     💡 Tip: Be specific about camera angle, lighting, mood, and visual style. The AI will create a cinematic storyboard image based on your description.
                   </p>
                 </div>
@@ -6037,16 +6037,16 @@ export default function SceneStoryboardsPage() {
           if (!open && !isGeneratingReferenceEdit) closeReferenceEditDialog()
         }}
       >
-        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
-          <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2">
+        <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader className="pb-2 min-w-0">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2 min-w-0 pr-8 break-words">
               <Wand2 className="h-5 w-5 text-violet-500" />
               {referenceEditStoryboard &&
               !hasPrimaryReferenceForEdit(referenceEditStoryboard, inlineShotReferenceFile)
                 ? "Generate Image"
                 : "Edit Image"}
             </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm">
+            <DialogDescription className="text-xs sm:text-sm break-words">
               {referenceEditStoryboard
                 ? hasPrimaryReferenceForEdit(referenceEditStoryboard, inlineShotReferenceFile)
                   ? `Reference edit for Shot ${referenceEditStoryboard.shot_number}${referenceEditStoryboard.title ? ` · ${referenceEditStoryboard.title}` : ""}.`
@@ -6056,7 +6056,7 @@ export default function SceneStoryboardsPage() {
           </DialogHeader>
 
           {referenceEditStoryboard && (
-            <>
+            <div className="min-w-0 w-full overflow-hidden">
               {referenceEditStoryboard.image_url && (
                 <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
                   <img
@@ -6071,7 +6071,7 @@ export default function SceneStoryboardsPage() {
                 "reference-edit-dialog",
                 true,
               )}
-            </>
+            </div>
           )}
         </DialogContent>
       </Dialog>

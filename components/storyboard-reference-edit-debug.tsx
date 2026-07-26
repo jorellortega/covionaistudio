@@ -74,7 +74,7 @@ export function StoryboardReferenceEditDebug({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[95vw] sm:max-w-xl max-h-[85vh] flex flex-col gap-3 p-4 sm:p-6">
+      <DialogContent className="max-w-[95vw] sm:max-w-xl max-h-[85vh] flex flex-col gap-3 p-4 sm:p-6 overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base sm:text-lg">
             <Bug className="h-5 w-5 text-amber-500" />
