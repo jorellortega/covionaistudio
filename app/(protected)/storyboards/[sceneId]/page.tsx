@@ -42,11 +42,13 @@ import Link from "next/link"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
+import { StoryboardShotPositionEditor } from "@/components/storyboard-shot-position-editor"
 import { ImageSizeBadge } from "@/components/image-size-badge"
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
 import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
+import { formatShotTypeLabel, SHOT_TYPE_OPTIONS } from "@/lib/shot-options"
 import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
 import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
 import {
@@ -408,6 +410,7 @@ export default function SceneStoryboardsPage() {
   const [referenceEditProgressByShotId, setReferenceEditProgressByShotId] = useState<
     Map<string, string>
   >(() => new Map())
+  const referenceEditDialogStoryboardIdRef = useRef<string | null>(null)
   
   // Script state
   const [isLoadingScript, setIsLoadingScript] = useState(false)
@@ -1627,6 +1630,45 @@ export default function SceneStoryboardsPage() {
     clearInlineReferenceEditState()
   }
 
+  const closeEditStoryboardDialog = () => {
+    setShowEditForm(false)
+    setEditingStoryboard(null)
+    closeReferenceEditDialog()
+    resetForm()
+  }
+
+  const openEditStoryboardDialog = (
+    storyboard: Storyboard,
+    options?: { prefillAiPrompt?: boolean },
+  ) => {
+    closeReferenceEditDialog()
+    setEditingStoryboard(storyboard)
+    setFormData({
+      title: storyboard.title,
+      description: storyboard.description,
+      scene_number: storyboard.scene_number,
+      shot_number: storyboard.shot_number || 1,
+      shot_type: storyboard.shot_type,
+      camera_angle: storyboard.camera_angle,
+      movement: storyboard.movement,
+      sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
+      status: storyboard.status || "draft",
+      character_id: storyboard.character_id || null,
+      location_id: storyboard.location_id || null,
+      dialogue: storyboard.dialogue || "",
+      action: storyboard.action || "",
+      visual_notes: storyboard.visual_notes || "",
+      image_url: storyboard.image_url || "",
+      project_id: storyboard.project_id || "",
+      scene_id: sceneId,
+    })
+    syncFormAssignmentsFromStoryboard(storyboard)
+    if (options?.prefillAiPrompt) {
+      setAiImagePrompt(buildQuickShotImagePrompt(storyboard))
+    }
+    setShowEditForm(true)
+  }
+
   const setReferenceEditProgressForShot = (storyboardId: string, progress: string) => {
     setReferenceEditProgressByShotId((prev) => new Map(prev).set(storyboardId, progress))
   }
@@ -1651,6 +1693,10 @@ export default function SceneStoryboardsPage() {
     })
     clearReferenceEditProgressForShot(storyboardId)
   }
+
+  useEffect(() => {
+    referenceEditDialogStoryboardIdRef.current = referenceEditStoryboard?.id ?? null
+  }, [referenceEditStoryboard])
 
   const handleGenerateStoryboardReferenceEdit = async (storyboardId: string) => {
     debugStoryboardImage("reference-edit-start", { storyboardId })
@@ -1907,9 +1953,12 @@ export default function SceneStoryboardsPage() {
         }
       }
 
-      clearInlineReferenceEditState()
-      setReferenceEditDialogOpen(false)
-      setReferenceEditStoryboard(null)
+      if (referenceEditDialogStoryboardIdRef.current === storyboardId) {
+        setReferenceEditStoryboard((prev) =>
+          prev?.id === storyboardId ? { ...prev, image_url: imageUrlToUse } : prev,
+        )
+      }
+
       pushStoryboardImageTrace("ok", "Edit complete")
       toast({
         title: isCreateMode ? "Image created" : "Image edited",
@@ -2756,8 +2805,10 @@ export default function SceneStoryboardsPage() {
       setIsUpdating(true)
 
       // Clean up form data - convert empty strings to undefined for optional fields
+      const { shot_number: _shotNumber, sequence_order: _sequenceOrder, ...formWithoutPosition } =
+        formData
       const cleanFormData = {
-        ...formData,
+        ...formWithoutPosition,
         dialogue: formData.dialogue?.trim() || undefined,
         action: formData.action?.trim() || undefined,
         visual_notes: formData.visual_notes?.trim() || undefined,
@@ -2773,9 +2824,7 @@ export default function SceneStoryboardsPage() {
 
       const updatedStoryboard = await StoryboardsService.updateStoryboard(editingStoryboard.id, cleanFormData)
       setStoryboards(prev => prev.map(sb => sb.id === editingStoryboard.id ? updatedStoryboard : sb))
-      setShowEditForm(false)
-      setEditingStoryboard(null)
-      resetForm()
+      closeEditStoryboardDialog()
       
       toast({
         title: "Success",
@@ -3370,15 +3419,28 @@ export default function SceneStoryboardsPage() {
 
       const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
       const refLimit = storyboardReferenceImageLimit(modelToUse)
-      const referenceSources = collectStoryboardReferenceSources({
-        characterIds: assignmentContext.characterIds,
-        locationIds: assignmentContext.locationIds,
-        characters,
-        locations,
-        avatarImages: projectAvatarImages,
-        characterAssets: characterImageAssets,
-        maxImages: refLimit,
-      })
+      const shotGallery = storyboardImages.get(storyboardId) ?? []
+      const hasShotImages = Boolean(storyboard.image_url) || shotGallery.length > 0
+      const skipReferenceImages = isQuick && hasShotImages
+      const excludeReferenceUrls = isQuick
+        ? [
+            ...(storyboard.image_url ? [storyboard.image_url] : []),
+            ...shotGallery.map((image) => image.image_url).filter(Boolean),
+          ]
+        : []
+
+      const referenceSources = skipReferenceImages
+        ? []
+        : collectStoryboardReferenceSources({
+            characterIds: assignmentContext.characterIds,
+            locationIds: assignmentContext.locationIds,
+            characters,
+            locations,
+            avatarImages: projectAvatarImages,
+            characterAssets: characterImageAssets,
+            maxImages: refLimit,
+            excludeUrls: excludeReferenceUrls,
+          })
       const referenceLoad =
         referenceSources.length > 0
           ? await loadStoryboardReferenceFiles(referenceSources)
@@ -3437,6 +3499,7 @@ export default function SceneStoryboardsPage() {
         enhancedPromptLength: enhancedPrompt.length,
         referenceUrlCount: referenceSources.length,
         referenceFileCount: referenceFiles.length,
+        skipReferenceImages,
         useExactPrompt,
       })
 
@@ -3565,8 +3628,7 @@ export default function SceneStoryboardsPage() {
 
           // Close edit form if it's open
           if (showEditForm) {
-            setShowEditForm(false)
-            setEditingStoryboard(null)
+            closeEditStoryboardDialog()
           }
         }
       } else {
@@ -3953,10 +4015,11 @@ export default function SceneStoryboardsPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="wide">Wide</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="close">Close</SelectItem>
-                            <SelectItem value="extreme-close">Extreme Close</SelectItem>
+                            {SHOT_TYPE_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
@@ -4076,10 +4139,11 @@ export default function SceneStoryboardsPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="wide">Wide</SelectItem>
-                            <SelectItem value="medium">Medium</SelectItem>
-                            <SelectItem value="close">Close</SelectItem>
-                            <SelectItem value="extreme-close">Extreme Close</SelectItem>
+                            {SHOT_TYPE_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
@@ -4611,10 +4675,11 @@ export default function SceneStoryboardsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="wide">Wide Shot</SelectItem>
-                      <SelectItem value="medium">Medium Shot</SelectItem>
-                      <SelectItem value="close">Close Up</SelectItem>
-                      <SelectItem value="extreme-close">Extreme Close Up</SelectItem>
+                      {SHOT_TYPE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -4769,88 +4834,55 @@ export default function SceneStoryboardsPage() {
           </Card>
         )}
 
-        {/* Edit Storyboard Form */}
-        {showEditForm && editingStoryboard && (
-          <Card className="mb-6 sm:mb-8">
-            <CardHeader className="p-4 sm:p-6">
-              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl break-words">
-                <Edit className="h-5 w-5 flex-shrink-0" />
-                <span className="hidden sm:inline">Edit Storyboard: {editingStoryboard.title}</span>
-                <span className="sm:hidden">Edit Storyboard</span>
-              </CardTitle>
-              <CardDescription className="text-xs sm:text-sm break-words">
-                Update the storyboard details below. Use AI assistance for image generation.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 sm:space-y-6 p-4 sm:p-6">
+        {/* Edit Storyboard Dialog */}
+        <Dialog
+          open={showEditForm && !!editingStoryboard}
+          onOpenChange={(open) => {
+            if (!open && !isUpdating) closeEditStoryboardDialog()
+          }}
+        >
+          <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+            {editingStoryboard ? (
+              <>
+                <DialogHeader className="pb-2 min-w-0">
+                  <DialogTitle className="text-lg sm:text-xl flex items-center gap-2 min-w-0 pr-8 break-words">
+                    <Edit className="h-5 w-5 flex-shrink-0" />
+                    Edit Shot {displayShotNumber(editingStoryboard)}
+                    {editingStoryboard.title ? ` · ${editingStoryboard.title}` : ""}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs sm:text-sm break-words">
+                    Update shot details, assignments, and AI image settings.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 sm:space-y-6 min-w-0 w-full overflow-hidden">
               {/* Basic Info */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-title">Title *</Label>
-                  <Input
-                    id="edit-title"
-                    value={formData.title}
-                    onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
-                    placeholder="Shot title"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-shot_number">Shot Number</Label>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    Use decimals to insert between shots: 1.2, 2.5, etc.
-                  </p>
-                  <div className="flex gap-2">
-                    <Input
-                      id="edit-shot_number"
-                      type="number"
-                      value={formData.shot_number}
-                      onChange={(e) => {
-                        const value = parseFloat(e.target.value) || 0
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: value,
-                          sequence_order: value // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      min="0.1"
-                      step="0.1"
-                      placeholder="1.2 for between shots 1 and 2"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const nextShot = getNextShotNumber()
-                        setFormData(prev => ({ 
-                          ...prev, 
-                          shot_number: nextShot,
-                          sequence_order: nextShot // Sync with sequence_order for proper sorting
-                        }))
-                      }}
-                      title="Auto-fill next shot number"
-                    >
-                      Next
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
               <div>
-                <Label htmlFor="edit-sequence_order">Sequence Order (for positioning)</Label>
-                <p className="text-sm text-muted-foreground mb-2">
-                  Use decimals to insert between shots: 2.5 goes between shots 2 and 3
-                </p>
+                <Label htmlFor="edit-title">Title *</Label>
                 <Input
-                  id="edit-sequence_order"
-                  type="number"
-                  value={formData.sequence_order || ""}
-                  onChange={(e) => setFormData(prev => ({ ...prev, sequence_order: parseFloat(e.target.value) || 0 }))}
-                  min="0.1"
-                  step="0.1"
-                  placeholder="1.5 for between shots 1 and 2"
+                  id="edit-title"
+                  value={formData.title}
+                  onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
+                  placeholder="Shot title"
                 />
               </div>
+
+              <StoryboardShotPositionEditor
+                storyboard={editingStoryboard}
+                storyboards={storyboards}
+                sceneId={sceneId}
+                disabled={isUpdating}
+                onChanged={async (updated) => {
+                  await fetchStoryboards()
+                  if (updated) {
+                    setEditingStoryboard(updated)
+                    setFormData((prev) => ({
+                      ...prev,
+                      shot_number: updated.shot_number,
+                      sequence_order: updated.sequence_order ?? updated.shot_number,
+                    }))
+                  }
+                }}
+              />
 
               <div>
                 <Label htmlFor="edit-description">Description *</Label>
@@ -4872,10 +4904,11 @@ export default function SceneStoryboardsPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="wide">Wide Shot</SelectItem>
-                      <SelectItem value="medium">Medium Shot</SelectItem>
-                      <SelectItem value="close">Close Up</SelectItem>
-                      <SelectItem value="extreme-close">Extreme Close Up</SelectItem>
+                      {SHOT_TYPE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -5281,16 +5314,11 @@ export default function SceneStoryboardsPage() {
                 </div>
               </div>
 
-              {/* Form Actions */}
               <div className="flex gap-2 justify-end">
                 <Button
                   variant="outline"
-                  onClick={() => {
-                    setShowEditForm(false)
-                    setEditingStoryboard(null)
-                    closeReferenceEditDialog()
-                    resetForm()
-                  }}
+                  onClick={closeEditStoryboardDialog}
+                  disabled={isUpdating}
                 >
                   Cancel
                 </Button>
@@ -5302,9 +5330,11 @@ export default function SceneStoryboardsPage() {
                   {isUpdating ? "Updating..." : "Update Storyboard"}
                 </Button>
               </div>
-            </CardContent>
-          </Card>
-        )}
+                </div>
+              </>
+            ) : null}
+          </DialogContent>
+        </Dialog>
 
         {/* Storyboards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
@@ -5631,7 +5661,7 @@ export default function SceneStoryboardsPage() {
 
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <Badge variant="outline" className="text-xs flex-shrink-0">
-                      {storyboard.shot_type}
+                      {formatShotTypeLabel(storyboard.shot_type)}
                     </Badge>
                     <Badge variant="outline" className="text-xs flex-shrink-0">
                       {storyboard.camera_angle}
@@ -5685,41 +5715,7 @@ export default function SceneStoryboardsPage() {
                       size="sm" 
                       className="h-8 w-8 p-0 hover:text-purple-600 flex-shrink-0"
                       title="Open AI image generator (custom prompt)"
-                      onClick={() => {
-                        // Set the editing storyboard and show edit form with AI focus
-                        closeReferenceEditDialog()
-                        setEditingStoryboard(storyboard)
-                        setFormData({
-                          title: storyboard.title,
-                          description: storyboard.description,
-                          scene_number: storyboard.scene_number,
-                          shot_number: storyboard.shot_number || 1,
-                          shot_type: storyboard.shot_type,
-                          camera_angle: storyboard.camera_angle,
-                          movement: storyboard.movement,
-                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
-                          status: storyboard.status || "draft",
-                          character_id: storyboard.character_id || null,
-                          location_id: storyboard.location_id || null,
-                          dialogue: storyboard.dialogue || "",
-                          action: storyboard.action || "",
-                          visual_notes: storyboard.visual_notes || "",
-                          image_url: storyboard.image_url || "",
-                          project_id: storyboard.project_id || "",
-                          scene_id: sceneId
-                        })
-                        syncFormAssignmentsFromStoryboard(storyboard)
-                        // Pre-fill AI prompt with shot details
-                        setAiImagePrompt(buildQuickShotImagePrompt(storyboard))
-                        setShowEditForm(true)
-                        // Scroll to AI section after form opens
-                        setTimeout(() => {
-                          const aiSection = document.querySelector('[id="ai-image-prompt"]')
-                          if (aiSection) {
-                            aiSection.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                          }
-                        }, 100)
-                      }}
+                      onClick={() => openEditStoryboardDialog(storyboard, { prefillAiPrompt: true })}
                     >
                       <Sparkles className="h-4 w-4" />
                     </Button>
@@ -5758,8 +5754,7 @@ export default function SceneStoryboardsPage() {
                       }
                       disabled={referenceEditingShotIds.has(storyboard.id)}
                       onClick={() => {
-                        setShowEditForm(false)
-                        setEditingStoryboard(null)
+                        closeEditStoryboardDialog()
                         openReferenceEditDialog(storyboard)
                       }}
                     >
@@ -5798,33 +5793,7 @@ export default function SceneStoryboardsPage() {
                       variant="ghost" 
                       size="sm" 
                       className="h-8 w-8 p-0 hover:text-blue-600"
-                      onClick={() => {
-                        closeReferenceEditDialog()
-                        setEditingStoryboard(storyboard)
-                        setFormData({
-                          title: storyboard.title,
-                          description: storyboard.description,
-                          scene_number: storyboard.scene_number,
-                          shot_number: storyboard.shot_number || 1,
-                          shot_type: storyboard.shot_type,
-                          camera_angle: storyboard.camera_angle,
-                          movement: storyboard.movement,
-                          sequence_order: storyboard.sequence_order || storyboard.shot_number || 1,
-                          status: storyboard.status || "draft",
-                          character_id: storyboard.character_id || null,
-                          location_id: storyboard.location_id || null,
-                          dialogue: storyboard.dialogue || "",
-                          action: storyboard.action || "",
-                          visual_notes: storyboard.visual_notes || "",
-                          image_url: storyboard.image_url || "",
-                          project_id: storyboard.project_id || "",
-                          scene_id: sceneId
-                        })
-                        syncFormAssignmentsFromStoryboard(storyboard)
-                        // Preserve the current AI service selection
-                        // Don't reset selectedAIService here
-                        setShowEditForm(true)
-                      }}
+                      onClick={() => openEditStoryboardDialog(storyboard)}
                     >
                       <Edit className="h-4 w-4" />
                     </Button>

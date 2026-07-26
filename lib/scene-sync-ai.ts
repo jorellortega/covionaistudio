@@ -128,7 +128,7 @@ Direction: ${direction}
 - Preserve dialogue in a dedicated "dialogue" field when present.
 - Put stage direction / blocking in "action", summary in "description" (shot list) or "title"+"description" (storyboard).
 - Do NOT delete anything. Unmatched source items become create operations.
-- For storyboard targets: never include image_url; shot_type must be one of wide, medium, close, extreme-close; camera_angle one of eye-level, high-angle, low-angle, dutch-angle; movement one of static, panning, tilting, tracking, zooming.
+- For storyboard targets: never include image_url; shot_type must be one of wide, medium, close, extreme-close, two-shot, over-the-shoulder, point-of-view, establishing, insert, cutaway; camera_angle one of eye-level, high-angle, low-angle, dutch-angle; movement one of static, panning, tilting, tracking, zooming.
 - For shot list targets: shot_type may be wide, medium, close, extreme-close, two-shot, over-the-shoulder, point-of-view, establishing, insert, cutaway.
 
 Return ONLY valid JSON:

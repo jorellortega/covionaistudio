@@ -213,6 +213,17 @@ export type CollectStoryboardReferenceOptions = {
   /** Linked project assets (character_id set) — used when portrait/reference URLs are stale */
   characterAssets?: Asset[]
   maxImages: number
+  /** Skip these URLs when collecting references (e.g. the current shot's gallery images). */
+  excludeUrls?: string[]
+}
+
+export function normalizeReferenceUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return url.split("?")[0] ?? url
+  }
 }
 
 export function collectStoryboardReferenceSources(
@@ -226,12 +237,15 @@ export function collectStoryboardReferenceSources(
     avatarImages,
     characterAssets = [],
     maxImages,
+    excludeUrls = [],
   } = options
   const sources: StoryboardReferenceSource[] = []
   const seen = new Set<string>()
+  const excluded = new Set(excludeUrls.map(normalizeReferenceUrl))
 
   const addSource = (source: StoryboardReferenceSource) => {
     if (!source.url || seen.has(source.url) || sources.length >= maxImages) return
+    if (excluded.has(normalizeReferenceUrl(source.url))) return
     seen.add(source.url)
     sources.push(source)
   }

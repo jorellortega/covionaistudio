@@ -1,3 +1,5 @@
+import { STORYBOARD_SHOT_TYPE_VALUES } from './shot-options'
+
 const SHOT_TYPE_TO_STORYBOARD: Record<string, string> = {
   'two-shot': 'medium',
   'over-the-shoulder': 'medium',
@@ -7,7 +9,7 @@ const SHOT_TYPE_TO_STORYBOARD: Record<string, string> = {
   cutaway: 'close',
 }
 
-const STORYBOARD_SHOT_TYPES = new Set(['wide', 'medium', 'close', 'extreme-close'])
+const STORYBOARD_SHOT_TYPES = STORYBOARD_SHOT_TYPE_VALUES
 const STORYBOARD_ANGLES = new Set(['eye-level', 'high-angle', 'low-angle', 'dutch-angle'])
 const STORYBOARD_MOVEMENTS = new Set(['static', 'panning', 'tilting', 'tracking', 'zooming'])
 

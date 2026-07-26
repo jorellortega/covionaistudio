@@ -1,5 +1,10 @@
 import { getSupabaseClient } from './supabase'
-import { sortShotListRows, sortStoryboardRows } from './shot-list-order'
+import {
+  shotOrderValue,
+  sortShotListRows,
+  sortStoryboardRows,
+  storyboardPlacementForInsert,
+} from './shot-list-order'
 
 export interface Storyboard {
   id: string
@@ -671,6 +676,134 @@ export class StoryboardsService {
     reordered.splice(toIdx, 0, moved)
 
     await this.applyStoryboardRenumbering(reordered)
+  }
+
+  private static async applyStoryboardSequencePlacement(
+    storyboardId: string,
+    sequenceOrder: number,
+    shotNumber: number
+  ): Promise<Storyboard> {
+    const temp = -(Math.floor(Date.now() % 1_000_000) + 1)
+    const supabase = getSupabaseClient()
+
+    const { error: stageError } = await supabase
+      .from('storyboards')
+      .update({ shot_number: temp, sequence_order: temp })
+      .eq('id', storyboardId)
+
+    if (stageError) {
+      console.error('Error staging storyboard position:', stageError)
+      throw stageError
+    }
+
+    const { data, error } = await supabase
+      .from('storyboards')
+      .update({ shot_number: shotNumber, sequence_order: sequenceOrder })
+      .eq('id', storyboardId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error applying storyboard position:', error)
+      throw error
+    }
+
+    return data
+  }
+
+  /** Move a shot to a sequence position (supports decimals like 11.5 between 11 and 12). */
+  static async moveStoryboardToSequenceOrder(
+    sceneId: string,
+    storyboardId: string,
+    targetSequenceOrder: number
+  ): Promise<Storyboard> {
+    if (!Number.isFinite(targetSequenceOrder) || targetSequenceOrder <= 0) {
+      throw new Error('Enter a position greater than 0')
+    }
+
+    const storyboards = await this.getStoryboardsBySceneOrdered(sceneId)
+    const current = storyboards.find((sb) => sb.id === storyboardId)
+    if (!current) {
+      throw new Error('Storyboard not found in this scene')
+    }
+
+    const currentOrder = shotOrderValue(current)
+    if (Math.abs(currentOrder - targetSequenceOrder) < 0.001) {
+      return current
+    }
+
+    const others = storyboards.filter((sb) => sb.id !== storyboardId)
+    if (
+      others.some((sb) => Math.abs(shotOrderValue(sb) - targetSequenceOrder) < 0.001)
+    ) {
+      throw new Error(`Position ${targetSequenceOrder} is already used by another shot`)
+    }
+
+    if (Number.isInteger(targetSequenceOrder)) {
+      await this.moveStoryboardToShotNumber(sceneId, storyboardId, targetSequenceOrder)
+      const updated = await this.getStoryboard(storyboardId)
+      if (!updated) {
+        throw new Error('Storyboard not found after move')
+      }
+      return updated
+    }
+
+    const placement = storyboardPlacementForInsert(storyboards, targetSequenceOrder)
+    return this.applyStoryboardSequencePlacement(
+      storyboardId,
+      targetSequenceOrder,
+      placement.shot_number,
+    )
+  }
+
+  /** Swap sequence position with the previous or next shot in the scene. */
+  static async swapStoryboardWithNeighbor(
+    sceneId: string,
+    storyboardId: string,
+    direction: 'previous' | 'next'
+  ): Promise<void> {
+    const storyboards = sortStoryboardRows(await this.getStoryboardsBySceneOrdered(sceneId))
+    const index = storyboards.findIndex((sb) => sb.id === storyboardId)
+    if (index === -1) {
+      throw new Error('Storyboard not found in this scene')
+    }
+
+    const neighborIndex = direction === 'previous' ? index - 1 : index + 1
+    if (neighborIndex < 0 || neighborIndex >= storyboards.length) {
+      return
+    }
+
+    const current = storyboards[index]
+    const neighbor = storyboards[neighborIndex]
+    const tempCurrent = -(index + 1)
+    const tempNeighbor = -(neighborIndex + 1)
+    const supabase = getSupabaseClient()
+
+    const stage = async (id: string, temp: number) => {
+      const { error } = await supabase
+        .from('storyboards')
+        .update({ shot_number: temp, sequence_order: temp })
+        .eq('id', id)
+      if (error) throw error
+    }
+
+    await stage(current.id, tempCurrent)
+    await stage(neighbor.id, tempNeighbor)
+
+    const apply = async (
+      id: string,
+      shotNumber: number,
+      sequenceOrder: number
+    ) => {
+      const { error } = await supabase
+        .from('storyboards')
+        .update({ shot_number: shotNumber, sequence_order: sequenceOrder })
+        .eq('id', id)
+      if (error) throw error
+    }
+
+    await apply(current.id, neighbor.shot_number, shotOrderValue(neighbor))
+    await apply(neighbor.id, current.shot_number, shotOrderValue(current))
   }
 
   // Insert a shot between two existing shots
