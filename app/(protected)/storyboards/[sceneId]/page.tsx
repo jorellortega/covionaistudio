@@ -1584,44 +1584,57 @@ export default function SceneStoryboardsPage() {
         reason: !storyboard ? "storyboard-not-found" : "missing-user-id",
         storyboardId,
       })
+      toast({
+        title: "Edit failed",
+        description: !storyboard
+          ? "Could not find this storyboard shot."
+          : "Your session is not ready yet. Refresh and try again.",
+        variant: "destructive",
+      })
       return
     }
 
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, inlineShotReferenceFile)
 
-    let styleReferenceFiles: File[] = []
-    for (const assetId of inlineStyleLinkAssetIds) {
-      const styleAsset = findStyleLinkAsset(assetId)
-      if (styleAsset?.content_url) {
-        styleReferenceFiles.push(
-          await referenceUrlToFile(
-            styleAsset.content_url,
-            `style-ref-${styleAsset.id}.png`,
-          ),
+    setIsGeneratingReferenceEdit(true)
+    setReferenceEditProgress(
+      isCreateMode ? "Loading references..." : "Loading reference image...",
+    )
+    try {
+      let styleReferenceFiles: File[] = []
+      for (const assetId of inlineStyleLinkAssetIds) {
+        const styleAsset = findStyleLinkAsset(assetId)
+        if (styleAsset?.content_url) {
+          styleReferenceFiles.push(
+            await referenceUrlToFile(
+              styleAsset.content_url,
+              `style-ref-${styleAsset.id}.png`,
+            ),
+          )
+        }
+      }
+
+      if (
+        styleReferenceFiles.length === 0 &&
+        (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)
+      ) {
+        const refSources = collectStoryboardReferenceSources({
+          characterIds: assignmentContext.characterIds,
+          locationIds: assignmentContext.locationIds,
+          characters,
+          locations,
+          avatarImages: projectAvatarImages,
+          characterAssets: characterImageAssets,
+          maxImages: storyboardReferenceImageLimit(),
+        })
+        styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files.slice(
+          0,
+          storyboardReferenceImageLimit(),
         )
       }
-    }
 
-    if (styleReferenceFiles.length === 0 && (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)) {
-      const refSources = collectStoryboardReferenceSources({
-        characterIds: assignmentContext.characterIds,
-        locationIds: assignmentContext.locationIds,
-        characters,
-        locations,
-        avatarImages: projectAvatarImages,
-        characterAssets: characterImageAssets,
-        maxImages: storyboardReferenceImageLimit(),
-      })
-      styleReferenceFiles = (await loadStoryboardReferenceFiles(refSources)).files.slice(
-        0,
-        storyboardReferenceImageLimit(),
-      )
-    }
-
-    setIsGeneratingReferenceEdit(true)
-    setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
-    try {
+      setReferenceEditProgress(isCreateMode ? "Generating image..." : "Editing image...")
       const config = isCreateMode
         ? requireLockedImageConfig()
         : requireLockedImageConfig({ withReferenceImage: true })

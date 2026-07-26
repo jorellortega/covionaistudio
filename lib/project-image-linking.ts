@@ -7,10 +7,14 @@ const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/we
 function isSupabaseStorageUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
-    return (
-      parsed.host.endsWith(".supabase.co") &&
-      parsed.pathname.includes("/storage/v1/object/")
-    )
+    if (!parsed.pathname.includes("/storage/v1/object/")) return false
+
+    const supabaseHost = process.env.NEXT_PUBLIC_SUPABASE_URL
+      ? new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host
+      : null
+    if (supabaseHost && parsed.host === supabaseHost) return true
+
+    return parsed.host.endsWith(".supabase.co")
   } catch {
     return false
   }
@@ -61,11 +65,16 @@ function resolveImageMime(buffer: ArrayBuffer, declaredType?: string | null): st
 }
 
 async function fetchReferenceResponse(url: string): Promise<Response> {
-  const direct = await fetch(url)
-  if (direct.ok) return direct
+  let direct: Response | null = null
+  try {
+    direct = await fetch(url)
+    if (direct.ok) return direct
+  } catch {
+    // Browser CORS/network errors throw — fall through to server proxy.
+  }
 
   // Missing files won't load via proxy either — skip the extra round trip.
-  const skipProxy = direct.status === 400 || direct.status === 404
+  const skipProxy = direct !== null && (direct.status === 400 || direct.status === 404)
   if (!skipProxy && isSupabaseStorageUrl(url)) {
     const proxy = await fetch(
       `/api/ai/proxy-download?url=${encodeURIComponent(url)}&filename=reference.png`,
@@ -73,7 +82,7 @@ async function fetchReferenceResponse(url: string): Promise<Response> {
     if (proxy.ok) return proxy
   }
 
-  throw new Error(`Could not load reference image (${direct.status})`)
+  throw new Error(`Could not load reference image (${direct?.status ?? "network"})`)
 }
 
 export async function referenceUrlToFile(url: string, filename: string): Promise<File> {
