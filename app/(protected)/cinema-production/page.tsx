@@ -1328,8 +1328,11 @@ export default function CinemaProductionPage() {
   const [framesDialogOpen, setFramesDialogOpen] = useState(false)
   const [imageToolsStoryboard, setImageToolsStoryboard] = useState<Storyboard | null>(null)
   const [imageEditPrompt, setImageEditPrompt] = useState("")
-  const [imageEditUploading, setImageEditUploading] = useState(false)
-  const [imageEditProgress, setImageEditProgress] = useState("")
+  const [imageEditingShotIds, setImageEditingShotIds] = useState<Set<string>>(() => new Set())
+  const [imageEditProgressByShotId, setImageEditProgressByShotId] = useState<Map<string, string>>(
+    () => new Map(),
+  )
+  const imageEditDialogStoryboardIdRef = useRef<string | null>(null)
   const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
   const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
   const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
@@ -3255,6 +3258,39 @@ export default function CinemaProductionPage() {
     setImageEditStyleLinkAssetIds([])
   }
 
+  const setImageEditProgressForShot = (storyboardId: string, progress: string) => {
+    setImageEditProgressByShotId((prev) => new Map(prev).set(storyboardId, progress))
+  }
+
+  const clearImageEditProgressForShot = (storyboardId: string) => {
+    setImageEditProgressByShotId((prev) => {
+      const next = new Map(prev)
+      next.delete(storyboardId)
+      return next
+    })
+  }
+
+  const startImageEditForShot = (storyboardId: string) => {
+    setImageEditingShotIds((prev) => new Set(prev).add(storyboardId))
+  }
+
+  const finishImageEditForShot = (storyboardId: string) => {
+    setImageEditingShotIds((prev) => {
+      const next = new Set(prev)
+      next.delete(storyboardId)
+      return next
+    })
+    clearImageEditProgressForShot(storyboardId)
+  }
+
+  const closeImageEditDialog = () => {
+    setImageEditDialogOpen(false)
+    setImageToolsStoryboard(null)
+    clearImageEditReference()
+    clearImageEditStyleLinks()
+    setImageEditPrompt("")
+  }
+
   const toggleImageEditStyleLink = (assetId: string) => {
     setImageEditStyleLinkAssetIds((prev) => {
       if (prev.includes(assetId)) return prev.filter((id) => id !== assetId)
@@ -3277,6 +3313,10 @@ export default function CinemaProductionPage() {
     clearImageEditStyleLinks()
     setImageEditDialogOpen(true)
   }
+
+  useEffect(() => {
+    imageEditDialogStoryboardIdRef.current = imageToolsStoryboard?.id ?? null
+  }, [imageToolsStoryboard])
 
   const openStylizeDialog = (storyboard: Storyboard) => {
     setImageToolsStoryboard(storyboard)
@@ -3582,6 +3622,8 @@ export default function CinemaProductionPage() {
   const handleCinemaImageEdit = async () => {
     const storyboard = imageToolsStoryboard
     const direction = imageEditPrompt.trim()
+    const referenceFileSnapshot = imageEditReferenceFile
+    const styleLinkAssetIds = [...imageEditStyleLinkAssetIds]
     if (!storyboard || !userId) return
     if (!direction) {
       toast({
@@ -3591,7 +3633,7 @@ export default function CinemaProductionPage() {
       })
       return
     }
-    if (!imageEditReferenceFile && !storyboard.image_url) {
+    if (!referenceFileSnapshot && !storyboard.image_url) {
       toast({
         title: "Reference required",
         description: "This shot needs an image, or upload a reference to edit from.",
@@ -3600,8 +3642,9 @@ export default function CinemaProductionPage() {
       return
     }
 
-    setImageEditUploading(true)
-    setImageEditProgress("Editing image...")
+    const storyboardId = storyboard.id
+    startImageEditForShot(storyboardId)
+    setImageEditProgressForShot(storyboardId, "Loading references...")
     try {
       const config = requireLockedImageConfig({ withReferenceImage: true })
       let prompt = direction
@@ -3609,7 +3652,7 @@ export default function CinemaProductionPage() {
       prompt = prompt.slice(0, 990)
 
       const styleReferenceUrls: string[] = []
-      for (const assetId of imageEditStyleLinkAssetIds) {
+      for (const assetId of styleLinkAssetIds) {
         const styleAsset = findImageEditStyleAsset(assetId)
         if (styleAsset?.content_url) {
           styleReferenceUrls.push(styleAsset.content_url)
@@ -3644,11 +3687,13 @@ export default function CinemaProductionPage() {
         }
       }
 
+      setImageEditProgressForShot(storyboardId, "Editing image...")
+
       let referenceImageUrl: string | undefined
       let referenceFile: File | undefined
       if (config.supportsReference) {
-        if (imageEditReferenceFile) {
-          referenceFile = imageEditReferenceFile
+        if (referenceFileSnapshot) {
+          referenceFile = referenceFileSnapshot
         } else if (storyboard.image_url) {
           referenceImageUrl = storyboard.image_url
         }
@@ -3676,18 +3721,19 @@ export default function CinemaProductionPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      // Keep the official shot image — save edit to the frame library only
       await ensureOriginalInLibrary(storyboard)
       await persistShotReferenceFrame(storyboard, {
         url: imageUrlToUse,
         label: "Edited shot",
       })
-      setShotPreviewImage(storyboard.id, imageUrlToUse)
+      setShotPreviewImage(storyboardId, imageUrlToUse)
 
-      setImageEditDialogOpen(false)
-      clearImageEditReference()
-      clearImageEditStyleLinks()
-      setImageEditPrompt("")
+      if (imageEditDialogStoryboardIdRef.current === storyboardId) {
+        setImageToolsStoryboard((prev) =>
+          prev?.id === storyboardId ? { ...prev } : prev,
+        )
+      }
+
       toast({
         title: "Edit saved to library",
         description: "Original shot kept. Edited version added to the frame library — click a thumb to preview.",
@@ -3699,8 +3745,7 @@ export default function CinemaProductionPage() {
         variant: "destructive",
       })
     } finally {
-      setImageEditUploading(false)
-      setImageEditProgress("")
+      finishImageEditForShot(storyboardId)
     }
   }
 
@@ -7808,6 +7853,14 @@ export default function CinemaProductionPage() {
                                     }}
                                   />
                                   <ImageSizeBadge src={displayImageUrl} />
+                                  {imageEditingShotIds.has(storyboard.id) ? (
+                                    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 pointer-events-none">
+                                      <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
+                                      <span className="mt-2 text-sm font-medium text-white">
+                                        {imageEditProgressByShotId.get(storyboard.id) || "Editing image…"}
+                                      </span>
+                                    </div>
+                                  ) : null}
                                   {previewImageByStoryboard.get(storyboard.id) &&
                                   previewImageByStoryboard.get(storyboard.id) !== storyboard.image_url ? (
                                     <div className="absolute top-2 left-2 rounded bg-black/70 text-white text-[10px] px-2 py-0.5">
@@ -7856,6 +7909,15 @@ export default function CinemaProductionPage() {
                                 </div>
                               ) : (
                                 <div className="py-12 text-center bg-muted rounded-lg space-y-3">
+                                  {imageEditingShotIds.has(storyboard.id) ? (
+                                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                                      <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+                                      <p className="text-sm font-medium">
+                                        {imageEditProgressByShotId.get(storyboard.id) || "Editing image…"}
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    <>
                                   <ImageIcon className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
                                   <p className="text-muted-foreground">
                                     No image available for this storyboard.
@@ -7877,6 +7939,8 @@ export default function CinemaProductionPage() {
                                   <p className="text-xs text-muted-foreground px-4">
                                     Uses shot details plus character avatars and location images when assigned.
                                   </p>
+                                    </>
+                                  )}
                                 </div>
                               )
                               })()
@@ -8151,9 +8215,14 @@ export default function CinemaProductionPage() {
                             size="sm"
                             variant="outline"
                             className="gap-1.5"
+                            disabled={imageEditingShotIds.has(storyboard.id)}
                             onClick={() => openImageEditDialog(storyboard)}
                           >
-                            <Wand2 className="h-3.5 w-3.5" />
+                            {imageEditingShotIds.has(storyboard.id) ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Wand2 className="h-3.5 w-3.5" />
+                            )}
                             Edit Image
                           </Button>
                           <Button
@@ -8166,7 +8235,7 @@ export default function CinemaProductionPage() {
                               !storyboard.image_url ||
                               resizingLandscapeId === storyboard.id ||
                               stylizeUploading ||
-                              imageEditUploading
+                              imageEditingShotIds.has(storyboard.id)
                             }
                             title="Redo same image at 1536×1024 landscape"
                           >
@@ -9905,13 +9974,7 @@ export default function CinemaProductionPage() {
       <Dialog
         open={imageEditDialogOpen}
         onOpenChange={(open) => {
-          if (!open && !imageEditUploading) {
-            setImageEditDialogOpen(false)
-            setImageToolsStoryboard(null)
-            clearImageEditReference()
-            clearImageEditStyleLinks()
-            setImageEditPrompt("")
-          }
+          if (!open) closeImageEditDialog()
         }}
       >
         <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
@@ -9927,7 +9990,10 @@ export default function CinemaProductionPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {imageToolsStoryboard && (
+          {imageToolsStoryboard && (() => {
+            const isEditingThisShot = imageEditingShotIds.has(imageToolsStoryboard.id)
+            const editProgress = imageEditProgressByShotId.get(imageToolsStoryboard.id)
+            return (
             <div className="space-y-3 min-w-0 w-full overflow-hidden">
               {imageToolsStoryboard.image_url && (
                 <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
@@ -9939,10 +10005,13 @@ export default function CinemaProductionPage() {
                 </div>
               )}
 
-              {imageEditUploading && imageEditProgress ? (
-                <p className="text-xs text-muted-foreground flex items-center gap-2">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  {imageEditProgress}
+              {isEditingThisShot && editProgress ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
+                  <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                  {editProgress}
+                  <span className="text-muted-foreground/80">
+                    — you can close this window and keep working
+                  </span>
                 </p>
               ) : null}
 
@@ -9956,7 +10025,7 @@ export default function CinemaProductionPage() {
                   onChange={(e) => setImageEditPrompt(e.target.value)}
                   placeholder='e.g., warmer lighting, wider framing, add rain, closer on the character'
                   className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
-                  disabled={imageEditUploading}
+                  disabled={isEditingThisShot}
                 />
               </div>
 
@@ -9970,7 +10039,7 @@ export default function CinemaProductionPage() {
                     type="file"
                     accept="image/*"
                     className="hidden"
-                    disabled={imageEditUploading}
+                    disabled={isEditingThisShot}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => {
                       const file = e.target.files?.[0]
                       if (!file) return
@@ -9985,7 +10054,7 @@ export default function CinemaProductionPage() {
                     variant="outline"
                     size="sm"
                     className="gap-2"
-                    disabled={imageEditUploading}
+                    disabled={isEditingThisShot}
                     onClick={() => document.getElementById("cinema-image-edit-ref")?.click()}
                   >
                     <Upload className="h-4 w-4" />
@@ -10005,7 +10074,7 @@ export default function CinemaProductionPage() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        disabled={imageEditUploading}
+                        disabled={isEditingThisShot}
                         onClick={clearImageEditReference}
                         title="Remove uploaded reference"
                       >
@@ -10064,7 +10133,7 @@ export default function CinemaProductionPage() {
                             <button
                               key={asset.id}
                               type="button"
-                              disabled={imageEditUploading}
+                              disabled={isEditingThisShot}
                               onClick={() => toggleImageEditStyleLink(asset.id)}
                               className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
                                 imageEditStyleLinkAssetIds.includes(asset.id)
@@ -10096,7 +10165,7 @@ export default function CinemaProductionPage() {
                       variant="ghost"
                       size="sm"
                       className="h-7 px-2 text-xs"
-                      disabled={imageEditUploading}
+                      disabled={isEditingThisShot}
                       onClick={clearImageEditStyleLinks}
                     >
                       Clear all
@@ -10109,14 +10178,14 @@ export default function CinemaProductionPage() {
                 size="sm"
                 onClick={() => void handleCinemaImageEdit()}
                 disabled={
-                  imageEditUploading ||
+                  isEditingThisShot ||
                   !imageEditPrompt.trim() ||
                   !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
                   (!imageEditReferenceFile && !imageToolsStoryboard.image_url)
                 }
                 className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
               >
-                {imageEditUploading && imageEditPrompt.trim() ? (
+                {isEditingThisShot ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Editing...
@@ -10129,7 +10198,8 @@ export default function CinemaProductionPage() {
                 )}
               </Button>
             </div>
-          )}
+            )
+          })()}
         </DialogContent>
       </Dialog>
 
