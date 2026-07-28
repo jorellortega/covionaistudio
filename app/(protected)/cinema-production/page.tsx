@@ -121,6 +121,10 @@ import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
 import { LazyShotImage } from "@/components/lazy-shot-image"
 import { StoryboardShotEditDialog } from "@/components/storyboard-shot-edit-dialog"
+import {
+  StoryboardShotReferencePicker,
+  type StoryboardShotReference,
+} from "@/components/storyboard-shot-reference-picker"
 import { PageLoadDebugPanel } from "@/components/page-load-debug-panel"
 import { usePageLoadDebug } from "@/hooks/use-page-load-debug"
 import {
@@ -1394,6 +1398,9 @@ export default function CinemaProductionPage() {
   const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
   const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
   const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
+  const [imageEditStoryboardShotRefs, setImageEditStoryboardShotRefs] = useState<
+    StoryboardShotReference[]
+  >([])
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
   const [projectLocations, setProjectLocations] = useState<Location[]>([])
   const [projectAvatarImages, setProjectAvatarImages] = useState<AvatarImageRecord[]>([])
@@ -3540,6 +3547,7 @@ export default function CinemaProductionPage() {
 
   const clearImageEditStyleLinks = () => {
     setImageEditStyleLinkAssetIds([])
+    setImageEditStoryboardShotRefs([])
   }
 
   const setImageEditProgressForShot = (storyboardId: string, progress: string) => {
@@ -3578,7 +3586,7 @@ export default function CinemaProductionPage() {
   const toggleImageEditStyleLink = (assetId: string) => {
     setImageEditStyleLinkAssetIds((prev) => {
       if (prev.includes(assetId)) return prev.filter((id) => id !== assetId)
-      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+      if (prev.length + imageEditStoryboardShotRefs.length >= MAX_LINKED_REFERENCE_IMAGES) {
         toast({
           title: "Maximum references reached",
           description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
@@ -3908,6 +3916,7 @@ export default function CinemaProductionPage() {
     const direction = imageEditPrompt.trim()
     const referenceFileSnapshot = imageEditReferenceFile
     const styleLinkAssetIds = [...imageEditStyleLinkAssetIds]
+    const storyboardShotRefs = [...imageEditStoryboardShotRefs]
     if (!storyboard || !userId) return
     if (!direction) {
       toast({
@@ -3941,6 +3950,9 @@ export default function CinemaProductionPage() {
         if (styleAsset?.content_url) {
           styleReferenceUrls.push(styleAsset.content_url)
         }
+      }
+      for (const shotRef of storyboardShotRefs) {
+        styleReferenceUrls.push(shotRef.imageUrl)
       }
 
       if (styleReferenceUrls.length === 0) {
@@ -10616,6 +10628,16 @@ export default function CinemaProductionPage() {
                 </p>
               </div>
 
+              <StoryboardShotReferencePicker
+                projectId={selectedProjectId}
+                excludeStoryboardId={imageToolsStoryboard.id}
+                selectedRefs={imageEditStoryboardShotRefs}
+                onSelectedRefsChange={setImageEditStoryboardShotRefs}
+                maxTotalReferences={MAX_LINKED_REFERENCE_IMAGES}
+                otherLinkedCount={imageEditStyleLinkAssetIds.length}
+                disabled={isEditingThisShot}
+              />
+
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -10625,7 +10647,7 @@ export default function CinemaProductionPage() {
                 </div>
                 <p className="text-xs text-muted-foreground break-words">
                   Adds more images as references from characters, locations, or project assets.
-                  Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
+                  Select up to {MAX_LINKED_REFERENCE_IMAGES} total including storyboard shots. Your description above is the only prompt.
                 </p>
                 {isLoadingProjectAssets ? (
                   <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
@@ -10669,10 +10691,11 @@ export default function CinemaProductionPage() {
                     ))}
                   </div>
                 )}
-                {imageEditStyleLinkAssetIds.length > 0 ? (
+                {imageEditStyleLinkAssetIds.length > 0 || imageEditStoryboardShotRefs.length > 0 ? (
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-xs text-violet-400">
-                      {imageEditStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as
+                      {imageEditStyleLinkAssetIds.length + imageEditStoryboardShotRefs.length} of{" "}
+                      {MAX_LINKED_REFERENCE_IMAGES} linked as
                       additional references
                     </p>
                     <Button

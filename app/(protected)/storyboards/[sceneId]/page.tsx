@@ -48,10 +48,14 @@ import { ContentViolationDialog } from "@/components/content-violation-dialog"
 import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
-import { formatShotTypeLabel, SHOT_TYPE_OPTIONS } from "@/lib/shot-options"
+import { formatShotTypeLabel, formatStoryboardSaveError, SHOT_TYPE_OPTIONS } from "@/lib/shot-options"
 import { sortStoryboardRows, computeInsertPlacementBetween, shotOrderValue, storyboardPlacementForInsert, displayShotNumber } from "@/lib/shot-list-order"
 import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
 import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
+import {
+  StoryboardShotReferencePicker,
+  type StoryboardShotReference,
+} from "@/components/storyboard-shot-reference-picker"
 import {
   buildStoryboardAssignmentPatch,
   getStoryboardCharacterIds,
@@ -407,6 +411,9 @@ export default function SceneStoryboardsPage() {
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
+  const [inlineStoryboardShotRefs, setInlineStoryboardShotRefs] = useState<StoryboardShotReference[]>(
+    [],
+  )
   const [referenceEditingShotIds, setReferenceEditingShotIds] = useState<Set<string>>(() => new Set())
   const [referenceEditProgressByShotId, setReferenceEditProgressByShotId] = useState<
     Map<string, string>
@@ -1583,6 +1590,7 @@ export default function SceneStoryboardsPage() {
 
   const clearInlineStyleLink = () => {
     setInlineStyleLinkAssetIds([])
+    setInlineStoryboardShotRefs([])
   }
 
   const toggleInlineStyleLinkAsset = (assetId: string) => {
@@ -1590,7 +1598,7 @@ export default function SceneStoryboardsPage() {
       if (prev.includes(assetId)) {
         return prev.filter((id) => id !== assetId)
       }
-      if (prev.length >= MAX_LINKED_REFERENCE_IMAGES) {
+      if (prev.length + inlineStoryboardShotRefs.length >= MAX_LINKED_REFERENCE_IMAGES) {
         toast({
           title: "Maximum references reached",
           description: `You can link up to ${MAX_LINKED_REFERENCE_IMAGES} images at a time.`,
@@ -1710,6 +1718,7 @@ export default function SceneStoryboardsPage() {
     const direction = inlineCustomShotPrompt.trim()
     const shotReferenceFile = inlineShotReferenceFile
     const styleLinkAssetIds = [...inlineStyleLinkAssetIds]
+    const storyboardShotRefs = [...inlineStoryboardShotRefs]
     if (!direction) {
       debugStoryboardImage("validation-failed", {
         reason: "empty-reference-edit-direction",
@@ -1754,7 +1763,7 @@ export default function SceneStoryboardsPage() {
     pushStoryboardImageTrace(
       "info",
       "Config",
-      `mode=${isCreateMode ? "create" : "edit"}, model=${lockedConfigPreview?.lockedModel ?? "none"}, supportsRef=${lockedConfigPreview?.supportsReference ?? false}, styleLinks=${inlineStyleLinkAssetIds.length}`,
+      `mode=${isCreateMode ? "create" : "edit"}, model=${lockedConfigPreview?.lockedModel ?? "none"}, supportsRef=${lockedConfigPreview?.supportsReference ?? false}, styleLinks=${inlineStyleLinkAssetIds.length}, storyboardRefs=${inlineStoryboardShotRefs.length}`,
     )
 
     if (!isCreateMode && !lockedConfigPreview?.supportsReference) {
@@ -1785,6 +1794,14 @@ export default function SceneStoryboardsPage() {
           styleReferenceUrls.push(styleAsset.content_url)
           pushStoryboardImageTrace("ok", `Style reference URL ${styleAsset.id}`, styleAsset.content_url.slice(0, 80))
         }
+      }
+      for (const shotRef of storyboardShotRefs) {
+        styleReferenceUrls.push(shotRef.imageUrl)
+        pushStoryboardImageTrace(
+          "ok",
+          `Storyboard shot reference ${shotRef.storyboardId}`,
+          shotRef.imageUrl.slice(0, 80),
+        )
       }
 
       if (
@@ -2126,6 +2143,15 @@ export default function SceneStoryboardsPage() {
                   : "Upload a reference or link an image to this shot first."}
           </p>
         </div>
+        <StoryboardShotReferencePicker
+          projectId={sceneProjectId || ""}
+          excludeStoryboardId={storyboard.id}
+          selectedRefs={inlineStoryboardShotRefs}
+          onSelectedRefsChange={setInlineStoryboardShotRefs}
+          maxTotalReferences={MAX_LINKED_REFERENCE_IMAGES}
+          otherLinkedCount={inlineStyleLinkAssetIds.length}
+          disabled={isEditingThisShot}
+        />
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -2135,7 +2161,7 @@ export default function SceneStoryboardsPage() {
           </div>
           <p className="text-xs text-muted-foreground break-words">
             {isCreateMode
-              ? `Adds more images as references from characters, locations, avatar studio, or project assets. Select up to ${MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.${
+              ? `Adds more images as references from characters, locations, avatar studio, or project assets. Select up to ${MAX_LINKED_REFERENCE_IMAGES} total including storyboard shots. Your description above is the only prompt.${
                   storyboard.character_id &&
                   getAvatarImagesForCharacter(storyboard.character_id).length > 0
                     ? " This character's avatar images are pre-selected when available."
@@ -2185,10 +2211,10 @@ export default function SceneStoryboardsPage() {
               ))}
             </div>
           )}
-          {inlineStyleLinkAssetIds.length > 0 ? (
+          {(inlineStyleLinkAssetIds.length > 0 || inlineStoryboardShotRefs.length > 0) ? (
             <div className="flex items-center gap-2 flex-wrap">
               <p className="text-xs text-violet-400">
-                {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
+                {inlineStyleLinkAssetIds.length + inlineStoryboardShotRefs.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
               </p>
               <Button
                 type="button"
@@ -2835,7 +2861,7 @@ export default function SceneStoryboardsPage() {
       console.error("Error updating storyboard:", error)
       toast({
         title: "Error",
-        description: "Failed to update storyboard",
+        description: formatStoryboardSaveError(error, formData.movement),
         variant: "destructive"
       })
     } finally {

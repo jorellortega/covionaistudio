@@ -19,7 +19,7 @@ import {
   getStoryboardLocationIds,
 } from "@/lib/storyboard-assignments"
 import { displayShotNumber } from "@/lib/shot-list-order"
-import { SHOT_TYPE_OPTIONS } from "@/lib/shot-options"
+import { SHOT_TYPE_OPTIONS, formatStoryboardSaveError } from "@/lib/shot-options"
 import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
 import {
   StoryboardsService,
@@ -135,7 +135,7 @@ export function StoryboardShotEditDialog({
       console.error("Error updating storyboard:", error)
       toast({
         title: "Error",
-        description: "Failed to update shot details.",
+        description: formatStoryboardSaveError(error, formData.movement),
         variant: "destructive",
       })
     } finally {

@@ -60,6 +60,44 @@ export type MovementValue = (typeof MOVEMENT_OPTIONS)[number]["value"]
 
 export const MOVEMENT_VALUES = new Set<string>(MOVEMENT_OPTIONS.map((option) => option.value))
 
+/** Values allowed before migration 092 — used for clearer save errors. */
+export const LEGACY_MOVEMENT_DB_VALUES = new Set([
+  "static",
+  "panning",
+  "tilting",
+  "tracking",
+  "zooming",
+  "dolly",
+  "crane",
+  "handheld",
+  "steadicam",
+])
+
+export function formatStoryboardSaveError(error: unknown, movement?: string | null): string {
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message: string }).message)
+      : ""
+  const code =
+    error && typeof error === "object" && "code" in error
+      ? String((error as { code: string }).code)
+      : ""
+
+  const movementRejected =
+    code === "23514" ||
+    message.includes("storyboards_movement_check") ||
+    message.includes("shot_lists_movement_check") ||
+    (movement != null &&
+      MOVEMENT_VALUES.has(movement) &&
+      !LEGACY_MOVEMENT_DB_VALUES.has(movement))
+
+  if (movementRejected) {
+    return `Database does not allow "${formatMovementLabel(movement) || movement}" yet. Apply migration 092_expand_shot_movement_options.sql on Supabase, then try again.`
+  }
+
+  return message || "Failed to update shot details."
+}
+
 export function formatShotTypeLabel(value: string | null | undefined): string {
   if (!value) return ""
   return SHOT_TYPE_OPTIONS.find((option) => option.value === value)?.label ?? value.replace(/-/g, " ")
