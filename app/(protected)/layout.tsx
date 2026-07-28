@@ -98,12 +98,30 @@ function ProtectedLayoutContent({ children }: { children: React.ReactNode }) {
     };
   }, [loading, session?.user?.id, isCastingPage, supabase, router, pathname]);
 
+  // Warm /api/movies server cache in background so /movies is fast on navigation
+  const moviesPrefetchForUser = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !session?.user || isCastingPage) return;
+    if (pathname === '/movies') return;
+    if (moviesPrefetchForUser.current === session.user.id) return;
+    moviesPrefetchForUser.current = session.user.id;
+    void fetch('/api/movies', { credentials: 'include' }).catch(() => {});
+  }, [loading, session?.user?.id, isCastingPage, pathname]);
+
   if (isCastingPage) {
     return <>{children}</>;
   }
 
-  // No full-page block — redirect to login in useEffect when session is confirmed absent
-  if (!loading && !session) {
+  if (loading) {
+    return (
+      <div className="grid min-h-screen place-items-center">
+        <p className="text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
+
+  // Redirect to login in useEffect when session is confirmed absent
+  if (!session) {
     return null;
   }
 

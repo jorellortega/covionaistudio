@@ -44,6 +44,7 @@ import {
   ChevronRight,
   ChevronDown,
   AudioWaveform,
+  Edit,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -52,7 +53,7 @@ import { useToast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
-import { MovieService, type Movie } from "@/lib/movie-service"
+import { MovieService, getLastMoviesFetchMeta, type Movie, type MoviesFetchMeta } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { displayShotNumber, sortStoryboardRows } from "@/lib/shot-list-order"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
@@ -118,8 +119,42 @@ import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
 import { LinkAudioPanel } from "@/components/linked-audio-picker"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
+import { LazyShotImage } from "@/components/lazy-shot-image"
+import { StoryboardShotEditDialog } from "@/components/storyboard-shot-edit-dialog"
+import { PageLoadDebugPanel } from "@/components/page-load-debug-panel"
+import { usePageLoadDebug } from "@/hooks/use-page-load-debug"
+import {
+  buildShotDiagnostic,
+  buildShotImageDiagnostic,
+  formatCinemaProductionImageDiagnostics,
+  formatCinemaProductionVideoDiagnostics,
+  getNetworkHint,
+  probeImageLoad,
+  probeVideoMetadata,
+  summarizeImageDiagnostics,
+  summarizeVideoDiagnostics,
+  type CinemaProductionImageDiagnostics,
+  type CinemaProductionVideoDiagnostics,
+} from "@/lib/cinema-production-video-debug"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
+
+const MOVIES_CACHE_KEY = "cinema_movies_v1"
+const MOVIES_CACHE_TTL_MS = 30 * 60 * 1000
+
+function readMoviesCache(userId: string): Movie[] | null {
+  try {
+    const raw = localStorage.getItem(MOVIES_CACHE_KEY) ?? sessionStorage.getItem(MOVIES_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { userId: string; at: number; movies: Movie[] }
+    if (parsed.userId !== userId || Date.now() - parsed.at > MOVIES_CACHE_TTL_MS) return null
+    return parsed.movies
+  } catch {
+    return null
+  }
+}
+
+const VIDEO_LOAD_STAGGER_MS = 50
 
 const VIDEO_FRAME_PRESETS = [
   {
@@ -1279,25 +1314,48 @@ function MireloSfxGenerator({
 }
 
 export default function CinemaProductionPage() {
-  const { session } = useAuth()
+  const { session, loading: authLoading } = useAuth()
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { ready, userId } = useAuthReady()
+  const { getLoadTracker, loadDebug, authDebug, loadCompleteMs } =
+    usePageLoadDebug("Cinema production")
+  const [lastApiMeta, setLastApiMeta] = useState<MoviesFetchMeta | null>(null)
   
   const [projects, setProjects] = useState<Movie[]>([])
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("")
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    () => searchParams.get("project") ?? "",
+  )
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
-  const [selectedSceneId, setSelectedSceneId] = useState<string>("")
+  const [selectedSceneId, setSelectedSceneId] = useState(
+    () => searchParams.get("scene") ?? "",
+  )
   const [storyboards, setStoryboards] = useState<Storyboard[]>([])
   const [selectedStoryboardId, setSelectedStoryboardId] = useState<string>("")
   const [selectedStoryboard, setSelectedStoryboard] = useState<Storyboard | null>(null)
   const [shotLists, setShotLists] = useState<ShotList[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [loadingScenes, setLoadingScenes] = useState(false)
   const [loadingStoryboards, setLoadingStoryboards] = useState(false)
+  const [loadingVideos, setLoadingVideos] = useState(false)
+  const [measuringMedia, setMeasuringMedia] = useState(false)
+  const [loadingVideoStoryboardIds, setLoadingVideoStoryboardIds] = useState<Set<string>>(
+    () => new Set(),
+  )
+  const [loadingImageStoryboardIds, setLoadingImageStoryboardIds] = useState<Set<string>>(
+    () => new Set(),
+  )
+  const [videoDiagnostics, setVideoDiagnostics] =
+    useState<CinemaProductionVideoDiagnostics | null>(null)
+  const [imageDiagnostics, setImageDiagnostics] =
+    useState<CinemaProductionImageDiagnostics | null>(null)
+  const videoLoadRunRef = useRef(0)
+  const storyboardBatchMsRef = useRef<number | null>(null)
   const [loadingShots, setLoadingShots] = useState(false)
   const [viewMode, setViewMode] = useState<'sequence' | 'grid' | 'detail'>('detail')
+  const [editShotDialogOpen, setEditShotDialogOpen] = useState(false)
+  const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
   
   // Leonardo API key and motion control
   const [leonardoApiKey, setLeonardoApiKey] = useState<string>("")
@@ -1543,13 +1601,25 @@ export default function CinemaProductionPage() {
   )
 
   useEffect(() => {
+    if (!userId) return
+    const cached = readMoviesCache(userId)
+    if (cached?.length) {
+      setProjects(cached)
+      getLoadTracker().addNote(`Showing ${cached.length} cached projects while refreshing`)
+    }
+  }, [userId])
+
+  useEffect(() => {
     if (!ready) return
     void findHedraCharacter3ModelId().then(setHedraCharacter3ModelId)
   }, [ready])
 
   useEffect(() => {
+    if (authLoading) return
     if (!session?.user) {
-      router.push('/login')
+      router.replace(
+        '/login?next=' + encodeURIComponent(window.location.pathname + window.location.search),
+      )
       return
     }
 
@@ -1563,7 +1633,7 @@ export default function CinemaProductionPage() {
       loadProjects()
       loadLeonardoApiKey()
     }
-  }, [session?.user, ready, userId, router, searchParams])
+  }, [authLoading, session?.user, ready, userId, router, searchParams])
 
   useEffect(() => {
     if (selectedProjectId && ready) {
@@ -1749,14 +1819,191 @@ export default function CinemaProductionPage() {
     }
   }, [selectedStoryboardId, storyboards])
 
-  // Load videos for all storyboards when they change
+  // Stream shot images + videos top-to-bottom after storyboards are visible (non-blocking).
   useEffect(() => {
-    if (storyboards.length > 0 && userId) {
-      storyboards.forEach(storyboard => {
-        loadStoryboardVideos(storyboard.id)
-      })
+    if (storyboards.length === 0 || !userId) {
+      setLoadingVideos(false)
+      setLoadingVideoStoryboardIds(new Set())
+      return
     }
-  }, [storyboards, userId])
+
+    const runId = ++videoLoadRunRef.current
+    let cancelled = false
+    const ordered = sortStoryboardRows(
+      storyboards.filter(
+        (sb) => !selectedProjectId || !sb.project_id || sb.project_id === selectedProjectId,
+      ),
+    )
+
+    const loadSceneVideosBatch = async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+      if (cancelled || videoLoadRunRef.current !== runId) return
+
+      const tracker = getLoadTracker()
+      const phase = tracker.startPhase("Fetch scene videos", `${ordered.length} shots`)
+      setLoadingVideos(true)
+
+      try {
+        const ids = ordered.map((sb) => sb.id)
+        const batchResult = await fetchSceneVideosBatch(ids)
+        if (cancelled || videoLoadRunRef.current !== runId) return
+
+        const byStoryboard = new Map<string, StoryboardVideo[]>()
+        for (const video of batchResult.videos) {
+          const list = byStoryboard.get(video.storyboard_id) || []
+          list.push(video)
+          byStoryboard.set(video.storyboard_id, list)
+        }
+
+        for (const storyboard of ordered) {
+          applyStoryboardVideosToState(storyboard.id, byStoryboard.get(storyboard.id) || [])
+        }
+
+        tracker.endPhase(
+          phase,
+          `${batchResult.videos.length} videos · ${batchResult.apiMs}ms (1 request)`,
+        )
+      } catch (error) {
+        if (!cancelled) {
+          tracker.failPhase(
+            phase,
+            error instanceof Error ? error.message : "Failed to load scene videos",
+          )
+        }
+      } finally {
+        if (!cancelled && videoLoadRunRef.current === runId) {
+          setLoadingVideos(false)
+          setLoadingVideoStoryboardIds(new Set())
+        }
+      }
+    }
+
+    void loadSceneVideosBatch()
+    return () => {
+      cancelled = true
+    }
+  }, [storyboards, userId, selectedProjectId])
+
+  const measureShotMedia = useCallback(async () => {
+    if (storyboards.length === 0 || !userId) return
+
+    const runId = ++videoLoadRunRef.current
+    const ordered = sortStoryboardRows(
+      storyboards.filter(
+        (sb) => !selectedProjectId || !sb.project_id || sb.project_id === selectedProjectId,
+      ),
+    )
+
+    setMeasuringMedia(true)
+    setImageDiagnostics(null)
+    setVideoDiagnostics(null)
+    const streamStart = performance.now()
+    const imageShotDiagnostics: ReturnType<typeof buildShotImageDiagnostic>[] = []
+    const videoShotDiagnostics: ReturnType<typeof buildShotDiagnostic>[] = []
+    const networkHint = getNetworkHint()
+
+    try {
+      for (const storyboard of ordered) {
+        if (videoLoadRunRef.current !== runId) break
+
+        setLoadingImageStoryboardIds(new Set([storyboard.id]))
+        let imageProbeMs: number | null = null
+        let imageProbeNote: string | null = null
+        const imageUrl = storyboard.image_url || null
+
+        if (imageUrl) {
+          const imageProbe = await probeImageLoad(imageUrl)
+          imageProbeMs = imageProbe.ms
+          imageProbeNote = imageProbe.note ?? null
+        }
+
+        imageShotDiagnostics.push(
+          buildShotImageDiagnostic({
+            storyboardId: storyboard.id,
+            shotNumber: storyboard.shot_number,
+            title: storyboard.title || `Shot ${storyboard.shot_number}`,
+            imageUrl,
+            probeMs: imageProbeMs,
+            probeNote: imageProbeNote,
+          }),
+        )
+
+        setImageDiagnostics(
+          summarizeImageDiagnostics(imageShotDiagnostics, {
+            storyboardBatchMs: storyboardBatchMsRef.current,
+            staggerMsPerShot: VIDEO_LOAD_STAGGER_MS,
+            streamMs: Math.round(performance.now() - streamStart),
+            networkHint,
+          }),
+        )
+        setLoadingImageStoryboardIds(new Set())
+
+        setLoadingVideoStoryboardIds(new Set([storyboard.id]))
+        const existingVideos = storyboardVideos.get(storyboard.id) || []
+        const defaultVideo =
+          existingVideos.find((v: StoryboardVideo) => v.is_default) || existingVideos[0]
+        let videoProbeMs: number | null = null
+        let videoProbeNote: string | null = null
+
+        if (defaultVideo?.video_url) {
+          const videoProbe = await probeVideoMetadata(defaultVideo.video_url)
+          videoProbeMs = videoProbe.ms
+          videoProbeNote = videoProbe.note ?? null
+        }
+
+        videoShotDiagnostics.push(
+          buildShotDiagnostic({
+            storyboardId: storyboard.id,
+            shotNumber: storyboard.shot_number,
+            title: storyboard.title || `Shot ${storyboard.shot_number}`,
+            apiMs: 0,
+            apiStatus: existingVideos.length > 0 ? 200 : 0,
+            videoCount: existingVideos.length,
+            videoUrl: defaultVideo?.video_url ?? null,
+            probeMs: videoProbeMs,
+            probeNote: videoProbeNote,
+          }),
+        )
+
+        setVideoDiagnostics(
+          summarizeVideoDiagnostics(videoShotDiagnostics, {
+            staggerMsPerShot: VIDEO_LOAD_STAGGER_MS,
+            streamMs: Math.round(performance.now() - streamStart),
+            networkHint,
+          }),
+        )
+        setLoadingVideoStoryboardIds(new Set())
+
+        if (VIDEO_LOAD_STAGGER_MS > 0) {
+          await new Promise((resolve) => setTimeout(resolve, VIDEO_LOAD_STAGGER_MS))
+        }
+      }
+
+      if (videoLoadRunRef.current === runId) {
+        const imageSummary = summarizeImageDiagnostics(imageShotDiagnostics, {
+          storyboardBatchMs: storyboardBatchMsRef.current,
+          staggerMsPerShot: VIDEO_LOAD_STAGGER_MS,
+          streamMs: Math.round(performance.now() - streamStart),
+          networkHint,
+        })
+        const videoSummary = summarizeVideoDiagnostics(videoShotDiagnostics, {
+          staggerMsPerShot: VIDEO_LOAD_STAGGER_MS,
+          streamMs: Math.round(performance.now() - streamStart),
+          networkHint,
+        })
+        setImageDiagnostics(imageSummary)
+        setVideoDiagnostics(videoSummary)
+      }
+    } finally {
+      if (videoLoadRunRef.current === runId) {
+        setMeasuringMedia(false)
+        setLoadingImageStoryboardIds(new Set())
+        setLoadingVideoStoryboardIds(new Set())
+      }
+    }
+  }, [storyboards, userId, selectedProjectId, storyboardVideos])
 
   // Preload video durations for Mirelo SFX as soon as shot videos are known.
   useEffect(() => {
@@ -2037,12 +2284,20 @@ export default function CinemaProductionPage() {
   }
 
   const loadProjects = async () => {
+    const tracker = getLoadTracker()
+    const phase = tracker.startPhase("Fetch projects")
+    setProjects((prev) => {
+      if (prev.length === 0) setLoading(true)
+      return prev
+    })
     try {
-      setLoading(true)
       const userProjects = await MovieService.getMovies()
       setProjects(userProjects)
+      setLastApiMeta(getLastMoviesFetchMeta())
+      tracker.endPhase(phase, `${userProjects.length} projects`)
     } catch (error) {
       console.error('Error loading projects:', error)
+      tracker.failPhase(phase, error instanceof Error ? error.message : "Failed to load projects")
       toast({
         title: "Error",
         description: "Failed to load projects.",
@@ -2055,14 +2310,19 @@ export default function CinemaProductionPage() {
 
   const loadScenes = async () => {
     if (!selectedProjectId) return
-    
+
+    const tracker = getLoadTracker()
+    const phase = tracker.startPhase("Fetch scenes", selectedProjectId)
     try {
       setLoadingScenes(true)
       console.log('🎬 Loading scenes for project:', selectedProjectId)
-      const projectScenes = await TimelineService.getMovieScenes(selectedProjectId)
+      const projectScenes = await TimelineService.getMovieScenes(selectedProjectId, {
+        skipThumbnails: true,
+      })
       console.log('🎬 Loaded scenes:', projectScenes.length, projectScenes)
       setScenes(projectScenes)
-      
+      tracker.endPhase(phase, `${projectScenes.length} scenes`)
+
       const sceneParam = searchParams.get("scene")
       if (sceneParam && projectScenes.some((s) => s.id === sceneParam)) {
         setSelectedSceneId(sceneParam)
@@ -2071,6 +2331,7 @@ export default function CinemaProductionPage() {
       }
     } catch (error) {
       console.error('Error loading scenes:', error)
+      tracker.failPhase(phase, error instanceof Error ? error.message : "Failed to load scenes")
       toast({
         title: "Error",
         description: "Failed to load scenes.",
@@ -2096,97 +2357,120 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const loadStoryboardDeferredExtras = async (
+    sceneStoryboards: Storyboard[],
+    sceneId: string,
+  ) => {
+    let storyboardsToShow = sceneStoryboards
+    if (selectedProjectId) {
+      const orphans = sceneStoryboards.filter((sb) => !sb.project_id)
+      if (orphans.length > 0) {
+        const repaired = await Promise.all(
+          sceneStoryboards.map(async (sb) => {
+            if (sb.project_id) return sb
+            try {
+              return await StoryboardsService.updateStoryboard(sb.id, {
+                project_id: selectedProjectId,
+              })
+            } catch {
+              return sb
+            }
+          }),
+        )
+        storyboardsToShow = repaired
+        setStoryboards(repaired)
+      }
+    }
+
+    await loadSavedAudioForScene(sceneId)
+
+    if (!selectedProjectId) return
+
+    try {
+      const supabase = getSupabaseClient()
+      const videoPath = `${selectedProjectId}/videos/`
+      const { data: videoFiles, error: bucketError } = await supabase.storage
+        .from('cinema_files')
+        .list(videoPath, {
+          limit: 100,
+          sortBy: { column: 'created_at', order: 'desc' },
+        })
+
+      if (!bucketError && videoFiles && videoFiles.length > 0) {
+        videoFiles.forEach((file) => {
+          const fileName = file.name
+          storyboardsToShow.forEach((storyboard) => {
+            const titleMatch = fileName
+              .toLowerCase()
+              .includes(storyboard.title?.toLowerCase().replace(/[^a-z0-9]/g, '-') || '')
+            const shotMatch =
+              fileName.includes(`shot-${storyboard.shot_number}`) ||
+              fileName.includes(`shot${storyboard.shot_number}`)
+
+            if (titleMatch || shotMatch) {
+              const videoUrl = supabase.storage
+                .from('cinema_files')
+                .getPublicUrl(`${videoPath}${fileName}`).data.publicUrl
+
+              const currentGen = storyboardGenerations.get(storyboard.id)
+              if (
+                !currentGen?.generatedVideoUrl ||
+                !currentGen.generatedVideoUrl.includes('cinema_files')
+              ) {
+                updateStoryboardGeneration(storyboard.id, {
+                  generatedVideoUrl: videoUrl,
+                  generationStatus: "Saved",
+                })
+              }
+            }
+          })
+        })
+      }
+    } catch (error) {
+      console.error('Error loading saved videos from bucket:', error)
+    }
+  }
+
+  const openEditShotDialog = (storyboard: Storyboard) => {
+    setEditingStoryboard(storyboard)
+    setEditShotDialogOpen(true)
+  }
+
+  const handleShotDetailsUpdated = (updated: Storyboard) => {
+    setStoryboards((prev) =>
+      sortStoryboardRows(prev.map((sb) => (sb.id === updated.id ? updated : sb))),
+    )
+    if (selectedStoryboard?.id === updated.id) {
+      setSelectedStoryboard(updated)
+    }
+    setEditingStoryboard((prev) => (prev?.id === updated.id ? updated : prev))
+  }
+
   const loadStoryboards = async () => {
     if (!selectedSceneId || !userId) return
-    
+
+    const tracker = getLoadTracker()
+    const phase = tracker.startPhase("Fetch storyboards", selectedSceneId)
     try {
       setLoadingStoryboards(true)
+      setStoryboardVideos(new Map())
+      setImageDiagnostics(null)
+      setVideoDiagnostics(null)
       console.log('🎬 Loading storyboards for scene:', selectedSceneId)
+      const batchStart = performance.now()
       const sceneStoryboards = await StoryboardsService.getStoryboardsBySceneOrdered(selectedSceneId)
+      storyboardBatchMsRef.current = Math.round(performance.now() - batchStart)
       console.log('🎬 Loaded storyboards:', sceneStoryboards.length, sceneStoryboards)
 
-      let storyboardsToShow = sceneStoryboards
-      if (selectedProjectId) {
-        const orphans = sceneStoryboards.filter((sb) => !sb.project_id)
-        if (orphans.length > 0) {
-          const repaired = await Promise.all(
-            sceneStoryboards.map(async (sb) => {
-              if (sb.project_id) return sb
-              try {
-                return await StoryboardsService.updateStoryboard(sb.id, {
-                  project_id: selectedProjectId,
-                })
-              } catch {
-                return sb
-              }
-            })
-          )
-          storyboardsToShow = repaired
-        }
-      }
-
-      setStoryboards(storyboardsToShow)
-      await loadSavedAudioForScene(selectedSceneId)
-      
-      // Check for saved videos in the bucket for each storyboard
-      // Only check bucket if we have a selected project to filter by
-      if (selectedProjectId) {
-        try {
-          const supabase = getSupabaseClient()
-          
-          // Check bucket directly for saved videos - filter by project ID
-          const videoPath = `${selectedProjectId}/videos/`
-          const { data: videoFiles, error: bucketError } = await supabase.storage
-            .from('cinema_files')
-            .list(videoPath, {
-              limit: 100,
-              sortBy: { column: 'created_at', order: 'desc' }
-            })
-          
-          if (!bucketError && videoFiles && videoFiles.length > 0) {
-            console.log('🎬 Found', videoFiles.length, 'saved videos in bucket for project:', selectedProjectId)
-            
-            // Try to match videos to storyboards by filename pattern
-            // Filename format: {timestamp}-{storyboard-title}-shot-{shot_number}.mp4
-            videoFiles.forEach(file => {
-              const fileName = file.name
-              // Try to extract storyboard info from filename
-              // Look for storyboards that might match this video
-              sceneStoryboards.forEach(storyboard => {
-                const titleMatch = fileName.toLowerCase().includes(storyboard.title?.toLowerCase().replace(/[^a-z0-9]/g, '-') || '')
-                const shotMatch = fileName.includes(`shot-${storyboard.shot_number}`) || fileName.includes(`shot${storyboard.shot_number}`)
-                
-                if (titleMatch || shotMatch) {
-                  const videoUrl = supabase.storage
-                    .from('cinema_files')
-                    .getPublicUrl(`${videoPath}${fileName}`).data.publicUrl
-                  
-                  const currentGen = storyboardGenerations.get(storyboard.id)
-                  if (!currentGen?.generatedVideoUrl || !currentGen.generatedVideoUrl.includes('cinema_files')) {
-                    // Only update if we don't already have a bucket URL
-                    updateStoryboardGeneration(storyboard.id, {
-                      generatedVideoUrl: videoUrl,
-                      generationStatus: "Saved"
-                    })
-                    console.log(`✅ Loaded saved video for storyboard ${storyboard.id} from bucket:`, videoUrl?.substring(0, 50) + '...')
-                  }
-                }
-              })
-            })
-          } else if (bucketError) {
-            console.log('⚠️ Could not check bucket for saved videos (non-critical):', bucketError.message)
-          }
-        } catch (error) {
-          console.error('Error loading saved videos from bucket:', error)
-          // Don't fail the whole load if bucket check fails
-        }
-      }
-      
-      // Clear storyboard selection when scene changes
+      setStoryboards(sceneStoryboards)
       setSelectedStoryboardId("")
       setSelectedStoryboard(null)
+      tracker.endPhase(phase, `${sceneStoryboards.length} storyboards · ${storyboardBatchMsRef.current}ms`)
+
+      void loadStoryboardDeferredExtras(sceneStoryboards, selectedSceneId)
     } catch (error) {
       console.error('Error loading storyboards:', error)
+      tracker.failPhase(phase, error instanceof Error ? error.message : "Failed to load storyboards")
       toast({
         title: "Error",
         description: "Failed to load storyboards.",
@@ -4569,37 +4853,124 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const applyStoryboardVideosToState = (storyboardId: string, videos: StoryboardVideo[]) => {
+    setStoryboardVideos((prev) => {
+      const newMap = new Map(prev)
+      newMap.set(storyboardId, videos)
+      return newMap
+    })
+
+    const defaultVideo = videos.find((v) => v.is_default) || videos[0]
+    if (defaultVideo) {
+      const generation = storyboardGenerations.get(storyboardId)
+      if (!generation?.generatedVideoUrl || !generation.generatedVideoUrl.includes("cinema_files")) {
+        updateStoryboardGeneration(storyboardId, {
+          generatedVideoUrl: defaultVideo.video_url,
+        })
+      }
+    }
+  }
+
+  const fetchStoryboardVideoList = async (storyboardId: string) => {
+    const apiStart = performance.now()
+    if (!userId) {
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs: 0,
+        apiStatus: 0,
+        apiError: "no userId",
+      }
+    }
+
+    try {
+      const response = await fetch(`/api/storyboard-videos?storyboardId=${storyboardId}`)
+      const result = await response.json()
+      const apiMs = Math.round(performance.now() - apiStart)
+
+      if (response.ok && result.success) {
+        return {
+          videos: (result.data || []) as StoryboardVideo[],
+          apiMs,
+          apiStatus: response.status,
+        }
+      }
+
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs,
+        apiStatus: response.status,
+        apiError: result.error || `HTTP ${response.status}`,
+      }
+    } catch (error) {
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs: Math.round(performance.now() - apiStart),
+        apiStatus: 0,
+        apiError: error instanceof Error ? error.message : "fetch failed",
+      }
+    }
+  }
+
+  const fetchSceneVideosBatch = async (storyboardIds: string[]) => {
+    const apiStart = performance.now()
+    if (!userId || storyboardIds.length === 0) {
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs: 0,
+        apiStatus: 0,
+      }
+    }
+
+    try {
+      const response = await fetch(
+        `/api/storyboard-videos?storyboardIds=${encodeURIComponent(storyboardIds.join(","))}`,
+      )
+      const result = await response.json()
+      const apiMs = Math.round(performance.now() - apiStart)
+
+      if (response.ok && result.success) {
+        return {
+          videos: (result.data || []) as StoryboardVideo[],
+          apiMs,
+          apiStatus: response.status,
+        }
+      }
+
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs,
+        apiStatus: response.status,
+        apiError: result.error || `HTTP ${response.status}`,
+      }
+    } catch (error) {
+      return {
+        videos: [] as StoryboardVideo[],
+        apiMs: Math.round(performance.now() - apiStart),
+        apiStatus: 0,
+        apiError: error instanceof Error ? error.message : "fetch failed",
+      }
+    }
+  }
+
   // Load videos for a storyboard
   const loadStoryboardVideos = async (storyboardId: string): Promise<StoryboardVideo[]> => {
     if (!userId) return []
 
     try {
-      const response = await fetch(`/api/storyboard-videos?storyboardId=${storyboardId}`)
-      const result = await response.json()
-
-      if (response.ok && result.success) {
-        const videos = result.data || []
-        console.log(`📹 Loaded ${videos.length} videos for storyboard ${storyboardId}:`, videos.map(v => ({ id: v.id, name: v.video_name, isDefault: v.is_default })))
-        setStoryboardVideos(prev => {
-          const newMap = new Map(prev)
-          newMap.set(storyboardId, videos)
-          return newMap
-        })
-
-        // Update generatedVideoUrl to default video if available
-        const defaultVideo = videos.find((v: StoryboardVideo) => v.is_default)
-        if (defaultVideo) {
-          const generation = storyboardGenerations.get(storyboardId)
-          if (!generation?.generatedVideoUrl || !generation.generatedVideoUrl.includes('cinema_files')) {
-            updateStoryboardGeneration(storyboardId, {
-              generatedVideoUrl: defaultVideo.video_url
-            })
-          }
-        }
-        return videos as StoryboardVideo[]
+      const { videos, apiStatus, apiError } = await fetchStoryboardVideoList(storyboardId)
+      if (apiStatus >= 200 && apiStatus < 300) {
+        console.log(
+          `📹 Loaded ${videos.length} videos for storyboard ${storyboardId}:`,
+          videos.map((v) => ({ id: v.id, name: v.video_name, isDefault: v.is_default })),
+        )
+        applyStoryboardVideosToState(storyboardId, videos)
+        return videos
+      }
+      if (apiError) {
+        console.error("Error loading storyboard videos:", apiError)
       }
     } catch (error) {
-      console.error('Error loading storyboard videos:', error)
+      console.error("Error loading storyboard videos:", error)
     }
     return []
   }
@@ -6951,19 +7322,95 @@ export default function CinemaProductionPage() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <div className="container mx-auto px-4 py-8">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading...
-          </div>
-        </div>
-      </div>
-    )
+  const pageLoading = loading || loadingScenes || loadingStoryboards
+
+  const retryPageLoad = async () => {
+    await loadProjects()
+    if (selectedProjectId) await loadScenes()
+    if (selectedSceneId) await loadStoryboards()
   }
+
+  const debugPanel = (
+    <PageLoadDebugPanel
+      title="Cinema production load debug"
+      pathname="/cinema-production"
+      snapshot={loadDebug}
+      auth={authDebug}
+      isLoading={pageLoading || loadingVideos || measuringMedia}
+      loadCompleteMs={loadCompleteMs}
+      badges={[
+        {
+          label: loading ? "projects loading" : `${projects.length} projects`,
+          loading,
+        },
+        {
+          label: loadingScenes ? "scenes loading" : `${scenes.length} scenes`,
+          loading: loadingScenes,
+        },
+        {
+          label: loadingStoryboards ? "storyboards loading" : `${storyboards.length} storyboards`,
+          loading: loadingStoryboards,
+        },
+        {
+          label: measuringMedia
+            ? `images ${loadingImageStoryboardIds.size > 0 ? loadingImageStoryboardIds.size + " probing" : "probing"}`
+            : "images lazy",
+          loading: measuringMedia,
+        },
+        {
+          label: loadingVideos
+            ? `videos ${loadingVideoStoryboardIds.size > 0 ? loadingVideoStoryboardIds.size + " pending" : "loading"}`
+            : "videos ready",
+          loading: loadingVideos,
+        },
+      ]}
+      stateLines={[
+        { label: "projects loading", value: String(loading) },
+        { label: "scenes loading", value: String(loadingScenes) },
+        { label: "storyboards loading", value: String(loadingStoryboards) },
+        { label: "images", value: measuringMedia ? "probing (debug)" : "lazy load" },
+        { label: "videos loading", value: String(loadingVideos) },
+        { label: "network", value: imageDiagnostics?.networkHint ?? videoDiagnostics?.networkHint ?? getNetworkHint() },
+        {
+          label: "image bottleneck",
+          value: imageDiagnostics?.summary ?? (measuringMedia ? "measuring…" : "— (use Probe in debug)"),
+        },
+        {
+          label: "video bottleneck",
+          value: videoDiagnostics?.summary ?? (measuringMedia ? "measuring…" : "— (use Probe in debug)"),
+        },
+        { label: "selected project", value: selectedProjectId || "none" },
+        { label: "selected scene", value: selectedSceneId || "none" },
+      ]}
+      extraSections={
+        storyboards.length > 0 && (measuringMedia || imageDiagnostics || videoDiagnostics)
+          ? [
+              {
+                title: "Image load diagnostics",
+                lines: imageDiagnostics
+                  ? formatCinemaProductionImageDiagnostics(imageDiagnostics)
+                  : [
+                      `network: ${getNetworkHint()}`,
+                      "Click the gauge icon to probe storyboard images (slow, debug only)…",
+                    ],
+              },
+              {
+                title: "Video playback diagnostics",
+                lines: videoDiagnostics
+                  ? formatCinemaProductionVideoDiagnostics(videoDiagnostics)
+                  : [
+                      `network: ${getNetworkHint()}`,
+                      "Click the gauge icon to probe video CDN load times (slow, debug only)…",
+                    ],
+              },
+            ]
+          : undefined
+      }
+      apiMeta={lastApiMeta}
+      onRetry={() => void retryPageLoad()}
+      onMeasureMedia={storyboards.length > 0 ? () => void measureShotMedia() : undefined}
+    />
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -7025,6 +7472,12 @@ export default function CinemaProductionPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2 min-w-0">
                 <Label htmlFor="cinema-production-project">Project</Label>
+                {loading && projects.length === 0 ? (
+                  <div className="flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading projects...
+                  </div>
+                ) : (
                 <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
                   <SelectTrigger id="cinema-production-project">
                     <SelectValue placeholder="Select a project..." />
@@ -7037,6 +7490,7 @@ export default function CinemaProductionPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                )}
               </div>
 
               <div className="space-y-2 min-w-0">
@@ -7253,13 +7707,28 @@ export default function CinemaProductionPage() {
                                   {storyboard.title}
                                 </span>
                               </div>
-                              {storyboard.status && (
-                                <div className={`h-2 w-2 rounded-full ${
-                                  storyboard.status === 'approved' ? 'bg-green-500' :
-                                  storyboard.status === 'completed' ? 'bg-blue-500' :
-                                  'bg-gray-500'
-                                }`}></div>
-                              )}
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 opacity-0 group-hover:opacity-100"
+                                  title="Edit shot details"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    openEditShotDialog(storyboard)
+                                  }}
+                                >
+                                  <Edit className="h-3 w-3" />
+                                </Button>
+                                {storyboard.status ? (
+                                  <div className={`h-2 w-2 rounded-full ${
+                                    storyboard.status === 'approved' ? 'bg-green-500' :
+                                    storyboard.status === 'completed' ? 'bg-blue-500' :
+                                    'bg-gray-500'
+                                  }`}></div>
+                                ) : null}
+                              </div>
                             </div>
 
                             {/* Clip Content */}
@@ -7361,13 +7830,10 @@ export default function CinemaProductionPage() {
                                 </>
                               ) : storyboard.image_url ? (
                                 <div className="relative w-full h-full bg-muted">
-                                  <img
+                                  <LazyShotImage
                                     src={storyboard.image_url}
                                     alt={storyboard.title || "Storyboard"}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => {
-                                      e.currentTarget.style.display = 'none'
-                                    }}
+                                    className="w-full h-full"
                                   />
                                   {/* Overlay for generate button */}
                                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -7553,13 +8019,25 @@ export default function CinemaProductionPage() {
                           <Badge variant="outline" className="font-mono text-xs">
                             Shot {displayShotNumber(storyboard)}
                           </Badge>
-                          <Badge className={
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              title="Edit shot details"
+                              onClick={() => openEditShotDialog(storyboard)}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Badge className={
                             storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
                             storyboard.status === 'completed' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
                             'bg-gray-500/20 text-gray-400 border-gray-500/30'
                           }>
                             {storyboard.status}
                           </Badge>
+                          </div>
                         </div>
                         <CardTitle className="text-base mt-2">{storyboard.title}</CardTitle>
                         {storyboard.description && (
@@ -7570,13 +8048,10 @@ export default function CinemaProductionPage() {
                         {/* Storyboard Image */}
                         {storyboard.image_url ? (
                           <div className="relative w-full bg-muted rounded-lg overflow-hidden border aspect-video">
-                            <img
+                            <LazyShotImage
                               src={storyboard.image_url}
                               alt={storyboard.title || "Storyboard"}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none'
-                              }}
+                              className="absolute inset-0 w-full h-full"
                             />
                           </div>
                         ) : (
@@ -7721,9 +8196,9 @@ export default function CinemaProductionPage() {
                 return (
                   <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className="cinema-card">
                     <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle className="flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <CardTitle className="flex items-center gap-2 flex-wrap">
                             <Badge variant="outline" className="font-mono">
                               Shot {displayShotNumber(storyboard)}
                             </Badge>
@@ -7733,13 +8208,25 @@ export default function CinemaProductionPage() {
                             {storyboard.description || "No description"}
                           </CardDescription>
                         </div>
-                        <Badge className={
-                          storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                          storyboard.status === 'completed' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                          'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                        }>
-                          {storyboard.status}
-                        </Badge>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="gap-1.5"
+                            onClick={() => openEditShotDialog(storyboard)}
+                          >
+                            <Edit className="h-4 w-4" />
+                            Edit Shot
+                          </Button>
+                          <Badge className={
+                            storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
+                            storyboard.status === 'completed' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
+                            'bg-gray-500/20 text-gray-400 border-gray-500/30'
+                          }>
+                            {storyboard.status}
+                          </Badge>
+                        </div>
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -7840,16 +8327,16 @@ export default function CinemaProductionPage() {
                                   }}
                                   title="Click to view full image"
                                 >
-                                  <img
+                                  <LazyShotImage
                                     src={displayImageUrl}
                                     alt={storyboard.title || "Storyboard"}
-                                    className="w-full h-auto max-h-[600px] object-contain mx-auto transition-opacity group-hover:opacity-95"
+                                    className="w-full"
+                                    imgClassName="w-full h-auto max-h-[600px] object-contain mx-auto transition-opacity group-hover:opacity-95"
                                     onLoad={() => {
                                       console.log('🎬 Storyboard image loaded successfully:', displayImageUrl)
                                     }}
-                                    onError={(e) => {
+                                    onError={() => {
                                       console.error('🎬 Failed to load storyboard image:', displayImageUrl)
-                                      e.currentTarget.style.display = 'none'
                                     }}
                                   />
                                   <ImageSizeBadge src={displayImageUrl} />
@@ -8190,6 +8677,16 @@ export default function CinemaProductionPage() {
 
                       <div className="space-y-2">
                         <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => openEditShotDialog(storyboard)}
+                          >
+                            <Edit className="h-3.5 w-3.5" />
+                            Edit Shot
+                          </Button>
                           <Button
                             type="button"
                             size="sm"
@@ -9970,6 +10467,24 @@ export default function CinemaProductionPage() {
         </DialogContent>
       </Dialog>
 
+      <StoryboardShotEditDialog
+        open={editShotDialogOpen && !!editingStoryboard}
+        storyboard={editingStoryboard}
+        storyboards={storyboards}
+        sceneId={selectedSceneId}
+        projectId={selectedProjectId}
+        characters={projectCharacters}
+        locations={projectLocations}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditShotDialogOpen(false)
+            setEditingStoryboard(null)
+          }
+        }}
+        onUpdated={handleShotDetailsUpdated}
+        onRefreshStoryboards={() => loadStoryboards()}
+      />
+
       {/* Edit Image — matches storyboards reference edit dialog */}
       <Dialog
         open={imageEditDialogOpen}
@@ -10705,6 +11220,7 @@ export default function CinemaProductionPage() {
           })()}
         </DialogContent>
       </Dialog>
+      {debugPanel}
     </div>
   )
 }

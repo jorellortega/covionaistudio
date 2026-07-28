@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useState } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,9 +10,10 @@ import { FileText, Film, ImageIcon, Loader2, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useAuthReady } from "@/components/auth-hooks"
+import { PageLoadDebugPanel } from "@/components/page-load-debug-panel"
+import { usePageLoadDebug } from "@/hooks/use-page-load-debug"
+import { getLastMoviesFetchMeta, MovieService, type Movie } from "@/lib/movie-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
-import { MovieService, type Movie } from "@/lib/movie-service"
 import { ProjectSelector } from "@/components/project-selector"
 
 export default function StoryboardsPage() {
@@ -20,12 +21,82 @@ export default function StoryboardsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const movieId = searchParams.get("movie")
-  const { ready, userId, loading: authLoading } = useAuthReady()
-  
+  const { getLoadTracker, loadDebug, authDebug, loadCompleteMs, authLoading, ready, userId } =
+    usePageLoadDebug("Storyboards")
+
   const [movie, setMovie] = useState<Movie | null>(null)
   const [scenes, setScenes] = useState<SceneWithMetadata[]>([])
   const [selectedSceneId, setSelectedSceneId] = useState<string>("")
   const [loading, setLoading] = useState(false)
+  const [lastApiMeta, setLastApiMeta] = useState(() => getLastMoviesFetchMeta())
+
+  const debugPanel = (
+    <PageLoadDebugPanel
+      title="Storyboards load debug"
+      pathname="/storyboards"
+      snapshot={loadDebug}
+      auth={authDebug}
+      isLoading={loading}
+      loadCompleteMs={loadCompleteMs}
+      badges={[
+        {
+          label: loading ? "loading" : movie ? `movie: ${movie.name}` : "no movie",
+          loading,
+        },
+        {
+          label: loading ? "scenes loading" : `${scenes.length} scenes`,
+          loading,
+        },
+      ]}
+      stateLines={[
+        { label: "movieId", value: movieId ?? "none" },
+        { label: "loading", value: String(loading) },
+        { label: "scenes", value: String(scenes.length) },
+      ]}
+      apiMeta={lastApiMeta}
+      onRetry={() => void loadMovieAndScenes()}
+    />
+  )
+
+  const loadMovieAndScenes = async () => {
+    if (!movieId || !ready || !userId) return
+
+    const tracker = getLoadTracker()
+    setLoading(true)
+
+    try {
+      const moviePhase = tracker.startPhase("Fetch movie", movieId)
+      const movieData = await MovieService.getMovieById(movieId)
+      setMovie(movieData)
+      setLastApiMeta(getLastMoviesFetchMeta())
+      tracker.endPhase(moviePhase, movieData?.name ?? "loaded")
+
+      const scenesPhase = tracker.startPhase("Fetch timeline & scenes")
+      const timeline = await TimelineService.getTimelineForMovie(movieId)
+      if (timeline) {
+        const scenesData = await TimelineService.getScenesForTimeline(timeline.id)
+        setScenes(scenesData)
+        tracker.endPhase(scenesPhase, `${scenesData.length} scenes`)
+
+        if (scenesData.length === 1) {
+          setSelectedSceneId(scenesData[0].id)
+          router.push(`/storyboards/${scenesData[0].id}`)
+        }
+      } else {
+        setScenes([])
+        tracker.endPhase(scenesPhase, "0 scenes — no timeline")
+      }
+    } catch (error) {
+      console.error("Error loading movie and scenes:", error)
+      toast({
+        title: "Error",
+        description: "Failed to load movie and scenes. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (authLoading) return
@@ -42,40 +113,6 @@ export default function StoryboardsPage() {
 
     void loadMovieAndScenes()
   }, [authLoading, ready, userId, movieId])
-
-  const loadMovieAndScenes = async () => {
-    if (!movieId || !ready || !userId) return
-
-    setLoading(true)
-    try {
-      // Load movie
-      const movieData = await MovieService.getMovieById(movieId)
-      setMovie(movieData)
-
-      // Get timeline for the movie
-      const timeline = await TimelineService.getTimelineForMovie(movieId)
-      if (timeline) {
-        // Load scenes from timeline
-        const scenesData = await TimelineService.getScenesForTimeline(timeline.id)
-        setScenes(scenesData)
-        
-        // If there's only one scene, auto-select it
-        if (scenesData.length === 1) {
-          setSelectedSceneId(scenesData[0].id)
-          router.push(`/storyboards/${scenesData[0].id}`)
-        }
-      }
-    } catch (error) {
-      console.error('Error loading movie and scenes:', error)
-      toast({
-        title: "Error",
-        description: "Failed to load movie and scenes. Please try again.",
-        variant: "destructive"
-      })
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleSceneSelect = (sceneId: string) => {
     if (sceneId) {
@@ -115,6 +152,7 @@ export default function StoryboardsPage() {
             </Link>
           </div>
         </main>
+        {debugPanel}
       </div>
     )
   }
@@ -129,6 +167,7 @@ export default function StoryboardsPage() {
             Loading storyboards...
           </div>
         </div>
+        {debugPanel}
       </div>
     )
   }
@@ -138,28 +177,22 @@ export default function StoryboardsPage() {
       <Header />
       <div className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <Button variant="ghost" size="sm" onClick={() => router.push('/movies')} className="mb-4">
+          <Button variant="ghost" size="sm" onClick={() => router.push("/movies")} className="mb-4">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back to Movies
           </Button>
-          
+
           <div className="flex items-center gap-3 mb-2">
             <Film className="h-6 w-6 text-primary" />
             <h1 className="text-3xl font-bold">Storyboards</h1>
           </div>
-          {movie && (
-            <p className="text-muted-foreground">
-              {movie.name}
-            </p>
-          )}
+          {movie && <p className="text-muted-foreground">{movie.name}</p>}
         </div>
 
         <Card className="cinema-card">
           <CardHeader>
             <CardTitle>Select a Scene</CardTitle>
-            <CardDescription>
-              Choose a scene to view and manage its storyboards
-            </CardDescription>
+            <CardDescription>Choose a scene to view and manage its storyboards</CardDescription>
           </CardHeader>
           <CardContent>
             {scenes.length === 0 ? (
@@ -170,9 +203,7 @@ export default function StoryboardsPage() {
                 </p>
                 {movieId && (
                   <Link href={`/timeline?movie=${movieId}`}>
-                    <Button variant="outline">
-                      Go to Timeline
-                    </Button>
+                    <Button variant="outline">Go to Timeline</Button>
                   </Link>
                 )}
               </div>
@@ -180,17 +211,15 @@ export default function StoryboardsPage() {
               <div className="space-y-4">
                 <div>
                   <Label htmlFor="scene-selector">Scene</Label>
-                  <Select 
-                    value={selectedSceneId} 
-                    onValueChange={handleSceneSelect}
-                  >
+                  <Select value={selectedSceneId} onValueChange={handleSceneSelect}>
                     <SelectTrigger id="scene-selector" className="mt-2">
                       <SelectValue placeholder="Select a scene..." />
                     </SelectTrigger>
                     <SelectContent>
                       {scenes.map((scene) => (
                         <SelectItem key={scene.id} value={scene.id}>
-                          {scene.scene_number ? `Scene ${scene.scene_number}: ` : ''}{scene.name}
+                          {scene.scene_number ? `Scene ${scene.scene_number}: ` : ""}
+                          {scene.name}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -204,6 +233,7 @@ export default function StoryboardsPage() {
           </CardContent>
         </Card>
       </div>
+      {debugPanel}
     </div>
   )
 }

@@ -1,5 +1,9 @@
 import { getSupabaseClient } from './supabase'
 import { sortShotListRows } from './shot-list-order'
+import {
+  resolveCameraAngleValue,
+  resolveMovementValue,
+} from './shot-options'
 
 export interface ShotList {
   id: string
@@ -454,8 +458,6 @@ export class ShotListService {
 
           // Validate and normalize enum values to match database constraints
           const validShotTypes = ['wide', 'medium', 'close', 'extreme-close', 'two-shot', 'over-the-shoulder', 'point-of-view', 'establishing', 'insert', 'cutaway']
-          const validCameraAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle', 'bird-eye', 'worm-eye']
-          const validMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming', 'dolly', 'crane', 'handheld', 'steadicam']
           
           const normalizeShotType = (value: string | undefined): string => {
             if (!value) return 'wide'
@@ -474,35 +476,11 @@ export class ShotListService {
             return 'wide'
           }
           
-          const normalizeCameraAngle = (value: string | undefined): string => {
-            if (!value) return 'eye-level'
-            const normalized = value.toLowerCase().trim()
-            if (validCameraAngles.includes(normalized)) return normalized
-            // Map common variations
-            if (normalized.includes('bird') || normalized.includes('aerial') || normalized.includes('overhead')) return 'bird-eye'
-            if (normalized.includes('worm') || normalized.includes('ground')) return 'worm-eye'
-            if (normalized.includes('high') || normalized.includes('above')) return 'high-angle'
-            if (normalized.includes('low') || normalized.includes('below')) return 'low-angle'
-            if (normalized.includes('dutch') || normalized.includes('tilted')) return 'dutch-angle'
-            return 'eye-level'
-          }
+          const normalizeCameraAngle = (value: string | undefined): string =>
+            resolveCameraAngleValue(value)
           
-          const normalizeMovement = (value: string | undefined): string => {
-            if (!value) return 'static'
-            const normalized = value.toLowerCase().trim()
-            if (validMovements.includes(normalized)) return normalized
-            // Map common variations
-            if (normalized.includes('sweep') || normalized.includes('sweeping')) return 'panning'
-            if (normalized.includes('pan') || normalized.includes('panning')) return 'panning'
-            if (normalized.includes('tilt') || normalized.includes('tilting')) return 'tilting'
-            if (normalized.includes('track') || normalized.includes('tracking') || normalized.includes('follow')) return 'tracking'
-            if (normalized.includes('zoom') || normalized.includes('zooming')) return 'zooming'
-            if (normalized.includes('dolly')) return 'dolly'
-            if (normalized.includes('crane')) return 'crane'
-            if (normalized.includes('handheld') || normalized.includes('hand-held')) return 'handheld'
-            if (normalized.includes('steadicam') || normalized.includes('steady')) return 'steadicam'
-            return 'static'
-          }
+          const normalizeMovement = (value: string | undefined): string =>
+            resolveMovementValue(value)
 
           return {
             ...shotList,

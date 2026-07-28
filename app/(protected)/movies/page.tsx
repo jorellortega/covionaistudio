@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import Header from "@/components/header"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -44,26 +44,30 @@ import {
   Shield,
   ScrollText,
   List,
+  ChevronDown,
+  Check,
+  Video,
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { MovieService, type Movie, type CreateMovieData } from "@/lib/movie-service"
+import { MovieService, getLastMoviesFetchMeta, type Movie, type CreateMovieData, type MoviesFetchMeta } from "@/lib/movie-service"
 import { TreatmentsService, type CreateTreatmentData } from "@/lib/treatments-service"
 import { useToast } from "@/hooks/use-toast"
 import { useAuthReady } from "@/components/auth-hooks"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
-import { IdeaImagesService } from "@/lib/idea-images-service"
-import { MovieIdeasService } from "@/lib/movie-ideas-service"
 import { AssetService } from "@/lib/asset-service"
 import {
-  createLoadDebug,
-  startPhase,
-  endPhase,
-  failPhase,
-  addNote,
+  createLoadDebugTracker,
   type LoadDebugSnapshot,
 } from "@/lib/load-debug"
+import { MoviesLoadDebugPanel } from "@/components/movies-load-debug-panel"
+import { getMoviesLoadGateReason } from "@/lib/movies-load-debug-report"
+import {
+  PLACEHOLDER_THUMBNAIL,
+  streamMovieCoversInOrder,
+  hasUsableThumbnail,
+} from "@/lib/movies-cover-loader"
 import { getErrorMessage, isRetryableFetchError, withRetry } from "@/lib/fetch-retry"
 
 const statusColors = {
@@ -71,6 +75,39 @@ const statusColors = {
   "Production": "bg-blue-500/20 text-blue-500 border-blue-500/30",
   "Post-Production": "bg-cyan-500/20 text-cyan-500 border-cyan-500/30",
   "Distribution": "bg-green-500/20 text-green-400 border-green-500/30",
+}
+
+const MOVIE_PHASE_OPTIONS = [
+  "Pre-Production",
+  "Production",
+  "Post-Production",
+  "Distribution",
+] as const
+
+const PROJECT_STATUS_OPTIONS = [
+  { value: "active", label: "Active" },
+  { value: "paused", label: "Paused" },
+  { value: "draft", label: "Draft" },
+  { value: "completed", label: "Completed" },
+  { value: "canceled", label: "Canceled" },
+  { value: "archived", label: "Archived" },
+] as const
+
+const projectStatusColors: Record<string, string> = {
+  active: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+  paused: "bg-amber-500/20 text-amber-400 border-amber-500/30",
+  draft: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+  completed: "bg-green-500/20 text-green-400 border-green-500/30",
+  canceled: "bg-red-500/20 text-red-400 border-red-500/30",
+  archived: "bg-muted text-muted-foreground border-border",
+}
+
+/** Production movies float to the top; others keep newest-first within each phase. */
+const MOVIE_PHASE_SORT_ORDER: Record<string, number> = {
+  Production: 0,
+  "Post-Production": 1,
+  "Pre-Production": 2,
+  Distribution: 3,
 }
 
 const MOVIES_CACHE_KEY = "cinema_movies_v1"
@@ -104,6 +141,20 @@ export default function MoviesPage() {
   const [loading, setLoading] = useState(true)
   const [loadingShared, setLoadingShared] = useState(false)
   const loadRunRef = useRef(0)
+  const pageMountedAtRef = useRef(Date.now())
+  const loadTrackerRef = useRef<ReturnType<typeof createLoadDebugTracker> | null>(null)
+  const [authReadyMs, setAuthReadyMs] = useState<number | null>(null)
+  const [loadDebug, setLoadDebug] = useState<LoadDebugSnapshot | null>(null)
+  const [lastApiMeta, setLastApiMeta] = useState<MoviesFetchMeta | null>(null)
+  const [localCacheCount, setLocalCacheCount] = useState(0)
+
+  const getLoadTracker = () => {
+    if (!loadTrackerRef.current) {
+      loadTrackerRef.current = createLoadDebugTracker(setLoadDebug)
+      loadTrackerRef.current.addNote("Movies page mounted")
+    }
+    return loadTrackerRef.current
+  }
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedStatus, setSelectedStatus] = useState("All")
   const [selectedProjectStatus, setSelectedProjectStatus] = useState("active")
@@ -116,6 +167,8 @@ export default function MoviesPage() {
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   const [movieCoverImages, setMovieCoverImages] = useState<Record<string, string>>({}) // movieId -> coverImageUrl
+  const [loadingCoverIds, setLoadingCoverIds] = useState<Set<string>>(() => new Set())
+  const [inlineStatusUpdating, setInlineStatusUpdating] = useState<string | null>(null)
   const [creatingTreatmentForMovieId, setCreatingTreatmentForMovieId] = useState<string | null>(null)
   const router = useRouter()
   const [newMovie, setNewMovie] = useState<CreateMovieData>({
@@ -145,7 +198,45 @@ export default function MoviesPage() {
   const [cowriterInput, setCowriterInput] = useState("")
   
   const { toast } = useToast()
-  const { user, userId, ready, session } = useAuthReady()
+  const { user, userId, ready, session, loading: authLoading } = useAuthReady()
+
+  useEffect(() => {
+    if (ready && authReadyMs == null) {
+      setAuthReadyMs(Date.now() - pageMountedAtRef.current)
+    }
+  }, [ready, authReadyMs])
+
+  useEffect(() => {
+    getLoadTracker()
+  }, [])
+
+  const loadCompleteMs = useMemo(() => {
+    if (!loadDebug?.phases.length) return null
+    const ended = loadDebug.phases
+      .filter((phase) => phase.status === "done" && phase.endedAt != null)
+      .map((phase) => phase.endedAt! - loadDebug.pageLoadAt)
+    return ended.length > 0 ? Math.max(...ended) : null
+  }, [loadDebug])
+
+  const authDebug = useMemo(() => {
+    const base = {
+      authLoading,
+      authReady: ready,
+      authReadyMs,
+      hasSession: Boolean(session),
+      hasUserId: Boolean(userId),
+      hasAccessToken: Boolean(session?.access_token),
+      userId: userId ?? null,
+      userEmail: session?.user?.email ?? null,
+      sessionExpiresAt: session?.expires_at ?? null,
+    }
+    const loadGateReason = getMoviesLoadGateReason(base)
+    return {
+      ...base,
+      loadGateStatus: loadGateReason ? ("blocked" as const) : ("ok" as const),
+      loadGateReason,
+    }
+  }, [authLoading, ready, authReadyMs, session, userId])
 
   useEffect(() => {
     if (!ready || !userId || !session?.access_token) return
@@ -155,18 +246,31 @@ export default function MoviesPage() {
     if (cached?.length) {
       setMovies(cached)
       setLoading(false)
+      setLocalCacheCount(cached.length)
+    } else {
+      setLocalCacheCount(0)
     }
 
     const runId = ++loadRunRef.current
-    const snapshot = createLoadDebug()
-    addNote(snapshot, `useEffect run #${runId} started`)
+    const tracker = getLoadTracker()
+    tracker.addNote(`useEffect run #${runId} started (auth ready in ${authReadyMs ?? "?"}ms)`)
 
     let cancelled = false
 
     const run = async () => {
-      await loadMovies(userId, snapshot, runId, () => cancelled)
+      const moviesData = await loadMovies(userId, tracker, runId, () => cancelled)
+      if (cancelled || !moviesData) return
+
       if (!cancelled) {
-        void loadSharedMovies(snapshot, () => cancelled)
+        await loadSharedMovies(tracker, () => cancelled)
+      }
+
+      if (!cancelled) {
+        // Paint movie cards first, then resolve covers last (top → bottom)
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        })
+        await loadMovieCovers(moviesData, userId, tracker, () => cancelled)
       }
     }
 
@@ -178,9 +282,9 @@ export default function MoviesPage() {
     return () => {
       cancelled = true
       cancelAnimationFrame(frame)
-      addNote(snapshot, `useEffect run #${runId} cancelled (cleanup)`)
+      tracker.addNote(`useEffect run #${runId} cancelled (cleanup)`)
     }
-  }, [ready, userId, session?.access_token])
+  }, [ready, userId, session?.access_token, authReadyMs])
 
   // Load AI settings after movies (avoid competing Supabase requests on first paint)
   useEffect(() => {
@@ -253,135 +357,106 @@ export default function MoviesPage() {
   const loadMovieCovers = async (
     moviesData: Movie[],
     uid: string,
-    snapshot: LoadDebugSnapshot,
+    tracker: ReturnType<typeof createLoadDebugTracker>,
     isCancelled: () => boolean,
   ) => {
-    const coverPhase = startPhase(snapshot, "Cover images", `${moviesData.length} movies`)
+    const needsLookup = moviesData.filter((m) => !hasUsableThumbnail(m.thumbnail))
+    setMovieCoverImages({})
 
-    const coverImageMap: Record<string, string> = {}
-    let ideasCache: Awaited<ReturnType<typeof MovieIdeasService.getUserIdeas>> | null = null
+    const coverPhase = tracker.startPhase(
+      "Cover images",
+      `${needsLookup.length} to resolve · ${moviesData.length - needsLookup.length} already have thumbs`,
+    )
 
-    for (const movie of moviesData) {
-      if (isCancelled()) break
+    try {
+      const { stats } = await streamMovieCoversInOrder(moviesData, uid, {
+        isCancelled,
+        staggerMs: 50,
+        onCoverStart: (movieId) => {
+          setLoadingCoverIds(new Set([movieId]))
+        },
+        onCover: (movieId, url) => {
+          setMovieCoverImages((prev) => ({ ...prev, [movieId]: url }))
+          setLoadingCoverIds(new Set())
+        },
+      })
 
-      try {
-        const hasExistingThumbnail =
-          movie.thumbnail &&
-          movie.thumbnail.trim() &&
-          movie.thumbnail !== "/placeholder.svg?height=300&width=200"
-
-        if (hasExistingThumbnail) {
-          coverImageMap[movie.id] = movie.thumbnail
-          continue
-        }
-
-        if (movie.treatment_id) {
-          try {
-            const treatment = await TreatmentsService.getTreatment(movie.treatment_id)
-            if (treatment?.cover_image_url) {
-              coverImageMap[movie.id] = treatment.cover_image_url
-              continue
-            }
-          } catch (error) {
-            console.error(`Cover: treatment fetch failed for ${movie.id}`, error)
-          }
-        }
-
-        if (!coverImageMap[movie.id]) {
-          try {
-            const coverAssets = await AssetService.getCoverImageAssets(movie.id)
-            if (coverAssets.length > 0) {
-              const defaultCover = coverAssets.find((a) => a.is_default_cover)
-              coverImageMap[movie.id] = (defaultCover || coverAssets[0]).content_url!
-              continue
-            }
-          } catch (assetError) {
-            console.error(`Cover: assets fetch failed for ${movie.id}`, assetError)
-          }
-        }
-
-        if (!coverImageMap[movie.id]) {
-          try {
-            if (!ideasCache) {
-              const ideasPhase = startPhase(snapshot, "Fetch all ideas (once)")
-              ideasCache = await MovieIdeasService.getUserIdeas(uid)
-              endPhase(ideasPhase, `${ideasCache.length} ideas`)
-            }
-            const matchingIdea = ideasCache.find(
-              (idea) => idea.title.toLowerCase().trim() === movie.name.toLowerCase().trim(),
-            )
-            if (matchingIdea) {
-              const ideaImages = await IdeaImagesService.getIdeaImages(matchingIdea.id)
-              const imageFiles = ideaImages.filter((img) =>
-                img.image_url.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i),
-              )
-              if (imageFiles.length > 0) {
-                coverImageMap[movie.id] = imageFiles[0].image_url
-              }
-            }
-          } catch (ideaError) {
-            console.error(`Cover: idea fetch failed for ${movie.id}`, ideaError)
-          }
-        }
-      } catch (error) {
-        console.error(`Cover: failed for ${movie.id}`, error)
+      if (!isCancelled()) {
+        setLoadingCoverIds(new Set())
+        tracker.endPhase(
+          coverPhase,
+          `${stats.resolved} resolved · ${stats.fromThumbnail} from thumb · ${stats.missing} missing · ${stats.total} total`,
+        )
+        tracker.addNote("Cover images done (streamed top to bottom)")
       }
-    }
-
-    if (!isCancelled()) {
-      setMovieCoverImages(coverImageMap)
-      endPhase(coverPhase, `${Object.keys(coverImageMap).length} covers`)
-      addNote(snapshot, "Cover images done")
+    } catch (error) {
+      if (!isCancelled()) {
+        setLoadingCoverIds(new Set())
+        tracker.failPhase(coverPhase, getErrorMessage(error))
+      }
     }
   }
 
   const loadMovies = async (
     uid: string,
-    snapshot: LoadDebugSnapshot,
+    tracker: ReturnType<typeof createLoadDebugTracker>,
     runId: number,
     isCancelled: () => boolean,
-  ) => {
-    if (isCancelled() || loadRunRef.current !== runId) return
+  ): Promise<Movie[] | null> => {
+    if (isCancelled() || loadRunRef.current !== runId) return null
 
     try {
       const cached = readMoviesCache(uid)
       if (cached?.length) {
         setMovies(cached)
         setLoading(false)
-        addNote(snapshot, `Showing ${cached.length} cached movies while refreshing`)
+        tracker.addNote(`Showing ${cached.length} cached movies while refreshing`)
       } else {
         setLoading(true)
       }
 
-      const moviesPhase = startPhase(snapshot, "Fetch movies (API)")
+      const moviesPhase = tracker.startPhase("Fetch movies (API)")
+      const tFetch = Date.now()
 
       const moviesData = await MovieService.getMovies(uid)
+      const fetchMs = Date.now() - tFetch
 
       if (isCancelled() || loadRunRef.current !== runId) {
-        addNote(snapshot, `Run #${runId} stale after movies fetch — skipped`)
-        return
+        tracker.addNote(`Run #${runId} stale after movies fetch — skipped`)
+        return null
       }
 
-      endPhase(moviesPhase, `${moviesData.length} movies`)
-      addNote(snapshot, "Movies fetched — showing page")
+      tracker.endPhase(moviesPhase, `${moviesData.length} movies · client ${fetchMs}ms`)
+      const apiMeta = getLastMoviesFetchMeta()
+      if (apiMeta) {
+        setLastApiMeta(apiMeta)
+        tracker.addNote(
+          `API meta — total ${apiMeta.totalMs ?? "?"}ms, auth ${apiMeta.authMs ?? "?"}ms, query ${apiMeta.queryMs ?? "?"}ms${apiMeta.cached ? ", cached" : ""}${apiMeta.serviceRole ? ", service role" : ""}`,
+        )
+        if ((apiMeta.queryMs ?? 0) > 2000) {
+          tracker.addNote(
+            "Slow DB query — ensure migration 082_projects_user_type_created_index is applied on Supabase",
+          )
+        }
+      }
+      tracker.addNote("Movies fetched — showing page")
 
       setMovies(moviesData)
       writeMoviesCache(uid, moviesData)
       setLoading(false)
 
-      void loadMovieCovers(moviesData, uid, snapshot, isCancelled)
+      return moviesData
     } catch (error) {
       if (isCancelled() || loadRunRef.current !== runId) {
-        addNote(snapshot, `Run #${runId} error ignored (stale): ${getErrorMessage(error)}`)
-        return
+        tracker.addNote(`Run #${runId} error ignored (stale): ${getErrorMessage(error)}`)
+        return null
       }
       console.error("Movies Page - Error loading movies:", error)
-      const running = snapshot.phases.find((p) => p.status === "running")
+      const running = tracker.snapshot.phases.find((p) => p.status === "running")
       if (running) {
-        failPhase(running, getErrorMessage(error))
+        tracker.failPhase(running, getErrorMessage(error))
       }
-      addNote(
-        snapshot,
+      tracker.addNote(
         isRetryableFetchError(error) ? "Network error — try Retry" : getErrorMessage(error),
       )
       toast({
@@ -391,43 +466,53 @@ export default function MoviesPage() {
       })
       setMovies([])
       setLoading(false)
+      return null
     }
   }
 
-  const loadSharedMovies = async (snapshot: LoadDebugSnapshot, isCancelled: () => boolean) => {
+  const loadSharedMovies = async (
+    tracker: ReturnType<typeof createLoadDebugTracker>,
+    isCancelled: () => boolean,
+  ) => {
     if (!userId || isCancelled()) return
 
-    const phase = startPhase(snapshot, "Shared movies")
+    const phase = tracker.startPhase("Shared movies")
 
     try {
       setLoadingShared(true)
+      const tFetch = Date.now()
       const response = await withRetry(
         "shared-movies",
         () => fetch("/api/project-shares/shared-with-me"),
         { retries: 2, baseDelayMs: 600 },
       )
       const data = await response.json()
+      const fetchMs = Date.now() - tFetch
 
       if (data.success) {
         const movieProjects = (data.projects || []).filter((p: any) => p.project_type === "movie")
         setSharedMovies(movieProjects)
-        endPhase(phase, `${movieProjects.length} shared`)
+        tracker.endPhase(phase, `${movieProjects.length} shared · ${fetchMs}ms`)
       } else {
-        failPhase(phase, data.error || "API error")
+        tracker.failPhase(phase, data.error || "API error")
       }
     } catch (error: any) {
-      failPhase(phase, error?.message || "Failed")
+      tracker.failPhase(phase, error?.message || "Failed")
     } finally {
       setLoadingShared(false)
     }
   }
 
-  const retryLoad = () => {
+  const retryLoad = async () => {
     if (!userId) return
-    const snapshot = createLoadDebug()
+    const tracker = getLoadTracker()
     const runId = ++loadRunRef.current
-    addNote(snapshot, `Manual retry #${runId}`)
-    void loadMovies(userId, snapshot, runId, () => false)
+    tracker.addNote(`Manual retry #${runId}`)
+    const moviesData = await loadMovies(userId, tracker, runId, () => false)
+    if (moviesData) {
+      await loadSharedMovies(tracker, () => false)
+      await loadMovieCovers(moviesData, userId, tracker, () => false)
+    }
   }
 
   const handleAcceptShareKey = async () => {
@@ -545,14 +630,26 @@ export default function MoviesPage() {
     }
   }
 
-  const filteredMovies = movies.filter((movie) => {
-    const matchesSearch =
-      movie.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (movie.description && movie.description.toLowerCase().includes(searchQuery.toLowerCase()))
-    const matchesStatus = selectedStatus === "All" || movie.movie_status === selectedStatus
-    const matchesProjectStatus = selectedProjectStatus === "All" || movie.project_status === selectedProjectStatus
-    return matchesSearch && matchesStatus && matchesProjectStatus
-  })
+  const filteredMovies = useMemo(() => {
+    return movies
+      .filter((movie) => {
+        const matchesSearch =
+          movie.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (movie.description &&
+            movie.description.toLowerCase().includes(searchQuery.toLowerCase()))
+        const matchesStatus = selectedStatus === "All" || movie.movie_status === selectedStatus
+        const matchesProjectStatus =
+          selectedProjectStatus === "All" || movie.project_status === selectedProjectStatus
+        return matchesSearch && matchesStatus && matchesProjectStatus
+      })
+      .sort((a, b) => {
+        const phaseDiff =
+          (MOVIE_PHASE_SORT_ORDER[a.movie_status] ?? 99) -
+          (MOVIE_PHASE_SORT_ORDER[b.movie_status] ?? 99)
+        if (phaseDiff !== 0) return phaseDiff
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+  }, [movies, searchQuery, selectedStatus, selectedProjectStatus])
 
   const handleCreateMovie = async () => {
     if (!newMovie.name.trim()) {
@@ -719,6 +816,47 @@ export default function MoviesPage() {
       })
     } finally {
       setIsUpdating(false)
+    }
+  }
+
+  const handleInlineMovieUpdate = async (
+    movie: Movie,
+    field: "movie_status" | "project_status",
+    value: string,
+  ) => {
+    const currentValue =
+      field === "movie_status"
+        ? movie.movie_status
+        : movie.project_status || "active"
+
+    if (currentValue === value) return
+
+    const updateKey = `${movie.id}:${field}`
+    setInlineStatusUpdating(updateKey)
+
+    const previousMovies = movies
+    const optimisticMovies = movies.map((m) =>
+      m.id === movie.id ? { ...m, [field]: value } : m,
+    )
+    setMovies(optimisticMovies)
+
+    try {
+      const updatedMovie = await MovieService.updateMovie(movie.id, { [field]: value })
+      const nextMovies = movies.map((m) =>
+        m.id === movie.id ? { ...m, ...updatedMovie } : m,
+      )
+      setMovies(nextMovies)
+      if (userId) writeMoviesCache(userId, nextMovies)
+    } catch (error) {
+      console.error("Error updating movie status:", error)
+      setMovies(previousMovies)
+      toast({
+        title: "Error",
+        description: "Failed to update status. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setInlineStatusUpdating(null)
     }
   }
 
@@ -1129,6 +1267,7 @@ export default function MoviesPage() {
             <span className="text-lg">Loading movies...</span>
             <div className="text-sm text-muted-foreground text-center">
               <p>Loading your movie projects...</p>
+              <p className="text-xs mt-1">Use the Debug button (bottom-right) for timing.</p>
             </div>
             <Button onClick={retryLoad} variant="outline" className="mt-2">
               <Loader2 className="h-4 w-4 mr-2" />
@@ -1136,6 +1275,18 @@ export default function MoviesPage() {
             </Button>
           </div>
         </main>
+        <MoviesLoadDebugPanel
+          snapshot={loadDebug}
+          auth={authDebug}
+          moviesLoading={loading}
+          moviesCount={movies.length}
+          sharedLoading={loadingShared}
+          loadCompleteMs={loadCompleteMs}
+          localCacheCount={localCacheCount}
+          apiMeta={lastApiMeta}
+          coversPendingCount={loadingCoverIds.size}
+          onRetry={retryLoad}
+        />
       </div>
     )
   }
@@ -2010,6 +2161,16 @@ export default function MoviesPage() {
                             Submissions
                           </Button>
                         </Link>
+                        <Link href={`/cinema-production?project=${movie.id}`}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full border-violet-500/30 bg-transparent hover:bg-violet-500/10 text-violet-400 hover:text-violet-300 text-xs h-8"
+                          >
+                            <Video className="mr-2 h-3.5 w-3.5" />
+                            Production
+                          </Button>
+                        </Link>
                       </div>
                     </CardContent>
                   </Card>
@@ -2090,6 +2251,11 @@ export default function MoviesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3 gap-6">
           {filteredMovies.map((movie) => {
             const viewMovieId = movie.treatment_id || movie.id
+            const coverUrl =
+              movieCoverImages[movie.id] ||
+              movie.thumbnail ||
+              PLACEHOLDER_THUMBNAIL
+            const coverPending = loadingCoverIds.has(movie.id)
             return (
             <Card key={movie.id} className="cinema-card hover:neon-glow transition-all duration-300 group">
               <CardHeader className="pb-2">
@@ -2098,15 +2264,23 @@ export default function MoviesPage() {
                   className="block"
                 >
                     <div className="aspect-[2/3] rounded-lg overflow-hidden mb-2 bg-muted relative group cursor-pointer">
+                      {coverPending ? (
+                        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-muted/90">
+                          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                          <span className="mt-2 text-[10px] text-muted-foreground">Loading cover…</span>
+                        </div>
+                      ) : null}
                       <img
-                        src={movieCoverImages[movie.id] || movie.thumbnail || "/placeholder.svg?height=300&width=200"}
+                        src={coverUrl}
                         alt={movie.name}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        loading="lazy"
+                        className={`w-full h-full object-cover transition-transform duration-300 ${
+                          coverPending ? "opacity-0" : "group-hover:scale-105"
+                        }`}
                         onError={(e) => {
-                          // Fallback to placeholder if image fails to load
                           const target = e.target as HTMLImageElement
-                          if (target.src !== "/placeholder.svg?height=300&width=200") {
-                            target.src = "/placeholder.svg?height=300&width=200"
+                          if (target.src !== PLACEHOLDER_THUMBNAIL) {
+                            target.src = PLACEHOLDER_THUMBNAIL
                           }
                         }}
                       />
@@ -2118,12 +2292,91 @@ export default function MoviesPage() {
                       {movie.name}
                     </CardTitle>
                     <div className="flex gap-2 mb-2">
-                      <Badge className={`text-xs ${statusColors[movie.movie_status as keyof typeof statusColors]}`}>
-                        {movie.movie_status}
-                      </Badge>
-                      <Badge className="text-xs bg-blue-500/20 text-blue-400 border-blue-500/30">
-                        {movie.project_status || 'active'}
-                      </Badge>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Badge
+                            asChild
+                            className={`text-xs cursor-pointer hover:opacity-80 ${
+                              statusColors[movie.movie_status as keyof typeof statusColors] ||
+                              "bg-gray-500/20 text-gray-400 border-gray-500/30"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              className="gap-1"
+                              disabled={inlineStatusUpdating === `${movie.id}:movie_status`}
+                            >
+                              {inlineStatusUpdating === `${movie.id}:movie_status` ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : null}
+                              {movie.movie_status}
+                              <ChevronDown className="h-3 w-3 opacity-70" />
+                            </button>
+                          </Badge>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="cinema-card border-border">
+                          {MOVIE_PHASE_OPTIONS.map((phase) => (
+                            <DropdownMenuItem
+                              key={phase}
+                              onClick={() =>
+                                void handleInlineMovieUpdate(movie, "movie_status", phase)
+                              }
+                            >
+                              <Check
+                                className={`mr-2 h-4 w-4 ${
+                                  movie.movie_status === phase ? "opacity-100" : "opacity-0"
+                                }`}
+                              />
+                              {phase}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Badge
+                            asChild
+                            className={`text-xs cursor-pointer hover:opacity-80 ${
+                              projectStatusColors[movie.project_status || "active"] ||
+                              projectStatusColors.active
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              className="gap-1 capitalize"
+                              disabled={inlineStatusUpdating === `${movie.id}:project_status`}
+                            >
+                              {inlineStatusUpdating === `${movie.id}:project_status` ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : null}
+                              {PROJECT_STATUS_OPTIONS.find(
+                                (s) => s.value === (movie.project_status || "active"),
+                              )?.label || movie.project_status || "Active"}
+                              <ChevronDown className="h-3 w-3 opacity-70" />
+                            </button>
+                          </Badge>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="cinema-card border-border">
+                          {PROJECT_STATUS_OPTIONS.map((status) => (
+                            <DropdownMenuItem
+                              key={status.value}
+                              onClick={() =>
+                                void handleInlineMovieUpdate(movie, "project_status", status.value)
+                              }
+                            >
+                              <Check
+                                className={`mr-2 h-4 w-4 ${
+                                  (movie.project_status || "active") === status.value
+                                    ? "opacity-100"
+                                    : "opacity-0"
+                                }`}
+                              />
+                              {status.label}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </div>
                   <DropdownMenu>
@@ -2280,6 +2533,16 @@ export default function MoviesPage() {
                       Submissions
                     </Button>
                   </Link>
+                  <Link href={`/cinema-production?project=${movie.id}`}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full border-violet-500/30 bg-transparent hover:bg-violet-500/10 text-violet-400 hover:text-violet-300 text-xs h-8"
+                    >
+                      <Video className="mr-2 h-3.5 w-3.5" />
+                      Production
+                    </Button>
+                  </Link>
                 </div>
               </CardContent>
             </Card>
@@ -2306,6 +2569,18 @@ export default function MoviesPage() {
           </div>
         )}
       </main>
+      <MoviesLoadDebugPanel
+        snapshot={loadDebug}
+        auth={authDebug}
+        moviesLoading={loading}
+        moviesCount={movies.length}
+        sharedLoading={loadingShared}
+        loadCompleteMs={loadCompleteMs}
+        localCacheCount={localCacheCount}
+        apiMeta={lastApiMeta}
+        coversPendingCount={loadingCoverIds.size}
+        onRetry={retryLoad}
+      />
     </div>
   )
 }

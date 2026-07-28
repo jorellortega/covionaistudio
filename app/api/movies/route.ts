@@ -8,14 +8,23 @@ export const runtime = "nodejs"
 
 type MoviesCacheEntry = { movies: Movie[]; expiresAt: number }
 const moviesCache = new Map<string, MoviesCacheEntry>()
-const CACHE_TTL_MS = 60_000
+const CACHE_TTL_MS = 5 * 60_000
+
+/** Columns needed for the movies grid — avoids select(*) payload. */
+const MOVIE_LIST_COLUMNS =
+  "id,user_id,name,description,status,project_type,genre,scenes,duration,thumbnail,movie_status,project_status,writer,cowriters,treatment_id,created_at,updated_at"
+
+let serviceClientSingleton: ReturnType<typeof createClient> | null = null
 
 function getServiceClient() {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!key) return null
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  })
+  if (!serviceClientSingleton) {
+    serviceClientSingleton = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
+  }
+  return serviceClientSingleton
 }
 
 export async function GET() {
@@ -79,14 +88,14 @@ export async function GET() {
       // Service role bypasses RLS (avoids per-row has_shared_access_to_project checks)
       ;({ data, error } = await admin
         .from("projects")
-        .select("*")
+        .select(MOVIE_LIST_COLUMNS)
         .eq("project_type", "movie")
         .eq("user_id", userId)
         .order("created_at", { ascending: false }))
     } else {
       ;({ data, error } = await supabase
         .from("projects")
-        .select("*")
+        .select(MOVIE_LIST_COLUMNS)
         .eq("project_type", "movie")
         .eq("user_id", userId)
         .order("created_at", { ascending: false }))
@@ -115,7 +124,14 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       movies,
-      meta: { totalMs, authMs, queryMs, cached: false, serviceRole: !!admin },
+      meta: {
+        totalMs,
+        authMs,
+        queryMs,
+        cached: false,
+        serviceRole: !!admin,
+        slowQuery: queryMs > 2000,
+      },
     })
   } catch (error) {
     console.error("[api/movies] error:", error)

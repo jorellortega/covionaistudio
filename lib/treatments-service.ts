@@ -97,6 +97,34 @@ export class TreatmentsService {
     }
   }
 
+  /** Batch-fetch cover_image_url for many treatments (movies grid). */
+  static async getTreatmentCoverUrlsByIds(ids: string[]): Promise<Map<string, string>> {
+    const result = new Map<string, string>()
+    if (ids.length === 0) return result
+
+    try {
+      const { data, error } = await getSupabaseClient()
+        .from('treatments')
+        .select('id, cover_image_url')
+        .in('id', ids)
+
+      if (error) {
+        console.error('Error batch-fetching treatment covers:', error)
+        return result
+      }
+
+      for (const row of data || []) {
+        if (row.cover_image_url) {
+          result.set(row.id, row.cover_image_url)
+        }
+      }
+    } catch (error) {
+      console.error('Error in getTreatmentCoverUrlsByIds:', error)
+    }
+
+    return result
+  }
+
   // Create a new treatment
   static async createTreatment(treatmentData: CreateTreatmentData): Promise<Treatment> {
     try {

@@ -62,3 +62,39 @@ export function formatMs(ms?: number) {
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
 }
+
+export function cloneLoadDebugSnapshot(snapshot: LoadDebugSnapshot): LoadDebugSnapshot {
+  return {
+    pageLoadAt: snapshot.pageLoadAt,
+    phases: snapshot.phases.map((phase) => ({ ...phase })),
+    notes: [...snapshot.notes],
+  }
+}
+
+/** Tracks load phases and optionally pushes snapshots to React state for on-page debug UI. */
+export function createLoadDebugTracker(onUpdate?: (snapshot: LoadDebugSnapshot) => void) {
+  const snapshot = createLoadDebug()
+  const publish = () => onUpdate?.(cloneLoadDebugSnapshot(snapshot))
+
+  return {
+    snapshot,
+    publish,
+    startPhase(name: string, detail?: string) {
+      const phase = startPhase(snapshot, name, detail)
+      publish()
+      return phase
+    },
+    endPhase(phase: LoadDebugPhase, detail?: string) {
+      endPhase(phase, detail)
+      publish()
+    },
+    failPhase(phase: LoadDebugPhase, detail: string) {
+      failPhase(phase, detail)
+      publish()
+    },
+    addNote(note: string) {
+      addNote(snapshot, note)
+      publish()
+    },
+  }
+}

@@ -19,6 +19,21 @@ export type CreateMovieData = Omit<Database['public']['Tables']['projects']['Ins
 
 const moviesInflight = new Map<string, Promise<Movie[]>>()
 
+export type MoviesFetchMeta = {
+  totalMs?: number
+  authMs?: number
+  queryMs?: number
+  cached?: boolean
+  serviceRole?: boolean
+  clientMs?: number
+}
+
+let lastMoviesFetchMeta: MoviesFetchMeta | null = null
+
+export function getLastMoviesFetchMeta(): MoviesFetchMeta | null {
+  return lastMoviesFetchMeta
+}
+
 export class MovieService {
   static async getMovies(userId?: string): Promise<Movie[]> {
     let resolvedUserId = userId
@@ -62,6 +77,10 @@ export class MovieService {
 
           const body = await response.json()
           const cacheTag = body.meta?.cached ? " (server cache)" : body.meta?.serviceRole ? " (service role)" : ""
+          lastMoviesFetchMeta = {
+            ...(body.meta || {}),
+            clientMs: fetchMs,
+          }
           console.log(
             `🎬 MovieService.getMovies() - API ${fetchMs}ms, auth ${body.meta?.authMs ?? '?'}ms, query ${body.meta?.queryMs ?? '?'}ms${cacheTag}, rows:`,
             body.movies?.length ?? 0,

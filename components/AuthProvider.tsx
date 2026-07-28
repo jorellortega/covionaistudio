@@ -41,7 +41,11 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
       if (!alive) return;
       console.log('🔔 onAuthStateChange:', ev);
       setSession(s ?? null);
-      finishLoading();
+      // Only end the initial loading gate after getSession() — avoids a brief
+      // null session on refresh redirecting protected pages to /login.
+      if (ev !== 'INITIAL_SESSION') {
+        finishLoading();
+      }
     });
 
     supabase.auth

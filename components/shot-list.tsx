@@ -46,6 +46,8 @@ import { LocationsService, type Location } from "@/lib/locations-service"
 import { sortShotListRows } from "@/lib/shot-list-order"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
+import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
+import { SHOT_TYPE_OPTIONS } from "@/lib/shot-options"
 import {
   Tooltip,
   TooltipContent,
@@ -724,45 +726,18 @@ export function ShotListComponent({
 
               <div>
                 <Label>Camera Angle</Label>
-                <Select
+                <ShotCameraAngleSelect
                   value={formData.camera_angle}
                   onValueChange={(value) => setFormData({ ...formData, camera_angle: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="eye-level">Eye Level</SelectItem>
-                    <SelectItem value="high-angle">High Angle</SelectItem>
-                    <SelectItem value="low-angle">Low Angle</SelectItem>
-                    <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
-                    <SelectItem value="bird-eye">Bird's Eye</SelectItem>
-                    <SelectItem value="worm-eye">Worm's Eye</SelectItem>
-                  </SelectContent>
-                </Select>
+                />
               </div>
 
               <div>
                 <Label>Movement</Label>
-                <Select
+                <ShotMovementSelect
                   value={formData.movement}
                   onValueChange={(value) => setFormData({ ...formData, movement: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="static">Static</SelectItem>
-                    <SelectItem value="panning">Panning</SelectItem>
-                    <SelectItem value="tilting">Tilting</SelectItem>
-                    <SelectItem value="tracking">Tracking</SelectItem>
-                    <SelectItem value="zooming">Zooming</SelectItem>
-                    <SelectItem value="dolly">Dolly</SelectItem>
-                    <SelectItem value="crane">Crane</SelectItem>
-                    <SelectItem value="handheld">Handheld</SelectItem>
-                    <SelectItem value="steadicam">Steadicam</SelectItem>
-                  </SelectContent>
-                </Select>
+                />
               </div>
 
               <div>

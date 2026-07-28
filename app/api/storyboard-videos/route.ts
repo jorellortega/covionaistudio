@@ -83,15 +83,16 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Get all videos for a storyboard
+// Get videos for one storyboard, or batch by storyboardIds (comma-separated).
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const storyboardId = searchParams.get('storyboardId')
+    const storyboardIdsParam = searchParams.get('storyboardIds')
     
-    if (!storyboardId) {
+    if (!storyboardId && !storyboardIdsParam) {
       return NextResponse.json(
-        { error: 'Missing storyboardId parameter' },
+        { error: 'Missing storyboardId or storyboardIds parameter' },
         { status: 400 }
       )
     }
@@ -122,10 +123,46 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    const queryStart = Date.now()
+
+    if (storyboardIdsParam) {
+      const storyboardIds = storyboardIdsParam
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean)
+
+      if (storyboardIds.length === 0) {
+        return NextResponse.json({ success: true, data: [], meta: { queryMs: 0, count: 0 } })
+      }
+
+      const { data, error } = await supabase
+        .from('storyboard_videos')
+        .select('*')
+        .in('storyboard_id', storyboardIds)
+        .eq('user_id', user.id)
+        .order('is_default', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching batch videos:', error)
+        return NextResponse.json(
+          { error: error.message },
+          { status: 500 }
+        )
+      }
+
+      const queryMs = Date.now() - queryStart
+      return NextResponse.json({
+        success: true,
+        data: data || [],
+        meta: { queryMs, count: data?.length ?? 0, storyboardCount: storyboardIds.length },
+      })
+    }
+
     const { data, error } = await supabase
       .from('storyboard_videos')
       .select('*')
-      .eq('storyboard_id', storyboardId)
+      .eq('storyboard_id', storyboardId!)
       .eq('user_id', user.id)
       .order('is_default', { ascending: false })
       .order('created_at', { ascending: false })
@@ -138,7 +175,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    return NextResponse.json({ success: true, data: data || [] })
+    const queryMs = Date.now() - queryStart
+    return NextResponse.json({
+      success: true,
+      data: data || [],
+      meta: { queryMs, count: data?.length ?? 0 },
+    })
   } catch (error) {
     console.error('Error in GET /api/storyboard-videos:', error)
     return NextResponse.json(

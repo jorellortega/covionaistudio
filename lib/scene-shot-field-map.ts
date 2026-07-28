@@ -1,4 +1,4 @@
-import { STORYBOARD_SHOT_TYPE_VALUES } from './shot-options'
+import { STORYBOARD_SHOT_TYPE_VALUES, resolveCameraAngleValue, resolveMovementValue } from './shot-options'
 
 const SHOT_TYPE_TO_STORYBOARD: Record<string, string> = {
   'two-shot': 'medium',
@@ -10,8 +10,6 @@ const SHOT_TYPE_TO_STORYBOARD: Record<string, string> = {
 }
 
 const STORYBOARD_SHOT_TYPES = STORYBOARD_SHOT_TYPE_VALUES
-const STORYBOARD_ANGLES = new Set(['eye-level', 'high-angle', 'low-angle', 'dutch-angle'])
-const STORYBOARD_MOVEMENTS = new Set(['static', 'panning', 'tilting', 'tracking', 'zooming'])
 
 export function mapShotTypeToStoryboard(shotType: string): string {
   if (STORYBOARD_SHOT_TYPES.has(shotType)) return shotType
@@ -19,14 +17,9 @@ export function mapShotTypeToStoryboard(shotType: string): string {
 }
 
 export function mapCameraAngleToStoryboard(angle: string): string {
-  if (STORYBOARD_ANGLES.has(angle)) return angle
-  if (angle === 'bird-eye') return 'high-angle'
-  if (angle === 'worm-eye') return 'low-angle'
-  return 'eye-level'
+  return resolveCameraAngleValue(angle)
 }
 
 export function mapMovementToStoryboard(movement: string): string {
-  if (STORYBOARD_MOVEMENTS.has(movement)) return movement
-  if (movement === 'dolly') return 'tracking'
-  return 'static'
+  return resolveMovementValue(movement)
 }

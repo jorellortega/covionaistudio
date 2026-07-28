@@ -547,6 +547,41 @@ export class AssetService {
     return data as Asset[]
   }
 
+  /** Batch-fetch cover image assets for multiple projects in one query. */
+  static async getCoverImageAssetsForProjects(
+    projectIds: string[],
+  ): Promise<Map<string, Asset[]>> {
+    const grouped = new Map<string, Asset[]>()
+    if (projectIds.length === 0) return grouped
+
+    const user = await this.ensureAuthenticated()
+
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .in('project_id', projectIds)
+      .eq('user_id', user.id)
+      .eq('content_type', 'image')
+      .eq('is_latest_version', true)
+      .is('scene_id', null)
+      .order('is_default_cover', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error batch-fetching cover image assets:', error)
+      return grouped
+    }
+
+    for (const asset of (data || []) as Asset[]) {
+      if (!asset.project_id) continue
+      const list = grouped.get(asset.project_id) || []
+      list.push(asset)
+      grouped.set(asset.project_id, list)
+    }
+
+    return grouped
+  }
+
   // Get cover image assets for a treatment (by treatment_id)
   static async getCoverImageAssetsForTreatment(treatmentId: string): Promise<Asset[]> {
     const user = await this.ensureAuthenticated()

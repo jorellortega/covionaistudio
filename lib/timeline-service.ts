@@ -118,7 +118,10 @@ export class TimelineService {
     return data
   }
 
-  static async getScenesForTimeline(timelineId: string): Promise<SceneWithMetadata[]> {
+  static async getScenesForTimeline(
+    timelineId: string,
+    options?: { skipThumbnails?: boolean },
+  ): Promise<SceneWithMetadata[]> {
     try {
       const user = await this.ensureAuthenticated()
       console.log('Fetching scenes for timeline:', timelineId, 'user:', user.id)
@@ -178,6 +181,13 @@ export class TimelineService {
       sortedScenes.forEach((scene, index) => {
         console.log(`  ${index + 1}. Scene "${scene.name}" - Scene Number: "${scene.metadata?.sceneNumber || 'None'}" - Order Index: ${scene.order_index}`)
       })
+
+      if (options?.skipThumbnails) {
+        return sortedScenes.map((scene) => ({
+          ...scene,
+          metadata: this.parseSceneMetadata(scene.metadata),
+        }))
+      }
       
       // Fetch associated assets for all scenes to get latest image URLs
       const sceneIds = sortedScenes.map(scene => scene.id)
@@ -555,7 +565,10 @@ export class TimelineService {
     return null
   }
 
-  static async getMovieScenes(movieId: string): Promise<SceneWithMetadata[]> {
+  static async getMovieScenes(
+    movieId: string,
+    options?: { skipThumbnails?: boolean },
+  ): Promise<SceneWithMetadata[]> {
     try {
       // First get or create timeline for the movie
       let timeline = await this.getTimelineForMovie(movieId)
@@ -577,7 +590,7 @@ export class TimelineService {
       }
 
       // Get scenes for the timeline
-      const scenes = await this.getScenesForTimeline(timeline.id)
+      const scenes = await this.getScenesForTimeline(timeline.id, options)
       console.log('Retrieved scenes:', scenes.length)
       return scenes
     } catch (error) {

@@ -44,6 +44,8 @@ import { ShotListComponent } from "@/components/shot-list"
 import { ShotListService } from "@/lib/shot-list-service"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
+import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
+import { resolveCameraAngleValue, resolveMovementValue } from "@/lib/shot-options"
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -2224,22 +2226,9 @@ export default function SceneShotListPage() {
     }
     
     // Map camera angles to valid storyboard values
-    const mapCameraAngle = (angle: string): string => {
-      const oldValidAngles = ['eye-level', 'high-angle', 'low-angle', 'dutch-angle']
-      if (oldValidAngles.includes(angle)) return angle
-      if (angle === 'bird-eye') return 'high-angle'
-      if (angle === 'worm-eye') return 'low-angle'
-      return 'eye-level'
-    }
+    const mapCameraAngle = (angle: string): string => resolveCameraAngleValue(angle)
     
-    // Map movement to valid storyboard values
-    const mapMovement = (movement: string): string => {
-      const oldValidMovements = ['static', 'panning', 'tilting', 'tracking', 'zooming']
-      if (oldValidMovements.includes(movement)) return movement
-      if (movement === 'dolly') return 'tracking'
-      if (['crane', 'handheld', 'steadicam'].includes(movement)) return 'static'
-      return 'static'
-    }
+    const mapMovement = (movement: string): string => resolveMovementValue(movement)
     
     // Try to preserve the shot's original shot_number, with retry logic for conflicts
     const preferredShotNumber = shot.shot_number || 1
@@ -3090,52 +3079,31 @@ export default function SceneShotListPage() {
                       </div>
                       <div>
                         <Label htmlFor="edit-camera-angle" className="text-xs text-blue-300">Camera Angle</Label>
-                        <Select 
-                          value={tempShotDetails.cameraAngle} 
+                        <ShotCameraAngleSelect
+                          id="edit-camera-angle"
+                          value={tempShotDetails.cameraAngle}
                           onValueChange={(value) => {
-                            setTempShotDetails(prev => ({ ...prev, cameraAngle: value }))
-                            // Re-apply visual selection after dropdown change
+                            setTempShotDetails((prev) => ({ ...prev, cameraAngle: value }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="eye-level">Eye Level</SelectItem>
-                            <SelectItem value="high-angle">High Angle</SelectItem>
-                            <SelectItem value="low-angle">Low Angle</SelectItem>
-                            <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          triggerClassName="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                          contentClassName="bg-gray-800 border-gray-600"
+                          triggerProps={{ onMouseDown: (e) => e.stopPropagation() }}
+                        />
                       </div>
                       <div>
                         <Label htmlFor="edit-movement" className="text-xs text-blue-300">Movement</Label>
-                        <Select 
-                          value={tempShotDetails.movement} 
+                        <ShotMovementSelect
+                          id="edit-movement"
+                          value={tempShotDetails.movement}
                           onValueChange={(value) => {
-                            setTempShotDetails(prev => ({ ...prev, movement: value }))
-                            // Re-apply visual selection after dropdown change
+                            setTempShotDetails((prev) => ({ ...prev, movement: value }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="static">Static</SelectItem>
-                            <SelectItem value="panning">Panning</SelectItem>
-                            <SelectItem value="tilting">Tilting</SelectItem>
-                            <SelectItem value="tracking">Tracking</SelectItem>
-                            <SelectItem value="zooming">Zooming</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          triggerClassName="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                          contentClassName="bg-gray-800 border-gray-600"
+                          triggerProps={{ onMouseDown: (e) => e.stopPropagation() }}
+                        />
                       </div>
                       <div className="flex items-end gap-2">
                         <Button
@@ -3213,52 +3181,31 @@ export default function SceneShotListPage() {
                       </div>
                       <div>
                         <Label htmlFor="camera-angle" className="text-xs text-blue-300">Camera Angle</Label>
-                        <Select 
-                          value={shotDetails.cameraAngle} 
+                        <ShotCameraAngleSelect
+                          id="camera-angle"
+                          value={shotDetails.cameraAngle}
                           onValueChange={(value) => {
-                            setShotDetails(prev => ({ ...prev, cameraAngle: value }))
-                            // Re-apply visual selection after dropdown change
+                            setShotDetails((prev) => ({ ...prev, cameraAngle: value }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="eye-level">Eye Level</SelectItem>
-                            <SelectItem value="high-angle">High Angle</SelectItem>
-                            <SelectItem value="low-angle">Low Angle</SelectItem>
-                            <SelectItem value="dutch-angle">Dutch Angle</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          triggerClassName="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                          contentClassName="bg-gray-800 border-gray-600"
+                          triggerProps={{ onMouseDown: (e) => e.stopPropagation() }}
+                        />
                       </div>
                       <div>
                         <Label htmlFor="movement" className="text-xs text-blue-300">Movement</Label>
-                        <Select 
-                          value={shotDetails.movement} 
+                        <ShotMovementSelect
+                          id="movement"
+                          value={shotDetails.movement}
                           onValueChange={(value) => {
-                            setShotDetails(prev => ({ ...prev, movement: value }))
-                            // Re-apply visual selection after dropdown change
+                            setShotDetails((prev) => ({ ...prev, movement: value }))
                             setTimeout(reapplySelection, 50)
                           }}
-                        >
-                          <SelectTrigger 
-                            className="h-8 text-xs bg-gray-800 border-gray-600 text-white"
-                            onMouseDown={(e) => e.stopPropagation()}
-                          >
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-gray-800 border-gray-600">
-                            <SelectItem value="static">Static</SelectItem>
-                            <SelectItem value="panning">Panning</SelectItem>
-                            <SelectItem value="tilting">Tilting</SelectItem>
-                            <SelectItem value="tracking">Tracking</SelectItem>
-                            <SelectItem value="zooming">Zooming</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          triggerClassName="h-8 text-xs bg-gray-800 border-gray-600 text-white"
+                          contentClassName="bg-gray-800 border-gray-600"
+                          triggerProps={{ onMouseDown: (e) => e.stopPropagation() }}
+                        />
                       </div>
                       <div className="flex items-end gap-2">
                         <Button
