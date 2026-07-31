@@ -37,6 +37,7 @@ import { PreferencesService } from "@/lib/preferences-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { AvatarImagesService, type AvatarImageRecord } from "@/lib/avatar-images-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
@@ -60,6 +61,7 @@ import {
   buildStoryboardAssignmentPatch,
   getStoryboardCharacterIds,
   getStoryboardLocationIds,
+  getStoryboardObjectIds,
 } from "@/lib/storyboard-assignments"
 import {
   buildQuickShotImagePrompt,
@@ -312,6 +314,8 @@ export default function SceneStoryboardsPage() {
   const [isLoadingCharacters, setIsLoadingCharacters] = useState(false)
   const [locations, setLocations] = useState<Location[]>([])
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
+  const [storyObjects, setStoryObjects] = useState<StoryObject[]>([])
+  const [isLoadingStoryObjects, setIsLoadingStoryObjects] = useState(false)
 
   const sceneProjectId = useMemo(() => {
     if (sceneInfo?.project_id) return sceneInfo.project_id
@@ -343,6 +347,7 @@ export default function SceneStoryboardsPage() {
   const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
   const [formCharacterIds, setFormCharacterIds] = useState<string[]>([])
   const [formLocationIds, setFormLocationIds] = useState<string[]>([])
+  const [formObjectIds, setFormObjectIds] = useState<string[]>([])
   const [updatingAssignmentStoryboardId, setUpdatingAssignmentStoryboardId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
@@ -436,6 +441,7 @@ export default function SceneStoryboardsPage() {
     movement: "static",
     characterIds: [] as string[],
     locationIds: [] as string[],
+    objectIds: [] as string[],
   })
   const [editingShotDetails, setEditingShotDetails] = useState(false)
   const [tempShotDetails, setTempShotDetails] = useState({
@@ -445,6 +451,7 @@ export default function SceneStoryboardsPage() {
     movement: "static",
     characterIds: [] as string[],
     locationIds: [] as string[],
+    objectIds: [] as string[],
   })
   
   // Ref to track current selection
@@ -986,6 +993,26 @@ export default function SceneStoryboardsPage() {
     loadLocations()
   }, [sceneProjectId, ready, userId])
 
+  // Load story objects when project is resolved
+  useEffect(() => {
+    const loadStoryObjects = async () => {
+      if (!sceneProjectId || !ready || !userId) return
+
+      setIsLoadingStoryObjects(true)
+      try {
+        const objects = await StoryObjectsService.getStoryObjects(sceneProjectId)
+        setStoryObjects(objects)
+        console.log("🎬 Loaded story objects for storyboards:", objects)
+      } catch (error) {
+        console.error("Error loading story objects:", error)
+      } finally {
+        setIsLoadingStoryObjects(false)
+      }
+    }
+
+    loadStoryObjects()
+  }, [sceneProjectId, ready, userId])
+
   // Load project image assets for linking to shots
   useEffect(() => {
     const loadProjectAssets = async () => {
@@ -1520,14 +1547,18 @@ export default function SceneStoryboardsPage() {
         : getStoryboardCharacterIds(storyboard)
     const locationIds =
       formLocationIds.length > 0 ? formLocationIds : getStoryboardLocationIds(storyboard)
+    const objectIds =
+      formObjectIds.length > 0 ? formObjectIds : getStoryboardObjectIds(storyboard)
     return {
       ...storyboard,
       character_id: characterIds[0] ?? formData.character_id ?? storyboard.character_id,
       location_id: locationIds[0] ?? formData.location_id ?? storyboard.location_id,
+      story_object_id: objectIds[0] ?? formData.story_object_id ?? storyboard.story_object_id,
       metadata: {
         ...(storyboard.metadata || {}),
         character_ids: characterIds,
         location_ids: locationIds,
+        object_ids: objectIds,
       },
       title: formData.title || storyboard.title,
       description: formData.description || storyboard.description,
@@ -1551,10 +1582,11 @@ export default function SceneStoryboardsPage() {
   }
 
   const buildStoryboardCreatePrompt = (userDirection: string, storyboard: Storyboard) => {
-    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
     const shotContext = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
+      objectNames: assignmentContext.objectNames,
     })
     const parts = [userDirection.trim(), shotContext].filter(Boolean)
     let prompt = parts.join(". ")
@@ -1754,7 +1786,7 @@ export default function SceneStoryboardsPage() {
       return
     }
 
-    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
     const isCreateMode = !hasPrimaryReferenceForEdit(storyboard, shotReferenceFile)
     const lockedConfigPreview = getLockedImageConfig(
       isCreateMode ? undefined : { withReferenceImage: true },
@@ -2539,7 +2571,9 @@ export default function SceneStoryboardsPage() {
         script_text_end: textRange && textRange.end !== null ? textRange.end : undefined,
         script_text_snippet: textRange ? textToUse : undefined,
         sequence_order: nextShotNumber,
-        ...buildStoryboardAssignmentPatch(shotDetails.characterIds, shotDetails.locationIds),
+        ...buildStoryboardAssignmentPatch(shotDetails.characterIds, shotDetails.locationIds, {
+          objectIds: shotDetails.objectIds,
+        }),
       }
       
       console.log("🎬 Creating storyboard with data:", storyboardData)
@@ -2687,6 +2721,7 @@ export default function SceneStoryboardsPage() {
       movement: "static",
       characterIds: [],
       locationIds: [],
+      objectIds: [],
     })
   }
 
@@ -2777,7 +2812,9 @@ export default function SceneStoryboardsPage() {
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || sceneProjectId,
         scene_id: sceneId,
-        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds),
+        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds, {
+          objectIds: formObjectIds,
+        }),
       }
 
       const newStoryboard = await StoryboardsService.createStoryboard(cleanFormData)
@@ -2842,11 +2879,10 @@ export default function SceneStoryboardsPage() {
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || sceneProjectId,
         scene_id: sceneId,
-        ...buildStoryboardAssignmentPatch(
-          formCharacterIds,
-          formLocationIds,
-          editingStoryboard.metadata,
-        ),
+        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds, {
+          objectIds: formObjectIds,
+          existingMetadata: editingStoryboard.metadata,
+        }),
       }
 
       const updatedStoryboard = await StoryboardsService.updateStoryboard(editingStoryboard.id, cleanFormData)
@@ -3032,16 +3068,21 @@ export default function SceneStoryboardsPage() {
   const syncFormAssignmentsFromStoryboard = (storyboard: Storyboard) => {
     setFormCharacterIds(getStoryboardCharacterIds(storyboard))
     setFormLocationIds(getStoryboardLocationIds(storyboard))
+    setFormObjectIds(getStoryboardObjectIds(storyboard))
   }
 
   const applyStoryboardAssignments = async (
     storyboard: Storyboard,
     characterIds: string[],
     locationIds: string[],
+    objectIds: string[],
   ) => {
     setUpdatingAssignmentStoryboardId(storyboard.id)
     try {
-      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, storyboard.metadata)
+      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, {
+        objectIds,
+        existingMetadata: storyboard.metadata,
+      })
       const updated = await StoryboardsService.updateStoryboard(storyboard.id, patch)
       setStoryboards((prev) =>
         sortStoryboardRows(prev.map((existing) => (existing.id === storyboard.id ? updated : existing))),
@@ -3260,7 +3301,7 @@ export default function SceneStoryboardsPage() {
       title: storyboard.title,
     })
 
-    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+    const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
     const prompt = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
@@ -3418,7 +3459,7 @@ export default function SceneStoryboardsPage() {
         locationIds: getStoryboardLocationIds(storyboard),
       })
 
-      const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations)
+      const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
 
       // Prepare the enhanced prompt for storyboard shots
       let enhancedPrompt = generationPrompt
@@ -3430,8 +3471,10 @@ export default function SceneStoryboardsPage() {
         enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
           characterNames: useCharacterDetails ? assignmentContext.characterNames : [],
           locationNames: assignmentContext.locationNames,
+          objectNames: assignmentContext.objectNames,
           characterDetails: useCharacterDetails ? assignmentContext.characterDetails : [],
           locationDetails: assignmentContext.locationDetails,
+          objectDetails: assignmentContext.objectDetails,
           masterPrompts: useMasterPrompt ? assignmentContext.masterPrompts : [],
           referenceCount: 0,
         })
@@ -3511,8 +3554,10 @@ export default function SceneStoryboardsPage() {
         enhancedPrompt = enrichPromptWithAssignments(enhancedPrompt, {
           characterNames: assignmentContext.characterNames,
           locationNames: assignmentContext.locationNames,
+          objectNames: assignmentContext.objectNames,
           characterDetails: [],
           locationDetails: [],
+          objectDetails: [],
           masterPrompts: [],
           referenceCount: referenceFiles.length,
         })
@@ -4233,6 +4278,24 @@ export default function SceneStoryboardsPage() {
                         />
                       </div>
                     )}
+                    {storyObjects.length > 0 && (
+                      <div>
+                        <Label className="text-xs text-blue-300">Object (Optional)</Label>
+                        <AssignmentBadgePicker
+                          kind="object"
+                          items={storyObjects.map((object) => ({
+                            id: object.id,
+                            name: object.name,
+                            subtitle: object.category ?? undefined,
+                          }))}
+                          selectedIds={shotDetails.objectIds}
+                          onSelectedIdsChange={(ids) => {
+                            setShotDetails((prev) => ({ ...prev, objectIds: ids }))
+                            setTimeout(reapplySelection, 50)
+                          }}
+                        />
+                      </div>
+                    )}
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-blue-300">
                         💡 Select text in the script below and click "Create Shot" to automatically create storyboards with these settings
@@ -4726,6 +4789,26 @@ export default function SceneStoryboardsPage() {
                 </div>
               )}
 
+              {storyObjects.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Object (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign props, vehicles, and other story objects for image generation
+                  </p>
+                  <AssignmentBadgePicker
+                    kind="object"
+                    items={storyObjects.map((object) => ({
+                      id: object.id,
+                      name: object.name,
+                      subtitle: object.category ?? undefined,
+                    }))}
+                    selectedIds={formObjectIds}
+                    onSelectedIdsChange={setFormObjectIds}
+                    disabled={isCreating}
+                  />
+                </div>
+              )}
+
               {/* Status Field */}
               <div>
                 <Label htmlFor="status">Status</Label>
@@ -4939,6 +5022,26 @@ export default function SceneStoryboardsPage() {
                     }))}
                     selectedIds={formLocationIds}
                     onSelectedIdsChange={setFormLocationIds}
+                    disabled={isUpdating}
+                  />
+                </div>
+              )}
+
+              {storyObjects.length > 0 && (
+                <div className="space-y-2">
+                  <Label>Object (Optional)</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Assign props, vehicles, and other story objects for image generation
+                  </p>
+                  <AssignmentBadgePicker
+                    kind="object"
+                    items={storyObjects.map((object) => ({
+                      id: object.id,
+                      name: object.name,
+                      subtitle: object.category ?? undefined,
+                    }))}
+                    selectedIds={formObjectIds}
+                    onSelectedIdsChange={setFormObjectIds}
                     disabled={isUpdating}
                   />
                 </div>
@@ -5574,7 +5677,7 @@ export default function SceneStoryboardsPage() {
                     </div>
                   ) : null}
 
-                  {sceneProjectId && (characters.length > 0 || locations.length > 0) && (
+                  {sceneProjectId && (characters.length > 0 || locations.length > 0 || storyObjects.length > 0) && (
                     <div className="flex flex-wrap items-center gap-1">
                       {characters.length > 0 && (
                         <AssignmentBadgePicker
@@ -5590,6 +5693,7 @@ export default function SceneStoryboardsPage() {
                               storyboard,
                               ids,
                               getStoryboardLocationIds(storyboard),
+                              getStoryboardObjectIds(storyboard),
                             )
                           }}
                           disabled={updatingAssignmentStoryboardId === storyboard.id}
@@ -5608,6 +5712,27 @@ export default function SceneStoryboardsPage() {
                             void applyStoryboardAssignments(
                               storyboard,
                               getStoryboardCharacterIds(storyboard),
+                              ids,
+                              getStoryboardObjectIds(storyboard),
+                            )
+                          }}
+                          disabled={updatingAssignmentStoryboardId === storyboard.id}
+                        />
+                      )}
+                      {storyObjects.length > 0 && (
+                        <AssignmentBadgePicker
+                          kind="object"
+                          items={storyObjects.map((object) => ({
+                            id: object.id,
+                            name: object.name,
+                            subtitle: object.category ?? undefined,
+                          }))}
+                          selectedIds={getStoryboardObjectIds(storyboard)}
+                          onSelectedIdsChange={(ids) => {
+                            void applyStoryboardAssignments(
+                              storyboard,
+                              getStoryboardCharacterIds(storyboard),
+                              getStoryboardLocationIds(storyboard),
                               ids,
                             )
                           }}

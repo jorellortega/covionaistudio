@@ -209,7 +209,7 @@ export function SceneSyncControls({
     setPreviewingDirection(direction)
     try {
       const syncData = await loadSceneSyncData(sceneId, projectId)
-      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount, characterNamesById, locationNamesById } = syncData
+      const { shots, storyboards, sceneShots, sceneShotCount, linkedOrphanCount, characterNamesById, locationNamesById, objectNamesById } = syncData
       setPendingSyncData(syncData)
 
       let plan: AISyncPlan | null = null
@@ -242,6 +242,7 @@ export function SceneSyncControls({
         sceneShots,
         characterNamesById,
         locationNamesById,
+        objectNamesById,
       })
       const keys = new Set([...nextPreview.creates, ...nextPreview.updates].map((item) => item.key))
       setPreview(nextPreview)
@@ -343,6 +344,7 @@ export function SceneSyncControls({
         aiPlan,
         characterNamesById,
         locationNamesById,
+        objectNamesById,
       })
       const stack = pushUndoEntry(sceneId, undoEntry)
       setUndoCount(stack.length)

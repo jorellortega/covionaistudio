@@ -43,6 +43,7 @@ import { useAuth } from "@/components/AuthProvider"
 import { ShotListService, type ShotList, type CreateShotListData } from "@/lib/shot-list-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
 import { sortShotListRows } from "@/lib/shot-list-order"
 import { SCENE_SYNC_APPLIED_EVENT } from "@/lib/scene-shot-sync"
 import { AssignmentBadgePicker } from "@/components/assignment-badge-picker"
@@ -96,13 +97,16 @@ export function ShotListComponent({
   })
   const [characters, setCharacters] = useState<Character[]>([])
   const [locations, setLocations] = useState<Location[]>([])
+  const [storyObjects, setStoryObjects] = useState<StoryObject[]>([])
   const [dialogCharacterNames, setDialogCharacterNames] = useState<string[]>([])
   const [dialogLocationNames, setDialogLocationNames] = useState<string[]>([])
+  const [dialogObjectNames, setDialogObjectNames] = useState<string[]>([])
 
   useEffect(() => {
     if (!projectId) {
       setCharacters([])
       setLocations([])
+      setStoryObjects([])
       return
     }
 
@@ -110,13 +114,15 @@ export function ShotListComponent({
 
     const loadProjectOptions = async () => {
       try {
-        const [chars, locs] = await Promise.all([
+        const [chars, locs, objects] = await Promise.all([
           CharactersService.getCharacters(projectId),
           LocationsService.getLocations(projectId),
+          StoryObjectsService.getStoryObjects(projectId),
         ])
         if (!cancelled) {
           setCharacters(chars)
           setLocations(locs)
+          setStoryObjects(objects)
         }
       } catch (error) {
         console.error('Error loading shot list character/location options:', error)
@@ -140,9 +146,21 @@ export function ShotListComponent({
     return shot.location ? [shot.location] : []
   }
 
+  const getShotObjects = (shot: ShotList) => {
+    const fromMetadata = shot.metadata?.objects
+    if (Array.isArray(fromMetadata) && fromMetadata.length > 0) {
+      return fromMetadata.filter((name): name is string => typeof name === "string" && !!name)
+    }
+    return []
+  }
+
   const buildLocationPatch = (shot: ShotList, names: string[]) => ({
     location: names[0] ?? "",
     metadata: { ...(shot.metadata || {}), locations: names },
+  })
+
+  const buildObjectPatch = (shot: ShotList, names: string[]) => ({
+    metadata: { ...(shot.metadata || {}), objects: names },
   })
 
   const characterIdsToNames = (ids: string[]) =>
@@ -153,6 +171,11 @@ export function ShotListComponent({
   const locationIdsToNames = (ids: string[]) =>
     ids
       .map((id) => locations.find((location) => location.id === id)?.name)
+      .filter((name): name is string => Boolean(name))
+
+  const objectIdsToNames = (ids: string[]) =>
+    ids
+      .map((id) => storyObjects.find((object) => object.id === id)?.name)
       .filter((name): name is string => Boolean(name))
 
   const namesToCharacterIds = (names: string[]) =>
@@ -179,9 +202,15 @@ export function ShotListComponent({
       })
       .filter((id): id is string => Boolean(id))
 
+  const namesToObjectIds = (names: string[]) =>
+    names
+      .map((name) => storyObjects.find((object) => object.name === name)?.id)
+      .filter((id): id is string => Boolean(id))
+
   const resetPickerState = () => {
     setDialogCharacterNames([])
     setDialogLocationNames([])
+    setDialogObjectNames([])
   }
 
   // Load shot lists (+ refresh when sync applied on another page)
@@ -271,6 +300,7 @@ export function ShotListComponent({
       })
       setDialogCharacterNames(getShotCharacters(shot))
       setDialogLocationNames(getShotLocations(shot))
+      setDialogObjectNames(getShotObjects(shot))
     } else {
       setEditingShot(null)
       setFormData({
@@ -311,6 +341,7 @@ export function ShotListComponent({
         metadata: {
           ...(editingShot?.metadata || {}),
           locations: dialogLocationNames,
+          objects: dialogObjectNames,
         },
       }
 
@@ -520,6 +551,7 @@ export function ShotListComponent({
           {shots.map((shot) => {
             const shotCharacters = getShotCharacters(shot)
             const shotLocations = getShotLocations(shot)
+            const shotObjects = getShotObjects(shot)
 
             return (
             <Card key={shot.id}>
@@ -578,7 +610,7 @@ export function ShotListComponent({
                       </div>
                     )}
 
-                    {projectId && (characters.length > 0 || locations.length > 0) && (
+                    {projectId && (characters.length > 0 || locations.length > 0 || storyObjects.length > 0) && (
                       <div className="flex flex-wrap items-center gap-1">
                         <TooltipProvider delayDuration={300}>
                           <Tooltip>
@@ -635,6 +667,22 @@ export function ShotListComponent({
                             selectedIds={namesToLocationIds(shotLocations)}
                             onSelectedIdsChange={(ids) => {
                               void applyShotPatch(shot, buildLocationPatch(shot, locationIdsToNames(ids)))
+                            }}
+                            disabled={updatingShotId === shot.id || assigningShotId === shot.id}
+                          />
+                        )}
+
+                        {storyObjects.length > 0 && (
+                          <AssignmentBadgePicker
+                            kind="object"
+                            items={storyObjects.map((object) => ({
+                              id: object.id,
+                              name: object.name,
+                              subtitle: object.category ?? undefined,
+                            }))}
+                            selectedIds={namesToObjectIds(shotObjects)}
+                            onSelectedIdsChange={(ids) => {
+                              void applyShotPatch(shot, buildObjectPatch(shot, objectIdsToNames(ids)))
                             }}
                             disabled={updatingShotId === shot.id || assigningShotId === shot.id}
                           />
@@ -797,7 +845,7 @@ export function ShotListComponent({
               </div>
             </div>
 
-            {projectId && (characters.length > 0 || locations.length > 0) && (
+            {projectId && (characters.length > 0 || locations.length > 0 || storyObjects.length > 0) && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {characters.length > 0 && (
                   <div className="space-y-2">
@@ -828,6 +876,23 @@ export function ShotListComponent({
                       }))}
                       selectedIds={namesToLocationIds(dialogLocationNames)}
                       onSelectedIdsChange={(ids) => setDialogLocationNames(locationIdsToNames(ids))}
+                      disabled={saving}
+                    />
+                  </div>
+                )}
+
+                {storyObjects.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Object (Optional)</Label>
+                    <AssignmentBadgePicker
+                      kind="object"
+                      items={storyObjects.map((object) => ({
+                        id: object.id,
+                        name: object.name,
+                        subtitle: object.category ?? undefined,
+                      }))}
+                      selectedIds={namesToObjectIds(dialogObjectNames)}
+                      onSelectedIdsChange={(ids) => setDialogObjectNames(objectIdsToNames(ids))}
                       disabled={saving}
                     />
                   </div>

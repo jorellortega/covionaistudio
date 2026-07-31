@@ -2,8 +2,13 @@ import type { Asset } from "./asset-service"
 import type { AvatarImageRecord } from "./avatar-images-service"
 import type { Character } from "./characters-service"
 import type { Location } from "./locations-service"
+import type { StoryObject } from "./story-objects-service"
 import type { Storyboard } from "./storyboards-service"
-import { getStoryboardCharacterIds, getStoryboardLocationIds } from "./storyboard-assignments"
+import {
+  getStoryboardCharacterIds,
+  getStoryboardLocationIds,
+  getStoryboardObjectIds,
+} from "./storyboard-assignments"
 import { AVATAR_REFERENCE_COLLAGE_ANGLE_ID } from "./avatar-angles"
 import { referenceUrlToFile } from "./project-image-linking"
 import { isGPTImage2ApiModel } from "./image-model-utils"
@@ -58,6 +63,7 @@ export function buildQuickShotImagePrompt(
   options?: {
     characterNames?: string[]
     locationNames?: string[]
+    objectNames?: string[]
   },
 ): string {
   const actionText =
@@ -73,6 +79,9 @@ export function buildQuickShotImagePrompt(
       : null,
     options?.locationNames?.length
       ? `Location: ${options.locationNames.join(", ")}`
+      : null,
+    options?.objectNames?.length
+      ? `Objects: ${options.objectNames.join(", ")}`
       : null,
     storyboard.shot_type ? `${storyboard.shot_type} shot` : null,
     storyboard.camera_angle ? `${storyboard.camera_angle} angle` : null,
@@ -137,6 +146,20 @@ export function buildLocationDetailsText(location: Location): string {
     location.key_features && location.key_features.length > 0
       ? `Key features: ${location.key_features.join(", ")}`
       : null,
+  ]
+    .filter(Boolean)
+    .join(", ")
+}
+
+export function buildObjectDetailsText(object: StoryObject): string {
+  return [
+    object.name && `Object name: ${object.name}`,
+    object.category && `Category: ${object.category}`,
+    object.description && `Description: ${object.description}`,
+    object.visual_description && `Visual description: ${object.visual_description}`,
+    object.material && `Material: ${object.material}`,
+    object.color && `Color: ${object.color}`,
+    object.era && `Era: ${object.era}`,
   ]
     .filter(Boolean)
     .join(", ")
@@ -511,8 +534,10 @@ export function enrichPromptWithAssignments(
   options: {
     characterNames: string[]
     locationNames: string[]
+    objectNames?: string[]
     characterDetails: string[]
     locationDetails: string[]
+    objectDetails?: string[]
     masterPrompts: string[]
     referenceCount: number
   },
@@ -526,6 +551,9 @@ export function enrichPromptWithAssignments(
         : null,
       options.locationNames.length
         ? `location/setting for ${options.locationNames.join(", ")}`
+        : null,
+      options.objectNames?.length
+        ? `object/prop appearance for ${options.objectNames.join(", ")}`
         : null,
     ].filter(Boolean)
     if (refParts.length > 0) {
@@ -544,6 +572,9 @@ export function enrichPromptWithAssignments(
   for (const details of options.locationDetails) {
     if (details) enhanced = `${enhanced} Location details: ${details}.`
   }
+  for (const details of options.objectDetails ?? []) {
+    if (details) enhanced = `${enhanced} Object details: ${details}.`
+  }
 
   return enhanced
 }
@@ -552,23 +583,31 @@ export function getStoryboardAssignmentContext(
   storyboard: Storyboard,
   characters: Character[],
   locations: Location[],
+  storyObjects: StoryObject[] = [],
 ) {
   const characterIds = getStoryboardCharacterIds(storyboard)
   const locationIds = getStoryboardLocationIds(storyboard)
+  const objectIds = getStoryboardObjectIds(storyboard)
   const assignedCharacters = characterIds
     .map((id) => characters.find((c) => c.id === id))
     .filter((c): c is Character => Boolean(c))
   const assignedLocations = locationIds
     .map((id) => locations.find((l) => l.id === id))
     .filter((l): l is Location => Boolean(l))
+  const assignedObjects = objectIds
+    .map((id) => storyObjects.find((item) => item.id === id))
+    .filter((item): item is StoryObject => Boolean(item))
 
   return {
     characterIds,
     locationIds,
+    objectIds,
     characterNames: assignedCharacters.map((c) => c.name),
     locationNames: assignedLocations.map((l) => l.name),
+    objectNames: assignedObjects.map((item) => item.name),
     characterDetails: assignedCharacters.map(buildCharacterDetailsText).filter(Boolean),
     locationDetails: assignedLocations.map(buildLocationDetailsText).filter(Boolean),
+    objectDetails: assignedObjects.map(buildObjectDetailsText).filter(Boolean),
     masterPrompts: assignedCharacters
       .map((c) => c.master_prompt?.trim())
       .filter((p): p is string => Boolean(p)),

@@ -25,6 +25,7 @@ export interface Storyboard {
   scene_id?: string
   character_id?: string | null
   location_id?: string | null
+  story_object_id?: string | null
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string
@@ -51,6 +52,7 @@ export interface CreateStoryboardData {
   scene_id?: string
   character_id?: string | null
   location_id?: string | null
+  story_object_id?: string | null
   script_text_start?: number
   script_text_end?: number
   script_text_snippet?: string
@@ -158,6 +160,7 @@ export class StoryboardsService {
         scene_id: storyboardData.scene_id,
         character_id: storyboardData.character_id || null,
         location_id: storyboardData.location_id || null,
+        story_object_id: storyboardData.story_object_id || null,
         script_text_start: storyboardData.script_text_start || null,
         script_text_end: storyboardData.script_text_end || null,
         script_text_snippet: storyboardData.script_text_snippet || null,

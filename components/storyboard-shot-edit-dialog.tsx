@@ -13,10 +13,12 @@ import { StoryboardShotPositionEditor } from "@/components/storyboard-shot-posit
 import { useToast } from "@/hooks/use-toast"
 import type { Character } from "@/lib/characters-service"
 import type { Location } from "@/lib/locations-service"
+import type { StoryObject } from "@/lib/story-objects-service"
 import {
   buildStoryboardAssignmentPatch,
   getStoryboardCharacterIds,
   getStoryboardLocationIds,
+  getStoryboardObjectIds,
 } from "@/lib/storyboard-assignments"
 import { displayShotNumber } from "@/lib/shot-list-order"
 import { SHOT_TYPE_OPTIONS, formatStoryboardSaveError } from "@/lib/shot-options"
@@ -35,6 +37,7 @@ type StoryboardShotEditDialogProps = {
   projectId?: string
   characters?: Character[]
   locations?: Location[]
+  storyObjects?: StoryObject[]
   onOpenChange: (open: boolean) => void
   onUpdated: (storyboard: Storyboard) => void
   onRefreshStoryboards?: () => void | Promise<void>
@@ -53,6 +56,7 @@ function storyboardToFormData(storyboard: Storyboard, sceneId: string): CreateSt
     status: storyboard.status || "draft",
     character_id: storyboard.character_id || null,
     location_id: storyboard.location_id || null,
+    story_object_id: storyboard.story_object_id || null,
     dialogue: storyboard.dialogue || "",
     action: storyboard.action || "",
     visual_notes: storyboard.visual_notes || "",
@@ -70,6 +74,7 @@ export function StoryboardShotEditDialog({
   projectId,
   characters = [],
   locations = [],
+  storyObjects = [],
   onOpenChange,
   onUpdated,
   onRefreshStoryboards,
@@ -78,6 +83,7 @@ export function StoryboardShotEditDialog({
   const [formData, setFormData] = useState<CreateStoryboardData | null>(null)
   const [formCharacterIds, setFormCharacterIds] = useState<string[]>([])
   const [formLocationIds, setFormLocationIds] = useState<string[]>([])
+  const [formObjectIds, setFormObjectIds] = useState<string[]>([])
   const [isUpdating, setIsUpdating] = useState(false)
 
   useEffect(() => {
@@ -90,6 +96,7 @@ export function StoryboardShotEditDialog({
     setFormData(storyboardToFormData(storyboard, sceneId))
     setFormCharacterIds(getStoryboardCharacterIds(storyboard))
     setFormLocationIds(getStoryboardLocationIds(storyboard))
+    setFormObjectIds(getStoryboardObjectIds(storyboard))
   }, [open, storyboard, sceneId])
 
   const handleUpdate = async () => {
@@ -114,11 +121,10 @@ export function StoryboardShotEditDialog({
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || projectId,
         scene_id: sceneId,
-        ...buildStoryboardAssignmentPatch(
-          formCharacterIds,
-          formLocationIds,
-          storyboard.metadata,
-        ),
+        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds, {
+          objectIds: formObjectIds,
+          existingMetadata: storyboard.metadata,
+        }),
       }
 
       const updatedStoryboard = await StoryboardsService.updateStoryboard(
@@ -298,6 +304,26 @@ export function StoryboardShotEditDialog({
                 }))}
                 selectedIds={formLocationIds}
                 onSelectedIdsChange={setFormLocationIds}
+                disabled={isUpdating}
+              />
+            </div>
+          ) : null}
+
+          {storyObjects.length > 0 ? (
+            <div className="space-y-2">
+              <Label>Object (Optional)</Label>
+              <p className="text-sm text-muted-foreground">
+                Assign props, vehicles, and other story objects for image generation.
+              </p>
+              <AssignmentBadgePicker
+                kind="object"
+                items={storyObjects.map((object) => ({
+                  id: object.id,
+                  name: object.name,
+                  subtitle: object.category ?? undefined,
+                }))}
+                selectedIds={formObjectIds}
+                onSelectedIdsChange={setFormObjectIds}
                 disabled={isUpdating}
               />
             </div>

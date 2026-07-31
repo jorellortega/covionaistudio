@@ -7,7 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { MapPin, Plus, UserCircle } from "lucide-react"
+import { MapPin, Package, Plus, UserCircle } from "lucide-react"
 
 export type AssignmentPickerItem = {
   id: string
@@ -22,7 +22,7 @@ export function AssignmentBadgePicker({
   onSelectedIdsChange,
   disabled = false,
 }: {
-  kind: "character" | "location"
+  kind: "character" | "location" | "object"
   items: AssignmentPickerItem[]
   selectedIds: string[]
   onSelectedIdsChange: (ids: string[]) => void
@@ -35,8 +35,9 @@ export function AssignmentBadgePicker({
     .map((id) => itemById.get(id))
     .filter((item): item is AssignmentPickerItem => Boolean(item))
   const availableItems = items.filter((item) => !selectedIds.includes(item.id))
-  const emptyLabel = kind === "character" ? "No character" : "No location"
-  const Icon = kind === "character" ? UserCircle : MapPin
+  const emptyLabel =
+    kind === "character" ? "No character" : kind === "location" ? "No location" : "No object"
+  const Icon = kind === "character" ? UserCircle : kind === "location" ? MapPin : Package
   const assignedVariant = kind === "character" ? "secondary" : "outline"
 
   const setFirst = (id: string) => onSelectedIdsChange([id])
@@ -111,7 +112,13 @@ export function AssignmentBadgePicker({
             <button
               type="button"
               className="inline-flex border-0 bg-transparent p-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
-              title={kind === "character" ? "Add character" : "Add location"}
+              title={
+                kind === "character"
+                  ? "Add character"
+                  : kind === "location"
+                    ? "Add location"
+                    : "Add object"
+              }
             >
               <Badge
                 variant="outline"

@@ -74,6 +74,7 @@ import { AISettingsService } from "@/lib/ai-settings-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
 import { ProjectVoicesService, type ProjectVoice } from "@/lib/project-voices-service"
 import {
   findHedraCharacter3ModelId,
@@ -106,6 +107,7 @@ import {
   buildStoryboardAssignmentPatch,
   getStoryboardCharacterIds,
   getStoryboardLocationIds,
+  getStoryboardObjectIds,
 } from "@/lib/storyboard-assignments"
 import {
   buildQuickShotImagePrompt,
@@ -1485,6 +1487,7 @@ export default function CinemaProductionPage() {
   const [hedraCharacter3ModelId, setHedraCharacter3ModelId] = useState<string | null>(null)
   const [storyboardSavedAudio, setStoryboardSavedAudio] = useState<Map<string, Asset[]>>(new Map())
   const [projectCharacters, setProjectCharacters] = useState<Character[]>([])
+  const [projectStoryObjects, setProjectStoryObjects] = useState<StoryObject[]>([])
   const [projectVoices, setProjectVoices] = useState<ProjectVoice[]>([])
   const [dialogueVoiceByStoryboard, setDialogueVoiceByStoryboard] = useState<Map<string, string>>(new Map())
   const [audioSaveNames, setAudioSaveNames] = useState<Map<string, string>>(new Map())
@@ -1654,6 +1657,7 @@ export default function CinemaProductionPage() {
       setSelectedStoryboardId("")
       setSelectedStoryboard(null)
       setProjectCharacters([])
+      setProjectStoryObjects([])
       setProjectVoices([])
       setDialogueVoiceByStoryboard(new Map())
     }
@@ -2353,12 +2357,14 @@ export default function CinemaProductionPage() {
     if (!selectedProjectId) return
 
     try {
-      const [characters, voices] = await Promise.all([
+      const [characters, voices, objects] = await Promise.all([
         CharactersService.getCharacters(selectedProjectId),
         ProjectVoicesService.getVoicesForProject(selectedProjectId),
+        StoryObjectsService.getStoryObjects(selectedProjectId),
       ])
       setProjectCharacters(characters)
       setProjectVoices(voices)
+      setProjectStoryObjects(objects)
     } catch (error) {
       console.error("Error loading project voices:", error)
     }
@@ -2821,10 +2827,14 @@ export default function CinemaProductionPage() {
     storyboard: Storyboard,
     characterIds: string[],
     locationIds: string[],
+    objectIds: string[],
   ) => {
     setUpdatingAssignmentStoryboardId(storyboard.id)
     try {
-      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, storyboard.metadata)
+      const patch = buildStoryboardAssignmentPatch(characterIds, locationIds, {
+        objectIds,
+        existingMetadata: storyboard.metadata,
+      })
       const updated = await StoryboardsService.updateStoryboard(storyboard.id, patch)
       setStoryboards((prev) =>
         sortStoryboardRows(prev.map((existing) => (existing.id === storyboard.id ? updated : existing))),
@@ -2842,7 +2852,7 @@ export default function CinemaProductionPage() {
   }
 
   const renderStoryboardAssignmentPickers = (storyboard: Storyboard) => {
-    if (!selectedProjectId || (projectCharacters.length === 0 && projectLocations.length === 0)) {
+    if (!selectedProjectId || (projectCharacters.length === 0 && projectLocations.length === 0 && projectStoryObjects.length === 0)) {
       return null
     }
 
@@ -2862,6 +2872,7 @@ export default function CinemaProductionPage() {
                 storyboard,
                 ids,
                 getStoryboardLocationIds(storyboard),
+                getStoryboardObjectIds(storyboard),
               )
             }}
             disabled={updatingAssignmentStoryboardId === storyboard.id}
@@ -2881,6 +2892,27 @@ export default function CinemaProductionPage() {
                 storyboard,
                 getStoryboardCharacterIds(storyboard),
                 ids,
+                getStoryboardObjectIds(storyboard),
+              )
+            }}
+            disabled={updatingAssignmentStoryboardId === storyboard.id}
+          />
+        )}
+        {projectStoryObjects.length > 0 && (
+          <AssignmentBadgePicker
+            kind="object"
+            items={projectStoryObjects.map((object) => ({
+              id: object.id,
+              name: object.name,
+              subtitle: object.category ?? undefined,
+            }))}
+            selectedIds={getStoryboardObjectIds(storyboard)}
+            onSelectedIdsChange={(ids) => {
+              void applyStoryboardAssignments(
+                storyboard,
+                getStoryboardCharacterIds(storyboard),
+                getStoryboardLocationIds(storyboard),
+                ids,
               )
             }}
             disabled={updatingAssignmentStoryboardId === storyboard.id}
@@ -2898,10 +2930,12 @@ export default function CinemaProductionPage() {
       storyboard,
       projectCharacters,
       projectLocations,
+      projectStoryObjects,
     )
     const prompt = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
+      objectNames: assignmentContext.objectNames,
     })
     if (prompt.trim()) return prompt
 
@@ -2992,6 +3026,7 @@ export default function CinemaProductionPage() {
       storyboard,
       projectCharacters,
       projectLocations,
+      projectStoryObjects,
     )
     const characterName =
       assignmentContext.characterNames.length > 0
@@ -3083,6 +3118,7 @@ export default function CinemaProductionPage() {
       storyboard,
       projectCharacters,
       projectLocations,
+      projectStoryObjects,
     )
     const imageUrl =
       generation?.filePreview ||
@@ -3380,6 +3416,7 @@ export default function CinemaProductionPage() {
       storyboard,
       projectCharacters,
       projectLocations,
+      projectStoryObjects,
     )
     const limit =
       refLimit ??
@@ -3420,10 +3457,12 @@ export default function CinemaProductionPage() {
       storyboard,
       projectCharacters,
       projectLocations,
+      projectStoryObjects,
     )
     const basePrompt = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
+      objectNames: assignmentContext.objectNames,
     })
     if (!basePrompt.trim()) {
       toast({
@@ -3464,6 +3503,7 @@ export default function CinemaProductionPage() {
         locationNames: assignmentContext.locationNames,
         characterDetails: assignmentContext.characterDetails,
         locationDetails: assignmentContext.locationDetails,
+        objectDetails: assignmentContext.objectDetails,
         masterPrompts: assignmentContext.masterPrompts,
         referenceCount: referenceUrls.length,
       })
@@ -10487,6 +10527,7 @@ export default function CinemaProductionPage() {
         projectId={selectedProjectId}
         characters={projectCharacters}
         locations={projectLocations}
+        storyObjects={projectStoryObjects}
         onOpenChange={(open) => {
           if (!open) {
             setEditShotDialogOpen(false)
