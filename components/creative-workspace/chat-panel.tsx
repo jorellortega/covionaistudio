@@ -46,6 +46,9 @@ import {
   Link2,
   MapPin,
   UserCircle,
+  Paperclip,
+  X,
+  Clapperboard,
 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
@@ -57,6 +60,10 @@ import {
   parseTreatmentFields,
   parseCharacterFields,
   parseLocationFields,
+  parseSceneFields,
+  detectSceneContent,
+  isSceneImportConfirmation,
+  extractImportedSceneFromThread,
   resolveCreativeMessageContext,
   buildImagePromptText,
   detectImageRequest,
@@ -64,6 +71,7 @@ import {
 import { SaveTreatmentDialog } from "@/components/creative-workspace/save-treatment-dialog"
 import { SaveCharacterDialog } from "@/components/creative-workspace/save-character-dialog"
 import { SaveLocationDialog } from "@/components/creative-workspace/save-location-dialog"
+import { SaveSceneDialog } from "@/components/creative-workspace/save-scene-dialog"
 import { SaveAvatarImageDialog } from "@/components/creative-workspace/save-avatar-image-dialog"
 import { LinkProjectDialog } from "@/components/creative-workspace/link-project-dialog"
 import { useAuthReady } from "@/components/auth-hooks"
@@ -72,6 +80,15 @@ import { AISettingsService } from "@/lib/ai-settings-service"
 import { mapDisplayModelToService, normalizeDisplayModelToApiId, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT } from "@/lib/image-model-utils"
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
 import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
+import {
+  CREATIVE_IMPORT_ACCEPT,
+  CREATIVE_IMPORT_MAX_BYTES,
+  CREATIVE_IMPORT_MAX_FILES,
+  extractCreativeDocumentText,
+  isCreativeImportSupported,
+  requiresDocumentExtraction,
+  truncateDocumentText,
+} from "@/lib/creative-workspace-import"
 
 function getImageGeneratedDescription(
   content: string,
@@ -91,6 +108,7 @@ function getImageGeneratedDescription(
 interface DialogTarget {
   message: CreativeMessage
   contextContent: string
+  imageUrls?: string[]
 }
 
 const QUICK_PROMPTS = [
@@ -121,22 +139,96 @@ interface ChatPanelProps {
   onMessagesChange: (messages: CreativeMessage[]) => void
   onWorkspaceTitleChange: (title: string) => void
   onArtifactCreated: (artifact?: CreativeArtifact) => void
+  onArtifactDeleted?: (artifactId: string) => void
   onMessageDeleted: (messageId: string) => void
   onProjectLinked: (projectId: string, projectName: string) => void
   onProjectUnlinked: () => void
   onDeleteWorkspace: () => void
 }
 
+interface PendingFile {
+  id: string
+  file: File
+  preview?: string
+  textContent?: string
+}
+
+function getMessageImageArtifacts(messageId: string, artifacts: CreativeArtifact[]): CreativeArtifact[] {
+  return artifacts.filter(
+    (artifact) =>
+      artifact.message_id === messageId &&
+      artifact.artifact_type === "image" &&
+      artifact.content &&
+      (artifact.content.startsWith("http") || artifact.content.startsWith("data:image/")),
+  )
+}
+
 function getMessageImages(messageId: string, artifacts: CreativeArtifact[]): string[] {
-  const urls = artifacts
-    .filter(
-      (a) =>
-        a.message_id === messageId &&
-        a.content &&
-        (a.content.startsWith("http") || a.content.startsWith("data:image/")),
-    )
-    .map((a) => a.content!)
+  const urls = getMessageImageArtifacts(messageId, artifacts).map((artifact) => artifact.content!)
   return [...new Set(urls)]
+}
+
+function getImageContextContent(
+  artifact: CreativeArtifact,
+  fallbackContent: string,
+): string {
+  const slugline = artifact.metadata?.slugline
+  if (typeof slugline === "string" && slugline.trim()) {
+    return slugline
+  }
+  const prompt = artifact.metadata?.prompt
+  if (typeof prompt === "string" && prompt.trim()) {
+    return prompt
+  }
+  return fallbackContent
+}
+
+function getMessageDocuments(messageId: string, artifacts: CreativeArtifact[]): CreativeArtifact[] {
+  return artifacts.filter(
+    (a) => a.message_id === messageId && a.artifact_type === "document",
+  )
+}
+
+function messageHasSavedScene(messageId: string, artifacts: CreativeArtifact[]): boolean {
+  return artifacts.some(
+    (a) =>
+      a.message_id === messageId &&
+      (a.artifact_type === "scene" ||
+        typeof a.metadata?.screenplay_scene_id === "string" ||
+        a.metadata?.imported === true),
+  )
+}
+
+function getSavedSceneArtifact(
+  messageId: string,
+  artifacts: CreativeArtifact[],
+): CreativeArtifact | undefined {
+  return artifacts.find(
+    (a) => a.message_id === messageId && a.artifact_type === "scene" && a.content,
+  )
+}
+
+function getSceneArtifactNearMessage(
+  messageIndex: number,
+  messages: { id: string }[],
+  artifacts: CreativeArtifact[],
+): CreativeArtifact | undefined {
+  const direct = getSavedSceneArtifact(messages[messageIndex]?.id, artifacts)
+  if (direct) return direct
+  if (messageIndex > 0) {
+    return getSavedSceneArtifact(messages[messageIndex - 1].id, artifacts)
+  }
+  return undefined
+}
+
+function getSceneImportDebugFromArtifacts(
+  messageId: string,
+  artifacts: CreativeArtifact[],
+): unknown | null {
+  const artifact = artifacts.find(
+    (a) => a.message_id === messageId && a.artifact_type === "scene",
+  )
+  return artifact?.metadata?.import_debug ?? null
 }
 
 export function ChatPanel({
@@ -149,6 +241,7 @@ export function ChatPanel({
   onMessagesChange,
   onWorkspaceTitleChange,
   onArtifactCreated,
+  onArtifactDeleted,
   onMessageDeleted,
   onProjectLinked,
   onProjectUnlinked,
@@ -159,10 +252,12 @@ export function ChatPanel({
   const [input, setInput] = useState("")
   const [isSending, setIsSending] = useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = useState<string | null>(null)
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
   const [treatmentDialog, setTreatmentDialog] = useState<CreativeMessage | null>(null)
   const [characterDialog, setCharacterDialog] = useState<DialogTarget | null>(null)
   const [locationDialog, setLocationDialog] = useState<DialogTarget | null>(null)
+  const [sceneDialog, setSceneDialog] = useState<DialogTarget | null>(null)
   const [avatarDialog, setAvatarDialog] = useState<DialogTarget | null>(null)
   const [isSuggestingTitle, setIsSuggestingTitle] = useState(false)
   const [showDeleteWorkspace, setShowDeleteWorkspace] = useState(false)
@@ -173,13 +268,20 @@ export function ChatPanel({
   const [saveLabel, setSaveLabel] = useState("")
   const [saveType, setSaveType] = useState<ArtifactType>("document")
   const [isSaving, setIsSaving] = useState(false)
+  const [sceneImportDebugByMessageId, setSceneImportDebugByMessageId] = useState<Record<string, unknown>>({})
+  const [viewSceneDialog, setViewSceneDialog] = useState<{ title: string; content: string } | null>(null)
+  const [expandedSceneMessages, setExpandedSceneMessages] = useState<Set<string>>(new Set())
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleInput, setTitleInput] = useState(workspaceTitle)
   const [contentBlockedDialog, setContentBlockedDialog] = useState<{
     message: CreativeMessage
     prompt: string
   } | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false)
+  const [isExtractingFiles, setIsExtractingFiles] = useState(false)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setTitleInput(workspaceTitle)
@@ -195,12 +297,113 @@ export function ChatPanel({
     }
   }, [messages, isSending, artifacts])
 
+  useEffect(() => {
+    return () => {
+      pendingFiles.forEach((pending) => {
+        if (pending.preview) URL.revokeObjectURL(pending.preview)
+      })
+    }
+  }, [pendingFiles])
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files
+    if (!selected || selected.length === 0) return
+
+    const remainingSlots = CREATIVE_IMPORT_MAX_FILES - pendingFiles.length
+    if (remainingSlots <= 0) {
+      toast({
+        title: "Too many files",
+        description: `You can attach up to ${CREATIVE_IMPORT_MAX_FILES} files at a time.`,
+        variant: "destructive",
+      })
+      if (fileInputRef.current) fileInputRef.current.value = ""
+      return
+    }
+
+    const files = Array.from(selected).slice(0, remainingSlots)
+    setIsExtractingFiles(true)
+
+    try {
+      const nextPending: PendingFile[] = []
+
+      for (const file of files) {
+        if (!isCreativeImportSupported(file)) {
+          toast({
+            title: "Unsupported file",
+            description: `${file.name} is not a supported file type.`,
+            variant: "destructive",
+          })
+          continue
+        }
+
+        if (file.size > CREATIVE_IMPORT_MAX_BYTES) {
+          toast({
+            title: "File too large",
+            description: `${file.name} exceeds the 20MB limit.`,
+            variant: "destructive",
+          })
+          continue
+        }
+
+        const pending: PendingFile = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+        }
+
+        if (file.type.startsWith("image/")) {
+          pending.preview = URL.createObjectURL(file)
+        } else if (requiresDocumentExtraction(file)) {
+          try {
+            const extracted = await extractCreativeDocumentText(file)
+            if (!extracted?.trim()) {
+              toast({
+                title: "No text found",
+                description: `Could not extract readable text from ${file.name}.`,
+                variant: "destructive",
+              })
+              continue
+            }
+            pending.textContent = truncateDocumentText(extracted)
+          } catch {
+            toast({
+              title: "Could not read file",
+              description: `Failed to extract text from ${file.name}.`,
+              variant: "destructive",
+            })
+            continue
+          }
+        }
+
+        nextPending.push(pending)
+      }
+
+      if (nextPending.length > 0) {
+        setPendingFiles((prev) => [...prev, ...nextPending])
+      }
+    } finally {
+      setIsExtractingFiles(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
+  }
+
+  const removePendingFile = (id: string) => {
+    setPendingFiles((prev) => {
+      const target = prev.find((file) => file.id === id)
+      if (target?.preview) URL.revokeObjectURL(target.preview)
+      return prev.filter((file) => file.id !== id)
+    })
+  }
+
   const handleSend = async (text?: string) => {
     const messageText = (text || input).trim()
-    if (!messageText || !workspaceId || isSending) return
+    if ((!messageText && pendingFiles.length === 0) || !workspaceId || isSending || isUploadingFiles) return
 
+    const filesToUpload = [...pendingFiles]
     setInput("")
+    setPendingFiles([])
     setIsSending(true)
+    setIsUploadingFiles(filesToUpload.length > 0)
+
     const isLikelyImageRequest = /\b(image|picture|visual|poster|cover|draw|visualize)\b/i.test(messageText)
     if (isLikelyImageRequest) {
       setIsGeneratingImage("pending")
@@ -210,16 +413,63 @@ export function ChatPanel({
       id: `temp-${Date.now()}`,
       workspace_id: workspaceId,
       role: "user",
-      content: messageText,
+      content: messageText || "Review my attached files.",
       created_at: new Date().toISOString(),
     }
     onMessagesChange([...messages, optimisticUser])
 
     try {
+      let uploadedArtifacts: CreativeArtifact[] = []
+      if (filesToUpload.length > 0) {
+        const formData = new FormData()
+        const textContents: Record<string, string> = {}
+        filesToUpload.forEach((pending, index) => {
+          formData.append("files", pending.file)
+          if (pending.textContent) textContents[String(index)] = pending.textContent
+        })
+        if (Object.keys(textContents).length > 0) {
+          formData.append("textContents", JSON.stringify(textContents))
+        }
+        if (linkedProject?.id) {
+          formData.append("projectId", linkedProject.id)
+        }
+
+        const uploadRes = await fetch(`/api/creative-workspace/${workspaceId}/import-files`, {
+          method: "POST",
+          body: formData,
+        })
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({}))
+          throw new Error(err.error || "Failed to upload files")
+        }
+        const uploadData = await uploadRes.json()
+        uploadedArtifacts = uploadData.artifacts || []
+        uploadedArtifacts.forEach((artifact) => onArtifactCreated(artifact))
+        if (uploadData.syncedAssetIds?.length > 0 && linkedProject?.name) {
+          toast({
+            title: "Saved to movie assets",
+            description: `${uploadData.syncedAssetIds.length} file${uploadData.syncedAssetIds.length === 1 ? "" : "s"} added to ${linkedProject.name}.`,
+          })
+        } else if (filesToUpload.length > 0 && !linkedProject) {
+          toast({
+            title: "Files uploaded",
+            description: "Link a movie project to save imports to movie assets.",
+          })
+        }
+      }
+
+      filesToUpload.forEach((pending) => {
+        if (pending.preview) URL.revokeObjectURL(pending.preview)
+      })
+
       const res = await fetch(`/api/creative-workspace/${workspaceId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: messageText }),
+        body: JSON.stringify({
+          message: messageText,
+          artifactIds: uploadedArtifacts.map((artifact) => artifact.id),
+          projectId: linkedProject?.id,
+        }),
       })
 
       if (!res.ok) {
@@ -234,21 +484,72 @@ export function ChatPanel({
         data.assistantMessage,
       ])
 
+      if (data.attachmentArtifacts?.length) {
+        data.attachmentArtifacts.forEach((artifact: CreativeArtifact) => onArtifactCreated(artifact))
+      }
+
       if (data.imageGenerated) {
         const assistantContent = data.assistantMessage?.content || ""
+        const generatedCount = Array.isArray(data.imageArtifacts) ? data.imageArtifacts.length : 1
         toast({
-          title: "Image generated",
-          description: getImageGeneratedDescription(assistantContent),
+          title: generatedCount > 1 ? `${generatedCount} images generated` : "Image generated",
+          description: data.imageContextUsed === false
+            ? "Images were generated without screenplay context — attach your PDF or link your project for better results."
+            : getImageGeneratedDescription(assistantContent),
         })
-        onArtifactCreated(data.artifact)
+        if (Array.isArray(data.imageArtifacts) && data.imageArtifacts.length > 0) {
+          data.imageArtifacts.forEach((item: CreativeArtifact) => onArtifactCreated(item))
+        } else if (data.artifact) {
+          onArtifactCreated(data.artifact)
+        }
+      } else if (data.wantsImage) {
+        toast({
+          title: "Image generation failed",
+          description:
+            data.imageGenerationError ||
+            "OpenAI image API did not return an image. Check AI settings and try again.",
+          variant: "destructive",
+        })
+      }
+
+      if (data.sceneImported && data.sceneImportArtifact) {
+        onArtifactCreated(data.sceneImportArtifact)
+
+        if (data.sceneImportDebug) {
+          console.group("[scene-import] Debug")
+          console.log("Full debug payload:", data.sceneImportDebug)
+          console.log("Extracted chars:", data.sceneImportDebug?.extraction?.finalChars)
+          console.log("Prior parts:", data.sceneImportDebug?.extraction?.priorParts)
+          console.log("Screenplay sync:", data.sceneImportDebug?.screenplaySync)
+          console.groupEnd()
+
+          setSceneImportDebugByMessageId((prev) => ({
+            ...prev,
+            [data.userMessage.id]: data.sceneImportDebug,
+            [data.assistantMessage.id]: data.sceneImportDebug,
+          }))
+        }
+
+        const charCount =
+          typeof data.sceneImportArtifact.metadata?.character_count === 'number'
+            ? data.sceneImportArtifact.metadata.character_count
+            : data.sceneImportArtifact.content?.length
+        toast({
+          title: "Scene imported in full",
+          description: charCount
+            ? `${data.sceneImportArtifact.title} saved (${charCount.toLocaleString()} characters) to movie scenes and assets.`
+            : `${data.sceneImportArtifact.title} saved verbatim to movie scenes and assets.`,
+        })
       }
 
       if (workspaceTitle === "Untitled Project" && messages.length === 0) {
-        const autoTitle = messageText.slice(0, 50) + (messageText.length > 50 ? "..." : "")
+        const autoTitleSource = messageText || filesToUpload[0]?.file.name || "Imported Project"
+        const autoTitle = autoTitleSource.slice(0, 50) + (autoTitleSource.length > 50 ? "..." : "")
         onWorkspaceTitleChange(autoTitle)
       }
     } catch (error) {
       onMessagesChange(messages.filter((m) => m.id !== optimisticUser.id))
+      setPendingFiles(filesToUpload)
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to send message",
@@ -256,6 +557,7 @@ export function ChatPanel({
       })
     } finally {
       setIsSending(false)
+      setIsUploadingFiles(false)
       setIsGeneratingImage(null)
     }
   }
@@ -451,6 +753,33 @@ export function ChatPanel({
     }
   }
 
+  const handleDeleteImageArtifact = async (artifact: CreativeArtifact) => {
+    if (!workspaceId) return
+    if (!confirm("Delete this image?")) return
+
+    setDeletingImageId(artifact.id)
+    try {
+      const res = await fetch(
+        `/api/creative-workspace/${workspaceId}/artifacts/${artifact.id}`,
+        { method: "DELETE" },
+      )
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || "Failed to delete image")
+      }
+      onArtifactDeleted?.(artifact.id)
+      toast({ title: "Image deleted" })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to delete image",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingImageId(null)
+    }
+  }
+
   const handleDeleteMessage = async (message: CreativeMessage) => {
     if (!workspaceId || message.id.startsWith("temp-")) return
     if (!confirm("Delete this message?")) return
@@ -605,19 +934,61 @@ export function ChatPanel({
             </div>
           ) : (
             messages.map((message, messageIndex) => {
-              const messageImages = message.role === "assistant" ? getMessageImages(message.id, artifacts) : []
+              const messageImageArtifacts = getMessageImageArtifacts(message.id, artifacts)
+              const messageImages = messageImageArtifacts.map((artifact) => artifact.content!)
+              const messageDocuments = getMessageDocuments(message.id, artifacts)
               const messageContext = message.role === "assistant"
                 ? resolveCreativeMessageContext(message, messageIndex, messages, workspaceTitle)
                 : { isCharacter: false, isLocation: false, contextContent: message.content }
               const isTreatment = message.role === "assistant" && detectTreatmentContent(message.content)
               const isCharacter = message.role === "assistant" && messageContext.isCharacter
               const isLocation = message.role === "assistant" && messageContext.isLocation
+              const sceneSource =
+                message.role === "user"
+                  ? message.content
+                  : messageContext.contextContent
+              const sceneAlreadySaved = messageHasSavedScene(message.id, artifacts)
+              const isSceneImportReply =
+                message.role === "assistant" && isSceneImportConfirmation(message.content)
+              const sceneImportDebug =
+                sceneImportDebugByMessageId[message.id] ||
+                getSceneImportDebugFromArtifacts(message.id, artifacts)
+              const isScene =
+                !sceneAlreadySaved &&
+                !isSceneImportReply &&
+                detectSceneContent(sceneSource)
               const openCharacterDialog = () =>
                 setCharacterDialog({ message, contextContent: messageContext.contextContent })
               const openLocationDialog = () =>
                 setLocationDialog({ message, contextContent: messageContext.contextContent })
+              const openSceneDialog = () => {
+                const priorMessages = messages
+                  .slice(0, messageIndex)
+                  .map((m) => ({ role: m.role, content: m.content }))
+                const threadImport = extractImportedSceneFromThread(priorMessages, sceneSource, {
+                  collectDebug: true,
+                })
+                console.group("[scene-import] Save dialog preview")
+                console.log(threadImport.debug)
+                console.groupEnd()
+                setSceneDialog({
+                  message,
+                  contextContent: threadImport.content,
+                })
+              }
               const openAvatarDialog = () =>
                 setAvatarDialog({ message, contextContent: messageContext.contextContent })
+              const savedSceneArtifact = getSceneArtifactNearMessage(messageIndex, messages, artifacts)
+              const savedSceneChars =
+                savedSceneArtifact?.content?.length ||
+                (sceneImportDebug as { extraction?: { finalChars?: number } } | null)?.extraction
+                  ?.finalChars ||
+                null
+              const isLongUserScene =
+                message.role === "user" &&
+                sceneAlreadySaved &&
+                message.content.length > 600
+              const isSceneMessageExpanded = expandedSceneMessages.has(message.id)
               return (
               <div
                 key={message.id}
@@ -632,28 +1003,153 @@ export function ChatPanel({
                   </div>
                 )}
                 <div className="max-w-[85%] space-y-1">
+                  {isLongUserScene && !isSceneMessageExpanded && (
+                    <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 px-3 py-1.5 text-[10px] text-cyan-600 dark:text-cyan-400">
+                      Long scene paste ({message.content.length.toLocaleString()} chars) — scroll inside the message or view the saved scene below.
+                    </div>
+                  )}
                   <div
                     className={cn(
                       "rounded-lg px-4 py-3 text-sm whitespace-pre-wrap break-words",
                       message.role === "user"
                         ? "bg-primary text-primary-foreground"
                         : "bg-muted text-foreground",
+                      isLongUserScene && !isSceneMessageExpanded && "max-h-48 overflow-y-auto",
                     )}
                   >
                     {message.content}
                   </div>
-                  {messageImages.length > 0 && (
-                    <div className="space-y-2 pt-1">
-                      {messageImages.map((url, i) => (
+                  {isLongUserScene && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[10px] px-2 text-cyan-600 dark:text-cyan-400"
+                      onClick={() =>
+                        setExpandedSceneMessages((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(message.id)) next.delete(message.id)
+                          else next.add(message.id)
+                          return next
+                        })
+                      }
+                    >
+                      {isSceneMessageExpanded ? "Collapse message" : "Expand full message"}
+                    </Button>
+                  )}
+                  {messageDocuments.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {messageDocuments.map((doc) => (
+                        <a
+                          key={doc.id}
+                          href={typeof doc.metadata?.url === "string" ? doc.metadata.url : doc.content || "#"}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={cn(
+                            "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs",
+                            message.role === "user"
+                              ? "border-primary-foreground/30 bg-primary-foreground/10 text-primary-foreground"
+                              : "border-border bg-background text-foreground",
+                          )}
+                        >
+                          <FileText className="h-3 w-3" />
+                          {typeof doc.metadata?.originalName === "string"
+                            ? doc.metadata.originalName
+                            : doc.title}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {messageImageArtifacts.length > 0 && (
+                    <div className="space-y-3 pt-1">
+                      {messageImageArtifacts.map((artifact, i) => (
                         <div
-                          key={`${message.id}-img-${i}`}
+                          key={artifact.id}
                           className="rounded-lg overflow-hidden border border-border bg-background"
                         >
+                          {artifact.label && (
+                            <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground border-b border-border bg-muted/40">
+                              {artifact.label}
+                            </div>
+                          )}
                           <img
-                            src={url}
-                            alt="Generated"
+                            src={artifact.content!}
+                            alt={artifact.label || `Generated image ${i + 1}`}
                             className="w-full max-w-md object-cover"
                           />
+                          <div className="flex flex-wrap gap-1 px-2 py-1.5 border-t border-border bg-muted/20">
+                            {(isLocation || messageImageArtifacts.length > 1) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-amber-600 dark:text-amber-400"
+                                onClick={() =>
+                                  setLocationDialog({
+                                    message,
+                                    contextContent: getImageContextContent(
+                                      artifact,
+                                      messageContext.contextContent,
+                                    ),
+                                    imageUrls: [artifact.content!],
+                                  })
+                                }
+                              >
+                                <MapPin className="h-3 w-3 mr-1" />
+                                Save to Location
+                              </Button>
+                            )}
+                            {isCharacter && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-violet-600 dark:text-violet-400"
+                                onClick={() =>
+                                  setAvatarDialog({
+                                    message,
+                                    contextContent: getImageContextContent(
+                                      artifact,
+                                      messageContext.contextContent,
+                                    ),
+                                    imageUrls: [artifact.content!],
+                                  })
+                                }
+                              >
+                                <UserCircle className="h-3 w-3 mr-1" />
+                                Save as Avatar
+                              </Button>
+                            )}
+                            {!isLocation && !isCharacter && messageImageArtifacts.length === 1 && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs text-muted-foreground"
+                                onClick={() =>
+                                  openSaveDialog(
+                                    message,
+                                    getImageContextContent(artifact, messageContext.contextContent),
+                                  )
+                                }
+                              >
+                                <Save className="h-3 w-3 mr-1" />
+                                Save
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs text-muted-foreground hover:text-destructive ml-auto"
+                              onClick={() => handleDeleteImageArtifact(artifact)}
+                              disabled={deletingImageId === artifact.id}
+                            >
+                              {deletingImageId === artifact.id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <Trash2 className="h-3 w-3 mr-1" />
+                                  Delete
+                                </>
+                              )}
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -718,6 +1214,88 @@ export function ChatPanel({
                       </div>
                     </div>
                   )}
+                  {isScene && !isTreatment && (
+                    <div className="rounded-md border border-cyan-500/30 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-700 dark:text-cyan-400 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span>Scene detected — save full scene to movie</span>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={openSceneDialog}
+                      >
+                        <Clapperboard className="h-3 w-3 mr-1" />
+                        Save to Scene
+                      </Button>
+                    </div>
+                  )}
+                  {sceneAlreadySaved && (
+                    <div className="rounded-md border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-600 dark:text-cyan-400 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Clapperboard className="h-3 w-3" />
+                        Scene saved
+                        {savedSceneChars
+                          ? ` (${savedSceneChars.toLocaleString()} characters)`
+                          : " to movie"}
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {savedSceneArtifact?.content && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs"
+                            onClick={() =>
+                              setViewSceneDialog({
+                                title: savedSceneArtifact.title || "Imported Scene",
+                                content: savedSceneArtifact.content!,
+                              })
+                            }
+                          >
+                            View full scene
+                          </Button>
+                        )}
+                        {linkedProject?.id && (
+                          <Button size="sm" className="h-7 text-xs" asChild>
+                            <Link href={`/screenplay/${linkedProject.id}`}>
+                              Open Screenplay
+                            </Link>
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {isSceneImportReply && sceneImportDebug && (
+                    <details className="rounded-md border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-800 dark:text-yellow-300">
+                      <summary className="cursor-pointer font-medium">
+                        Scene import debug
+                      </summary>
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words text-[10px] leading-relaxed text-yellow-900/90 dark:text-yellow-100/90">
+                        {JSON.stringify(sceneImportDebug, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                  {isSceneImportReply && savedSceneArtifact?.content && (
+                    <div className="flex flex-wrap gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() =>
+                          setViewSceneDialog({
+                            title: savedSceneArtifact.title || "Imported Scene",
+                            content: savedSceneArtifact.content!,
+                          })
+                        }
+                      >
+                        View full scene ({savedSceneArtifact.content!.length.toLocaleString()} chars)
+                      </Button>
+                      {linkedProject?.id && (
+                        <Button size="sm" className="h-7 text-xs" asChild>
+                          <Link href={`/screenplay/${linkedProject.id}`}>
+                            Open Screenplay
+                          </Link>
+                        </Button>
+                      )}
+                    </div>
+                  )}
                   {message.role === "assistant" && (
                     <div className="flex flex-wrap gap-1">
                       {isTreatment && (
@@ -762,6 +1340,17 @@ export function ChatPanel({
                         >
                           <MapPin className="h-3 w-3 mr-1" />
                           Save to Location
+                        </Button>
+                      )}
+                      {isScene && !isTreatment && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-cyan-600 dark:text-cyan-400"
+                          onClick={openSceneDialog}
+                        >
+                          <Clapperboard className="h-3 w-3 mr-1" />
+                          Save to Scene
                         </Button>
                       )}
                       <Button
@@ -846,23 +1435,79 @@ export function ChatPanel({
       </ScrollArea>
 
       <div className="border-t border-border p-4">
-        <div className="max-w-3xl mx-auto flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Describe your character, ask for a treatment, brainstorm scenes..."
-            className="min-h-[56px] max-h-[200px] resize-none"
-            disabled={isSending}
-          />
-          <Button
-            onClick={() => handleSend()}
-            disabled={isSending || !input.trim()}
-            size="icon"
-            className="self-end h-[56px] w-[56px] flex-shrink-0"
-          >
-            {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+        <div className="max-w-3xl mx-auto space-y-2">
+          {pendingFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {pendingFiles.map((pending) => (
+                <div
+                  key={pending.id}
+                  className="relative flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2 py-1.5 text-xs"
+                >
+                  {pending.preview ? (
+                    <img
+                      src={pending.preview}
+                      alt={pending.file.name}
+                      className="h-10 w-10 rounded object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded bg-background">
+                      <FileText className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  )}
+                  <span className="max-w-[140px] truncate">{pending.file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removePendingFile(pending.id)}
+                    className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                    aria-label={`Remove ${pending.file.name}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={CREATIVE_IMPORT_ACCEPT}
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="self-end h-[56px] w-[56px] flex-shrink-0"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isSending || isUploadingFiles || isExtractingFiles || pendingFiles.length >= CREATIVE_IMPORT_MAX_FILES}
+              title="Import photos or files"
+            >
+              {isUploadingFiles || isExtractingFiles ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Paperclip className="h-4 w-4" />
+              )}
+            </Button>
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Describe your character, ask for a treatment, or attach photos/files..."
+              className="min-h-[56px] max-h-[200px] resize-none"
+              disabled={isSending || isUploadingFiles || isExtractingFiles}
+            />
+            <Button
+              onClick={() => handleSend()}
+              disabled={isSending || isUploadingFiles || isExtractingFiles || (!input.trim() && pendingFiles.length === 0)}
+              size="icon"
+              className="self-end h-[56px] w-[56px] flex-shrink-0"
+            >
+              {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -911,7 +1556,7 @@ export function ChatPanel({
           workspaceTitle={workspaceTitle}
           messageId={characterDialog.message.id}
           parsed={parseCharacterFields(characterDialog.contextContent, workspaceTitle)}
-          imageUrls={getMessageImages(characterDialog.message.id, artifacts)}
+          imageUrls={characterDialog.imageUrls ?? getMessageImages(characterDialog.message.id, artifacts)}
           linkedProjectId={linkedProject?.id}
           linkedProjectName={linkedProject?.name}
           onSaved={({ updated, projectId, projectName, characterName }) => {
@@ -934,7 +1579,7 @@ export function ChatPanel({
           workspaceTitle={workspaceTitle}
           messageId={locationDialog.message.id}
           parsed={parseLocationFields(locationDialog.contextContent, workspaceTitle)}
-          imageUrls={getMessageImages(locationDialog.message.id, artifacts)}
+          imageUrls={locationDialog.imageUrls ?? getMessageImages(locationDialog.message.id, artifacts)}
           linkedProjectId={linkedProject?.id}
           linkedProjectName={linkedProject?.name}
           onSaved={({ updated, projectId, projectName, locationName }) => {
@@ -949,6 +1594,28 @@ export function ChatPanel({
         />
       )}
 
+      {sceneDialog && workspaceId && (
+        <SaveSceneDialog
+          open={!!sceneDialog}
+          onOpenChange={(open) => !open && setSceneDialog(null)}
+          workspaceId={workspaceId}
+          workspaceTitle={workspaceTitle}
+          messageId={sceneDialog.message.id}
+          parsed={parseSceneFields(sceneDialog.contextContent, workspaceTitle)}
+          linkedProjectId={linkedProject?.id}
+          linkedProjectName={linkedProject?.name}
+          onSaved={({ updated, projectId, projectName, sceneName }) => {
+            toast({
+              title: updated ? "Scene updated" : "Scene saved",
+              description: `${sceneName} saved to ${projectName}. Open the Scenes tab or Screenplay to edit.`,
+            })
+            onProjectLinked(projectId, projectName)
+            onArtifactCreated()
+            setSceneDialog(null)
+          }}
+        />
+      )}
+
       {avatarDialog && workspaceId && (
         <SaveAvatarImageDialog
           open={!!avatarDialog}
@@ -956,7 +1623,7 @@ export function ChatPanel({
           workspaceId={workspaceId}
           workspaceTitle={workspaceTitle}
           messageId={avatarDialog.message.id}
-          imageUrls={getMessageImages(avatarDialog.message.id, artifacts)}
+          imageUrls={avatarDialog.imageUrls ?? getMessageImages(avatarDialog.message.id, artifacts)}
           suggestedCharacterName={parseCharacterFields(avatarDialog.contextContent, workspaceTitle).name}
           prompt={avatarDialog.contextContent}
           linkedProjectId={linkedProject?.id}
@@ -1011,6 +1678,30 @@ export function ChatPanel({
             <Button onClick={handleSaveArtifact} disabled={isSaving || !saveTitle.trim()}>
               {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Save"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!viewSceneDialog} onOpenChange={(open) => !open && setViewSceneDialog(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>{viewSceneDialog?.title || "Imported Scene"}</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            {viewSceneDialog?.content.length.toLocaleString()} characters — this is exactly what was saved to your movie.
+          </p>
+          <ScrollArea className="flex-1 min-h-0 max-h-[60vh] rounded-md border border-border bg-muted/30 p-3">
+            <pre className="text-xs font-mono whitespace-pre-wrap break-words">
+              {viewSceneDialog?.content}
+            </pre>
+          </ScrollArea>
+          <DialogFooter>
+            {linkedProject?.id && (
+              <Button variant="outline" asChild>
+                <Link href={`/screenplay/${linkedProject.id}`}>Open in Screenplay</Link>
+              </Button>
+            )}
+            <Button onClick={() => setViewSceneDialog(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

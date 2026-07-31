@@ -93,6 +93,7 @@ export default function TimelinePage() {
   const [selectedSceneForUpload, setSelectedSceneForUpload] = useState<SceneWithMetadata | null>(null)
   const [isClearingScenes, setIsClearingScenes] = useState(false)
   const [expandedDescriptions, setExpandedDescriptions] = useState<Set<string>>(new Set())
+  const [suggestingSceneNameId, setSuggestingSceneNameId] = useState<string | null>(null)
   
   // Scene description audio states
   const [sceneDescriptionAudio, setSceneDescriptionAudio] = useState<Map<string, string>>(new Map()) // sceneId -> audioUrl
@@ -577,6 +578,70 @@ export default function TimelinePage() {
     // Open the dialog when editing
     setIsAddSceneOpen(true)
   }
+
+  const handleSuggestSceneName = async (
+    scene: SceneWithMetadata,
+    options?: { formOnly?: boolean },
+  ) => {
+    setSuggestingSceneNameId(scene.id)
+    try {
+      const res = await fetch(`/api/timeline/scenes/${scene.id}/suggest-name`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+
+      if (options?.formOnly) {
+        setNewScene((prev) => ({ ...prev, title: data.name }))
+        toast({
+          title: 'Scene name suggested',
+          description: data.name,
+        })
+        return
+      }
+
+      await TimelineService.updateScene(scene.id, { name: data.name })
+      setScenes((prev) =>
+        prev.map((s) => (s.id === scene.id ? { ...s, name: data.name } : s)),
+      )
+      if (editingScene?.id === scene.id) {
+        setNewScene((prev) => ({ ...prev, title: data.name }))
+      }
+      toast({
+        title: 'Scene renamed',
+        description: data.name,
+      })
+    } catch (error) {
+      toast({
+        title: 'Could not name scene',
+        description: error instanceof Error ? error.message : 'AI naming failed',
+        variant: 'destructive',
+      })
+    } finally {
+      setSuggestingSceneNameId(null)
+    }
+  }
+
+  const renderAiSceneNameButton = (scene: SceneWithMetadata) => (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="h-7 w-7 p-0 shrink-0 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+      title="AI name this scene from its content"
+      disabled={suggestingSceneNameId === scene.id}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        void handleSuggestSceneName(scene)
+      }}
+    >
+      {suggestingSceneNameId === scene.id ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Sparkles className="h-3.5 w-3.5" />
+      )}
+    </Button>
+  )
 
   const handleUpdateScene = async () => {
     if (!editingScene) return
@@ -2054,13 +2119,31 @@ export default function TimelinePage() {
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="title">Scene Title</Label>
-                  <Input
-                    id="title"
-                    value={newScene.title}
-                    onChange={(e) => setNewScene({ ...newScene, title: e.target.value })}
-                    placeholder="Enter scene title..."
-                    className="bg-input border-border"
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="title"
+                      value={newScene.title}
+                      onChange={(e) => setNewScene({ ...newScene, title: e.target.value })}
+                      placeholder="Enter scene title..."
+                      className="bg-input border-border"
+                    />
+                    {editingScene && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="shrink-0 border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                        title="AI suggest scene name from content"
+                        disabled={suggestingSceneNameId === editingScene.id}
+                        onClick={() => void handleSuggestSceneName(editingScene, { formOnly: true })}
+                      >
+                        {suggestingSceneNameId === editingScene.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-4 w-4" />
+                        )}
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="description">Description</Label>
@@ -2408,7 +2491,10 @@ export default function TimelinePage() {
                                   </div>
                                 </div>
                                 <div className="flex items-center justify-between gap-2">
-                                  <CardTitle className="text-lg md:text-xl min-w-0">{scene.name}</CardTitle>
+                                  <div className="flex items-center gap-1 min-w-0 flex-1">
+                                    <CardTitle className="text-lg md:text-xl min-w-0">{scene.name}</CardTitle>
+                                    {renderAiSceneNameButton(scene)}
+                                  </div>
                                   {/* Scene Description Audio Play/Pause Button */}
                                   {sceneDescriptionAudio.has(scene.id) && (
                                     <Button
@@ -2655,7 +2741,10 @@ export default function TimelinePage() {
                                   <div className="flex-1 p-4 lg:p-6 min-w-0">
                                     <div className="flex flex-col gap-3 mb-2 min-w-0">
                                       <div className="flex items-center justify-between gap-2">
-                                        <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
+                                        <div className="flex items-center gap-1 min-w-0 flex-1">
+                                          <CardTitle className="text-lg lg:text-xl min-w-0">{scene.name}</CardTitle>
+                                          {renderAiSceneNameButton(scene)}
+                                        </div>
                                         {/* Scene Description Audio Play/Pause Button */}
                                         {sceneDescriptionAudio.has(scene.id) && (
                                           <Button
@@ -2832,7 +2921,10 @@ export default function TimelinePage() {
                                 <Play className="h-5 w-5 text-blue-500" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                  {renderAiSceneNameButton(scene)}
+                                </div>
                                 {scene.description && (
                                   <div>
                                     <CardDescription className={`text-sm ${!expandedDescriptions.has(scene.id) ? 'line-clamp-2' : ''}`}>

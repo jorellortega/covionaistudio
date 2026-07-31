@@ -92,6 +92,7 @@ const navigationCategories: NavCategory[] = [
       { name: "Characters", href: "/characters", icon: UserCircle },
       { name: "Avatars", href: "/avatars", icon: ScanFace },
       { name: "Locations", href: "/locations", icon: MapPin },
+      { name: "Objects", href: "/objects", icon: Package },
     ],
   },
   {

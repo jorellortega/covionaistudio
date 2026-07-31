@@ -153,5 +153,12 @@ export class ScreenplayScenesService {
 
     return data || []
   }
+
+  static combineSceneContents(scenes: ScreenplayScene[]): string {
+    return scenes
+      .filter((scene) => scene.content?.trim())
+      .map((scene) => scene.content!.trim())
+      .join('\n\n')
+  }
 }
 

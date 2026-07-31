@@ -1,6 +1,7 @@
 import type { Asset } from "@/lib/asset-service"
 import type { Character } from "@/lib/characters-service"
 import type { Location } from "@/lib/locations-service"
+import type { StoryObject } from "@/lib/story-objects-service"
 import { pushStoryboardImageTrace } from "@/lib/storyboard-image-debug"
 
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"])
@@ -121,6 +122,7 @@ export function getProjectAssetSourceLabel(
   asset: Asset,
   locations: Location[],
   characters: Character[],
+  storyObjects: StoryObject[] = [],
 ): string {
   if (asset.character_id) {
     const character = characters.find((c) => c.id === asset.character_id)
@@ -129,6 +131,10 @@ export function getProjectAssetSourceLabel(
   if (asset.location_id) {
     const location = locations.find((l) => l.id === asset.location_id)
     return location ? `Location · ${location.name}` : "Location"
+  }
+  if (asset.story_object_id) {
+    const storyObject = storyObjects.find((item) => item.id === asset.story_object_id)
+    return storyObject ? `Object · ${storyObject.name}` : "Object"
   }
   if (asset.is_default_cover) return "Project cover"
   const source = asset.metadata?.source ?? asset.metadata?.page
@@ -140,10 +146,18 @@ export function buildLinkedAssetGroups(
   assets: Asset[],
   locations: Location[],
   characters: Character[],
+  storyObjects: StoryObject[] = [],
 ): { label: string; assets: Asset[] }[] {
   const characterAssets = assets.filter((a) => a.character_id)
-  const locationAssets = assets.filter((a) => a.location_id && !a.character_id)
-  const projectAssets = assets.filter((a) => !a.character_id && !a.location_id)
+  const locationAssets = assets.filter(
+    (a) => a.location_id && !a.character_id && !a.story_object_id,
+  )
+  const objectAssets = assets.filter(
+    (a) => a.story_object_id && !a.character_id && !a.location_id,
+  )
+  const projectAssets = assets.filter(
+    (a) => !a.character_id && !a.location_id && !a.story_object_id,
+  )
 
   const groups: { label: string; assets: Asset[] }[] = []
 
@@ -164,6 +178,17 @@ export function buildLinkedAssetGroups(
       assets: [...locationAssets].sort((a, b) => {
         const nameA = locations.find((l) => l.id === a.location_id)?.name ?? a.title
         const nameB = locations.find((l) => l.id === b.location_id)?.name ?? b.title
+        return nameA.localeCompare(nameB)
+      }),
+    })
+  }
+
+  if (objectAssets.length > 0) {
+    groups.push({
+      label: "Objects",
+      assets: [...objectAssets].sort((a, b) => {
+        const nameA = storyObjects.find((item) => item.id === a.story_object_id)?.name ?? a.title
+        const nameB = storyObjects.find((item) => item.id === b.story_object_id)?.name ?? b.title
         return nameA.localeCompare(nameB)
       }),
     })

@@ -8,6 +8,7 @@ export interface Asset {
   treatment_id?: string | null // Optional reference to treatment
   character_id?: string | null // Optional reference to character
   location_id?: string | null // Optional reference to location
+  story_object_id?: string | null // Optional reference to story object (vehicle, prop, etc.)
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -37,6 +38,7 @@ export interface CreateAssetData {
   treatment_id?: string | null // Optional reference to treatment
   character_id?: string | null // Optional reference to character
   location_id?: string | null // Optional reference to location
+  story_object_id?: string | null // Optional reference to story object (vehicle, prop, etc.)
   title: string
   content_type: 'script' | 'image' | 'video' | 'audio' | 'lyrics' | 'poetry' | 'prose'
   content?: string
@@ -131,10 +133,24 @@ export class AssetService {
         .eq('id', assetData.location_id)
         .eq('user_id', user.id)
         .single()
-      
+
       if (locationError || !locationExists) {
         console.error('Location validation failed:', { location_id: assetData.location_id, error: locationError })
         throw new Error(`Location with ID ${assetData.location_id} not found or access denied`)
+      }
+    }
+
+    if (assetData.story_object_id && assetData.story_object_id !== null && typeof assetData.story_object_id === 'string' && !assetData.metadata?.bypassStoryObjectValidation) {
+      const { data: storyObjectExists, error: storyObjectError } = await getSupabaseClient()
+        .from('story_objects')
+        .select('id')
+        .eq('id', assetData.story_object_id)
+        .eq('user_id', user.id)
+        .single()
+
+      if (storyObjectError || !storyObjectExists) {
+        console.error('Story object validation failed:', { story_object_id: assetData.story_object_id, error: storyObjectError })
+        throw new Error(`Story object with ID ${assetData.story_object_id} not found or access denied`)
       }
     }
     
@@ -174,6 +190,7 @@ export class AssetService {
       treatment_id: assetData.treatment_id || null,
       character_id: (assetData.character_id && typeof assetData.character_id === 'string') ? assetData.character_id : null,
       location_id: (assetData.location_id && typeof assetData.location_id === 'string') ? assetData.location_id : null,
+      story_object_id: (assetData.story_object_id && typeof assetData.story_object_id === 'string') ? assetData.story_object_id : null,
       title: assetData.title,
       content_type: assetData.content_type,
       content: assetData.content,
@@ -372,6 +389,29 @@ export class AssetService {
       // If column doesn't exist (e.g., migration not run), return empty array
       if (error.code === '42703' || error.message?.includes('column "location_id"')) {
         console.warn('location_id column may not exist. Please run migration 048_add_location_id_to_assets.sql')
+        return []
+      }
+      throw error
+    }
+
+    return (data || []) as Asset[]
+  }
+
+  static async getAssetsForStoryObject(storyObjectId: string): Promise<Asset[]> {
+    const user = await this.ensureAuthenticated()
+
+    const { data, error } = await getSupabaseClient()
+      .from('assets')
+      .select('*')
+      .eq('story_object_id', storyObjectId)
+      .eq('user_id', user.id)
+      .eq('is_latest_version', true)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching story object assets:', error)
+      if (error.code === '42703' || error.message?.includes('column "story_object_id"')) {
+        console.warn('story_object_id column may not exist. Please run migration 094_add_story_object_id_to_assets.sql')
         return []
       }
       throw error

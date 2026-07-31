@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -32,7 +32,10 @@ import {
   X,
   User,
   MapPin,
+  FileText,
   ExternalLink,
+  FolderOpen,
+  Clapperboard,
 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
@@ -42,6 +45,8 @@ import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
+import { AssetService, type Asset } from "@/lib/asset-service"
+import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 
 export interface UpdateArtifactPayload {
   title?: string
@@ -104,6 +109,13 @@ function isLocationArtifact(artifact: CreativeArtifact): boolean {
   )
 }
 
+function isSceneArtifact(artifact: CreativeArtifact): boolean {
+  return (
+    artifact.artifact_type === "scene" ||
+    typeof artifact.metadata?.screenplay_scene_id === "string"
+  )
+}
+
 function dedupeCharacterArtifacts(artifacts: CreativeArtifact[]): CreativeArtifact[] {
   const seenCharacterIds = new Map<string, CreativeArtifact>()
   const result: CreativeArtifact[] = []
@@ -141,17 +153,24 @@ function dedupeCharacterArtifacts(artifacts: CreativeArtifact[]): CreativeArtifa
 function partitionArtifacts(artifacts: CreativeArtifact[]) {
   const characterArtifacts = dedupeCharacterArtifacts(artifacts.filter(isCharacterArtifact))
   const locationArtifacts = artifacts.filter(isLocationArtifact)
+  const sceneArtifacts = artifacts.filter(isSceneArtifact)
+  const documentArtifacts = artifacts.filter(
+    (a) =>
+      a.artifact_type === "document" ||
+      (a.metadata?.imported === true && a.artifact_type !== "image"),
+  )
   const imageArtifacts = artifacts.filter(
     (a) =>
       !isCharacterArtifact(a) &&
       !isLocationArtifact(a) &&
+      !isSceneArtifact(a) &&
       (a.artifact_type === "image" ||
         a.artifact_type === "cover" ||
         (a.content?.startsWith("http") &&
           a.artifact_type !== "document" &&
           a.artifact_type !== "treatment")),
   )
-  return { characterArtifacts, locationArtifacts, imageArtifacts }
+  return { characterArtifacts, locationArtifacts, sceneArtifacts, imageArtifacts, documentArtifacts }
 }
 
 export function ArtifactPanel({
@@ -182,8 +201,52 @@ export function ArtifactPanel({
   const [renameValue, setRenameValue] = useState("")
   const [renaming, setRenaming] = useState(false)
   const [suggestingNameId, setSuggestingNameId] = useState<string | null>(null)
+  const [projectAssets, setProjectAssets] = useState<Asset[]>([])
+  const [loadingAssets, setLoadingAssets] = useState(false)
+  const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
+  const [loadingScenes, setLoadingScenes] = useState(false)
 
-  const { characterArtifacts, locationArtifacts, imageArtifacts } = partitionArtifacts(artifacts)
+  const { characterArtifacts, locationArtifacts, sceneArtifacts, imageArtifacts } = partitionArtifacts(artifacts)
+
+  const loadProjectAssets = useCallback(async () => {
+    if (!linkedProjectId) {
+      setProjectAssets([])
+      return
+    }
+    setLoadingAssets(true)
+    try {
+      const assets = await AssetService.getAssetsForProject(linkedProjectId)
+      setProjectAssets(assets)
+    } catch {
+      setProjectAssets([])
+    } finally {
+      setLoadingAssets(false)
+    }
+  }, [linkedProjectId])
+
+  useEffect(() => {
+    void loadProjectAssets()
+  }, [loadProjectAssets, artifacts.length])
+
+  const loadProjectScenes = useCallback(async () => {
+    if (!linkedProjectId) {
+      setScreenplayScenes([])
+      return
+    }
+    setLoadingScenes(true)
+    try {
+      const scenes = await ScreenplayScenesService.getScreenplayScenes(linkedProjectId)
+      setScreenplayScenes(scenes)
+    } catch {
+      setScreenplayScenes([])
+    } finally {
+      setLoadingScenes(false)
+    }
+  }, [linkedProjectId])
+
+  useEffect(() => {
+    void loadProjectScenes()
+  }, [loadProjectScenes, artifacts.length])
 
   const loadProjectLinks = async (projectId: string) => {
     setLoadingLinks(true)
@@ -584,23 +647,31 @@ export function ArtifactPanel({
         <div className="border-b border-border p-3">
           <h2 className="text-sm font-medium">Created Assets</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Images, characters, and locations from your chat
+            Images, movie assets, characters, locations, and scenes
           </p>
         </div>
 
         <Tabs defaultValue="images" className="flex flex-col flex-1 min-h-0">
-          <TabsList className="mx-3 mt-2 grid grid-cols-3">
-            <TabsTrigger value="images" className="text-xs px-1.5">
-              <ImageIcon className="h-3 w-3 mr-1" />
+          <TabsList className="mx-3 mt-2 grid grid-cols-5">
+            <TabsTrigger value="images" className="text-[10px] px-1">
+              <ImageIcon className="h-3 w-3 mr-0.5" />
               Images ({imageArtifacts.length})
             </TabsTrigger>
-            <TabsTrigger value="characters" className="text-xs px-1.5">
-              <User className="h-3 w-3 mr-1" />
-              Characters ({characterArtifacts.length})
+            <TabsTrigger value="assets" className="text-[10px] px-1">
+              <FolderOpen className="h-3 w-3 mr-0.5" />
+              Assets ({projectAssets.length})
             </TabsTrigger>
-            <TabsTrigger value="locations" className="text-xs px-1.5">
-              <MapPin className="h-3 w-3 mr-1" />
-              Locations ({locationArtifacts.length})
+            <TabsTrigger value="characters" className="text-[10px] px-1">
+              <User className="h-3 w-3 mr-0.5" />
+              Chars ({characterArtifacts.length})
+            </TabsTrigger>
+            <TabsTrigger value="locations" className="text-[10px] px-1">
+              <MapPin className="h-3 w-3 mr-0.5" />
+              Locs ({locationArtifacts.length})
+            </TabsTrigger>
+            <TabsTrigger value="scenes" className="text-[10px] px-1">
+              <Clapperboard className="h-3 w-3 mr-0.5" />
+              Scenes ({screenplayScenes.length || sceneArtifacts.length})
             </TabsTrigger>
           </TabsList>
 
@@ -613,6 +684,110 @@ export function ArtifactPanel({
                   </p>
                 ) : (
                   imageArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="assets" className="flex-1 min-h-0 mt-0">
+            <ScrollArea className="h-[calc(100vh-220px)]">
+              <div className="p-3 pb-6 space-y-3">
+                {!linkedProjectId ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Link a movie project to save imports to assets and view them here.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <Link
+                        href={`/assets?project=${linkedProjectId}`}
+                        className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                      >
+                        Open Assets
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => void loadProjectAssets()}
+                        disabled={loadingAssets}
+                      >
+                        {loadingAssets ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Refresh"
+                        )}
+                      </Button>
+                    </div>
+                    {loadingAssets ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : projectAssets.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-8">
+                        No movie assets yet. Import photos or files in chat — they save here when a project is linked.
+                      </p>
+                    ) : (
+                      projectAssets.map((asset) => {
+                        const isImage = asset.content_type === "image"
+                        const previewUrl = asset.content_url || (isImage ? asset.content : null)
+                        return (
+                          <div
+                            key={asset.id}
+                            className="rounded-lg border border-border bg-card p-3 space-y-2"
+                          >
+                            {previewUrl && isImage && (
+                              <button
+                                type="button"
+                                className="block w-full overflow-hidden rounded-md border border-border"
+                                onClick={() => setPreviewImage(previewUrl)}
+                              >
+                                <img
+                                  src={previewUrl}
+                                  alt={asset.title}
+                                  className="w-full h-28 object-cover"
+                                />
+                              </button>
+                            )}
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">{asset.title}</p>
+                                <p className="text-xs text-muted-foreground capitalize">
+                                  {asset.content_type}
+                                  {asset.metadata?.imported ? " · imported" : ""}
+                                </p>
+                              </div>
+                              <Badge variant="secondary" className="text-xs capitalize">
+                                {asset.content_type}
+                              </Badge>
+                            </div>
+                            <div className="flex gap-2">
+                              {(asset.content_url || (asset.content && asset.content.startsWith("http"))) && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 flex-1 text-xs"
+                                  asChild
+                                >
+                                  <a
+                                    href={asset.content_url || asset.content}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                                    Open
+                                  </a>
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </>
                 )}
               </div>
             </ScrollArea>
@@ -668,6 +843,96 @@ export function ArtifactPanel({
                   </p>
                 ) : (
                   locationArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="scenes" className="flex-1 min-h-0 mt-0">
+            <ScrollArea className="h-[calc(100vh-220px)]">
+              <div className="p-3 pb-6 space-y-3">
+                {!linkedProjectId ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Link a movie project to save scenes from chat and view them here.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
+                      <Link
+                        href={`/screenplay/${linkedProjectId}`}
+                        className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                      >
+                        Open Screenplay
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => void loadProjectScenes()}
+                        disabled={loadingScenes}
+                      >
+                        {loadingScenes ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Refresh"
+                        )}
+                      </Button>
+                    </div>
+                    {loadingScenes ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : screenplayScenes.length === 0 && sceneArtifacts.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-8">
+                        No scenes yet. Paste a screenplay scene in chat or use &quot;Save to Scene&quot; when one is detected.
+                      </p>
+                    ) : (
+                      <>
+                        {screenplayScenes.map((scene) => (
+                          <div
+                            key={scene.id}
+                            className="rounded-lg border border-border bg-card p-3 space-y-2"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate">
+                                  {scene.scene_number ? `Scene ${scene.scene_number}` : "Scene"} — {scene.name}
+                                </p>
+                                {scene.location && (
+                                  <p className="text-xs text-muted-foreground truncate">{scene.location}</p>
+                                )}
+                              </div>
+                              <Badge variant="outline" className="text-[10px] shrink-0">
+                                {scene.status || "draft"}
+                              </Badge>
+                            </div>
+                            {scene.content && (
+                              <p className="text-xs text-muted-foreground line-clamp-3 font-mono whitespace-pre-wrap">
+                                {scene.content}
+                              </p>
+                            )}
+                            {scene.characters && scene.characters.length > 0 && (
+                              <p className="text-[10px] text-muted-foreground">
+                                {scene.characters.join(", ")}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                        {sceneArtifacts
+                          .filter(
+                            (a) =>
+                              !screenplayScenes.some(
+                                (s) => s.id === a.metadata?.screenplay_scene_id,
+                              ),
+                          )
+                          .map((a) => (
+                            <ArtifactCard key={a.id} artifact={a} />
+                          ))}
+                      </>
+                    )}
+                  </>
                 )}
               </div>
             </ScrollArea>

@@ -35,6 +35,12 @@ import { OpenAIService } from "@/lib/ai-services"
 import { KlingService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
+import {
+  buildLinkedAssetGroups,
+  getProjectAssetSourceLabel,
+  referenceUrlToFile,
+} from "@/lib/project-image-linking"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
@@ -103,16 +109,6 @@ function buildReferenceShotPrompt(
   return prompt.slice(0, 990)
 }
 
-async function referenceUrlToFile(url: string, filename: string): Promise<File> {
-  const response = await fetch(url)
-  if (!response.ok) {
-    throw new Error("Could not load reference image")
-  }
-  const blob = await response.blob()
-  const type = blob.type || "image/png"
-  return new File([blob], filename, { type })
-}
-
 async function downloadMediaToDevice(url: string, fileName: string): Promise<void> {
   const safeName = fileName.replace(/[^\w.\-() ]/g, "_") || "download.mp4"
   const proxyUrl = `/api/ai/proxy-download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(safeName)}`
@@ -133,65 +129,6 @@ async function downloadMediaToDevice(url: string, fileName: string): Promise<voi
     document.body.removeChild(link)
     URL.revokeObjectURL(blobUrl)
   }, 100)
-}
-
-function getProjectAssetSourceLabel(
-  asset: Asset,
-  locations: Location[],
-  characters: Character[],
-): string {
-  if (asset.character_id) {
-    const character = characters.find((c) => c.id === asset.character_id)
-    return character ? `Character · ${character.name}` : "Character"
-  }
-  if (asset.location_id) {
-    const location = locations.find((l) => l.id === asset.location_id)
-    return location ? `Location · ${location.name}` : "Location"
-  }
-  if (asset.is_default_cover) return "Project cover"
-  const source = asset.metadata?.source ?? asset.metadata?.page
-  if (typeof source === "string" && source.trim()) return source
-  return "Project asset"
-}
-
-function buildLinkedAssetGroups(
-  assets: Asset[],
-  locations: Location[],
-  characters: Character[],
-): { label: string; assets: Asset[] }[] {
-  const characterAssets = assets.filter((a) => a.character_id)
-  const locationAssets = assets.filter((a) => a.location_id && !a.character_id)
-  const projectAssets = assets.filter((a) => !a.character_id && !a.location_id)
-
-  const groups: { label: string; assets: Asset[] }[] = []
-
-  if (characterAssets.length > 0) {
-    groups.push({
-      label: "Characters",
-      assets: [...characterAssets].sort((a, b) => {
-        const nameA = characters.find((c) => c.id === a.character_id)?.name ?? a.title
-        const nameB = characters.find((c) => c.id === b.character_id)?.name ?? b.title
-        return nameA.localeCompare(nameB)
-      }),
-    })
-  }
-
-  if (locationAssets.length > 0) {
-    groups.push({
-      label: "Other locations",
-      assets: [...locationAssets].sort((a, b) => {
-        const nameA = locations.find((l) => l.id === a.location_id)?.name ?? a.title
-        const nameB = locations.find((l) => l.id === b.location_id)?.name ?? b.title
-        return nameA.localeCompare(nameB)
-      }),
-    })
-  }
-
-  if (projectAssets.length > 0) {
-    groups.push({ label: "Project assets", assets: projectAssets })
-  }
-
-  return groups
 }
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
@@ -310,6 +247,8 @@ export default function LocationsPage() {
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
+  const [referenceEditDialogOpen, setReferenceEditDialogOpen] = useState(false)
+  const [referenceEditAsset, setReferenceEditAsset] = useState<Asset | null>(null)
   const [isGenerateVideoDialogOpen, setIsGenerateVideoDialogOpen] = useState(false)
   const [videoMotionPrompt, setVideoMotionPrompt] = useState("")
   const [videoDuration, setVideoDuration] = useState<5 | 10>(5)
@@ -332,6 +271,7 @@ export default function LocationsPage() {
   const [locationAssets, setLocationAssets] = useState<Asset[]>([])
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
   const [projectCharacters, setProjectCharacters] = useState<Character[]>([])
+  const [projectStoryObjects, setProjectStoryObjects] = useState<StoryObject[]>([])
   const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
@@ -465,22 +405,26 @@ export default function LocationsPage() {
       if (!projectId) {
         setProjectImageAssets([])
         setProjectCharacters([])
+        setProjectStoryObjects([])
         return
       }
       try {
         setIsLoadingProjectAssets(true)
-        const [assets, characters] = await Promise.all([
+        const [assets, characters, storyObjects] = await Promise.all([
           AssetService.getAssetsForProject(projectId),
           CharactersService.getCharacters(projectId),
+          StoryObjectsService.getStoryObjects(projectId),
         ])
         setProjectImageAssets(
           assets.filter((a) => a.content_type === "image" && a.content_url),
         )
         setProjectCharacters(characters)
+        setProjectStoryObjects(storyObjects)
       } catch (err) {
         console.error("Failed to load project assets:", err)
         setProjectImageAssets([])
         setProjectCharacters([])
+        setProjectStoryObjects([])
       } finally {
         setIsLoadingProjectAssets(false)
       }
@@ -1027,10 +971,36 @@ export default function LocationsPage() {
     [projectImageAssets, selectedLocationId],
   )
 
-  const linkedAssetGroups = useMemo(
-    () => buildLinkedAssetGroups(linkableProjectAssets, locations, projectCharacters),
-    [linkableProjectAssets, locations, projectCharacters],
-  )
+  const linkedAssetGroups = useMemo(() => {
+    const groups: { label: string; assets: Asset[] }[] = []
+
+    if (imageAssetsForLocation.length > 0) {
+      groups.push({ label: "This location", assets: imageAssetsForLocation })
+    }
+
+    if (linkableProjectAssets.length > 0) {
+      groups.push(
+        ...buildLinkedAssetGroups(
+          linkableProjectAssets,
+          locations,
+          projectCharacters,
+          projectStoryObjects,
+        ),
+      )
+    }
+
+    return groups
+  }, [
+    imageAssetsForLocation,
+    linkableProjectAssets,
+    locations,
+    projectCharacters,
+    projectStoryObjects,
+  ])
+
+  const findStyleLinkAsset = (assetId: string) =>
+    locationAssets.find((asset) => asset.id === assetId) ??
+    projectImageAssets.find((asset) => asset.id === assetId)
 
   const framePickerAssets = useMemo(() => {
     const byId = new Map<string, Asset>()
@@ -1050,8 +1020,8 @@ export default function LocationsPage() {
     const otherAssets = projectImageAssets.filter(
       (a) => a.content_url && !locationImageIds.has(a.id),
     )
-    return buildLinkedAssetGroups(otherAssets, locations, projectCharacters)
-  }, [imageAssetsForLocation, projectImageAssets, locations, projectCharacters])
+    return buildLinkedAssetGroups(otherAssets, locations, projectCharacters, projectStoryObjects)
+  }, [imageAssetsForLocation, projectImageAssets, locations, projectCharacters, projectStoryObjects])
 
   const selectedLocation = useMemo(
     () => locations.find((l) => l.id === selectedLocationId),
@@ -1204,6 +1174,16 @@ export default function LocationsPage() {
     if (includeLocationDetailsInShot && loc.name) {
       prompt += ` Location: ${loc.name}.`
     }
+    return prompt.slice(0, 990)
+  }
+
+  const buildLocationEditPrompt = (userDirection: string, loc: Location) => {
+    let prompt = userDirection.trim()
+    if (loc.name) {
+      prompt += ` Location: ${loc.name}.`
+    }
+    prompt +=
+      " Edit the attached reference image only. Keep the same composition, setting, lighting, and environment — change only what is described above. Do not add new elements."
     return prompt.slice(0, 990)
   }
 
@@ -2123,30 +2103,319 @@ export default function LocationsPage() {
     })
   }
 
+  const clearInlineReferenceEditState = () => {
+    setInlineCustomShotPrompt("")
+    clearInlineShotReference()
+    clearInlineStyleLink()
+  }
+
+  const openReferenceEditDialog = (asset?: Asset) => {
+    const targetAsset =
+      asset ??
+      imageAssetsForLocation[currentImageIndex] ??
+      imageAssetsForLocation[0]
+    if (!targetAsset?.content_url) {
+      toast({
+        title: "No image",
+        description: "Upload or generate a location image first.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setReferenceEditAsset(targetAsset)
+    clearInlineReferenceEditState()
+    const assetIndex = imageAssetsForLocation.findIndex((item) => item.id === targetAsset.id)
+    if (assetIndex >= 0) {
+      carouselApi?.scrollTo(assetIndex)
+    }
+    setReferenceEditDialogOpen(true)
+  }
+
+  const closeReferenceEditDialog = () => {
+    setReferenceEditDialogOpen(false)
+    setReferenceEditAsset(null)
+    clearInlineReferenceEditState()
+  }
+
+  const renderLocationReferenceEdit = (
+    referenceAsset: Asset,
+    idPrefix: string,
+    inDialog = false,
+  ) => {
+    const lockedModel = getLockedImageModelLabel()
+    const lockedConfig = getLockedImageConfig({ withReferenceImage: true })
+
+    return (
+      <div
+        className={
+          inDialog
+            ? "space-y-3 min-w-0 w-full overflow-hidden"
+            : "border border-violet-500/20 rounded-lg p-4 bg-violet-500/5 space-y-3"
+        }
+      >
+        {!inDialog && (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium flex items-center gap-2">
+                <Wand2 className="h-4 w-4 text-violet-500" />
+                Reference Image Edit
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Edit the selected location image using your locked model ({lockedModel})
+                {lockedConfig?.supportsReference
+                  ? " and optional project references."
+                  : ". Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2 border-violet-500/30 text-violet-600 hover:bg-violet-500/10 shrink-0"
+              onClick={() => openReferenceEditDialog(referenceAsset)}
+              disabled={!lockedConfig?.supportsReference}
+            >
+              <Wand2 className="h-4 w-4" />
+              Edit Image
+            </Button>
+          </div>
+        )}
+
+        {inDialog && (
+          <p className="text-xs text-muted-foreground break-words">
+            Edit using your locked model ({lockedModel}).
+            {lockedConfig?.supportsReference
+              ? " The selected image is used as the primary reference unless you upload another."
+              : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
+          </p>
+        )}
+
+        {(isGeneratingShot && shotGenerationProgress) ? (
+          <p className="text-xs text-muted-foreground flex items-center gap-2">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {shotGenerationProgress}
+            {inDialog ? (
+              <span className="text-muted-foreground/80">
+                — you can close this window and keep working
+              </span>
+            ) : null}
+          </p>
+        ) : null}
+
+        {inDialog ? (
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
+            Describe your edit
+          </Label>
+          <Textarea
+            id={`${idPrefix}-inline-edit`}
+            value={inlineCustomShotPrompt}
+            onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+            placeholder='e.g., warmer lighting, wider framing, add snow, closer on the gas station sign'
+            className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
+            disabled={isGeneratingShot}
+          />
+          <div className="space-y-2">
+            <Label htmlFor={`${idPrefix}-ref-upload`} className="text-xs text-muted-foreground">
+              Primary reference (optional)
+            </Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                id={`${idPrefix}-ref-upload`}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleInlineShotReferenceSelect}
+                disabled={isGeneratingShot}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                disabled={isGeneratingShot}
+                onClick={() =>
+                  document.getElementById(`${idPrefix}-ref-upload`)?.click()
+                }
+              >
+                <Upload className="h-4 w-4" />
+                Upload reference
+              </Button>
+              {inlineShotReferencePreview && (
+                <>
+                  <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                    <img
+                      src={inlineShotReferencePreview}
+                      alt="Uploaded reference"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    disabled={isGeneratingShot}
+                    onClick={clearInlineShotReference}
+                    title="Remove uploaded reference"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </>
+              )}
+              {!inlineShotReferencePreview && referenceAsset.content_url && (
+                <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
+                  <img
+                    src={referenceAsset.content_url}
+                    alt="Current location image"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground break-words">
+              {inlineShotReferenceFile
+                ? "Using your uploaded image as the primary reference."
+                : "Uses the selected location image if you don't upload one."}
+            </p>
+          </div>
+
+          {(linkedAssetGroups.length > 0 || isLoadingProjectAssets) && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
+                <Label className="text-xs text-muted-foreground">
+                  Link existing image (optional)
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Adds more images from your project as references — this location, other locations, characters, objects (cars/props), and covers. Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
+              </p>
+              {isLoadingProjectAssets ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Loading project assets…
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-48 overflow-y-auto rounded-lg border border-border/60 p-2">
+                  {linkedAssetGroups.map((group) => (
+                    <div key={group.label} className="space-y-1.5">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {group.label}
+                      </p>
+                      <div className="flex gap-2 overflow-x-auto pb-1">
+                        {group.assets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            disabled={isGeneratingShot}
+                            onClick={() => toggleInlineStyleLinkAsset(asset.id)}
+                            className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
+                              inlineStyleLinkAssetIds.includes(asset.id)
+                                ? "border-violet-500 ring-2 ring-violet-500/40"
+                                : "border-border hover:border-violet-500/50"
+                            }`}
+                            title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters, projectStoryObjects)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                          >
+                            <img
+                              src={asset.content_url!}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {inlineStyleLinkAssetIds.length > 0 ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-xs text-violet-400">
+                    {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    disabled={isGeneratingShot}
+                    onClick={clearInlineStyleLink}
+                  >
+                    Clear all
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleGenerateInlineCustomShot}
+              disabled={
+                isGeneratingShot ||
+                !inlineCustomShotPrompt.trim() ||
+                !lockedConfig?.supportsReference
+              }
+              className="gap-2 w-full sm:w-auto"
+            >
+              {isGeneratingShot && inlineCustomShotPrompt.trim() ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Editing...
+                </>
+              ) : (
+                <>
+                  <Wand2 className="h-4 w-4" />
+                  Edit Image
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+        ) : null}
+      </div>
+    )
+  }
+
   const handleGenerateInlineCustomShot = async () => {
     const direction = inlineCustomShotPrompt.trim()
     if (!direction) {
       toast({
-        title: "Describe your shot",
-        description: 'Enter what you want, e.g. "close up of the drone on the right" or "zoom into the city".',
+        title: "Description required",
+        description: 'Enter what you want, e.g. "warmer lighting" or "wider framing with more snow".',
         variant: "destructive",
       })
       return
     }
 
     const referenceAsset =
-      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0]
+      referenceEditAsset ??
+      (imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0])
     if (!referenceAsset) return
 
     const selectedLoc = locations.find((l) => l.id === selectedLocationId)
     if (!selectedLoc) return
+
+    const lockedConfig = getLockedImageConfig({ withReferenceImage: true })
+    if (!lockedConfig?.supportsReference) {
+      toast({
+        title: "Model not supported",
+        description:
+          "Your locked image model does not support reference editing. Lock GPT Image 2 or Runway ML in AI Settings.",
+        variant: "destructive",
+      })
+      return
+    }
 
     const shotLabel =
       direction.length > 48 ? `${direction.slice(0, 45).trim()}...` : direction
 
     let styleReferenceFiles: File[] = []
     for (const assetId of inlineStyleLinkAssetIds) {
-      const styleAsset = projectImageAssets.find((a) => a.id === assetId)
+      const styleAsset = findStyleLinkAsset(assetId)
       if (styleAsset?.content_url) {
         styleReferenceFiles.push(
           await referenceUrlToFile(
@@ -2158,27 +2427,28 @@ export default function LocationsPage() {
     }
 
     setIsGeneratingShot(true)
-    setShotGenerationProgress("Generating custom shot...")
+    setShotGenerationProgress("Editing image...")
     try {
       await generateLocationShotFromReference(referenceAsset, shotLabel, {
-        promptOverride: buildCustomLocationShotPrompt(direction, selectedLoc),
+        promptOverride: buildLocationEditPrompt(direction, selectedLoc),
         referenceFile: inlineShotReferenceFile ?? undefined,
         styleReferenceFiles,
         styleAssetIds: inlineStyleLinkAssetIds,
       })
-      setInlineCustomShotPrompt("")
-      clearInlineShotReference()
-      clearInlineStyleLink()
+      clearInlineReferenceEditState()
+      if (referenceEditDialogOpen) {
+        closeReferenceEditDialog()
+      }
       toast({
-        title: "Custom shot generated",
-        description: "Your directed shot was added to location assets.",
+        title: "Image edited",
+        description: "Your edited location image was added to assets.",
       })
     } catch (error) {
       toast({
-        title: "Custom shot failed",
+        title: "Edit failed",
         description: getImageGenerationErrorMessage(
           error,
-          "Could not generate your custom shot.",
+          "Could not edit the location image.",
         ),
         variant: "destructive",
       })
@@ -2737,6 +3007,19 @@ export default function LocationsPage() {
                                                     variant="secondary"
                                                     onClick={(e) => {
                                                       e.stopPropagation()
+                                                      openReferenceEditDialog(asset)
+                                                    }}
+                                                    className="h-8 pointer-events-auto hover:text-violet-500"
+                                                    title="Edit image from reference"
+                                                  >
+                                                    <Wand2 className="h-3 w-3 mr-1" />
+                                                    Edit Image
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
                                                       openGenerateShotsDialog(asset)
                                                     }}
                                                     className="h-8 pointer-events-auto"
@@ -2922,163 +3205,10 @@ export default function LocationsPage() {
                                       ) : null}
                                     </div>
 
-                                    <div className="space-y-2 pt-2 border-t border-border/60">
-                                      <Label htmlFor="inline-custom-shot" className="text-xs sm:text-sm">
-                                        Describe your shot
-                                      </Label>
-                                      <Textarea
-                                        id="inline-custom-shot"
-                                        value={inlineCustomShotPrompt}
-                                        onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
-                                        placeholder='e.g., close up of the drone on the right, zoom into the city skyline, push in on the NEW YORK sign'
-                                        className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
-                                        disabled={isGeneratingShot}
-                                      />
-                                      <div className="space-y-2">
-                                        <Label htmlFor="inline-shot-ref-upload" className="text-xs text-muted-foreground">
-                                          Primary reference (optional)
-                                        </Label>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <input
-                                            id="inline-shot-ref-upload"
-                                            type="file"
-                                            accept="image/*"
-                                            className="hidden"
-                                            onChange={handleInlineShotReferenceSelect}
-                                            disabled={isGeneratingShot}
-                                          />
-                                          <Button
-                                            type="button"
-                                            variant="outline"
-                                            size="sm"
-                                            className="gap-2"
-                                            disabled={isGeneratingShot}
-                                            onClick={() =>
-                                              document.getElementById("inline-shot-ref-upload")?.click()
-                                            }
-                                          >
-                                            <Upload className="h-4 w-4" />
-                                            Upload reference
-                                          </Button>
-                                          {inlineShotReferencePreview && (
-                                            <>
-                                              <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
-                                                <img
-                                                  src={inlineShotReferencePreview}
-                                                  alt="Uploaded reference"
-                                                  className="w-full h-full object-cover"
-                                                />
-                                              </div>
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-8 w-8"
-                                                disabled={isGeneratingShot}
-                                                onClick={clearInlineShotReference}
-                                                title="Remove uploaded reference"
-                                              >
-                                                <X className="h-4 w-4" />
-                                              </Button>
-                                            </>
-                                          )}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                          {inlineShotReferenceFile
-                                            ? "Using your uploaded image as the primary reference."
-                                            : "Uses the selected carousel image if you don't upload one."}
-                                        </p>
-                                      </div>
-
-                                      {(linkedAssetGroups.length > 0 || isLoadingProjectAssets) && (
-                                        <div className="space-y-2">
-                                          <div className="flex items-center gap-2">
-                                            <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
-                                            <Label className="text-xs text-muted-foreground">
-                                              Link existing image (optional)
-                                            </Label>
-                                          </div>
-                                          <p className="text-xs text-muted-foreground">
-                                            Adds more images from your project as references — characters, other locations, covers, etc. Select up to {MAX_LINKED_REFERENCE_IMAGES}. Your description above is the only prompt.
-                                          </p>
-                                          {isLoadingProjectAssets ? (
-                                            <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                              Loading project assets…
-                                            </div>
-                                          ) : (
-                                            <div className="space-y-3">
-                                              {linkedAssetGroups.map((group) => (
-                                                <div key={group.label} className="space-y-1.5">
-                                                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                                                    {group.label}
-                                                  </p>
-                                                  <div className="flex gap-2 overflow-x-auto pb-1">
-                                                    {group.assets.map((asset) => (
-                                                      <button
-                                                        key={asset.id}
-                                                        type="button"
-                                                        disabled={isGeneratingShot}
-                                                        onClick={() => toggleInlineStyleLinkAsset(asset.id)}
-                                                        className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
-                                                          inlineStyleLinkAssetIds.includes(asset.id)
-                                                            ? "border-violet-500 ring-2 ring-violet-500/40"
-                                                            : "border-border hover:border-violet-500/50"
-                                                        }`}
-                                                        title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
-                                                      >
-                                                        <img
-                                                          src={asset.content_url!}
-                                                          alt=""
-                                                          className="w-full h-full object-cover"
-                                                        />
-                                                      </button>
-                                                    ))}
-                                                  </div>
-                                                </div>
-                                              ))}
-                                            </div>
-                                          )}
-                                          {inlineStyleLinkAssetIds.length > 0 ? (
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                              <p className="text-xs text-violet-400">
-                                                {inlineStyleLinkAssetIds.length} of {MAX_LINKED_REFERENCE_IMAGES} linked as additional references
-                                              </p>
-                                              <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="sm"
-                                                className="h-7 px-2 text-xs"
-                                                disabled={isGeneratingShot}
-                                                onClick={clearInlineStyleLink}
-                                              >
-                                                Clear all
-                                              </Button>
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      )}
-                                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                                        <Button
-                                          size="sm"
-                                          onClick={handleGenerateInlineCustomShot}
-                                          disabled={isGeneratingShot || !inlineCustomShotPrompt.trim()}
-                                          className="gap-2 w-full sm:w-auto"
-                                        >
-                                          {isGeneratingShot && inlineCustomShotPrompt.trim() ? (
-                                            <>
-                                              <Loader2 className="h-4 w-4 animate-spin" />
-                                              Generating...
-                                            </>
-                                          ) : (
-                                            <>
-                                              <Wand2 className="h-4 w-4" />
-                                              Generate Custom Shot
-                                            </>
-                                          )}
-                                        </Button>
-                                      </div>
-                                    </div>
+                                    {renderLocationReferenceEdit(
+                                      imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0],
+                                      "location-inline-edit",
+                                    )}
                                   </div>
                                 )}
                                 
@@ -4126,6 +4256,45 @@ export default function LocationsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Reference image edit dialog */}
+      <Dialog
+        open={referenceEditDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeReferenceEditDialog()
+        }}
+      >
+        <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader className="pb-2 min-w-0">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2 min-w-0 pr-8 break-words">
+              <Wand2 className="h-5 w-5 text-violet-500" />
+              Edit Image
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm break-words">
+              {referenceEditAsset
+                ? `Reference edit for ${(referenceEditAsset.title || "location image").replace(/ - AI Generated Image.*$/, "")}.`
+                : "Edit this location image from a reference."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {referenceEditAsset?.content_url && (
+            <div className="min-w-0 w-full overflow-hidden space-y-4">
+              <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                <img
+                  src={referenceEditAsset.content_url}
+                  alt={referenceEditAsset.title}
+                  className="w-full h-full max-h-40 object-contain"
+                />
+              </div>
+              {renderLocationReferenceEdit(
+                referenceEditAsset,
+                "location-reference-edit-dialog",
+                true,
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* View Full Image Dialog */}
       <Dialog open={viewImageDialogOpen} onOpenChange={setViewImageDialogOpen}>
         <DialogContent className="cinema-card border-border max-w-6xl max-h-[90vh] p-0">
@@ -4155,6 +4324,18 @@ export default function LocationsPage() {
             >
               <Link2 className="h-4 w-4 mr-2" />
               Link to Shot
+            </Button>
+            <Button
+              variant="outline"
+              className="border-violet-500/30 text-violet-600 hover:bg-violet-500/10"
+              onClick={() => {
+                if (viewingImage) {
+                  openReferenceEditDialog(viewingImage)
+                }
+              }}
+            >
+              <Wand2 className="h-4 w-4 mr-2" />
+              Edit Image
             </Button>
             <Button
               variant="outline"

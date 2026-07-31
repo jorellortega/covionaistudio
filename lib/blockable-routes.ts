@@ -59,6 +59,7 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'Productions', path: '/characters', label: 'Characters' },
   { group: 'Productions', path: '/avatars', label: 'Avatars' },
   { group: 'Productions', path: '/locations', label: 'Locations' },
+  { group: 'Productions', path: '/objects', label: 'Objects' },
   { group: 'Productions', path: '/assets', label: 'Assets' },
   { group: 'Productions', path: '/viewmovie', label: 'View movie' },
   { group: 'Productions', path: '/visdev', label: 'Vis dev' },

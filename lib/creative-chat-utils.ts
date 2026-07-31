@@ -1,21 +1,121 @@
 const IMAGE_REQUEST_PATTERNS = [
+  /\b(give|show|create|make|generate|draw|produce|build|get)\s+(me\s+)?(an?\s+)?(the\s+)?(images?|pictures?|photos?|visuals?|illustrations?|renders?|artworks?|posters?|covers?)\b/i,
   /\b(give|show|create|make|generate|draw|produce|get)\s+(me\s+)?(an?\s+)?(the\s+)?(image|picture|photo|visual|illustration|render|artwork|poster|cover)\b/i,
+  /\b(images?|pictures?|visuals?|illustrations?|renders?)\s+of\b/i,
   /\b(image|picture|visual|illustration|render)\s+of\b/i,
-  /\bcan you\s+(make|create|generate|draw|show)\b.*\b(image|picture|visual|it)\b/i,
+  /\bcan you\s+(make|create|generate|draw|show|build)\b.*\b(images?|pictures?|visuals?|it|collage)\b/i,
   /\bwhat\s+(does|do|would)\s+.+\s+look\s+like\b/i,
-  /\bvisualize\b/i,
+  /\bvisuali[sz]e\b/i,
   /\bshow me how\b/i,
+  /\b(collage|storyboard|mood\s*board)\b/i,
+  /\bgenerate\b[\s\S]{0,60}\b(images?|collage|storyboard)\b/i,
+  /\b(more|additional|another|extra)\s+(images?|pictures?|photos?|locations?|shots?)\b/i,
 ]
 
 export function detectImageRequest(message: string): boolean {
   const trimmed = message.trim()
   if (!trimmed) return false
-  return IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(trimmed))
+  if (IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(trimmed))) return true
+  if (/\bimages?\b/i.test(trimmed) && /\b(generate|create|make|build|need|want|collage|storyboard|more|additional|another|extra)\b/i.test(trimmed)) {
+    return true
+  }
+  if (isLocationImageRequest(trimmed)) return true
+  if (isCharacterImageRequest(trimmed)) return true
+  return false
+}
+
+export function detectMultiImageRequest(
+  message: string,
+  conversationHistory: { role: string; content: string }[] = [],
+): boolean {
+  const trimmed = message.trim()
+  if (!detectImageRequest(trimmed)) return false
+
+  if (
+    /\b(collage|storyboard|multiple|several|pick and choose|number them|variety|different locations?|location scenes|more images?|more locations?|more pictures?|additional images?)\b/i.test(
+      trimmed,
+    )
+  ) {
+    return true
+  }
+
+  if (/\b(more|additional|another|extra)\s+(images?|pictures?|photos?|locations?|shots?)\b/i.test(trimmed)) {
+    const hadPriorImageBatch = conversationHistory.some(
+      (m) =>
+        m.role === 'user' &&
+        /\b(collage|storyboard|location scenes|multiple images?|several images?|images? for|locations? for|generate\b[\s\S]{0,40}\bimages?)\b/i.test(
+          m.content,
+        ),
+    )
+    if (hadPriorImageBatch) return true
+  }
+
+  return false
+}
+
+export function pickSluglinesForImageBatch(
+  sluglines: string[],
+  usedSluglines: string[],
+  max: number,
+  preferRemaining: boolean,
+): string[] {
+  const used = new Set(usedSluglines.map((slugline) => slugline.toLowerCase()))
+  const remaining = sluglines.filter((slugline) => !used.has(slugline.toLowerCase()))
+
+  if (preferRemaining && remaining.length > 0) {
+    return remaining.slice(0, max)
+  }
+
+  return sluglines.slice(0, max)
+}
+
+export interface StoryImageContext {
+  combinedText: string
+  projectName: string
+}
+
+export function extractScreenplayLocationSluglines(text: string): string[] {
+  const locations: string[] = []
+  const seen = new Set<string>()
+
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!/^(INT\.|EXT\.|INT\/EXT\.)/i.test(trimmed)) continue
+    const normalized = trimmed.replace(/\s+/g, ' ').slice(0, 140)
+    const key = normalized.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    locations.push(normalized)
+  }
+
+  return locations
+}
+
+export function buildLocationImagePromptsFromSluglines(
+  sluglines: string[],
+  projectName?: string,
+  max = 6,
+): string[] {
+  const film =
+    projectName && projectName !== 'Untitled Project' ? ` for the film "${projectName}"` : ''
+
+  return sluglines.slice(0, max).map((slugline, index) => {
+    const setting = slugline
+      .replace(/^(INT\.|EXT\.|INT\/EXT\.)\s*/i, '')
+      .replace(/\s*-\s*/g, ', ')
+      .trim()
+    return (
+      `Cinematic film still, empty establishing shot${film}, ${setting}, ` +
+      `accurate to the screenplay location, dramatic natural lighting, ` +
+      `no people, wide angle, photorealistic, storyboard frame ${index + 1}`
+    ).slice(0, 500)
+  })
 }
 
 export function buildImagePromptInstruction(
   conversationHistory: { role: string; content: string }[],
   userMessage: string,
+  storyContext?: StoryImageContext,
 ): string {
   const focus = detectImageRequestFocus(userMessage, conversationHistory)
   const context = conversationHistory
@@ -31,23 +131,33 @@ export function buildImagePromptInstruction(
     (m) => m.role === 'assistant' && detectCharacterContent(m.content),
   )?.content
 
+  const storyBlock = storyContext?.combinedText?.trim()
+    ? `\n\nSCREENPLAY / STORY SOURCE (use ONLY these locations and settings — do NOT invent unrelated places):\n${storyContext.combinedText.slice(0, 12000)}`
+    : ''
+
+  const filmLine = storyContext?.projectName
+    ? `\nFilm title: ${storyContext.projectName}`
+    : ''
+
   if (focus === 'location') {
     return `You are building a cinematic LOCATION/ESTABLISHING SHOT image prompt.
 
-The user asked: "${userMessage}"
+The user asked: "${userMessage}"${filmLine}
 
 Primary location description:
-${locationSource || 'Derive the setting only from the conversation below.'}
+${locationSource || 'Derive locations ONLY from the screenplay/story source below — never invent random cities or countries.'}
 
 Conversation (use ONLY environment, architecture, landscape, and atmosphere — ignore characters):
-${context}
+${context}${storyBlock}
 
 Rules:
 - Output ONLY the image prompt text, nothing else
 - Start with "Cinematic film still,"
-- EMPTY establishing shot — NO people, NO characters, NO actors, NO vehicles with riders unless the user explicitly asked for people
+- EMPTY establishing shot — NO people, NO characters, NO actors
+- Location MUST match the screenplay sluglines (INT./EXT.) and story setting
+- Do NOT use generic stock locations (bazaars, mosques, etc.) unless explicitly in the script
 - Focus on: place, landscape, architecture, weather, lighting, mood, textures, time of day
-- Do NOT include character names (e.g. Santiago) or story plot
+- Do NOT include character names or story plot
 - Max 500 characters
 - Do not say you cannot generate images`
   }
@@ -55,13 +165,13 @@ Rules:
   if (focus === 'character') {
     return `You are building a cinematic CHARACTER portrait image prompt.
 
-The user asked: "${userMessage}"
+The user asked: "${userMessage}"${filmLine}
 
 Primary character description:
-${characterSource || 'Derive the character only from the conversation below.'}
+${characterSource || 'Derive the character only from the conversation and story source below.'}
 
 Conversation:
-${context}
+${context}${storyBlock}
 
 Rules:
 - Output ONLY the image prompt text, nothing else
@@ -77,14 +187,15 @@ Rules:
 Conversation so far:
 ${context}
 
-The user just asked: "${userMessage}"
+The user just asked: "${userMessage}"${filmLine}${storyBlock}
 
 Write ONE detailed cinematic image prompt that captures what the user wants to see. Match the subject they asked for (location, character, or scene).
 
 Rules:
 - Output ONLY the image prompt text, nothing else
 - Start with "Cinematic film still,"
-- Be vivid and specific
+- Use ONLY locations/settings from the screenplay source above if provided
+- Do NOT invent unrelated places
 - If they asked for a location, do NOT add characters unless they asked for people
 - If they asked for a character, focus on the character
 - Max 500 characters
@@ -129,8 +240,16 @@ export function detectImageRequestFocus(
 export function buildImagePromptText(
   conversationHistory: { role: string; content: string }[],
   userMessage: string,
+  storyContext?: StoryImageContext,
 ): string {
   const focus = detectImageRequestFocus(userMessage, conversationHistory)
+
+  if (storyContext?.combinedText?.trim()) {
+    const sluglines = extractScreenplayLocationSluglines(storyContext.combinedText)
+    if (sluglines.length > 0) {
+      return buildLocationImagePromptsFromSluglines(sluglines, storyContext.projectName, 1)[0]
+    }
+  }
 
   if (focus === 'location') {
     const locationSource = [...conversationHistory].reverse().find(
@@ -441,30 +560,22 @@ export function resolveCreativeMessageContext(
 
   const recent = allMessages.slice(Math.max(0, messageIndex - 8), messageIndex + 1)
   const recentUserImageRequest = [...recent].reverse().find(
-    (m) => m.role === 'user' && /\b(image|picture|visual|photo|show me|generate)\b/i.test(m.content),
+    (m) => m.role === 'user' && detectImageRequest(m.content),
   )
 
   if (recentUserImageRequest) {
     if (isLocationImageRequest(recentUserImageRequest.content)) {
-      const locationSource = [...recent].reverse().find(
-        (m) => m.role === 'assistant' && detectLocationContent(m.content),
-      )
-      const combined = recent.map((m) => m.content).join('\n\n')
       return {
         isCharacter: false,
-        isLocation: true,
-        contextContent: locationSource?.content || combined || message.content,
+        isLocation: false,
+        contextContent: recentUserImageRequest.content,
       }
     }
     if (isCharacterImageRequest(recentUserImageRequest.content)) {
-      const characterSource = [...recent].reverse().find(
-        (m) => m.role === 'assistant' && detectCharacterContent(m.content),
-      )
-      const combined = recent.map((m) => m.content).join('\n\n')
       return {
-        isCharacter: true,
+        isCharacter: false,
         isLocation: false,
-        contextContent: characterSource?.content || combined || message.content,
+        contextContent: recentUserImageRequest.content,
       }
     }
   }
@@ -533,6 +644,344 @@ export function parseLocationFields(content: string, fallbackTitle: string): Par
     visualDescription: stripWrappingQuotes(visualMatch?.[1]?.trim() || content.trim()),
     lightingNotes: stripWrappingQuotes(lightingMatch?.[1]?.trim() || ''),
     city: stripWrappingQuotes(cityMatch?.[1]?.trim() || ''),
+    prompt: content.trim(),
+  }
+}
+
+const SCENE_IMPORT_PATTERNS = [
+  /\bimport\s+(this\s+)?(scene|it)\b/i,
+  /\bsave\s+(this\s+)?scene\b/i,
+  /\badd\s+(this\s+)?scene\b/i,
+  /\bthis\s+is\s+scene\s+\d+/i,
+  /\bhere'?s?\s+scene\s+\d+/i,
+  /\bscene\s+\d+\s*:/i,
+]
+
+export function detectScreenplayContent(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return (
+    /\b(INT\.|EXT\.)\b/i.test(trimmed) ||
+    /^[A-Z][A-Z0-9 .'()\-]{1,40}$/m.test(trimmed)
+  )
+}
+
+const SCENE_IMPORT_LINE_REGEX =
+  /^(?:this\s+is\s+scene\s+\d+(?:\s*import\s+it)?|import\s+(?:this\s+)?(?:scene|it)|save\s+(?:this\s+)?scene|add\s+(?:this\s+)?scene|here'?s?\s+scene\s+\d+|scene\s+\d+\s*:)\s*[:\-]?\s*(.*)$/i
+
+function stripSceneImportPreamble(message: string): string {
+  const lines = message.split('\n')
+  const output: string[] = []
+  let skippingPreamble = true
+
+  for (const line of lines) {
+    if (!skippingPreamble) {
+      output.push(line)
+      continue
+    }
+
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    const importMatch = trimmed.match(SCENE_IMPORT_LINE_REGEX)
+    if (importMatch) {
+      const remainder = importMatch[1]?.trim()
+      if (remainder) output.push(remainder)
+      continue
+    }
+
+    skippingPreamble = false
+    output.push(line)
+  }
+
+  return output.join('\n').trim()
+}
+
+export function isSceneImportConfirmation(text: string): boolean {
+  return /^Imported your full scene verbatim/i.test(text.trim())
+}
+
+export function detectSceneImportRequest(message: string): boolean {
+  const trimmed = message.trim()
+  if (!trimmed || !detectScreenplayContent(trimmed)) return false
+  return SCENE_IMPORT_PATTERNS.some((pattern) => pattern.test(trimmed))
+}
+
+export function extractImportedSceneContent(message: string): {
+  title: string
+  content: string
+  sceneNumber: string | null
+} {
+  const content = stripSceneImportPreamble(message) || message.trim()
+  const sceneNumMatch = message.match(/\bscene\s+(\d+)\b/i)
+  const sceneNumber = sceneNumMatch?.[1] || null
+  const firstHeading = content.match(/^(INT\.|EXT\.)\s*.+$/im)?.[0]?.trim()
+
+  const title =
+    sceneNumber && firstHeading
+      ? `Scene ${sceneNumber} - ${firstHeading}`
+      : sceneNumber
+        ? `Scene ${sceneNumber}`
+        : firstHeading || 'Imported Scene'
+
+  return { title, content, sceneNumber }
+}
+
+function isScreenplayFragment(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (/\b(INT\.|EXT\.)\b/i.test(trimmed)) return true
+  if (/^(?:\d+\.|FADE|CUT TO|CONTINUED)/im.test(trimmed)) return true
+  if (/^[A-Z][A-Z0-9 .'()\-]{1,40}$/m.test(trimmed)) return true
+  if (/\n[A-Z][A-Z0-9 .'()\-]{1,40}\n/.test(`\n${trimmed}\n`)) return true
+  if (/\([A-Za-z][^)]{0,60}\)/.test(trimmed)) return true
+  return false
+}
+
+function findSuffixPrefixOverlap(left: string, right: string, minOverlap = 24): number {
+  const max = Math.min(left.length, right.length, 800)
+  for (let len = max; len >= minOverlap; len--) {
+    if (left.endsWith(right.slice(0, len))) return len
+  }
+  return 0
+}
+
+export function mergeSceneContent(existing: string, incoming: string): string {
+  const left = existing.trim()
+  const right = incoming.trim()
+  if (!left) return right
+  if (!right) return left
+  if (left === right) return left
+  if (right.includes(left)) return right
+  if (left.includes(right)) return left
+
+  const overlap = findSuffixPrefixOverlap(left, right)
+  if (overlap > 0) return `${left}${right.slice(overlap)}`
+
+  return `${left}\n\n${right}`
+}
+
+function extractSceneNumberFromThread(
+  priorMessages: { role: string; content: string }[],
+  currentContent: string,
+): string | null {
+  const current = currentContent.match(/\bscene\s+(\d+)\b/i)?.[1]
+  if (current) return current
+
+  for (let i = priorMessages.length - 1; i >= 0; i--) {
+    const msg = priorMessages[i]
+    if (msg.role !== 'user') continue
+    const match = msg.content.match(/\bscene\s+(\d+)\b/i)?.[1]
+    if (match) return match
+  }
+
+  return null
+}
+
+function buildSceneTitle(sceneNumber: string | null, content: string): string {
+  const firstHeading = content.match(/^(INT\.|EXT\.)\s*.+$/im)?.[0]?.trim()
+  if (sceneNumber && firstHeading) return `Scene ${sceneNumber} - ${firstHeading}`
+  if (sceneNumber) return `Scene ${sceneNumber}`
+  return firstHeading || 'Imported Scene'
+}
+
+function debugTextPreview(text: string, max = 140): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (!normalized) return '(empty)'
+  if (normalized.length <= max) return normalized
+  return `${normalized.slice(0, max)}…`
+}
+
+export interface SceneImportDebug {
+  currentMessageChars: number
+  currentExtractedChars: number
+  priorMessagesInThread: number
+  priorPartsCollected: number
+  priorParts: Array<{
+    messageIndex: number
+    chars: number
+    preview: string
+    reason: 'screenplay_fragment' | 'prior_import'
+  }>
+  mergeSteps: Array<{
+    partChars: number
+    beforeChars: number
+    afterChars: number
+  }>
+  finalChars: number
+  lineCount: number
+  sceneNumber: string | null
+  slugline: string | null
+  previewStart: string
+  previewEnd: string
+  contentEndExact: string
+}
+
+export function extractImportedSceneFromThread(
+  priorMessages: { role: string; content: string }[],
+  currentContent: string,
+  options?: { collectDebug?: boolean },
+): {
+  title: string
+  content: string
+  sceneNumber: string | null
+  debug?: SceneImportDebug
+} {
+  const collectDebug = options?.collectDebug ?? false
+  const current = extractImportedSceneContent(currentContent)
+  const sceneNumber = extractSceneNumberFromThread(priorMessages, currentContent) || current.sceneNumber
+  const parts: string[] = []
+  const priorPartsDebug: SceneImportDebug['priorParts'] = []
+  const mergeSteps: SceneImportDebug['mergeSteps'] = []
+
+  for (let i = priorMessages.length - 1; i >= 0; i--) {
+    const msg = priorMessages[i]
+    if (msg.role === 'assistant') break
+    if (msg.role !== 'user') continue
+
+    const priorSceneNum = msg.content.match(/\bscene\s+(\d+)\b/i)?.[1]
+    if (priorSceneNum && sceneNumber && priorSceneNum !== sceneNumber) break
+
+    if (detectSceneImportRequest(msg.content)) {
+      const extracted = extractImportedSceneContent(msg.content)
+      parts.unshift(extracted.content)
+      if (collectDebug) {
+        priorPartsDebug.unshift({
+          messageIndex: i,
+          chars: extracted.content.length,
+          preview: debugTextPreview(extracted.content),
+          reason: 'prior_import',
+        })
+      }
+      break
+    }
+
+    const body = stripSceneImportPreamble(msg.content)
+    if (!body.trim()) continue
+
+    if (!isScreenplayFragment(body)) break
+
+    parts.unshift(body)
+    if (collectDebug) {
+      priorPartsDebug.unshift({
+        messageIndex: i,
+        chars: body.length,
+        preview: debugTextPreview(body),
+        reason: 'screenplay_fragment',
+      })
+    }
+  }
+
+  let content = current.content
+  for (const part of parts) {
+    const beforeChars = content.length
+    content = mergeSceneContent(part, content)
+    if (collectDebug) {
+      mergeSteps.push({
+        partChars: part.length,
+        beforeChars,
+        afterChars: content.length,
+      })
+    }
+  }
+
+  const slugline = content.match(/^(INT\.|EXT\.)\s*.+$/im)?.[0]?.trim() || null
+  const result = {
+    title: buildSceneTitle(sceneNumber, content),
+    content,
+    sceneNumber,
+  }
+
+  if (!collectDebug) return result
+
+  return {
+    ...result,
+    debug: {
+      currentMessageChars: currentContent.length,
+      currentExtractedChars: current.content.length,
+      priorMessagesInThread: priorMessages.length,
+      priorPartsCollected: parts.length,
+      priorParts: priorPartsDebug,
+      mergeSteps,
+      finalChars: content.length,
+      lineCount: content.split('\n').length,
+      sceneNumber,
+      slugline,
+      previewStart: debugTextPreview(content.slice(0, 240)),
+      previewEnd: debugTextPreview(content.slice(-240)),
+      contentEndExact: content.slice(-120).trim(),
+    },
+  }
+}
+
+function extractSceneCharacterNames(screenplay: string): string[] {
+  const names = new Set<string>()
+  for (const line of screenplay.split('\n')) {
+    const trimmed = line.trim()
+    if (
+      trimmed.length >= 2 &&
+      trimmed.length <= 40 &&
+      /^[A-Z][A-Z0-9 .'()-]*$/.test(trimmed) &&
+      !/^(INT\.|EXT\.|FADE|CUT|CONT'D|CONTINUED)$/i.test(trimmed) &&
+      !trimmed.includes('.') &&
+      !trimmed.includes(' - ')
+    ) {
+      names.add(trimmed)
+    }
+  }
+  return [...names]
+}
+
+export interface ParsedScene {
+  name: string
+  sceneNumber: string | null
+  location: string | null
+  characters: string[]
+  content: string
+  prompt: string
+}
+
+export function detectSceneContent(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (isSceneImportConfirmation(trimmed)) return false
+  if (detectScreenplayContent(trimmed)) return true
+  if (/^Scene\s+\d+/im.test(trimmed)) return true
+  if (/\bscene\s+\d+\b/i.test(trimmed) && /\b(INT\.|EXT\.|dialogue|action)\b/i.test(trimmed)) {
+    return true
+  }
+  return false
+}
+
+export function parseSceneFields(content: string, fallbackTitle: string): ParsedScene {
+  if (/\b(INT\.|EXT\.)/i.test(content) || detectSceneImportRequest(content)) {
+    const imported = extractImportedSceneContent(content)
+    const headingMatch = imported.content.match(/^(INT\.|EXT\.)\s*(.+)$/im)
+    const location = headingMatch?.[2]?.split('-')[0]?.trim() || null
+    const characters = extractSceneCharacterNames(imported.content)
+    return {
+      name: imported.title,
+      sceneNumber: imported.sceneNumber,
+      location,
+      characters,
+      content: imported.content,
+      prompt: imported.content,
+    }
+  }
+
+  const sceneNumMatch = content.match(/\bscene\s+(\d+)\b/i)
+  const sceneNumber = sceneNumMatch?.[1] || null
+  const titleMatch = content.match(/(?:^|\n)Scene\s+\d+[:\s-]+(.+?)(?:\n|$)/im)
+  const name =
+    titleMatch?.[1]?.trim() ||
+    (sceneNumber ? `Scene ${sceneNumber}` : fallbackTitle !== 'Untitled Project' ? `${fallbackTitle} - Scene` : 'Imported Scene')
+
+  return {
+    name,
+    sceneNumber,
+    location: null,
+    characters: extractSceneCharacterNames(content),
+    content: content.trim(),
     prompt: content.trim(),
   }
 }

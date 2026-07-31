@@ -291,6 +291,7 @@ export default function NewCreativePage() {
             onMessagesChange={setMessages}
             onWorkspaceTitleChange={handleWorkspaceTitleChange}
             onArtifactCreated={handleArtifactCreated}
+            onArtifactDeleted={handleDeleteArtifact}
             onMessageDeleted={handleMessageDeleted}
             onProjectLinked={handleProjectLinked}
             onProjectUnlinked={handleProjectUnlinked}

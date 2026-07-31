@@ -345,6 +345,32 @@ function ScreenplayPageClient({ id }: { id: string }) {
         // Get all script assets for this project
         const assets = await AssetService.getAssetsForProject(id)
         const scripts = assets.filter(a => a.content_type === 'script' && a.is_latest_version)
+
+        const screenplayTableScenes = await ScreenplayScenesService.getScreenplayScenes(id)
+        const scenesWithContent = sortScreenplayScenes(screenplayTableScenes).filter(
+          (scene) => scene.content?.trim(),
+        )
+
+        if (scenesWithContent.length > 0) {
+          const combinedFromScenes = ScreenplayScenesService.combineSceneContents(scenesWithContent)
+          console.log(
+            `[screenplay] Loaded ${scenesWithContent.length} scenes from screenplay_scenes (${combinedFromScenes.length} chars)`,
+          )
+          setFullScript(combinedFromScenes)
+
+          const projectScripts = scripts.filter((s) => s.project_id && !s.scene_id)
+          if (projectScripts.length > 0) {
+            projectScripts.sort(
+              (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+            )
+            setActiveScriptAsset(projectScripts[0])
+            setScriptAssets([projectScripts[0]])
+          } else {
+            setScriptAssets([])
+            setActiveScriptAsset(null)
+          }
+          return
+        }
         
         // Separate project-level scripts from scene-level scripts
         const projectScripts = scripts.filter(s => s.project_id && !s.scene_id)
@@ -2030,6 +2056,12 @@ ${centerText('AUTHOR NAME')}
     
     try {
       setIsLoadingScenes(true)
+
+      const tableScenes = await ScreenplayScenesService.getScreenplayScenes(projectId)
+      if (tableScenes.length > 0) {
+        setScreenplayScenes(sortScreenplayScenes(tableScenes))
+        return
+      }
       
       // Get or create timeline for the project
       let timeline = await TimelineService.getTimelineForMovie(projectId)
