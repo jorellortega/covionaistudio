@@ -70,6 +70,9 @@ import {
   getStoryboardAssignmentContext,
   loadStoryboardReferenceFiles,
   storyboardReferenceImageLimit,
+  summarizeStoryboardReferenceCoverage,
+  summarizeObjectReferenceCoverage,
+  buildEntityReferenceMapping,
   SINGLE_FRAME_STORYBOARD_INSTRUCTION,
   urlsToReferenceFiles,
   type StoryboardReferenceLoadFailure,
@@ -363,6 +366,7 @@ export default function SceneStoryboardsPage() {
   const [selectedAIService, setSelectedAIService] = useState("dalle")
   const [aiImagePrompt, setAiImagePrompt] = useState("")
   const [aiImagePromptFull, setAiImagePromptFull] = useState("") // Store the actual full prompt text
+  const [selectedAiImagePromptId, setSelectedAiImagePromptId] = useState("")
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
   const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
   const [quickInsertingKey, setQuickInsertingKey] = useState<string | null>(null)
@@ -413,6 +417,7 @@ export default function SceneStoryboardsPage() {
   const [referenceEditDialogOpen, setReferenceEditDialogOpen] = useState(false)
   const [referenceEditStoryboard, setReferenceEditStoryboard] = useState<Storyboard | null>(null)
   const [inlineCustomShotPrompt, setInlineCustomShotPrompt] = useState("")
+  const [selectedInlineEditPromptId, setSelectedInlineEditPromptId] = useState("")
   const [inlineShotReferenceFile, setInlineShotReferenceFile] = useState<File | null>(null)
   const [inlineShotReferencePreview, setInlineShotReferencePreview] = useState<string | null>(null)
   const [inlineStyleLinkAssetIds, setInlineStyleLinkAssetIds] = useState<string[]>([])
@@ -1091,6 +1096,11 @@ export default function SceneStoryboardsPage() {
     [projectImageAssets],
   )
 
+  const objectImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.story_object_id && a.content_url),
+    [projectImageAssets],
+  )
+
   const linkedProjectImageGroups = useMemo(() => {
     const groups = buildLinkedAssetGroups(linkableImageAssets, locations, characters)
     const avatarOnly = avatarImageAssets.filter(
@@ -1644,8 +1654,101 @@ export default function SceneStoryboardsPage() {
 
   const clearInlineReferenceEditState = () => {
     setInlineCustomShotPrompt("")
+    setSelectedInlineEditPromptId("")
     clearInlineShotReference()
     clearInlineStyleLink()
+  }
+
+  const getStoryboardCharacterMasterPrompt = (storyboard: Storyboard): string | null => {
+    for (const characterId of getStoryboardCharacterIds(storyboard)) {
+      const master = characters.find((c) => c.id === characterId)?.master_prompt?.trim()
+      if (master) return master
+    }
+    return null
+  }
+
+  const hasInlineEditPromptOptions = (storyboard: Storyboard) =>
+    savedPrompts.length > 0 || Boolean(getStoryboardCharacterMasterPrompt(storyboard))
+
+  const handleInlineEditPromptSelect = (storyboard: Storyboard, value: string) => {
+    if (value === "__none__") {
+      setSelectedInlineEditPromptId("")
+      return
+    }
+
+    if (value === "__character_master__") {
+      const master = getStoryboardCharacterMasterPrompt(storyboard)
+      if (!master) {
+        toast({
+          title: "No master prompt",
+          description: "Assigned character(s) do not have a master prompt saved yet.",
+          variant: "destructive",
+        })
+        return
+      }
+      setSelectedInlineEditPromptId(value)
+      setInlineCustomShotPrompt(master)
+      toast({
+        title: "Prompt applied",
+        description: "Character master prompt loaded into the edit field.",
+      })
+      return
+    }
+
+    const saved = savedPrompts.find((p) => p.id === value)
+    if (!saved) return
+    setSelectedInlineEditPromptId(value)
+    setInlineCustomShotPrompt(saved.prompt)
+    toast({
+      title: "Prompt applied",
+      description: `Loaded: ${saved.title}`,
+    })
+  }
+
+  const handleAiImagePromptSelect = (value: string) => {
+    if (value === "__none__") {
+      setSelectedAiImagePromptId("")
+      return
+    }
+
+    if (value === "__character_master__") {
+      if (!editingStoryboard) return
+      const master = getStoryboardCharacterMasterPrompt(editingStoryboard)
+      if (!master) {
+        toast({
+          title: "No master prompt",
+          description: "Assigned character(s) do not have a master prompt saved yet.",
+          variant: "destructive",
+        })
+        return
+      }
+      setSelectedAiImagePromptId(value)
+      if (hidePromptText) {
+        setAiImagePrompt("Character master prompt")
+      } else {
+        setAiImagePrompt(master)
+      }
+      setAiImagePromptFull(master)
+      toast({
+        title: "Prompt applied",
+        description: "Character master prompt loaded into image prompt.",
+      })
+      return
+    }
+
+    const selectedPrompt = savedPrompts.find((p) => p.id === value)
+    if (!selectedPrompt) return
+    setSelectedAiImagePromptId(value)
+    if (hidePromptText) {
+      setAiImagePrompt(selectedPrompt.title)
+    } else {
+      setAiImagePrompt(selectedPrompt.prompt)
+    }
+    setAiImagePromptFull(selectedPrompt.prompt)
+    toast({
+      title: "Prompt applied",
+      description: `Loaded: ${selectedPrompt.title}`,
+    })
   }
 
   const openReferenceEditDialog = (storyboard: Storyboard) => {
@@ -1839,15 +1942,20 @@ export default function SceneStoryboardsPage() {
       if (
         isCreateMode &&
         styleReferenceUrls.length === 0 &&
-        (assignmentContext.characterIds.length > 0 || assignmentContext.locationIds.length > 0)
+        (assignmentContext.characterIds.length > 0 ||
+          assignmentContext.locationIds.length > 0 ||
+          assignmentContext.objectIds.length > 0)
       ) {
         const refSources = collectStoryboardReferenceSources({
           characterIds: assignmentContext.characterIds,
           locationIds: assignmentContext.locationIds,
+          objectIds: assignmentContext.objectIds,
           characters,
           locations,
+          storyObjects,
           avatarImages: projectAvatarImages,
           characterAssets: characterImageAssets,
+          objectAssets: objectImageAssets,
           maxImages: storyboardReferenceImageLimit(),
         })
         pushStoryboardImageTrace(
@@ -2091,6 +2199,48 @@ export default function SceneStoryboardsPage() {
           ) : null}
         </p>
       ) : null}
+      {hasInlineEditPromptOptions(storyboard) ? (
+        <div className="space-y-2">
+          <Label htmlFor={`${idPrefix}-saved-prompt`} className="text-xs sm:text-sm">
+            Saved prompt
+          </Label>
+          <Select
+            value={selectedInlineEditPromptId || "__none__"}
+            onValueChange={(v) => handleInlineEditPromptSelect(storyboard, v)}
+            disabled={isEditingThisShot || isLoadingPrompts}
+          >
+            <SelectTrigger
+              id={`${idPrefix}-saved-prompt`}
+              className="bg-input border-border text-xs sm:text-sm"
+            >
+              <SelectValue
+                placeholder={
+                  isLoadingPrompts ? "Loading prompts…" : "Apply a saved prompt…"
+                }
+              />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">
+                {isCreateMode ? "None (custom description)" : "None (custom edit)"}
+              </SelectItem>
+              {getStoryboardCharacterMasterPrompt(storyboard) ? (
+                <SelectItem value="__character_master__">Character master prompt</SelectItem>
+              ) : null}
+              {savedPrompts.map((prompt) => (
+                <SelectItem key={prompt.id} value={prompt.id}>
+                  {prompt.title}
+                  {prompt.type === "style" ? " (style)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground break-words">
+            {isCreateMode
+              ? "Loads into the description below, then generate the shot image."
+              : "Loads into the edit field below — then click Edit Image to apply to this shot."}
+          </p>
+        </div>
+      ) : null}
       <div className="space-y-2">
         <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
           {isCreateMode ? "Describe the image" : "Describe your edit"}
@@ -2098,7 +2248,10 @@ export default function SceneStoryboardsPage() {
         <Textarea
           id={`${idPrefix}-inline-edit`}
           value={inlineCustomShotPrompt}
-          onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+          onChange={(e) => {
+            setInlineCustomShotPrompt(e.target.value)
+            if (selectedInlineEditPromptId) setSelectedInlineEditPromptId("")
+          }}
           placeholder={
             isCreateMode
               ? "e.g., wide shot of a detective in a rainy neon alley, moody cinematic lighting"
@@ -3060,6 +3213,7 @@ export default function SceneStoryboardsPage() {
     setEditingStoryboard(null)
     setAiImagePrompt("")
     setAiImagePromptFull("")
+    setSelectedAiImagePromptId("")
     setIncludeCharacterDetails(false)
     setIncludeMasterPrompt(false)
     setUseExactPrompt(true)
@@ -3488,10 +3642,20 @@ export default function SceneStoryboardsPage() {
       generationPrompt = enhancedPrompt
 
       const modelLabel = modelToUse || imagesSetting?.locked_model || serviceToUse
-      const refLimit = storyboardReferenceImageLimit(modelToUse)
+      const refLimit = storyboardReferenceImageLimit(modelToUse, {
+        characterCount: assignmentContext.characterIds.length,
+        locationCount: assignmentContext.locationIds.length,
+        objectCount: assignmentContext.objectIds.length,
+      })
       const shotGallery = storyboardImages.get(storyboardId) ?? []
       const hasShotImages = Boolean(storyboard.image_url) || shotGallery.length > 0
-      const skipReferenceImages = isQuick && hasShotImages
+      const hasAssignedRefs =
+        assignmentContext.characterIds.length > 0 ||
+        assignmentContext.locationIds.length > 0 ||
+        assignmentContext.objectIds.length > 0
+      // Quick regen on a shot with images used to skip all refs → text-only random faces.
+      // Still exclude this shot's own URLs; when characters/locations are assigned, use collage/avatars.
+      const skipReferenceImages = isQuick && hasShotImages && !hasAssignedRefs
       const excludeReferenceUrls = isQuick
         ? [
             ...(storyboard.image_url ? [storyboard.image_url] : []),
@@ -3504,13 +3668,98 @@ export default function SceneStoryboardsPage() {
         : collectStoryboardReferenceSources({
             characterIds: assignmentContext.characterIds,
             locationIds: assignmentContext.locationIds,
+            objectIds: assignmentContext.objectIds,
             characters,
             locations,
+            storyObjects,
             avatarImages: projectAvatarImages,
             characterAssets: characterImageAssets,
+            objectAssets: objectImageAssets,
             maxImages: refLimit,
             excludeUrls: excludeReferenceUrls,
           })
+
+      if (isQuick && hasShotImages) {
+        pushStoryboardImageTrace(
+          "info",
+          skipReferenceImages
+            ? "Quick generate — no character/location assignments; references skipped"
+            : "Quick generate — using assigned references (shot gallery URLs excluded)",
+          `sources=${referenceSources.length}, excludedUrls=${excludeReferenceUrls.length}`,
+        )
+      }
+      for (const source of referenceSources) {
+        pushStoryboardImageTrace(
+          "ok",
+          `Reference: ${source.label}`,
+          `${source.sourceType} · ${source.url.slice(0, 80)}`,
+        )
+      }
+
+      const referenceCoverage = summarizeStoryboardReferenceCoverage(
+        referenceSources,
+        assignmentContext.characterIds,
+        characters,
+        refLimit,
+      )
+      const objectReferenceCoverage = summarizeObjectReferenceCoverage(
+        referenceSources,
+        assignmentContext.objectIds,
+        storyObjects,
+        refLimit,
+      )
+      debugStoryboardImage("references-collected", {
+        phase: "multi-character-coverage",
+        storyboardId,
+        model: modelToUse,
+        refLimit,
+        assignedCharacters: assignmentContext.characterNames,
+        assignedObjects: assignmentContext.objectNames,
+        characterRefMapping: referenceCoverage.characterRefMapping,
+        objectRefMapping: objectReferenceCoverage.objectRefMapping,
+        included: referenceCoverage.included,
+        missingSource: referenceCoverage.missingSource,
+        droppedDueToLimit: referenceCoverage.droppedDueToLimit,
+        objectIncluded: objectReferenceCoverage.included,
+        objectMissingSource: objectReferenceCoverage.missingSource,
+        objectDroppedDueToLimit: objectReferenceCoverage.droppedDueToLimit,
+      })
+      if (objectReferenceCoverage.missingSource.length > 0) {
+        pushStoryboardImageTrace(
+          "warn",
+          "Objects with NO reference image (model may invent props/vehicles)",
+          objectReferenceCoverage.missingSource.map((e) => e.name).join(", "),
+        )
+      }
+      for (const entry of objectReferenceCoverage.objectRefMapping) {
+        pushStoryboardImageTrace(
+          "info",
+          `GPT ref #${entry.index} → ${entry.name} (${entry.category})`,
+          `${entry.sourceType}: ${entry.label}`,
+        )
+      }
+      if (referenceCoverage.missingSource.length > 0) {
+        pushStoryboardImageTrace(
+          "warn",
+          "Characters with NO reference image (model may invent faces)",
+          referenceCoverage.missingSource.map((e) => e.name).join(", "),
+        )
+      }
+      if (referenceCoverage.droppedDueToLimit.length > 0) {
+        pushStoryboardImageTrace(
+          "warn",
+          "Characters dropped — ref limit exceeded",
+          `${referenceCoverage.droppedDueToLimit.map((e) => e.name).join(", ")} (limit=${refLimit})`,
+        )
+      }
+      for (const entry of referenceCoverage.characterRefMapping) {
+        pushStoryboardImageTrace(
+          "info",
+          `GPT ref #${entry.index} → ${entry.name}`,
+          `${entry.sourceType}: ${entry.label}`,
+        )
+      }
+
       const referenceLoad =
         referenceSources.length > 0
           ? await loadStoryboardReferenceFiles(referenceSources)
@@ -3557,9 +3806,10 @@ export default function SceneStoryboardsPage() {
           objectNames: assignmentContext.objectNames,
           characterDetails: [],
           locationDetails: [],
-          objectDetails: [],
+          objectDetails: assignmentContext.objectDetails,
           masterPrompts: [],
           referenceCount: referenceFiles.length,
+          entityRefMapping: buildEntityReferenceMapping(referenceLoad.loaded),
         })
       }
 
@@ -3599,6 +3849,11 @@ export default function SceneStoryboardsPage() {
           styleReferenceUrls: loadedReferenceUrls.slice(1),
           supportsReference: true,
         })
+        pushStoryboardImageTrace(
+          "info",
+          "GPT Image reference payload",
+          `primary=${loadedReferenceUrls[0]?.slice(0, 60) ?? "none"}, styleRefs=${loadedReferenceUrls.length - 1}, total=${loadedReferenceUrls.length}`,
+        )
       } else {
         debugStoryboardImage("request-sent", {
           storyboardId,
@@ -5111,63 +5366,53 @@ export default function SceneStoryboardsPage() {
                   <div>
                     <Label htmlFor="ai-image-prompt">Image Prompt</Label>
                     
-                    {/* Saved Prompts Dropdown */}
-                    <div className="mb-3">
-                      <div className="text-xs text-muted-foreground mb-2">
-                        Saved Prompts: {savedPrompts.length} found for this movie
-                        {sceneInfo?.project_id && (
-                          <span className="ml-2 text-blue-400">
-                            (Project: {sceneInfo.project_id})
-                          </span>
-                        )}
-                      </div>
-                      {savedPrompts.length > 0 ? (
-                        <>
-                          <Label htmlFor="saved-prompt-select" className="text-xs text-muted-foreground mb-2 block">
-                            Use Saved Prompt
-                          </Label>
-                        <Select onValueChange={(promptId) => {
-                          const selectedPrompt = savedPrompts.find(p => p.id === promptId)
-                          
-                          if (selectedPrompt) {
-                            if (hidePromptText) {
-                              // Insert just the prompt name when hiding text
-                              setAiImagePrompt(selectedPrompt.title)
-                            } else {
-                              // Insert the full prompt when showing text
-                              setAiImagePrompt(selectedPrompt.prompt)
-                            }
-                            // Always store the full prompt text for AI generation
-                            setAiImagePromptFull(selectedPrompt.prompt)
-                            toast({
-                              title: "Prompt Loaded",
-                              description: `Loaded: ${selectedPrompt.title}`,
-                            })
-                          }
-                        }}>
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue placeholder="Select a saved prompt..." />
+                    {/* Saved prompt */}
+                    {(savedPrompts.length > 0 ||
+                      (editingStoryboard &&
+                        getStoryboardCharacterMasterPrompt(editingStoryboard))) ? (
+                      <div className="mb-3 space-y-2">
+                        <Label htmlFor="saved-prompt-select" className="text-xs text-muted-foreground">
+                          Saved prompt
+                        </Label>
+                        <Select
+                          value={selectedAiImagePromptId || "__none__"}
+                          onValueChange={handleAiImagePromptSelect}
+                          disabled={isLoadingPrompts}
+                        >
+                          <SelectTrigger id="saved-prompt-select" className="h-8 text-xs bg-input border-border">
+                            <SelectValue
+                              placeholder={
+                                isLoadingPrompts
+                                  ? "Loading prompts…"
+                                  : "Apply a saved prompt…"
+                              }
+                            />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value="__none__">None (custom prompt)</SelectItem>
+                            {editingStoryboard &&
+                            getStoryboardCharacterMasterPrompt(editingStoryboard) ? (
+                              <SelectItem value="__character_master__">
+                                Character master prompt
+                              </SelectItem>
+                            ) : null}
                             {savedPrompts.map((prompt) => (
                               <SelectItem key={prompt.id} value={prompt.id}>
-                                <div className="flex items-center justify-between w-full">
-                                  <span className="truncate">{prompt.title}</span>
-                                  <Badge variant="secondary" className="ml-2 text-xs">
-                                    {prompt.useCount || 0} uses
-                                  </Badge>
-                                </div>
+                                {prompt.title}
+                                {prompt.type === "style" ? " (style)" : ""}
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
-                        </>
-                      ) : (
-                        <div className="text-xs text-muted-foreground">
-                          No saved prompts found. Create some in the Visual Dev page first.
-                        </div>
-                      )}
-                    </div>
+                        <p className="text-xs text-muted-foreground">
+                          Applies to the image prompt below. Saved in VisDev or character prompts.
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mb-3">
+                        No saved prompts for this movie yet — create some in VisDev.
+                      </p>
+                    )}
                     
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex gap-2">
@@ -5246,7 +5491,10 @@ export default function SceneStoryboardsPage() {
                         <Textarea
                           id="ai-image-prompt"
                           value={aiImagePrompt.replace(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title || '', '')}
-                          onChange={(e) => setAiImagePrompt(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title + ' ' + e.target.value)}
+                        onChange={(e) => {
+                          setAiImagePrompt(savedPrompts.find(p => p.prompt === aiImagePromptFull)?.title + ' ' + e.target.value)
+                          if (selectedAiImagePromptId) setSelectedAiImagePromptId("")
+                        }}
                           placeholder="Type additional text here..."
                           rows={2}
                           className="text-sm"
@@ -5256,7 +5504,10 @@ export default function SceneStoryboardsPage() {
                       <Textarea
                         id="ai-image-prompt"
                         value={aiImagePrompt}
-                        onChange={(e) => setAiImagePrompt(e.target.value)}
+                        onChange={(e) => {
+                          setAiImagePrompt(e.target.value)
+                          if (selectedAiImagePromptId) setSelectedAiImagePromptId("")
+                        }}
                         placeholder="Describe the visual style, composition, lighting, and mood for this shot..."
                         rows={2}
                         className="text-sm"

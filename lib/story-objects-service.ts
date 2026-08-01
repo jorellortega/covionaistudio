@@ -52,6 +52,10 @@ export const STORY_OBJECT_CATEGORIES: { value: StoryObjectCategory; label: strin
   { value: 'other', label: 'Other' },
 ]
 
+export function getStoryObjectCategoryLabel(category: StoryObjectCategory | string): string {
+  return STORY_OBJECT_CATEGORIES.find((entry) => entry.value === category)?.label ?? String(category)
+}
+
 export class StoryObjectsService {
   static async ensureAuthenticated() {
     const { data: { session }, error } = await getSupabaseClient().auth.getSession()

@@ -115,6 +115,7 @@ import {
   getStoryboardAssignmentContext,
   loadAssignedStoryboardReferenceFiles,
   storyboardReferenceImageLimit,
+  buildEntityReferenceMapping,
   SINGLE_FRAME_STORYBOARD_INSTRUCTION,
 } from "@/lib/storyboard-image-generation"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
@@ -1737,6 +1738,11 @@ export default function CinemaProductionPage() {
 
   const characterImageAssets = useMemo(
     () => projectImageAssets.filter((a) => a.character_id && a.content_url),
+    [projectImageAssets],
+  )
+
+  const objectImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.story_object_id && a.content_url),
     [projectImageAssets],
   )
 
@@ -3422,28 +3428,38 @@ export default function CinemaProductionPage() {
       refLimit ??
       storyboardReferenceImageLimit(
         getLockedImageConfig({ withReferenceImage: true })?.apiModel,
+        {
+          characterCount: assignmentContext.characterIds.length,
+          locationCount: assignmentContext.locationIds.length,
+          objectCount: assignmentContext.objectIds.length,
+        },
       )
 
     if (
       assignmentContext.characterIds.length === 0 &&
-      assignmentContext.locationIds.length === 0
+      assignmentContext.locationIds.length === 0 &&
+      assignmentContext.objectIds.length === 0
     ) {
-      return { files: [], urls: [], failed: [], assignmentContext, limit }
+      return { files: [], urls: [], loaded: [], failed: [], assignmentContext, limit }
     }
 
     const result = await loadAssignedStoryboardReferenceFiles({
       characterIds: assignmentContext.characterIds,
       locationIds: assignmentContext.locationIds,
+      objectIds: assignmentContext.objectIds,
       characters: projectCharacters,
       locations: projectLocations,
+      storyObjects: projectStoryObjects,
       avatarImages: projectAvatarImages,
       characterAssets: characterImageAssets,
+      objectAssets: objectImageAssets,
       maxImages: limit,
     })
 
     return {
       files: result.files.slice(0, limit),
       urls: result.loaded.map((source) => source.url).slice(0, limit),
+      loaded: result.loaded.slice(0, limit),
       failed: result.failed,
       assignmentContext,
       limit,
@@ -3481,9 +3497,14 @@ export default function CinemaProductionPage() {
         throw new Error("Please lock GPT Image 2 in AI Settings → Images first.")
       }
 
-      const refLimit = storyboardReferenceImageLimit(config.apiModel)
+      const refLimit = storyboardReferenceImageLimit(config.apiModel, {
+        characterCount: assignmentContext.characterIds.length,
+        locationCount: assignmentContext.locationIds.length,
+        objectCount: assignmentContext.objectIds.length,
+      })
       const {
         urls: referenceUrls,
+        loaded: loadedReferences,
         failed: failedReferences,
       } = await loadStoryboardAssignmentReferences(storyboard, refLimit)
 
@@ -3501,11 +3522,16 @@ export default function CinemaProductionPage() {
       let enhancedPrompt = enrichPromptWithAssignments(basePrompt, {
         characterNames: assignmentContext.characterNames,
         locationNames: assignmentContext.locationNames,
+        objectNames: assignmentContext.objectNames,
         characterDetails: assignmentContext.characterDetails,
         locationDetails: assignmentContext.locationDetails,
         objectDetails: assignmentContext.objectDetails,
         masterPrompts: assignmentContext.masterPrompts,
         referenceCount: referenceUrls.length,
+        entityRefMapping:
+          loadedReferences.length > 0
+            ? buildEntityReferenceMapping(loadedReferences)
+            : undefined,
       })
       enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
 
@@ -4000,14 +4026,20 @@ export default function CinemaProductionPage() {
           storyboard,
           projectCharacters,
           projectLocations,
+          projectStoryObjects,
         )
         if (
           assignmentContext.characterIds.length > 0 ||
-          assignmentContext.locationIds.length > 0
+          assignmentContext.locationIds.length > 0 ||
+          assignmentContext.objectIds.length > 0
         ) {
           const { urls, failed } = await loadStoryboardAssignmentReferences(
             storyboard,
-            storyboardReferenceImageLimit(config.apiModel),
+            storyboardReferenceImageLimit(config.apiModel, {
+              characterCount: assignmentContext.characterIds.length,
+              locationCount: assignmentContext.locationIds.length,
+              objectCount: assignmentContext.objectIds.length,
+            }),
           )
           styleReferenceUrls.push(...urls)
           if (failed.length > 0) {

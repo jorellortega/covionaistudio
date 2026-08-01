@@ -3,6 +3,7 @@ import type { AvatarImageRecord } from "./avatar-images-service"
 import type { Character } from "./characters-service"
 import type { Location } from "./locations-service"
 import type { StoryObject } from "./story-objects-service"
+import { getStoryObjectCategoryLabel } from "./story-objects-service"
 import type { Storyboard } from "./storyboards-service"
 import {
   getStoryboardCharacterIds,
@@ -28,6 +29,9 @@ export type StoryboardReferenceSourceType =
   | "avatar_angle"
   | "location_image"
   | "location_reference"
+  | "object_image"
+  | "object_reference"
+  | "object_asset"
 
 export interface StoryboardReferenceSource {
   url: string
@@ -54,8 +58,206 @@ export function maxReferenceImagesForModel(apiModel?: string | null): number {
   return 6
 }
 
-export function storyboardReferenceImageLimit(apiModel?: string | null): number {
-  return Math.min(maxReferenceImagesForModel(apiModel), STORYBOARD_MAX_REFERENCE_IMAGES)
+export function storyboardReferenceImageLimit(
+  apiModel?: string | null,
+  options?: { characterCount?: number; locationCount?: number; objectCount?: number },
+): number {
+  const modelMax = maxReferenceImagesForModel(apiModel)
+  const assignmentCount =
+    (options?.characterCount ?? 0) +
+    (options?.locationCount ?? 0) +
+    (options?.objectCount ?? 0)
+
+  if (apiModel && isGPTImage2ApiModel(apiModel)) {
+    // GPT Image 2 edits: one collage per assigned character/location when possible.
+    const needed =
+      assignmentCount > 0 ? assignmentCount : STORYBOARD_MAX_REFERENCE_IMAGES
+    return Math.min(modelMax, needed)
+  }
+
+  return Math.min(modelMax, STORYBOARD_MAX_REFERENCE_IMAGES)
+}
+
+export type StoryboardReferenceCoverageEntry = {
+  characterId: string
+  name: string
+  status: "included" | "missing_source" | "dropped_limit" | "not_assigned"
+  sourceType?: StoryboardReferenceSourceType
+  label?: string
+}
+
+export function summarizeStoryboardReferenceCoverage(
+  sources: StoryboardReferenceSource[],
+  characterIds: string[],
+  characters: Character[],
+  maxImages: number,
+): {
+  refLimit: number
+  included: StoryboardReferenceCoverageEntry[]
+  droppedDueToLimit: StoryboardReferenceCoverageEntry[]
+  missingSource: StoryboardReferenceCoverageEntry[]
+  characterRefMapping: Array<{ index: number; name: string; sourceType: string; label: string }>
+} {
+  const finalSources = sources.slice(0, maxImages)
+  const droppedSources = sources.slice(maxImages)
+  const characterSourceTypes = new Set<StoryboardReferenceSourceType>([
+    "character_collage",
+    "avatar_angle",
+    "character_asset",
+    "character_reference",
+    "character_portrait",
+  ])
+
+  const included: StoryboardReferenceCoverageEntry[] = []
+  const missingSource: StoryboardReferenceCoverageEntry[] = []
+  const droppedDueToLimit: StoryboardReferenceCoverageEntry[] = []
+
+  for (const characterId of characterIds) {
+    const character = characters.find((c) => c.id === characterId)
+    const name = character?.name ?? characterId
+    const source = finalSources.find(
+      (s) => s.entityId === characterId && characterSourceTypes.has(s.sourceType),
+    )
+    if (source) {
+      included.push({
+        characterId,
+        name,
+        status: "included",
+        sourceType: source.sourceType,
+        label: source.label,
+      })
+      continue
+    }
+
+    const dropped = droppedSources.find(
+      (s) => s.entityId === characterId && characterSourceTypes.has(s.sourceType),
+    )
+    if (dropped) {
+      droppedDueToLimit.push({
+        characterId,
+        name,
+        status: "dropped_limit",
+        sourceType: dropped.sourceType,
+        label: dropped.label,
+      })
+      continue
+    }
+
+    missingSource.push({ characterId, name, status: "missing_source" })
+  }
+
+  const characterRefMapping = finalSources
+    .filter((s) => characterSourceTypes.has(s.sourceType) && s.entityName)
+    .map((s, index) => ({
+      index: index + 1,
+      name: s.entityName!,
+      sourceType: s.sourceType,
+      label: s.label,
+    }))
+
+  return {
+    refLimit: maxImages,
+    included,
+    droppedDueToLimit,
+    missingSource,
+    characterRefMapping,
+  }
+}
+
+export function summarizeObjectReferenceCoverage(
+  sources: StoryboardReferenceSource[],
+  objectIds: string[],
+  storyObjects: StoryObject[],
+  maxImages: number,
+): {
+  refLimit: number
+  included: StoryboardReferenceCoverageEntry[]
+  droppedDueToLimit: StoryboardReferenceCoverageEntry[]
+  missingSource: StoryboardReferenceCoverageEntry[]
+  objectRefMapping: Array<{ index: number; name: string; sourceType: string; label: string; category: string }>
+} {
+  const finalSources = sources.slice(0, maxImages)
+  const droppedSources = sources.slice(maxImages)
+  const objectSourceTypes = new Set<StoryboardReferenceSourceType>([
+    "object_image",
+    "object_reference",
+    "object_asset",
+  ])
+
+  const included: StoryboardReferenceCoverageEntry[] = []
+  const missingSource: StoryboardReferenceCoverageEntry[] = []
+  const droppedDueToLimit: StoryboardReferenceCoverageEntry[] = []
+
+  for (const objectId of objectIds) {
+    const object = storyObjects.find((item) => item.id === objectId)
+    const name = object?.name ?? objectId
+    const source = finalSources.find(
+      (s) => s.entityId === objectId && objectSourceTypes.has(s.sourceType),
+    )
+    if (source) {
+      included.push({
+        characterId: objectId,
+        name,
+        status: "included",
+        sourceType: source.sourceType,
+        label: source.label,
+      })
+      continue
+    }
+
+    const dropped = droppedSources.find(
+      (s) => s.entityId === objectId && objectSourceTypes.has(s.sourceType),
+    )
+    if (dropped) {
+      droppedDueToLimit.push({
+        characterId: objectId,
+        name,
+        status: "dropped_limit",
+        sourceType: dropped.sourceType,
+        label: dropped.label,
+      })
+      continue
+    }
+
+    missingSource.push({ characterId: objectId, name, status: "missing_source" })
+  }
+
+  const objectRefMapping = finalSources
+    .filter((s) => objectSourceTypes.has(s.sourceType) && s.entityName)
+    .map((s, index) => {
+      const object = storyObjects.find((item) => item.id === s.entityId)
+      return {
+        index: index + 1,
+        name: s.entityName!,
+        sourceType: s.sourceType,
+        label: s.label,
+        category: object ? getStoryObjectCategoryLabel(object.category) : "Object",
+      }
+    })
+
+  return {
+    refLimit: maxImages,
+    included,
+    droppedDueToLimit,
+    missingSource,
+    objectRefMapping,
+  }
+}
+
+export function buildEntityReferenceMapping(
+  loaded: StoryboardReferenceSource[],
+): Array<{ index: number; name: string; sourceType: string; label: string }> {
+  return loaded.map((source, index) => ({
+    index: index + 1,
+    name: source.entityName ?? source.label,
+    sourceType: source.sourceType,
+    label: source.label,
+  }))
+}
+
+export function buildObjectReferenceLabel(object: StoryObject): string {
+  const categoryLabel = getStoryObjectCategoryLabel(object.category)
+  return `${object.name} · ${categoryLabel}`
 }
 
 export function buildQuickShotImagePrompt(
@@ -154,7 +356,7 @@ export function buildLocationDetailsText(location: Location): string {
 export function buildObjectDetailsText(object: StoryObject): string {
   return [
     object.name && `Object name: ${object.name}`,
-    object.category && `Category: ${object.category}`,
+    object.category && `Type: ${getStoryObjectCategoryLabel(object.category)}`,
     object.description && `Description: ${object.description}`,
     object.visual_description && `Visual description: ${object.visual_description}`,
     object.material && `Material: ${object.material}`,
@@ -230,11 +432,15 @@ function resolveCharacterCollageUrl(
 export type CollectStoryboardReferenceOptions = {
   characterIds: string[]
   locationIds: string[]
+  objectIds?: string[]
   characters: Character[]
   locations: Location[]
+  storyObjects?: StoryObject[]
   avatarImages: AvatarImageRecord[]
   /** Linked project assets (character_id set) — used when portrait/reference URLs are stale */
   characterAssets?: Asset[]
+  /** Linked project assets (story_object_id set) */
+  objectAssets?: Asset[]
   maxImages: number
   /** Skip these URLs when collecting references (e.g. the current shot's gallery images). */
   excludeUrls?: string[]
@@ -255,10 +461,13 @@ export function collectStoryboardReferenceSources(
   const {
     characterIds,
     locationIds,
+    objectIds = [],
     characters,
     locations,
+    storyObjects = [],
     avatarImages,
     characterAssets = [],
+    objectAssets = [],
     maxImages,
     excludeUrls = [],
   } = options
@@ -278,6 +487,14 @@ export function collectStoryboardReferenceSources(
       (img) => img.image_url && avatarBelongsToCharacter(img, characterId, characterName),
     )
 
+  const collageResolution: Array<{
+    characterId: string
+    name: string
+    collageUrl: string | null
+    avatarCollageRows: number
+    collageAssets: number
+  }> = []
+
   for (const characterId of characterIds) {
     const character = characters.find((c) => c.id === characterId)
     const name = character?.name || "Character"
@@ -287,6 +504,20 @@ export function collectStoryboardReferenceSources(
       avatarImages,
       characterAssets,
     )
+
+    collageResolution.push({
+      characterId,
+      name,
+      collageUrl,
+      avatarCollageRows: avatarImages.filter(
+        (img) =>
+          img.angle_id === AVATAR_REFERENCE_COLLAGE_ANGLE_ID &&
+          avatarBelongsToCharacter(img, characterId, character?.name),
+      ).length,
+      collageAssets: characterAssets.filter(
+        (a) => a.character_id === characterId && a.content_url && isCollageAsset(a),
+      ).length,
+    })
 
     if (collageUrl) {
       addSource({
@@ -303,52 +534,42 @@ export function collectStoryboardReferenceSources(
 
     const avatars = avatarsForCharacter(characterId, character?.name)
     const front = avatars.find((a) => a.angle_id === "front")
-    const orderedAvatars = [
-      ...(front ? [front] : []),
-      ...avatars.filter((a) => a !== front && a.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID),
-    ]
+    const bestAvatar =
+      front ??
+      avatars.find((a) => a.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID) ??
+      null
 
-    for (const avatar of orderedAvatars) {
-      if (!avatar.image_url || seen.has(avatar.image_url)) continue
+    if (bestAvatar?.image_url && !seen.has(bestAvatar.image_url)) {
       addSource({
-        url: avatar.image_url,
-        label: `${name} · Avatar (${avatar.angle_id || "angle"})`,
+        url: bestAvatar.image_url,
+        label: `${name} · Avatar (${bestAvatar.angle_id || "angle"})`,
         sourceType: "avatar_angle",
         entityId: characterId,
         entityName: name,
       })
     }
 
-    for (const asset of characterAssets.filter(
-      (a) =>
-        a.character_id === characterId &&
-        a.content_type === "image" &&
-        a.content_url &&
-        !isCollageAsset(a),
-    )) {
-      addSource({
-        url: asset.content_url!,
-        label: `${name} · ${asset.title?.trim() || "Gallery image"}`,
-        sourceType: "character_asset",
-        entityId: characterId,
-        entityName: name,
-      })
+    if (sources.length === sourceCountBefore) {
+      const galleryAsset = characterAssets.find(
+        (a) =>
+          a.character_id === characterId &&
+          a.content_type === "image" &&
+          a.content_url &&
+          !isCollageAsset(a),
+      )
+      if (galleryAsset?.content_url) {
+        addSource({
+          url: galleryAsset.content_url,
+          label: `${name} · ${galleryAsset.title?.trim() || "Gallery image"}`,
+          sourceType: "character_asset",
+          entityId: characterId,
+          entityName: name,
+        })
+      }
     }
 
     const portraitUrl = character?.image_url?.trim()
-    for (const [index, ref] of (character?.reference_images ?? []).entries()) {
-      if (!ref || ref === portraitUrl) continue
-      addSource({
-        url: ref,
-        label: `${name} · Reference image ${index + 1}`,
-        sourceType: "character_reference",
-        entityId: characterId,
-        entityName: name,
-      })
-    }
-
-    const addedCharacterSources = sources.length > sourceCountBefore
-    if (!addedCharacterSources && portraitUrl) {
+    if (sources.length === sourceCountBefore && portraitUrl) {
       addSource({
         url: portraitUrl,
         label: `${name} · Portrait`,
@@ -383,6 +604,106 @@ export function collectStoryboardReferenceSources(
       })
     }
   }
+
+  for (const objectId of objectIds) {
+    const object = storyObjects.find((item) => item.id === objectId)
+    const name = object?.name || "Object"
+    const categoryLabel = object ? getStoryObjectCategoryLabel(object.category) : "Object"
+    const kindLabel = `${name} · ${categoryLabel}`
+    const sourceCountBefore = sources.length
+    const coverUrl = object?.image_url?.trim()
+
+    if (coverUrl) {
+      addSource({
+        url: coverUrl,
+        label: `${kindLabel} (cover)`,
+        sourceType: "object_image",
+        entityId: objectId,
+        entityName: name,
+      })
+    }
+
+    if (sources.length === sourceCountBefore) {
+      const refUrl = (object?.reference_images ?? []).find(
+        (ref) => ref && ref.trim() && ref !== coverUrl,
+      )
+      if (refUrl) {
+        addSource({
+          url: refUrl,
+          label: `${kindLabel} (reference)`,
+          sourceType: "object_reference",
+          entityId: objectId,
+          entityName: name,
+        })
+      }
+    }
+
+    if (sources.length === sourceCountBefore) {
+      const galleryAsset = objectAssets.find(
+        (a) =>
+          a.story_object_id === objectId &&
+          a.content_type === "image" &&
+          a.content_url,
+      )
+      if (galleryAsset?.content_url) {
+        addSource({
+          url: galleryAsset.content_url,
+          label: `${kindLabel} · ${galleryAsset.title?.trim() || "Gallery image"}`,
+          sourceType: "object_asset",
+          entityId: objectId,
+          entityName: name,
+        })
+      }
+    }
+  }
+
+  const coverage = summarizeStoryboardReferenceCoverage(
+    sources,
+    characterIds,
+    characters,
+    maxImages,
+  )
+
+  const objectCoverage = summarizeObjectReferenceCoverage(
+    sources,
+    objectIds,
+    storyObjects,
+    maxImages,
+  )
+
+  debugStoryboardImage("references-collected", {
+    phase: "collection",
+    characterIds,
+    locationIds,
+    objectIds,
+    maxImages,
+    excludedUrlCount: excludeUrls.length,
+    collageResolution: collageResolution.map((entry) => ({
+      name: entry.name,
+      usedCollage: Boolean(entry.collageUrl),
+      avatarCollageRows: entry.avatarCollageRows,
+      collageAssets: entry.collageAssets,
+      collageUrl: entry.collageUrl,
+    })),
+    coverage: {
+      refLimit: coverage.refLimit,
+      characterRefMapping: coverage.characterRefMapping,
+      included: coverage.included,
+      missingSource: coverage.missingSource,
+      droppedDueToLimit: coverage.droppedDueToLimit,
+      objectIncluded: objectCoverage.included,
+      objectMissingSource: objectCoverage.missingSource,
+      objectDroppedDueToLimit: objectCoverage.droppedDueToLimit,
+      objectRefMapping: objectCoverage.objectRefMapping,
+      totalSourcesBeforeCap: sources.length,
+    },
+    selectedSources: sources.slice(0, maxImages).map((s) => ({
+      sourceType: s.sourceType,
+      label: s.label,
+      entityName: s.entityName,
+      url: s.url,
+    })),
+  })
 
   return sources.slice(0, maxImages)
 }
@@ -441,16 +762,39 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
         return `Open Locations, select ${name}, and upload or generate a new cover image.`
       case "location_reference":
         return `Open Locations, select ${name}, and replace the broken reference image.`
+      case "object_image":
+        return `Open Objects, select ${name}, and upload or generate a new cover image.`
+      case "object_reference":
+        return `Open Objects, select ${name}, and replace the broken reference image.`
+      case "object_asset":
+        return `Open Objects, select ${name}, and re-upload or replace the gallery image.`
       default:
         return "Re-upload or replace the image link in storage."
     }
   }
 
   if (error.toLowerCase().includes("text/html") || error.includes("not a valid image")) {
-    return `Replace this link with a direct image file URL on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "character_collage" ? "Avatar Studio" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page.`
+    const page =
+      source.sourceType.startsWith("location")
+        ? "Locations"
+        : source.sourceType.startsWith("object")
+          ? "Objects"
+          : source.sourceType === "character_collage"
+            ? "Avatar Studio"
+            : source.sourceType === "avatar_angle"
+              ? "Avatars"
+              : "Characters"
+    return `Replace this link with a direct image file URL on the ${page} page.`
   }
 
-  return `Check the image on the ${source.sourceType.startsWith("location") ? "Locations" : source.sourceType === "avatar_angle" ? "Avatars" : "Characters"} page for ${name}.`
+  const page = source.sourceType.startsWith("location")
+    ? "Locations"
+    : source.sourceType.startsWith("object")
+      ? "Objects"
+      : source.sourceType === "avatar_angle"
+        ? "Avatars"
+        : "Characters"
+  return `Check the image on the ${page} page for ${name}.`
 }
 
 export async function loadStoryboardReferenceFiles(
@@ -540,6 +884,8 @@ export function enrichPromptWithAssignments(
     objectDetails?: string[]
     masterPrompts: string[]
     referenceCount: number
+    characterRefMapping?: Array<{ index: number; name: string; sourceType: string }>
+    entityRefMapping?: Array<{ index: number; name: string; sourceType: string; label: string }>
   },
 ): string {
   let enhanced = prompt.trim()
@@ -560,6 +906,23 @@ export function enrichPromptWithAssignments(
       enhanced = `${enhanced}. Use the attached reference image(s) only as visual inspiration for ${refParts.join(" and ")}. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
     } else {
       enhanced = `${enhanced}. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
+    }
+
+    const refMapping = options.entityRefMapping ?? options.characterRefMapping
+    if (refMapping && refMapping.length > 0) {
+      const mapping = refMapping
+        .map((entry) => {
+          const label = "label" in entry && entry.label ? entry.label : entry.sourceType
+          return `reference image ${entry.index} = ${entry.name} (${label})`
+        })
+        .join("; ")
+      enhanced = `${enhanced} Match each reference: ${mapping}.`
+      if (options.characterNames.length > 0) {
+        enhanced = `${enhanced} Every assigned character must appear and look like their reference — do not substitute random people.`
+      }
+      if (options.objectNames?.length) {
+        enhanced = `${enhanced} Props, vehicles, and objects must match their reference images with the correct type and appearance (e.g. car, weapon, furniture).`
+      }
     }
   }
 

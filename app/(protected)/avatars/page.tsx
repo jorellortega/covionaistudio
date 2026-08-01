@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, useCallback, type ChangeEvent } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
+import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import {
   AvatarImagesService,
@@ -209,16 +210,24 @@ function mergeAngleGalleries(existing: AngleGalleries, incoming: AngleGalleries)
   return merged
 }
 
-function getAvatarGalleryStorageKey(projectId: string, userId: string) {
+function getAvatarGalleryStorageKey(
+  projectId: string,
+  userId: string,
+  characterId: string,
+) {
   return projectId
-    ? `avatar-galleries-project-${projectId}`
-    : `avatar-galleries-user-${userId}`
+    ? `avatar-galleries-project-${projectId}-char-${characterId}`
+    : `avatar-galleries-user-${userId}-char-${characterId}`
 }
 
-function loadCachedAngleGalleries(projectId: string, userId: string): AngleGalleries {
-  if (!userId) return {}
+function loadCachedAngleGalleries(
+  projectId: string,
+  userId: string,
+  characterId: string,
+): AngleGalleries {
+  if (!userId || !characterId) return {}
   try {
-    const raw = localStorage.getItem(getAvatarGalleryStorageKey(projectId, userId))
+    const raw = localStorage.getItem(getAvatarGalleryStorageKey(projectId, userId, characterId))
     if (!raw) return {}
     const parsed = JSON.parse(raw) as AngleGalleries
     return parsed && typeof parsed === "object" ? parsed : {}
@@ -230,16 +239,53 @@ function loadCachedAngleGalleries(projectId: string, userId: string): AngleGalle
 function saveCachedAngleGalleries(
   projectId: string,
   userId: string,
+  characterId: string,
   galleries: AngleGalleries,
 ) {
-  if (!userId) return
+  if (!userId || !characterId) return
   const hasImages = Object.values(galleries).some((gallery) => gallery.images.length > 0)
   if (!hasImages) return
   try {
-    localStorage.setItem(getAvatarGalleryStorageKey(projectId, userId), JSON.stringify(galleries))
+    localStorage.setItem(
+      getAvatarGalleryStorageKey(projectId, userId, characterId),
+      JSON.stringify(galleries),
+    )
   } catch {
     // ignore quota errors
   }
+}
+
+function buildCharacterVisualDescription(char: Character): string {
+  return [
+    char.master_prompt,
+    char.description,
+    char.hair_color_current || char.hair_color_natural,
+    char.eye_color,
+    char.skin_tone,
+    char.usual_clothing_style,
+    char.distinguishing_marks,
+  ]
+    .filter(Boolean)
+    .join(". ")
+}
+
+function buildGalleriesForCharacter(
+  avatarRecords: AvatarImageRecord[],
+  projectAssets: Asset[],
+  characterId: string,
+): AngleGalleries {
+  const records = avatarRecords.filter(
+    (img) => img.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+  )
+  const avatarAssets = projectAssets.filter(
+    (asset) => isAvatarAsset(asset) && asset.character_id === characterId,
+  )
+
+  let galleries = buildGalleriesFromAvatarImageRecords(records)
+  if (avatarAssets.length > 0) {
+    galleries = mergeAngleGalleries(galleries, buildGalleriesFromAvatarAssets(avatarAssets))
+  }
+  return galleries
 }
 
 const createAvatarImage = (
@@ -272,10 +318,15 @@ export default function AvatarsPage() {
     [...AVATAR_TURNAROUND_ANGLE_IDS],
   )
   const [characters, setCharacters] = useState<Character[]>([])
-  const [linkedCharacterId, setLinkedCharacterId] = useState<string>("")
+  const [linkedCharacterId, setLinkedCharacterId] = useState(
+    searchParams.get("characterId") || "",
+  )
   const [angleGalleries, setAngleGalleries] = useState<AngleGalleries>({})
-  const [generatingAngleId, setGeneratingAngleId] = useState<string | null>(null)
-  const [isGeneratingAll, setIsGeneratingAll] = useState(false)
+  const [generatingAngleIds, setGeneratingAngleIds] = useState<Set<string>>(() => new Set())
+  const [generatingProgressByAngleId, setGeneratingProgressByAngleId] = useState<Map<string, string>>(
+    () => new Map(),
+  )
+  const [isBatchGenerating, setIsBatchGenerating] = useState(false)
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [isSavingAll, setIsSavingAll] = useState(false)
   const [projectImageAssets, setProjectImageAssets] = useState<Asset[]>([])
@@ -294,8 +345,6 @@ export default function AvatarsPage() {
   const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
   const [imageEditAngleId, setImageEditAngleId] = useState<string | null>(null)
   const [imageEditPrompt, setImageEditPrompt] = useState("")
-  const [imageEditUploading, setImageEditUploading] = useState(false)
-  const [imageEditProgress, setImageEditProgress] = useState("")
   const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
   const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
   const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
@@ -312,8 +361,51 @@ export default function AvatarsPage() {
   const [settingPortraitUrl, setSettingPortraitUrl] = useState<string | null>(null)
   const [portraitPickDialogOpen, setPortraitPickDialogOpen] = useState(false)
   const [pendingPortraitImageUrl, setPendingPortraitImageUrl] = useState<string | null>(null)
+  const [savedCharacterPrompts, setSavedCharacterPrompts] = useState<SavedPrompt[]>([])
+  const [isLoadingSavedPrompts, setIsLoadingSavedPrompts] = useState(false)
+  const [selectedDescriptionPromptId, setSelectedDescriptionPromptId] = useState("")
+  const [selectedEditPromptId, setSelectedEditPromptId] = useState("")
   const hydrationKeyRef = useRef<string | null>(null)
-  const lastGalleryProjectRef = useRef<string | null>(null)
+
+  const updateAvatarsUrl = useCallback(
+    (nextProjectId: string, nextCharacterId?: string) => {
+      if (!nextProjectId) {
+        router.replace("/avatars", { scroll: false })
+        return
+      }
+      const params = new URLSearchParams({ projectId: nextProjectId })
+      if (nextCharacterId) params.set("characterId", nextCharacterId)
+      router.replace(`/avatars?${params.toString()}`, { scroll: false })
+    },
+    [router],
+  )
+
+  const startAngleJob = (angleId: string, progress: string) => {
+    setGeneratingAngleIds((prev) => new Set(prev).add(angleId))
+    setGeneratingProgressByAngleId((prev) => new Map(prev).set(angleId, progress))
+  }
+
+  const setAngleJobProgress = (angleId: string, progress: string) => {
+    setGeneratingProgressByAngleId((prev) => new Map(prev).set(angleId, progress))
+  }
+
+  const finishAngleJob = (angleId: string) => {
+    setGeneratingAngleIds((prev) => {
+      const next = new Set(prev)
+      next.delete(angleId)
+      return next
+    })
+    setGeneratingProgressByAngleId((prev) => {
+      const next = new Map(prev)
+      next.delete(angleId)
+      return next
+    })
+  }
+
+  const isAngleGenerating = (angleId: string) => generatingAngleIds.has(angleId)
+
+  const angleGenerationProgress = (angleId: string) =>
+    generatingProgressByAngleId.get(angleId)
 
   useEffect(() => {
     if (!ready) return
@@ -323,11 +415,91 @@ export default function AvatarsPage() {
   }, [ready])
 
   useEffect(() => {
+    if (!ready || !userId) {
+      setSavedCharacterPrompts([])
+      return
+    }
+    setIsLoadingSavedPrompts(true)
+    SavedPromptsService.getSavedPrompts(userId, projectId || null)
+      .then((prompts) => {
+        setSavedCharacterPrompts(
+          prompts.filter((p) => p.type === "character" || p.type === "style"),
+        )
+      })
+      .catch(() => setSavedCharacterPrompts([]))
+      .finally(() => setIsLoadingSavedPrompts(false))
+  }, [ready, userId, projectId])
+
+  const applySavedPromptText = (promptText: string, target: "description" | "edit") => {
+    const text = promptText.trim()
+    if (!text) return
+    if (target === "description") {
+      setDescription(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into visual description for avatar generation.",
+      })
+    } else {
+      setImageEditPrompt(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into the edit prompt for this image.",
+      })
+    }
+  }
+
+  const handleSavedPromptSelect = (
+    value: string,
+    target: "description" | "edit",
+  ) => {
+    if (value === "__none__") {
+      if (target === "description") setSelectedDescriptionPromptId("")
+      else setSelectedEditPromptId("")
+      return
+    }
+
+    if (value === "__character_master__") {
+      const master = characters.find((c) => c.id === linkedCharacterId)?.master_prompt?.trim()
+      if (!master) {
+        toast({
+          title: "No master prompt",
+          description: "This character does not have a master prompt saved yet.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (target === "description") setSelectedDescriptionPromptId(value)
+      else setSelectedEditPromptId(value)
+      applySavedPromptText(master, target)
+      return
+    }
+
+    const saved = savedCharacterPrompts.find((p) => p.id === value)
+    if (!saved) return
+    if (target === "description") setSelectedDescriptionPromptId(value)
+    else setSelectedEditPromptId(value)
+    applySavedPromptText(saved.prompt, target)
+    if (saved.style && target === "description") {
+      setStyle(saved.style)
+    }
+  }
+
+  const hasSavedPromptOptions =
+    savedCharacterPrompts.length > 0 ||
+    Boolean(
+      characters.find((c) => c.id === linkedCharacterId)?.master_prompt?.trim(),
+    )
+
+  useEffect(() => {
     if (!ready || !projectId) {
       setCharacters([])
       setProjectImageAssets([])
       setProjectLocations([])
       setCharacterImageAssets([])
+      setLinkedCharacterId("")
+      setAngleGalleries({})
+      setProjectAvatarImages([])
+      hydrationKeyRef.current = null
       return
     }
     CharactersService.getCharacters(projectId)
@@ -353,59 +525,72 @@ export default function AvatarsPage() {
   }, [ready, projectId])
 
   useEffect(() => {
-    if (!userId) return
-    if (lastGalleryProjectRef.current === projectId) return
+    const urlCharacterId = searchParams.get("characterId") || ""
+    if (!projectId || !characters.length) return
 
-    lastGalleryProjectRef.current = projectId
-    hydrationKeyRef.current = null
-    setGalleriesHydrated(false)
-    setAngleGalleries(loadCachedAngleGalleries(projectId, userId))
-  }, [projectId, userId])
+    if (urlCharacterId && characters.some((c) => c.id === urlCharacterId)) {
+      if (linkedCharacterId !== urlCharacterId) {
+        hydrationKeyRef.current = null
+        setLinkedCharacterId(urlCharacterId)
+      }
+      return
+    }
+
+    if (linkedCharacterId && !characters.some((c) => c.id === linkedCharacterId)) {
+      hydrationKeyRef.current = null
+      setLinkedCharacterId("")
+      setAngleGalleries({})
+      setProjectAvatarImages([])
+      updateAvatarsUrl(projectId)
+    }
+  }, [characters, projectId, searchParams, linkedCharacterId, updateAvatarsUrl])
 
   useEffect(() => {
     if (!ready || !userId || !projectId || isLoadingImages) return
 
-    const hydrationKey = `${projectId}:${userId}`
+    if (!linkedCharacterId) {
+      setAngleGalleries({})
+      setProjectAvatarImages([])
+      hydrationKeyRef.current = null
+      setGalleriesHydrated(true)
+      return
+    }
+
+    const hydrationKey = `${projectId}:${userId}:${linkedCharacterId}`
     if (hydrationKeyRef.current === hydrationKey) return
 
+    setAngleGalleries(loadCachedAngleGalleries(projectId, userId, linkedCharacterId))
     let cancelled = false
     setIsLoadingAvatars(true)
 
-    AvatarImagesService.listImagesForProject(projectId)
+    AvatarImagesService.listImagesForCharacter(projectId, linkedCharacterId)
       .then((images) => {
         if (cancelled) return
 
         setProjectAvatarImages(images)
 
-        const avatarRecords = images.filter(
-          (img) => img.angle_id !== AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
+        const galleries = buildGalleriesForCharacter(
+          images,
+          projectImageAssets,
+          linkedCharacterId,
         )
-        const avatarAssets = projectImageAssets.filter(isAvatarAsset)
-
-        setAngleGalleries((prev) => {
-          let merged = mergeAngleGalleries(
-            prev,
-            buildGalleriesFromAvatarImageRecords(avatarRecords),
-          )
-          if (avatarAssets.length > 0) {
-            merged = mergeAngleGalleries(
-              merged,
-              buildGalleriesFromAvatarAssets(projectImageAssets),
-            )
-          }
-          saveCachedAngleGalleries(projectId, userId, merged)
-          return merged
-        })
+        setAngleGalleries(galleries)
+        saveCachedAngleGalleries(projectId, userId, linkedCharacterId, galleries)
         hydrationKeyRef.current = hydrationKey
         setGalleriesHydrated(true)
 
-        const nameFromRow = avatarRecords.find((img) => img.metadata?.character_name)
-        const metaName =
-          typeof nameFromRow?.metadata?.character_name === "string"
-            ? nameFromRow.metadata.character_name
-            : null
-        if (metaName?.trim()) {
-          setCharacterName((prev) => prev || metaName)
+        const char = characters.find((c) => c.id === linkedCharacterId)
+        if (char) {
+          setCharacterName(char.name)
+          const visual = buildCharacterVisualDescription(char)
+          if (visual.trim()) setDescription(visual)
+        } else {
+          const nameFromRow = images.find((img) => img.metadata?.character_name)
+          const metaName =
+            typeof nameFromRow?.metadata?.character_name === "string"
+              ? nameFromRow.metadata.character_name
+              : null
+          if (metaName?.trim()) setCharacterName(metaName)
         }
       })
       .catch(() => {
@@ -421,12 +606,20 @@ export default function AvatarsPage() {
     return () => {
       cancelled = true
     }
-  }, [ready, userId, projectId, isLoadingImages, projectImageAssets])
+  }, [
+    ready,
+    userId,
+    projectId,
+    linkedCharacterId,
+    isLoadingImages,
+    projectImageAssets,
+    characters,
+  ])
 
   useEffect(() => {
-    if (!userId) return
-    saveCachedAngleGalleries(projectId, userId, angleGalleries)
-  }, [angleGalleries, userId, projectId])
+    if (!userId || !linkedCharacterId) return
+    saveCachedAngleGalleries(projectId, userId, linkedCharacterId, angleGalleries)
+  }, [angleGalleries, userId, projectId, linkedCharacterId])
 
   useEffect(() => {
     if (!ready || !linkedCharacterId) {
@@ -834,6 +1027,15 @@ export default function AvatarsPage() {
     setImageEditStyleLinkAssetIds([])
   }
 
+  const closeImageEditDialog = () => {
+    setImageEditDialogOpen(false)
+    setImageEditAngleId(null)
+    setSelectedEditPromptId("")
+    clearImageEditReference()
+    clearImageEditStyleLinks()
+    setImageEditPrompt("")
+  }
+
   const toggleImageEditStyleLink = (assetId: string) => {
     setImageEditStyleLinkAssetIds((prev) => {
       if (prev.includes(assetId)) return prev.filter((id) => id !== assetId)
@@ -852,6 +1054,7 @@ export default function AvatarsPage() {
   const openImageEditDialog = (angleId: string) => {
     setImageEditAngleId(angleId)
     setImageEditPrompt("")
+    setSelectedEditPromptId("")
     clearImageEditReference()
     clearImageEditStyleLinks()
     setImageEditDialogOpen(true)
@@ -1195,12 +1398,21 @@ export default function AvatarsPage() {
   }
 
   const canGenerate = () => {
+    if (!linkedCharacterId) return false
     if (selectedAngles.length === 0) return false
     if (generationMode === "from_reference") return !!sourceReference
     return !!(description.trim() || characterName.trim())
   }
 
   const handleGenerateAll = async () => {
+    if (!linkedCharacterId) {
+      toast({
+        title: "Character required",
+        description: "Select a character before generating avatar shots.",
+        variant: "destructive",
+      })
+      return
+    }
     if (generationMode === "from_reference" && !sourceReference) {
       toast({
         title: "Source image needed",
@@ -1226,38 +1438,52 @@ export default function AvatarsPage() {
       return
     }
 
-    setIsGeneratingAll(true)
+    setIsBatchGenerating(true)
     const anglesToGenerate = avatarShots.filter((a) => selectedAngles.includes(a.id))
     let created = 0
 
     try {
       for (const angle of anglesToGenerate) {
-        setGeneratingAngleId(angle.id)
-        const result = await generateAngle(angle)
-        if (result) {
-          await addAvatarImage(angle, result)
-          created++
+        startAngleJob(angle.id, "Generating…")
+        try {
+          const result = await generateAngle(angle)
+          if (result) {
+            await addAvatarImage(angle, result)
+            created++
+          }
+        } catch (error) {
+          toast({
+            title: `${angle.label} failed`,
+            description:
+              error instanceof Error ? error.message : "Could not generate this angle.",
+            variant: "destructive",
+          })
+        } finally {
+          finishAngleJob(angle.id)
         }
       }
-      toast({
-        title: "Avatars generated",
-        description: generationMode === "from_reference"
-          ? `Added ${created} angle${created === 1 ? "" : "s"} from your reference image.`
-          : `Added ${created} angle${created === 1 ? "" : "s"}.`,
-      })
-    } catch (error) {
-      toast({
-        title: "Generation failed",
-        description: error instanceof Error ? error.message : "Failed to generate avatar",
-        variant: "destructive",
-      })
+      if (created > 0) {
+        toast({
+          title: "Avatars generated",
+          description: generationMode === "from_reference"
+            ? `Added ${created} angle${created === 1 ? "" : "s"} from your reference image.`
+            : `Added ${created} angle${created === 1 ? "" : "s"}.`,
+        })
+      }
     } finally {
-      setGeneratingAngleId(null)
-      setIsGeneratingAll(false)
+      setIsBatchGenerating(false)
     }
   }
 
   const handleGenerateSingle = async (angle: AvatarAngle) => {
+    if (!linkedCharacterId) {
+      toast({
+        title: "Character required",
+        description: "Select a character before generating avatar shots.",
+        variant: "destructive",
+      })
+      return
+    }
     if (generationMode === "from_reference" && !sourceReference) {
       toast({
         title: "Source image needed",
@@ -1275,7 +1501,15 @@ export default function AvatarsPage() {
       return
     }
 
-    setGeneratingAngleId(angle.id)
+    if (isAngleGenerating(angle.id)) {
+      toast({
+        title: "Already in progress",
+        description: "This angle is still generating.",
+      })
+      return
+    }
+
+    startAngleJob(angle.id, "Generating…")
     try {
       const result = await generateAngle(angle)
       if (result) {
@@ -1296,7 +1530,7 @@ export default function AvatarsPage() {
         variant: "destructive",
       })
     } finally {
-      setGeneratingAngleId(null)
+      finishAngleJob(angle.id)
     }
   }
 
@@ -1339,6 +1573,8 @@ export default function AvatarsPage() {
     const direction = imageEditPrompt.trim()
     const currentImage = imageEditCurrentImage
     const angle = imageEditAngle
+    const referenceFile = imageEditReferenceFile
+    const styleLinkAssetIds = [...imageEditStyleLinkAssetIds]
     if (!angleId || !userId) return
     if (!direction) {
       toast({
@@ -1348,7 +1584,7 @@ export default function AvatarsPage() {
       })
       return
     }
-    if (!imageEditReferenceFile && !currentImage?.imageUrl) {
+    if (!referenceFile && !currentImage?.imageUrl) {
       toast({
         title: "Reference required",
         description: "This view needs an image, or upload a reference to edit from.",
@@ -1356,9 +1592,17 @@ export default function AvatarsPage() {
       })
       return
     }
+    if (isAngleGenerating(angleId)) {
+      toast({
+        title: "Already in progress",
+        description: "This angle is still generating. You can keep working on other shots.",
+      })
+      return
+    }
 
-    setImageEditUploading(true)
-    setImageEditProgress("Editing image...")
+    startAngleJob(angleId, "Editing image…")
+    closeImageEditDialog()
+
     try {
       const config = requireLockedImageConfig({ withReferenceImage: true })
       let prompt = direction
@@ -1367,7 +1611,7 @@ export default function AvatarsPage() {
       prompt = prompt.slice(0, 990)
 
       const styleReferenceFiles: File[] = []
-      for (const assetId of imageEditStyleLinkAssetIds) {
+      for (const assetId of styleLinkAssetIds) {
         const styleAsset = allPickableAssets.find((a) => a.id === assetId)
         if (styleAsset?.content_url) {
           styleReferenceFiles.push(
@@ -1379,18 +1623,19 @@ export default function AvatarsPage() {
         }
       }
 
-      let referenceFile: File | undefined
+      let primaryReferenceFile: File | undefined
       if (config.supportsReference) {
-        referenceFile =
-          imageEditReferenceFile ??
+        primaryReferenceFile =
+          referenceFile ??
           (await referenceUrlToFile(
             currentImage!.imageUrl,
             `avatar-edit-${angleId}.png`,
           ))
       }
 
+      setAngleJobProgress(angleId, "Calling image model…")
       const response = await requestImageGeneration(prompt, config, {
-        referenceFile,
+        referenceFile: primaryReferenceFile,
         styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
       })
       if (!response.ok) {
@@ -1403,18 +1648,14 @@ export default function AvatarsPage() {
         throw new Error("Failed to edit image")
       }
 
-      if (imageEditAngle) {
-        await addAvatarImage(imageEditAngle, {
+      if (angle) {
+        await addAvatarImage(angle, {
           imageUrl,
           prompt,
           source: "generated",
         })
       }
 
-      setImageEditDialogOpen(false)
-      clearImageEditReference()
-      clearImageEditStyleLinks()
-      setImageEditPrompt("")
       toast({
         title: "Edit added",
         description: "Edited version added as a new variant for this angle.",
@@ -1426,8 +1667,7 @@ export default function AvatarsPage() {
         variant: "destructive",
       })
     } finally {
-      setImageEditUploading(false)
-      setImageEditProgress("")
+      finishAngleJob(angleId)
     }
   }
 
@@ -1492,22 +1732,24 @@ export default function AvatarsPage() {
   }
 
   const handleCharacterSelect = (id: string) => {
+    hydrationKeyRef.current = null
     setLinkedCharacterId(id)
+    setSourceReference(null)
+    setCollagePreviewUrl(null)
+    setCollagePreviewBlob(null)
+    setSavedCollageUrl(null)
+    setSelectedDescriptionPromptId("")
+
     const char = characters.find((c) => c.id === id)
     if (!char) return
-    if (!characterName.trim()) setCharacterName(char.name)
-    const visual = [
-      char.master_prompt,
-      char.description,
-      char.hair_color_current || char.hair_color_natural,
-      char.eye_color,
-      char.skin_tone,
-      char.usual_clothing_style,
-      char.distinguishing_marks,
-    ]
-      .filter(Boolean)
-      .join(". ")
-    if (visual.trim() && !description.trim()) setDescription(visual)
+
+    setCharacterName(char.name)
+    const visual = buildCharacterVisualDescription(char)
+    if (visual.trim()) setDescription(visual)
+
+    if (projectId) {
+      updateAvatarsUrl(projectId, id)
+    }
   }
 
   const totalImageCount = useMemo(
@@ -1823,8 +2065,14 @@ export default function AvatarsPage() {
                   <ProjectSelector
                     selectedProject={projectId}
                     onProjectChange={(id) => {
+                      hydrationKeyRef.current = null
                       setProjectId(id)
-                      router.replace(id ? `/avatars?projectId=${id}` : "/avatars", { scroll: false })
+                      setLinkedCharacterId("")
+                      setAngleGalleries({})
+                      setProjectAvatarImages([])
+                      setCharacterName("")
+                      setDescription("")
+                      updateAvatarsUrl(id)
                     }}
                     placeholder="Link to save assets..."
                   />
@@ -1832,12 +2080,21 @@ export default function AvatarsPage() {
 
                 {characters.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Link Character (optional)</Label>
+                    <Label>Character</Label>
                     <Select
                       value={linkedCharacterId || "none"}
                       onValueChange={(v) => {
-                        if (v === "none") setLinkedCharacterId("")
-                        else handleCharacterSelect(v)
+                        if (v === "none") {
+                          hydrationKeyRef.current = null
+                          setLinkedCharacterId("")
+                          setAngleGalleries({})
+                          setProjectAvatarImages([])
+                          setCharacterName("")
+                          setDescription("")
+                          if (projectId) updateAvatarsUrl(projectId)
+                        } else {
+                          handleCharacterSelect(v)
+                        }
                       }}
                     >
                       <SelectTrigger>
@@ -1852,6 +2109,44 @@ export default function AvatarsPage() {
                     </Select>
                   </div>
                 )}
+
+                {hasSavedPromptOptions ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="avatar-desc-prompt-selector">Saved prompt</Label>
+                    <Select
+                      value={selectedDescriptionPromptId || "__none__"}
+                      onValueChange={(v) => handleSavedPromptSelect(v, "description")}
+                      disabled={isLoadingSavedPrompts}
+                    >
+                      <SelectTrigger id="avatar-desc-prompt-selector" className="bg-input border-border">
+                        <SelectValue
+                          placeholder={
+                            isLoadingSavedPrompts
+                              ? "Loading prompts…"
+                              : "Apply a saved prompt…"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None (custom description)</SelectItem>
+                        {characters.find((c) => c.id === linkedCharacterId)?.master_prompt?.trim() ? (
+                          <SelectItem value="__character_master__">
+                            Character master prompt
+                          </SelectItem>
+                        ) : null}
+                        {savedCharacterPrompts.map((prompt) => (
+                          <SelectItem key={prompt.id} value={prompt.id}>
+                            {prompt.title}
+                            {prompt.type === "style" ? " (style)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Applies to generation and reference-based angles. Saved in VisDev or character prompts.
+                    </p>
+                  </div>
+                ) : null}
 
                 <Tabs
                   value={generationMode}
@@ -1892,7 +2187,10 @@ export default function AvatarsPage() {
                   </div>
                   <Textarea
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    onChange={(e) => {
+                      setDescription(e.target.value)
+                      if (selectedDescriptionPromptId) setSelectedDescriptionPromptId("")
+                    }}
                     placeholder="Tall man in his 40s, salt-and-pepper hair, sharp jawline, weathered skin, dark leather jacket..."
                     rows={5}
                   />
@@ -2231,9 +2529,9 @@ export default function AvatarsPage() {
                 <Button
                   className="w-full mt-2"
                   onClick={handleGenerateAll}
-                  disabled={isGeneratingAll || !canGenerate()}
+                  disabled={isBatchGenerating || !canGenerate()}
                 >
-                  {isGeneratingAll ? (
+                  {isBatchGenerating ? (
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   ) : (
                     <Sparkles className="h-4 w-4 mr-2" />
@@ -2272,7 +2570,16 @@ export default function AvatarsPage() {
               )}
             </div>
 
-            {!hasAnyImages && !isGeneratingAll ? (
+            {!linkedCharacterId && characters.length > 0 ? (
+              <Card className="border-dashed">
+                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+                  <UserCircle className="h-12 w-12 text-muted-foreground/50 mb-4" />
+                  <p className="text-muted-foreground text-sm max-w-sm">
+                    Select a character above to view and generate avatar shots for that character only.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : !hasAnyImages && generatingAngleIds.size === 0 && !isBatchGenerating ? (
               <Card className="border-dashed">
                 <CardContent className="flex flex-col items-center justify-center py-16 text-center">
                   <UserCircle className="h-12 w-12 text-muted-foreground/50 mb-4" />
@@ -2289,7 +2596,8 @@ export default function AvatarsPage() {
                 ).map((angle) => {
                   const gallery = angleGalleries[angle.id]
                   const avatar = gallery?.images[gallery.selectedIndex]
-                  const isLoading = generatingAngleId === angle.id
+                  const isLoading = isAngleGenerating(angle.id)
+                  const loadProgress = angleGenerationProgress(angle.id)
                   const isDefaultPortrait = Boolean(
                     avatar?.imageUrl &&
                       characters.some((character) => character.image_url === avatar.imageUrl),
@@ -2327,8 +2635,13 @@ export default function AvatarsPage() {
                       <CardContent className="p-0">
                         <div className="aspect-[3/4] bg-muted relative">
                           {isLoading && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10 gap-2 p-3">
                               <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                              {loadProgress ? (
+                                <p className="text-xs text-muted-foreground text-center">
+                                  {loadProgress}
+                                </p>
+                              ) : null}
                             </div>
                           )}
                           {avatar ? (
@@ -2344,7 +2657,7 @@ export default function AvatarsPage() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => handleGenerateSingle(angle)}
-                                disabled={isGeneratingAll}
+                                disabled={isLoading}
                               >
                                 Generate
                               </Button>
@@ -2353,7 +2666,7 @@ export default function AvatarsPage() {
                                 size="sm"
                                 className="text-xs"
                                 onClick={() => openPickDialog(angle.id)}
-                                disabled={isGeneratingAll}
+                                disabled={isLoading}
                               >
                                 <Images className="h-3 w-3 mr-1" />
                                 Pick Existing
@@ -2406,7 +2719,7 @@ export default function AvatarsPage() {
                               size="sm"
                               className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               onClick={() => openImageEditDialog(angle.id)}
-                              disabled={isLoading || isGeneratingAll || imageEditUploading}
+                              disabled={isLoading}
                             >
                               <Wand2 className="h-3 w-3 mr-1" />
                               Edit
@@ -2416,7 +2729,7 @@ export default function AvatarsPage() {
                               size="sm"
                               className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               onClick={() => openPickDialog(angle.id)}
-                              disabled={isLoading || isGeneratingAll}
+                              disabled={isLoading}
                             >
                               <Images className="h-3 w-3 mr-1" />
                               Pick
@@ -2431,10 +2744,7 @@ export default function AvatarsPage() {
                               )}
                               onClick={() => void handleSetPortrait(avatar.imageUrl)}
                               disabled={
-                                isLoading ||
-                                isGeneratingAll ||
-                                imageEditUploading ||
-                                settingPortraitUrl === avatar.imageUrl
+                                isLoading || settingPortraitUrl === avatar.imageUrl
                               }
                               title="Set as character default portrait"
                             >
@@ -2455,7 +2765,7 @@ export default function AvatarsPage() {
                               size="sm"
                               className="flex-1 min-w-[4.5rem] h-8 text-xs"
                               onClick={() => handleGenerateSingle(angle)}
-                              disabled={isLoading || isGeneratingAll}
+                              disabled={isLoading}
                             >
                               <Sparkles className="h-3 w-3 mr-1" />
                               Add
@@ -2465,7 +2775,7 @@ export default function AvatarsPage() {
                               size="sm"
                               className="flex-1 min-w-[4.5rem] h-8 text-xs text-destructive hover:text-destructive"
                               onClick={() => avatar && void handleDeleteAvatarImage(angle, avatar)}
-                              disabled={isLoading || isGeneratingAll || imageEditUploading}
+                              disabled={isLoading}
                             >
                               <Trash2 className="h-3 w-3 mr-1" />
                               Delete
@@ -2695,13 +3005,7 @@ export default function AvatarsPage() {
         <Dialog
           open={imageEditDialogOpen}
           onOpenChange={(open) => {
-            if (!open && !imageEditUploading) {
-              setImageEditDialogOpen(false)
-              setImageEditAngleId(null)
-              clearImageEditReference()
-              clearImageEditStyleLinks()
-              setImageEditPrompt("")
-            }
+            if (!open) closeImageEditDialog()
           }}
         >
           <DialogContent className="max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
@@ -2734,11 +3038,48 @@ export default function AvatarsPage() {
                     : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
                 </p>
 
-                {imageEditUploading && imageEditProgress ? (
+                {imageEditAngleId && isAngleGenerating(imageEditAngleId) && angleGenerationProgress(imageEditAngleId) ? (
                   <p className="text-xs text-muted-foreground flex items-center gap-2">
                     <Loader2 className="h-3 w-3 animate-spin" />
-                    {imageEditProgress}
+                    {angleGenerationProgress(imageEditAngleId)}
+                    <span className="text-muted-foreground/80">
+                      — you can close this window and keep working
+                    </span>
                   </p>
+                ) : null}
+
+                {hasSavedPromptOptions ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="avatar-edit-prompt-selector">Saved prompt</Label>
+                    <Select
+                      value={selectedEditPromptId || "__none__"}
+                      onValueChange={(v) => handleSavedPromptSelect(v, "edit")}
+                      disabled={
+                        imageEditAngleId != null && isAngleGenerating(imageEditAngleId)
+                      }
+                    >
+                      <SelectTrigger id="avatar-edit-prompt-selector" className="bg-input border-border">
+                        <SelectValue placeholder="Apply a saved prompt to this edit…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">None (custom edit)</SelectItem>
+                        {characters.find((c) => c.id === linkedCharacterId)?.master_prompt?.trim() ? (
+                          <SelectItem value="__character_master__">
+                            Character master prompt
+                          </SelectItem>
+                        ) : null}
+                        {savedCharacterPrompts.map((prompt) => (
+                          <SelectItem key={prompt.id} value={prompt.id}>
+                            {prompt.title}
+                            {prompt.type === "style" ? " (style)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Loads into the edit field below — then click Edit Image to apply to this view.
+                    </p>
+                  </div>
                 ) : null}
 
                 <div className="space-y-2">
@@ -2748,10 +3089,13 @@ export default function AvatarsPage() {
                   <Textarea
                     id="avatar-image-edit-prompt"
                     value={imageEditPrompt}
-                    onChange={(e) => setImageEditPrompt(e.target.value)}
+                    onChange={(e) => {
+                      setImageEditPrompt(e.target.value)
+                      if (selectedEditPromptId) setSelectedEditPromptId("")
+                    }}
                     placeholder='e.g., warmer lighting, darker jacket, softer background'
                     className="min-h-[72px] text-xs sm:text-sm resize-none"
-                    disabled={imageEditUploading}
+                    disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                   />
                 </div>
 
@@ -2765,7 +3109,7 @@ export default function AvatarsPage() {
                       type="file"
                       accept="image/*"
                       className="hidden"
-                      disabled={imageEditUploading}
+                      disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => {
                         const file = e.target.files?.[0]
                         if (!file) return
@@ -2780,7 +3124,7 @@ export default function AvatarsPage() {
                       variant="outline"
                       size="sm"
                       className="gap-2"
-                      disabled={imageEditUploading}
+                      disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                       onClick={() => document.getElementById("avatar-image-edit-ref")?.click()}
                     >
                       <Upload className="h-4 w-4" />
@@ -2800,7 +3144,7 @@ export default function AvatarsPage() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          disabled={imageEditUploading}
+                          disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                           onClick={clearImageEditReference}
                           title="Remove uploaded reference"
                         >
@@ -2856,7 +3200,7 @@ export default function AvatarsPage() {
                               <button
                                 key={asset.id}
                                 type="button"
-                                disabled={imageEditUploading}
+                                disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                                 onClick={() => toggleImageEditStyleLink(asset.id)}
                                 className={cn(
                                   "relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all",
@@ -2889,7 +3233,7 @@ export default function AvatarsPage() {
                         variant="ghost"
                         size="sm"
                         className="h-7 px-2 text-xs"
-                        disabled={imageEditUploading}
+                        disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                         onClick={clearImageEditStyleLinks}
                       >
                         Clear all
@@ -2902,14 +3246,14 @@ export default function AvatarsPage() {
                   size="sm"
                   onClick={() => void handleAvatarImageEdit()}
                   disabled={
-                    imageEditUploading ||
+                    (imageEditAngleId != null && isAngleGenerating(imageEditAngleId)) ||
                     !imageEditPrompt.trim() ||
                     !getLockedImageConfig({ withReferenceImage: true })?.supportsReference ||
                     (!imageEditReferenceFile && !imageEditCurrentImage?.imageUrl)
                   }
                   className="gap-2 w-full sm:w-auto bg-violet-600 hover:bg-violet-700 text-white"
                 >
-                  {imageEditUploading && imageEditPrompt.trim() ? (
+                  {(imageEditAngleId != null && isAngleGenerating(imageEditAngleId)) ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Editing...
