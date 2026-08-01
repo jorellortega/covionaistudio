@@ -323,7 +323,15 @@ export function SceneSyncControls({
         return
       }
 
-      const { shots, storyboards, sceneShots, sceneShotCount, characterNamesById, locationNamesById } = pendingSyncData
+      const {
+        shots,
+        storyboards,
+        sceneShots,
+        sceneShotCount,
+        characterNamesById,
+        locationNamesById,
+        objectNamesById,
+      } = pendingSyncData
       console.log("[scene-sync] applying with cached data", {
         storyboards: storyboards.length,
         shots: shots.length,

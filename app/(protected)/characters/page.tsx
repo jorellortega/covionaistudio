@@ -1216,6 +1216,19 @@ export default function CharactersPage() {
     setNewCharForeshadowingNotes("")
   }
 
+  const openCreateCharacterForm = (namePrefill?: string) => {
+    clearForm()
+    if (namePrefill) {
+      setNewCharName(namePrefill)
+    }
+    setTimeout(() => {
+      const charactersCard = document.getElementById("characters-form-card")
+      if (charactersCard) {
+        charactersCard.scrollIntoView({ behavior: "smooth", block: "start" })
+      }
+    }, 100)
+  }
+
   const saveEdit = async (id: string) => {
     if (!projectId) return
     try {
@@ -3445,7 +3458,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     <div className="min-h-screen bg-background overflow-x-hidden">
       <Header />
       <main className="container mx-auto max-w-7xl px-4 sm:px-6 py-4 sm:py-6 lg:py-8">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4 sm:mb-6">
+        <div className="flex items-center justify-between gap-3 mb-4 sm:mb-6">
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-400 bg-clip-text text-transparent break-words">
               Characters
@@ -3454,10 +3467,17 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               Aggregate characters from scenes and manage casting roles.
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            {projectId && !loading && (
+              <Button onClick={() => openCreateCharacterForm()} className="gap-2 shrink-0">
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">Create Character</span>
+                <span className="sm:hidden">Create</span>
+              </Button>
+            )}
             {projectId && (
-              <Link href={`/casting/${projectId}`} className="w-full sm:w-auto">
-                <Button variant="outline" size="sm" className="gap-2 w-full sm:w-auto text-xs sm:text-sm">
+              <Link href={`/casting/${projectId}`}>
+                <Button variant="outline" size="sm" className="gap-2 text-xs sm:text-sm">
                   <Users className="h-4 w-4" />
                   <span className="hidden sm:inline">Open Casting</span>
                   <span className="sm:hidden">Casting</span>
@@ -3523,7 +3543,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     disabled={characters.length === 0}
                   >
                     <SelectTrigger id="character-selector" className="bg-input border-border text-xs sm:text-sm">
-                      <SelectValue placeholder={characters.length === 0 ? "No characters available. Create one below." : "Select a character to view details..."} />
+                      <SelectValue placeholder={characters.length === 0 ? "No characters available. Create one above." : "Select a character to view details..."} />
                     </SelectTrigger>
                     <SelectContent>
                       {characters.length === 0 ? (
@@ -4317,7 +4337,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                   
                   {characters.length === 0 && (
                     <div className="text-xs sm:text-sm text-muted-foreground text-center py-4 px-2 break-words">
-                      No characters created yet. Create your first character below.
+                      No characters created yet. Click <strong>Create Character</strong> above to add your first one.
                     </div>
                   )}
                 </CardContent>
