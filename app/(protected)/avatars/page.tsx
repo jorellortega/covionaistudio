@@ -357,6 +357,7 @@ export default function AvatarsPage() {
   const [collagePreviewBlob, setCollagePreviewBlob] = useState<Blob | null>(null)
   const [isBuildingCollage, setIsBuildingCollage] = useState(false)
   const [isSavingCollage, setIsSavingCollage] = useState(false)
+  const [isDeletingCollage, setIsDeletingCollage] = useState(false)
   const [savedCollageUrl, setSavedCollageUrl] = useState<string | null>(null)
   const [settingPortraitUrl, setSettingPortraitUrl] = useState<string | null>(null)
   const [portraitPickDialogOpen, setPortraitPickDialogOpen] = useState(false)
@@ -1957,6 +1958,84 @@ export default function AvatarsPage() {
     link.click()
   }
 
+  const handleDeleteCollage = async () => {
+    const hasSaved = savedCollageRecord != null
+    const hasPreview = collagePreviewUrl != null
+
+    if (!hasSaved && !hasPreview) return
+
+    const message = hasSaved
+      ? "Delete this saved reference collage? Storyboards will no longer use it as the character reference."
+      : "Discard this unsaved collage preview?"
+
+    if (!window.confirm(message)) return
+
+    try {
+      setIsDeletingCollage(true)
+
+      if (collagePreviewUrl) {
+        URL.revokeObjectURL(collagePreviewUrl)
+        setCollagePreviewUrl(null)
+        setCollagePreviewBlob(null)
+      }
+
+      if (savedCollageRecord) {
+        const collageUrl = savedCollageRecord.image_url
+        const assetId = savedCollageRecord.asset_id
+        const recordId = savedCollageRecord.id
+
+        await AvatarImagesService.deleteImage(recordId)
+        setProjectAvatarImages((prev) => prev.filter((img) => img.id !== recordId))
+
+        if (assetId) {
+          try {
+            await AssetService.deleteAsset(assetId)
+            setProjectImageAssets((prev) => prev.filter((a) => a.id !== assetId))
+          } catch (assetError) {
+            console.error("Failed to delete collage asset:", assetError)
+          }
+        }
+
+        if (linkedCharacterId && collageUrl) {
+          const character = characters.find((c) => c.id === linkedCharacterId)
+          if (character) {
+            const refs = Array.isArray(character.reference_images)
+              ? character.reference_images.filter(
+                  (url): url is string => !!url && url !== collageUrl,
+                )
+              : []
+            await CharactersService.updateCharacter(linkedCharacterId, {
+              reference_images: refs,
+            })
+            setCharacters((prev) =>
+              prev.map((c) =>
+                c.id === linkedCharacterId ? { ...c, reference_images: refs } : c,
+              ),
+            )
+          }
+        }
+
+        setSavedCollageUrl(null)
+      }
+
+      toast({
+        title: hasSaved ? "Collage deleted" : "Preview discarded",
+        description: hasSaved
+          ? "The reference collage was removed from this character."
+          : "You can generate a new collage anytime.",
+      })
+    } catch (error) {
+      console.error("Failed to delete avatar collage:", error)
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete collage.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeletingCollage(false)
+    }
+  }
+
   const resolvePortraitCharacterId = (): string | null => {
     if (linkedCharacterId) return linkedCharacterId
 
@@ -2850,10 +2929,29 @@ export default function AvatarsPage() {
                       type="button"
                       variant="outline"
                       onClick={handleDownloadCollage}
-                      disabled={!collageDisplayUrl}
+                      disabled={!collageDisplayUrl || isDeletingCollage}
                     >
                       <Download className="h-4 w-4 mr-2" />
                       Download
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-destructive hover:text-destructive border-destructive/30 hover:bg-destructive/10"
+                      onClick={() => void handleDeleteCollage()}
+                      disabled={
+                        !collageDisplayUrl ||
+                        isDeletingCollage ||
+                        isSavingCollage ||
+                        isBuildingCollage
+                      }
+                    >
+                      {isDeletingCollage ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-4 w-4 mr-2" />
+                      )}
+                      Delete
                     </Button>
                   </div>
 

@@ -5,6 +5,7 @@ import type { Location } from "./locations-service"
 import type { StoryObject } from "./story-objects-service"
 import { getStoryObjectCategoryLabel } from "./story-objects-service"
 import type { Storyboard } from "./storyboards-service"
+import { getStoryboardDialogueText } from "./script-selection"
 import {
   getStoryboardCharacterIds,
   getStoryboardLocationIds,
@@ -297,8 +298,8 @@ export function buildQuickShotImagePrompt(
     storyboard.visual_notes?.trim()
       ? `Visual notes: ${storyboard.visual_notes.trim()}`
       : null,
-    storyboard.dialogue?.trim()
-      ? `Dialogue context: ${storyboard.dialogue.trim()}`
+    getStoryboardDialogueText(storyboard)
+      ? `Dialogue context: ${getStoryboardDialogueText(storyboard)}`
       : null,
   ].filter(Boolean)
 

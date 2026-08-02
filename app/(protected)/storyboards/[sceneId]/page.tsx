@@ -93,6 +93,7 @@ import {
   getStoryboardLayoutReference,
   type StoryboardLayoutReference,
 } from "@/lib/storyboard-layout-reference"
+import { parseScriptSelection, getStoryboardDialogueText } from "@/lib/script-selection"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 const IMAGE_GENERATION_FETCH_TIMEOUT_MS = 240_000
@@ -129,50 +130,6 @@ type SceneInfo = SceneWithMetadata & {
 // AI Models configuration (matching AI Studio)
 const aiModels = {
   image: ["OpenArt", "DALL-E 3", "Runway ML", "Midjourney", "Stable Diffusion", "Custom"],
-}
-
-/** Pull dialogue / action lines out of a screenplay-formatted script selection */
-function parseScriptSelection(text: string): { dialogue?: string; action?: string } {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean)
-  if (lines.length === 0) return {}
-
-  const isSceneHeading = (line: string) => /^(INT\.|EXT\.|INT\/EXT\.|I\/E\.)/i.test(line)
-  const isCharacterCue = (line: string) =>
-    !isSceneHeading(line) &&
-    line.length <= 40 &&
-    /^[A-Z][A-Z0-9 '.\-()]+$/.test(line)
-
-  const dialogueLines: string[] = []
-  const actionLines: string[] = []
-  let i = 0
-
-  while (i < lines.length) {
-    const line = lines[i]
-    if (isCharacterCue(line)) {
-      i += 1
-      while (i < lines.length && !isCharacterCue(lines[i]) && !isSceneHeading(lines[i])) {
-        const content = lines[i]
-        if (content.startsWith('(') && content.endsWith(')')) {
-          actionLines.push(content.slice(1, -1).trim())
-        } else {
-          dialogueLines.push(content)
-        }
-        i += 1
-      }
-      continue
-    }
-    if (line.startsWith('(') && line.endsWith(')')) {
-      actionLines.push(line.slice(1, -1).trim())
-    } else {
-      actionLines.push(line)
-    }
-    i += 1
-  }
-
-  return {
-    dialogue: dialogueLines.length > 0 ? dialogueLines.join('\n') : undefined,
-    action: actionLines.length > 0 ? actionLines.join('\n') : undefined,
-  }
 }
 
 export default function SceneStoryboardsPage() {
@@ -5743,10 +5700,7 @@ export default function SceneStoryboardsPage() {
         {/* Storyboards Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {filteredStoryboards.map((storyboard, index) => {
-            const dialogueText =
-              storyboard.dialogue?.trim() ||
-              parseScriptSelection(storyboard.description || '').dialogue ||
-              ''
+            const dialogueText = getStoryboardDialogueText(storyboard)
             const hasDialogue = dialogueText.length > 0
 
             return (

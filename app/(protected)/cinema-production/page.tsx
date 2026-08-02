@@ -45,6 +45,7 @@ import {
   ChevronDown,
   AudioWaveform,
   Edit,
+  MessageSquare,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -123,6 +124,7 @@ import {
   enrichPromptWithLayoutReference,
   getStoryboardLayoutReference,
 } from "@/lib/storyboard-layout-reference"
+import { getStoryboardDialogueText } from "@/lib/script-selection"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
 import { LinkAudioPanel } from "@/components/linked-audio-picker"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
@@ -530,13 +532,8 @@ function sessionAudioOptionId(clipId: string) {
   return `session-${clipId}`
 }
 
-function getStoryboardDialogueText(storyboard: Storyboard): string {
-  return (
-    storyboard.dialogue?.trim() ||
-    storyboard.action?.trim() ||
-    storyboard.script_text_snippet?.trim() ||
-    ""
-  )
+function getStoryboardSpokenText(storyboard: Storyboard): string {
+  return getStoryboardDialogueText(storyboard, { includeActionFallback: true })
 }
 
 function audioSaveNameKey(storyboardId: string, clipId: string) {
@@ -3056,7 +3053,7 @@ export default function CinemaProductionPage() {
           title: storyboard.title,
           description: storyboard.description,
           action: storyboard.action,
-          dialogue: storyboard.dialogue,
+          dialogue: getStoryboardDialogueText(storyboard) || null,
           visualNotes: storyboard.visual_notes,
           shotType: storyboard.shot_type,
           cameraAngle: storyboard.camera_angle,
@@ -3143,7 +3140,7 @@ export default function CinemaProductionPage() {
       title: storyboard.title,
       description: storyboard.description,
       action: storyboard.action,
-      dialogue: storyboard.dialogue,
+      dialogue: getStoryboardDialogueText(storyboard) || null,
       visualNotes: storyboard.visual_notes,
       shotType: storyboard.shot_type,
       cameraAngle: storyboard.camera_angle,
@@ -3203,8 +3200,7 @@ export default function CinemaProductionPage() {
       })
     } catch (error) {
       const fallback =
-        storyboard.dialogue?.trim() ||
-        storyboard.action?.trim() ||
+        getStoryboardSpokenText(storyboard) ||
         buildPromptFromStoryboard(storyboard)
       await applyDialogueText(storyboard, fallback)
       toast({
@@ -4681,7 +4677,7 @@ export default function CinemaProductionPage() {
       return
     }
 
-    const dialogueText = getStoryboardDialogueText(storyboard)
+    const dialogueText = getStoryboardSpokenText(storyboard)
     if (!dialogueText) {
       toast({
         title: "Dialogue text required",
@@ -8650,7 +8646,7 @@ export default function CinemaProductionPage() {
                                           replacingNativeDialogueId === storyboard.id ||
                                           klingLipSyncingId === storyboard.id ||
                                           !getDialogueVoiceId(storyboard) ||
-                                          !getStoryboardDialogueText(storyboard) ||
+                                          !getStoryboardSpokenText(storyboard) ||
                                           !userApiKeys.elevenlabs_api_key
                                         }
                                         onClick={() =>
@@ -8669,7 +8665,7 @@ export default function CinemaProductionPage() {
                                           </>
                                         )}
                                       </Button>
-                                      {!getStoryboardDialogueText(storyboard) ? (
+                                      {!getStoryboardSpokenText(storyboard) ? (
                                         <p className="text-xs text-amber-600 dark:text-amber-500">
                                           Add dialogue in the Audio section below, or fill in this shot&apos;s action/dialogue field.
                                         </p>
@@ -9020,6 +9016,34 @@ export default function CinemaProductionPage() {
                           <span className="font-medium">{storyboard.scene_number}</span>
                         </div>
                       </div>
+
+                      {storyboard.description?.trim() &&
+                      storyboard.description.trim() !== storyboard.action?.trim() ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground mb-1">Description:</p>
+                          <p className="text-sm whitespace-pre-wrap">{storyboard.description}</p>
+                        </div>
+                      ) : null}
+
+                      {(() => {
+                        const dialogueText = getStoryboardDialogueText(storyboard)
+                        if (!dialogueText) return null
+                        return (
+                          <div className="rounded-md border border-amber-500/25 bg-amber-500/5 p-2.5">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <MessageSquare
+                                className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0"
+                              />
+                              <span className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                                Dialogue
+                              </span>
+                            </div>
+                            <p className="text-xs sm:text-sm italic text-foreground whitespace-pre-wrap">
+                              {dialogueText}
+                            </p>
+                          </div>
+                        )
+                      })()}
 
                       {storyboard.action && (
                         <div>
@@ -10096,7 +10120,7 @@ export default function CinemaProductionPage() {
 
                           <div className="space-y-2">
                           <AudioGeneratorSection
-                            title="Dialogue (ElevenLabs TTS)"
+                            title="Dialogue"
                             icon={Music}
                             clipCount={getSessionClipsForStoryboard(storyboard.id, "dialogue").length}
                           >
@@ -10165,32 +10189,34 @@ export default function CinemaProductionPage() {
                               })()}
                               <div className="flex gap-2">
                                 <Textarea
-                                  value={storyboard.action || ''}
+                                  value={storyboard.dialogue || getStoryboardDialogueText(storyboard) || ""}
                                   onChange={(e) => {
-                                    // Update storyboard action in real-time
-                                    const updatedStoryboards = storyboards.map(sb => 
-                                      sb.id === storyboard.id 
-                                        ? { ...sb, action: e.target.value }
-                                        : sb
+                                    const updatedStoryboards = storyboards.map((sb) =>
+                                      sb.id === storyboard.id
+                                        ? { ...sb, dialogue: e.target.value }
+                                        : sb,
                                     )
                                     setStoryboards(updatedStoryboards)
                                   }}
                                   onBlur={async (e) => {
-                                    // Save to database when user finishes editing
                                     const newValue = e.target.value.trim()
-                                    if (newValue !== (storyboard.action || '')) {
+                                    const current =
+                                      storyboard.dialogue?.trim() ||
+                                      getStoryboardDialogueText(storyboard) ||
+                                      ""
+                                    if (newValue !== current) {
                                       try {
                                         const supabase = getSupabaseClient()
                                         const { error } = await supabase
-                                          .from('storyboards')
-                                          .update({ action: newValue || null })
-                                          .eq('id', storyboard.id)
-                                        
+                                          .from("storyboards")
+                                          .update({ dialogue: newValue || null })
+                                          .eq("id", storyboard.id)
+
                                         if (error) {
-                                          console.error('Error saving dialogue:', error)
+                                          console.error("Error saving dialogue:", error)
                                         }
                                       } catch (error) {
-                                        console.error('Error saving dialogue:', error)
+                                        console.error("Error saving dialogue:", error)
                                       }
                                     }
                                   }}
@@ -10201,16 +10227,17 @@ export default function CinemaProductionPage() {
                                 <div className="flex flex-col gap-2">
                                   <Button
                                     onClick={() => {
-                                      if (storyboard.action) {
+                                      const spoken = getStoryboardSpokenText(storyboard)
+                                      if (spoken) {
                                         handleGenerateDialogue(
                                           storyboard,
-                                          storyboard.action,
+                                          spoken,
                                           getDialogueVoiceId(storyboard),
                                         )
                                       }
                                     }}
                                     disabled={
-                                      !storyboard.action?.trim() ||
+                                      !getStoryboardSpokenText(storyboard) ||
                                       !getDialogueVoiceId(storyboard) ||
                                       audioGenerating.get(`${storyboard.id}-dialogue`) ||
                                       !userApiKeys.elevenlabs_api_key
@@ -10248,28 +10275,25 @@ export default function CinemaProductionPage() {
                                     )}
                                     Prompt Assist
                                   </Button>
-                                  {storyboard.action && (
+                                  {(storyboard.dialogue || getStoryboardDialogueText(storyboard)) && (
                                     <Button
                                       variant="ghost"
                                       size="sm"
                                       onClick={async () => {
-                                        // Clear the action text
                                         try {
                                           const supabase = getSupabaseClient()
                                           const { error } = await supabase
-                                            .from('storyboards')
-                                            .update({ action: null })
-                                            .eq('id', storyboard.id)
-                                          
+                                            .from("storyboards")
+                                            .update({ dialogue: null })
+                                            .eq("id", storyboard.id)
+
                                           if (!error) {
-                                            const updatedStoryboards = storyboards.map(sb => 
-                                              sb.id === storyboard.id 
-                                                ? { ...sb, action: null }
-                                                : sb
+                                            const updatedStoryboards = storyboards.map((sb) =>
+                                              sb.id === storyboard.id ? { ...sb, dialogue: null } : sb,
                                             )
                                             setStoryboards(updatedStoryboards)
                                             toast({
-                                              title: "Dialogue Cleared",
+                                              title: "Dialogue cleared",
                                               description: "The dialogue text has been removed.",
                                             })
                                           }

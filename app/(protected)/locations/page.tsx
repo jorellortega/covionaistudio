@@ -36,6 +36,7 @@ import { KlingService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
+import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import {
   buildLinkedAssetGroups,
   getProjectAssetSourceLabel,
@@ -275,7 +276,11 @@ export default function LocationsPage() {
   const [isLoadingProjectAssets, setIsLoadingProjectAssets] = useState(false)
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
-  
+  const [isImportingImage, setIsImportingImage] = useState(false)
+  const [savedLocationPrompts, setSavedLocationPrompts] = useState<SavedPrompt[]>([])
+  const [isLoadingSavedPrompts, setIsLoadingSavedPrompts] = useState(false)
+  const [selectedImagePromptId, setSelectedImagePromptId] = useState("")
+  const [selectedEditPromptId, setSelectedEditPromptId] = useState("")
   // Location form fields
   const [editingLocationInFormId, setEditingLocationInFormId] = useState<string | null>(null)
   const [newLocName, setNewLocName] = useState("")
@@ -432,6 +437,95 @@ export default function LocationsPage() {
     loadProjectAssets()
   }, [projectId])
 
+  useEffect(() => {
+    if (!ready || !userId) {
+      setSavedLocationPrompts([])
+      return
+    }
+    setIsLoadingSavedPrompts(true)
+    SavedPromptsService.getSavedPrompts(userId, projectId || null)
+      .then((prompts) => {
+        setSavedLocationPrompts(
+          prompts.filter(
+            (p) =>
+              p.type === "environment" ||
+              p.type === "style" ||
+              p.type === "prompt",
+          ),
+        )
+      })
+      .catch(() => setSavedLocationPrompts([]))
+      .finally(() => setIsLoadingSavedPrompts(false))
+  }, [ready, userId, projectId])
+
+  const applySavedPromptText = (promptText: string, target: "image" | "edit") => {
+    const text = promptText.trim()
+    if (!text) return
+    if (target === "image") {
+      setImagePrompt(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into image prompt for location generation.",
+      })
+    } else {
+      setInlineCustomShotPrompt(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into the edit prompt for this image.",
+      })
+    }
+  }
+
+  const handleSavedPromptSelect = (value: string, target: "image" | "edit") => {
+    if (value === "__none__") {
+      if (target === "image") setSelectedImagePromptId("")
+      else setSelectedEditPromptId("")
+      return
+    }
+
+    if (value === "__current_image_prompt__") {
+      const current = imagePrompt.trim()
+      if (!current) {
+        toast({
+          title: "No image prompt",
+          description: "Enter an image prompt on this location first.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (target === "image") setSelectedImagePromptId(value)
+      else setSelectedEditPromptId(value)
+      applySavedPromptText(current, target)
+      return
+    }
+
+    const loc = locations.find((l) => l.id === selectedLocationId)
+
+    if (value === "__location_visual__") {
+      const visual =
+        loc?.visual_description?.trim() ||
+        loc?.description?.trim()
+      if (!visual) {
+        toast({
+          title: "No visual description",
+          description: "Add a visual description on this location first.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (target === "image") setSelectedImagePromptId(value)
+      else setSelectedEditPromptId(value)
+      applySavedPromptText(visual, target)
+      return
+    }
+
+    const saved = savedLocationPrompts.find((p) => p.id === value)
+    if (!saved) return
+    if (target === "image") setSelectedImagePromptId(value)
+    else setSelectedEditPromptId(value)
+    applySavedPromptText(saved.prompt, target)
+  }
+
   // Load text enhancer settings and user API keys
   useEffect(() => {
     if (!ready || !userId) return
@@ -454,7 +548,7 @@ export default function LocationsPage() {
           prefix: ''
         }
 
-        data?.forEach((item) => {
+        data?.forEach((item: { setting_key: string; setting_value: string }) => {
           if (item.setting_key === 'text_enhancer_model') {
             settings.model = item.setting_value || 'gpt-4o-mini'
           } else if (item.setting_key === 'text_enhancer_prefix') {
@@ -1033,6 +1127,14 @@ export default function LocationsPage() {
     [selectedLocation],
   )
 
+  const hasSavedPromptOptions =
+    savedLocationPrompts.length > 0 ||
+    Boolean(imagePrompt.trim()) ||
+    Boolean(
+      selectedLocation?.visual_description?.trim() ||
+        selectedLocation?.description?.trim(),
+    )
+
   const getImagesTabSetting = () => aiSettings.find((s) => s.tab_type === "images")
 
   const getVideosTabSetting = () => aiSettings.find((s) => s.tab_type === "videos")
@@ -1204,6 +1306,34 @@ export default function LocationsPage() {
       toast({
         title: "Download failed",
         description: error instanceof Error ? error.message : "Could not download video.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleDownloadLocationImage = async (asset: Asset) => {
+    if (!asset.content_url) return
+    const baseName =
+      asset.title.replace(/ - AI Generated Image.*$/, "").trim() ||
+      locations.find((l) => l.id === selectedLocationId)?.name ||
+      "location-image"
+    const extMatch = asset.content_url.split("?")[0].match(/\.(png|jpe?g|webp|gif)$/i)
+    const ext = extMatch ? extMatch[1].toLowerCase().replace("jpeg", "jpg") : "png"
+    const fileName = `${baseName}.${ext}`
+    try {
+      toast({
+        title: "Preparing download…",
+        description: "Fetching image file.",
+      })
+      await downloadMediaToDevice(asset.content_url, fileName)
+      toast({
+        title: "Download started",
+        description: "Your image should appear in Downloads.",
+      })
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description: error instanceof Error ? error.message : "Could not download image.",
         variant: "destructive",
       })
     }
@@ -2105,8 +2235,21 @@ export default function LocationsPage() {
 
   const clearInlineReferenceEditState = () => {
     setInlineCustomShotPrompt("")
+    setSelectedEditPromptId("")
     clearInlineShotReference()
     clearInlineStyleLink()
+  }
+
+  const resolveDefaultEditPrompt = (asset: Asset) => {
+    const fromAsset = asset.prompt?.trim()
+    if (fromAsset) return fromAsset
+    if (imagePrompt.trim()) return imagePrompt.trim()
+    const loc = locations.find((l) => l.id === selectedLocationId)
+    return (
+      loc?.visual_description?.trim() ||
+      loc?.description?.trim() ||
+      ""
+    )
   }
 
   const openReferenceEditDialog = (asset?: Asset) => {
@@ -2124,7 +2267,10 @@ export default function LocationsPage() {
     }
 
     setReferenceEditAsset(targetAsset)
-    clearInlineReferenceEditState()
+    clearInlineShotReference()
+    clearInlineStyleLink()
+    setSelectedEditPromptId("")
+    setInlineCustomShotPrompt(resolveDefaultEditPrompt(targetAsset))
     const assetIndex = imageAssetsForLocation.findIndex((item) => item.id === targetAsset.id)
     if (assetIndex >= 0) {
       carouselApi?.scrollTo(assetIndex)
@@ -2205,13 +2351,66 @@ export default function LocationsPage() {
 
         {inDialog ? (
         <div className="space-y-2">
+          {hasSavedPromptOptions ? (
+            <div className="space-y-2">
+              <Label htmlFor={`${idPrefix}-saved-prompt`} className="text-xs sm:text-sm">
+                Saved prompt
+              </Label>
+              <Select
+                value={selectedEditPromptId || "__none__"}
+                onValueChange={(v) => handleSavedPromptSelect(v, "edit")}
+                disabled={isGeneratingShot}
+              >
+                <SelectTrigger
+                  id={`${idPrefix}-saved-prompt`}
+                  className="bg-input border-border text-xs sm:text-sm"
+                >
+                  <SelectValue
+                    placeholder={
+                      isLoadingSavedPrompts
+                        ? "Loading prompts…"
+                        : "Apply a saved prompt…"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">None (custom edit)</SelectItem>
+                  {imagePrompt.trim() ? (
+                    <SelectItem value="__current_image_prompt__">
+                      Current image prompt
+                    </SelectItem>
+                  ) : null}
+                  {selectedLocation?.visual_description?.trim() ||
+                  selectedLocation?.description?.trim() ? (
+                    <SelectItem value="__location_visual__">
+                      Location visual description
+                    </SelectItem>
+                  ) : null}
+                  {savedLocationPrompts.map((prompt) => (
+                    <SelectItem key={prompt.id} value={prompt.id}>
+                      {prompt.title}
+                      {prompt.type === "style" ? " (style)" : ""}
+                      {prompt.type === "environment" ? " (environment)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Loads into the edit field below — then click Edit Image to apply.
+              </p>
+            </div>
+          ) : null}
+
           <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
             Describe your edit
           </Label>
           <Textarea
             id={`${idPrefix}-inline-edit`}
             value={inlineCustomShotPrompt}
-            onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+            onChange={(e) => {
+              setInlineCustomShotPrompt(e.target.value)
+              if (selectedEditPromptId) setSelectedEditPromptId("")
+            }}
             placeholder='e.g., warmer lighting, wider framing, add snow, closer on the gas station sign'
             className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
             disabled={isGeneratingShot}
@@ -2684,6 +2883,27 @@ export default function LocationsPage() {
     }
   }
 
+  const handleImportLocationImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file || !selectedLocationId || !projectId) return
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Images only",
+        description: "Please choose a PNG, JPEG, or WebP image file.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsImportingImage(true)
+    try {
+      await handleFileUpload(file)
+    } finally {
+      setIsImportingImage(false)
+    }
+  }
+
   const handleDeleteAsset = async (assetId: string) => {
     if (!confirm("Delete this asset? This cannot be undone.")) return
     
@@ -2897,13 +3117,61 @@ export default function LocationsPage() {
                           </div>
 
                           <div className="space-y-2">
+                            {hasSavedPromptOptions ? (
+                              <div className="space-y-2">
+                                <Label htmlFor="location-saved-prompt">Saved prompt</Label>
+                                <Select
+                                  value={selectedImagePromptId || "__none__"}
+                                  onValueChange={(v) => handleSavedPromptSelect(v, "image")}
+                                  disabled={isLoadingSavedPrompts || isGeneratingImage || isGeneratingQuickImage}
+                                >
+                                  <SelectTrigger id="location-saved-prompt" className="bg-input border-border">
+                                    <SelectValue
+                                      placeholder={
+                                        isLoadingSavedPrompts
+                                          ? "Loading prompts…"
+                                          : "Apply a saved prompt…"
+                                      }
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="__none__">None (custom prompt)</SelectItem>
+                                    {imagePrompt.trim() ? (
+                                      <SelectItem value="__current_image_prompt__">
+                                        Current image prompt
+                                      </SelectItem>
+                                    ) : null}
+                                    {selectedLoc.visual_description?.trim() ||
+                                    selectedLoc.description?.trim() ? (
+                                      <SelectItem value="__location_visual__">
+                                        Location visual description
+                                      </SelectItem>
+                                    ) : null}
+                                    {savedLocationPrompts.map((prompt) => (
+                                      <SelectItem key={prompt.id} value={prompt.id}>
+                                        {prompt.title}
+                                        {prompt.type === "style" ? " (style)" : ""}
+                                        {prompt.type === "environment" ? " (environment)" : ""}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  Applies to Quick Generate below. Saved in VisDev or prompt library.
+                                </p>
+                              </div>
+                            ) : null}
+
                             <Label htmlFor="inline-location-image-prompt" className="text-xs sm:text-sm font-medium">
                               Image Prompt
                             </Label>
                             <Textarea
                               id="inline-location-image-prompt"
                               value={imagePrompt}
-                              onChange={(e) => setImagePrompt(e.target.value)}
+                              onChange={(e) => {
+                                setImagePrompt(e.target.value)
+                                if (selectedImagePromptId) setSelectedImagePromptId("")
+                              }}
                               placeholder="e.g., misty riverbank at dawn, wide establishing shot, cinematic atmosphere"
                               className="bg-input border-border min-h-[80px] text-xs sm:text-sm"
                             />
@@ -2950,6 +3218,31 @@ export default function LocationsPage() {
                                     <span className="sm:hidden">Generate</span>
                                   </>
                                 )}
+                              </Button>
+                              <input
+                                id="location-image-import"
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={isImportingImage || isUploadingAsset}
+                                onChange={(e) => void handleImportLocationImage(e)}
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isImportingImage || isUploadingAsset}
+                                onClick={() =>
+                                  document.getElementById("location-image-import")?.click()
+                                }
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isImportingImage ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Upload className="h-4 w-4" />
+                                )}
+                                <span className="hidden sm:inline">Import Image</span>
+                                <span className="sm:hidden">Import</span>
                               </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
@@ -3040,6 +3333,19 @@ export default function LocationsPage() {
                                                   >
                                                     <ExternalLink className="h-3 w-3 mr-1" />
                                                     View
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="secondary"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      void handleDownloadLocationImage(asset)
+                                                    }}
+                                                    className="h-8 pointer-events-auto"
+                                                    title="Download image"
+                                                  >
+                                                    <Download className="h-3 w-3 mr-1" />
+                                                    Download
                                                   </Button>
                                                   <Button
                                                     size="sm"
@@ -4358,6 +4664,17 @@ export default function LocationsPage() {
             >
               <Star className="h-4 w-4 mr-2" />
               Set as Thumbnail
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (viewingImage) {
+                  void handleDownloadLocationImage(viewingImage)
+                }
+              }}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              Download
             </Button>
             <Button
               variant="outline"
