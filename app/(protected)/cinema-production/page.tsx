@@ -131,6 +131,7 @@ import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
 import { LazyShotImage } from "@/components/lazy-shot-image"
 import { StoryboardShotEditDialog } from "@/components/storyboard-shot-edit-dialog"
+import type { StoryboardImage } from "@/components/storyboard-shot-images"
 import {
   StoryboardShotReferencePicker,
   type StoryboardShotReference,
@@ -1427,6 +1428,9 @@ export default function CinemaProductionPage() {
   const [shotReferenceFrames, setShotReferenceFrames] = useState<Map<string, ShotReferenceFrame[]>>(
     new Map(),
   )
+  const [storyboardGalleryImages, setStoryboardGalleryImages] = useState<
+    Map<string, StoryboardImage[]>
+  >(new Map())
   /** Which library image is shown in the main preview (does not change storyboard.image_url). */
   const [previewImageByStoryboard, setPreviewImageByStoryboard] = useState<Map<string, string>>(
     new Map(),
@@ -2378,6 +2382,49 @@ export default function CinemaProductionPage() {
     }
   }
 
+  const fetchStoryboardImagesApi = async (input: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers)
+    if (init?.body && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json")
+    }
+    const {
+      data: { session },
+    } = await getSupabaseClient().auth.getSession()
+    if (session?.access_token) {
+      headers.set("Authorization", `Bearer ${session.access_token}`)
+    }
+    return fetch(input, { ...init, headers, credentials: "include" })
+  }
+
+  const loadStoryboardGalleryImages = async (storyboardId: string): Promise<StoryboardImage[]> => {
+    try {
+      const query = new URLSearchParams({ storyboardId })
+      if (userId) query.set("userId", userId)
+      const response = await fetchStoryboardImagesApi(`/api/storyboard-images?${query.toString()}`)
+      const result = await response.json()
+      if (response.ok && result.success) {
+        const images = (result.data || []) as StoryboardImage[]
+        setStoryboardGalleryImages((prev) => {
+          const next = new Map(prev)
+          next.set(storyboardId, images)
+          return next
+        })
+        return images
+      }
+    } catch (error) {
+      console.error("Error loading storyboard gallery images:", error)
+    }
+    return []
+  }
+
+  const loadAllStoryboardGalleryImages = async (storyboardIds: string[]) => {
+    if (storyboardIds.length === 0) {
+      setStoryboardGalleryImages(new Map())
+      return
+    }
+    await Promise.all(storyboardIds.map((id) => loadStoryboardGalleryImages(id)))
+  }
+
   const loadStoryboardDeferredExtras = async (
     sceneStoryboards: Storyboard[],
     sceneId: string,
@@ -2404,6 +2451,7 @@ export default function CinemaProductionPage() {
     }
 
     await loadSavedAudioForScene(sceneId)
+    await loadAllStoryboardGalleryImages(sceneStoryboards.map((sb) => sb.id))
 
     if (!selectedProjectId) return
 
@@ -2475,6 +2523,7 @@ export default function CinemaProductionPage() {
     try {
       setLoadingStoryboards(true)
       setStoryboardVideos(new Map())
+      setStoryboardGalleryImages(new Map())
       setImageDiagnostics(null)
       setVideoDiagnostics(null)
       console.log('🎬 Loading storyboards for scene:', selectedSceneId)
@@ -2971,7 +3020,7 @@ export default function CinemaProductionPage() {
       generation?.endFramePreview || generation?.endFrameImageUrl,
       "End frame",
     )
-    for (const frame of shotReferenceFrames.get(storyboard.id) || []) {
+    for (const frame of getShotLibraryFrames(storyboard)) {
       pushUnique(`frame-${frame.id}`, frame.url, frame.label)
     }
     return choices
@@ -3747,20 +3796,50 @@ export default function CinemaProductionPage() {
   const getDisplayedShotImage = (storyboard: Storyboard) =>
     previewImageByStoryboard.get(storyboard.id) || storyboard.image_url || null
 
-  /** Frame library thumbs including the original shot image when it isn't already saved as a frame. */
+  /** Frame library: storyboard gallery images + cinema frames + main shot image. */
   const getShotLibraryFrames = (storyboard: Storyboard): ShotReferenceFrame[] => {
-    const frames = shotReferenceFrames.get(storyboard.id) || []
-    if (!storyboard.image_url) return frames
-    if (frames.some((f) => f.url === storyboard.image_url)) return frames
-    return [
-      {
+    const cinemaFrames = shotReferenceFrames.get(storyboard.id) || []
+    const galleryImages = storyboardGalleryImages.get(storyboard.id) || []
+    const merged: ShotReferenceFrame[] = []
+    const seenUrls = new Set<string>()
+
+    const pushFrame = (frame: ShotReferenceFrame) => {
+      if (!frame.url || seenUrls.has(frame.url)) return
+      seenUrls.add(frame.url)
+      merged.push(frame)
+    }
+
+    const sortedGallery = [...galleryImages].sort((a, b) => {
+      if (a.is_default !== b.is_default) return a.is_default ? -1 : 1
+      return Date.parse(b.created_at) - Date.parse(a.created_at)
+    })
+
+    for (let i = 0; i < sortedGallery.length; i++) {
+      const img = sortedGallery[i]
+      pushFrame({
+        id: `gallery-${img.id}`,
+        url: img.image_url,
+        label:
+          img.image_name?.trim() ||
+          (img.is_default ? "Default" : `Variant ${i + 1}`),
+        createdAt: Date.parse(img.created_at) || Date.now(),
+      })
+    }
+
+    for (const frame of cinemaFrames) {
+      pushFrame(frame)
+    }
+
+    if (storyboard.image_url && !seenUrls.has(storyboard.image_url)) {
+      pushFrame({
         id: `original-${storyboard.id}`,
         url: storyboard.image_url,
         label: "Original",
         createdAt: 0,
-      },
-      ...frames,
-    ]
+      })
+    }
+
+    return merged.slice(0, 12)
   }
 
   const getStoryboardVideoList = (storyboardId: string): StoryboardVideo[] => {
@@ -3944,6 +4023,118 @@ export default function CinemaProductionPage() {
         console.error("Failed to delete frame asset:", error)
       })
       setProjectImageAssets((prev) => prev.filter((a) => a.id !== assetIdToDelete))
+    }
+  }
+
+  const resolveNextShotPreviewUrl = (
+    storyboard: Storyboard,
+    excludeFrameId?: string,
+  ): string | null => {
+    const frames = getShotLibraryFrames(storyboard).filter((f) => f.id !== excludeFrameId)
+    if (frames.length > 0) return frames[0].url
+    return storyboard.image_url || null
+  }
+
+  const deleteShotLibraryFrame = async (
+    storyboard: Storyboard,
+    frame: ShotReferenceFrame,
+  ) => {
+    if (
+      !window.confirm(`Delete "${frame.label}" from this shot's library?`)
+    ) {
+      return
+    }
+
+    const wasPreview = getDisplayedShotImage(storyboard) === frame.url
+
+    try {
+      if (frame.id.startsWith("gallery-")) {
+        const imageId = frame.id.slice("gallery-".length)
+        const deleteQuery = new URLSearchParams({ imageId })
+        if (userId) deleteQuery.set("userId", userId)
+        const response = await fetchStoryboardImagesApi(
+          `/api/storyboard-images?${deleteQuery.toString()}`,
+          { method: "DELETE" },
+        )
+        const result = await response.json()
+        if (!response.ok || !result.success) {
+          throw new Error(result.error || "Failed to delete image")
+        }
+
+        const refreshed = await loadStoryboardGalleryImages(storyboard.id)
+        const nextDefault = refreshed.find((img) => img.is_default) || refreshed[0]
+        const nextImageUrl = nextDefault?.image_url ?? null
+
+        setStoryboards((prev) =>
+          prev.map((sb) =>
+            sb.id === storyboard.id ? { ...sb, image_url: nextImageUrl ?? undefined } : sb,
+          ),
+        )
+
+        if (wasPreview) {
+          const nextUrl =
+            nextImageUrl ||
+            (shotReferenceFrames.get(storyboard.id) || [])[0]?.url ||
+            null
+          if (nextUrl) setShotPreviewImage(storyboard.id, nextUrl)
+          else {
+            setPreviewImageByStoryboard((prev) => {
+              const next = new Map(prev)
+              next.delete(storyboard.id)
+              return next
+            })
+          }
+        }
+      } else if (frame.id.startsWith("original-")) {
+        const { data, error } = await getSupabaseClient()
+          .from("storyboards")
+          .update({ image_url: null })
+          .eq("id", storyboard.id)
+          .select()
+          .single()
+        if (error) throw error
+
+        setStoryboards((prev) =>
+          prev.map((sb) => (sb.id === storyboard.id ? (data as Storyboard) : sb)),
+        )
+
+        if (wasPreview) {
+          const nextUrl = resolveNextShotPreviewUrl(storyboard, frame.id)
+          if (nextUrl) setShotPreviewImage(storyboard.id, nextUrl)
+          else {
+            setPreviewImageByStoryboard((prev) => {
+              const next = new Map(prev)
+              next.delete(storyboard.id)
+              return next
+            })
+          }
+        }
+      } else {
+        removeShotReferenceFrame(storyboard.id, frame.id)
+        if (wasPreview) {
+          const nextUrl = resolveNextShotPreviewUrl(storyboard, frame.id)
+          if (nextUrl) setShotPreviewImage(storyboard.id, nextUrl)
+          else {
+            setPreviewImageByStoryboard((prev) => {
+              const next = new Map(prev)
+              next.delete(storyboard.id)
+              return next
+            })
+          }
+        }
+      }
+
+      toast({
+        title: "Frame removed",
+        description: `Deleted "${frame.label}" from this shot's library.`,
+      })
+    } catch (error) {
+      console.error("Failed to delete shot library frame:", error)
+      toast({
+        title: "Could not delete frame",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -8921,7 +9112,6 @@ export default function CinemaProductionPage() {
                                 const displayUrl = getDisplayedShotImage(storyboard)
                                 const isPreview = displayUrl === frame.url
                                 const isOfficial = storyboard.image_url === frame.url
-                                const isVirtualOriginal = frame.id.startsWith("original-")
                                 return (
                                 <div
                                   key={frame.id}
@@ -8945,7 +9135,7 @@ export default function CinemaProductionPage() {
                                       {isOfficial && frame.label !== "Original" ? `${frame.label} · shot` : frame.label}
                                     </span>
                                   </button>
-                                  {!isOfficial && !isVirtualOriginal && isPreview ? (
+                                  {!isOfficial && isPreview ? (
                                     <Button
                                       type="button"
                                       size="sm"
@@ -8960,7 +9150,6 @@ export default function CinemaProductionPage() {
                                       Set as shot
                                     </Button>
                                   ) : null}
-                                  {!isVirtualOriginal ? (
                                   <Button
                                     type="button"
                                     size="icon"
@@ -8969,22 +9158,11 @@ export default function CinemaProductionPage() {
                                     title="Delete frame"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      removeShotReferenceFrame(storyboard.id, frame.id)
-                                      if (previewImageByStoryboard.get(storyboard.id) === frame.url) {
-                                        setShotPreviewImage(
-                                          storyboard.id,
-                                          storyboard.image_url || "",
-                                        )
-                                      }
-                                      toast({
-                                        title: "Frame removed",
-                                        description: `Deleted “${frame.label}” from this shot’s library.`,
-                                      })
+                                      void deleteShotLibraryFrame(storyboard, frame)
                                     }}
                                   >
                                     <Trash2 className="h-3 w-3" />
                                   </Button>
-                                  ) : null}
                                 </div>
                                 )
                               })}
@@ -10592,18 +10770,19 @@ export default function CinemaProductionPage() {
                 size="sm"
                 className="gap-1.5"
                 onClick={() => {
-                  const label = fullImageTitle
-                  removeShotReferenceFrame(
-                    fullImageLibraryRef.storyboardId,
-                    fullImageLibraryRef.frameId,
+                  const storyboard = storyboards.find(
+                    (s) => s.id === fullImageLibraryRef?.storyboardId,
                   )
-                  closeFullImageViewer()
-                  toast({
-                    title: "Frame removed",
-                    description: label
-                      ? `Deleted “${label}” from this shot’s library.`
-                      : "Deleted from this shot’s library.",
-                  })
+                  const frame = storyboard
+                    ? getShotLibraryFrames(storyboard).find(
+                        (f) => f.id === fullImageLibraryRef?.frameId,
+                      )
+                    : null
+                  if (storyboard && frame) {
+                    void deleteShotLibraryFrame(storyboard, frame).then(() => {
+                      closeFullImageViewer()
+                    })
+                  }
                 }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -11113,14 +11292,14 @@ export default function CinemaProductionPage() {
               )}
             </Button>
             {imageToolsStoryboard &&
-              (shotReferenceFrames.get(imageToolsStoryboard.id) || []).length > 0 && (
+              getShotLibraryFrames(imageToolsStoryboard).length > 0 && (
                 <div className="space-y-2 pt-2 border-t">
                   <p className="text-xs font-medium">This shot’s frames</p>
                   <p className="text-[11px] text-muted-foreground">
                     Click a frame to view full size. Delete ones you don’t need.
                   </p>
                   <div className="grid grid-cols-2 gap-2">
-                    {(shotReferenceFrames.get(imageToolsStoryboard.id) || []).map((frame) => (
+                    {getShotLibraryFrames(imageToolsStoryboard).map((frame) => (
                       <div key={frame.id} className="rounded border overflow-hidden space-y-1">
                         <button
                           type="button"
@@ -11214,11 +11393,7 @@ export default function CinemaProductionPage() {
                               className="h-7 text-[11px] px-2 text-destructive hover:text-destructive"
                               title="Delete frame"
                               onClick={() => {
-                                removeShotReferenceFrame(imageToolsStoryboard.id, frame.id)
-                                toast({
-                                  title: "Frame removed",
-                                  description: `Deleted “${frame.label}” from this shot’s library.`,
-                                })
+                                void deleteShotLibraryFrame(imageToolsStoryboard, frame)
                               }}
                             >
                               <Trash2 className="h-3 w-3 mr-1" />

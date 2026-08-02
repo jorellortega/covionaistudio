@@ -1,9 +1,14 @@
 "use client"
 
 import { useCallback, useState } from "react"
-import { Film, Grid3x3, Loader2, Upload, X } from "lucide-react"
+import { Film, Grid3x3, Loader2, Upload, X, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Select,
   SelectContent,
@@ -192,21 +197,41 @@ export function StoryboardLayoutReferenceControl({
   }
 
   return (
-    <div className="rounded-md border border-cyan-500/25 bg-cyan-500/5 p-2.5 space-y-2">
-      <div className="flex items-start gap-2">
-        <Grid3x3 className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0 mt-0.5" />
-        <div className="min-w-0 flex-1 space-y-1">
+    <Collapsible
+      defaultOpen={false}
+      className="rounded-md border border-cyan-500/25 bg-cyan-500/5"
+    >
+      <CollapsibleTrigger
+        className="group flex w-full items-center gap-2 p-2.5 text-left hover:bg-cyan-500/10 transition-colors rounded-md data-[state=open]:rounded-b-none"
+      >
+        <Grid3x3 className="h-4 w-4 text-cyan-600 dark:text-cyan-400 shrink-0" />
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-cyan-800 dark:text-cyan-200">
             Layout / blocking reference
           </p>
-          <p className="text-[11px] text-muted-foreground leading-snug">
-            Pick <strong>one</strong> layout source below (uploaded sketch works best). Quick
-            Generate uses it as <strong>image 1</strong> for blocking; character collages are
-            images 2+ for faces. Do not upload blocking and then click &quot;Use this shot&quot; —
-            that replaces your upload with the current shot image.
-          </p>
+          {layout.url ? (
+            <p className="text-[10px] text-muted-foreground truncate">
+              {layout.label ?? "Layout reference"} · active
+            </p>
+          ) : null}
         </div>
-      </div>
+        {layout.url ? (
+          <div className="h-8 w-10 shrink-0 overflow-hidden rounded border border-cyan-500/40 bg-muted">
+            <img src={layout.url} alt="" className="h-full w-full object-cover" />
+          </div>
+        ) : null}
+        <ChevronDown
+          className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+        />
+      </CollapsibleTrigger>
+
+      <CollapsibleContent className="px-2.5 pb-2.5 space-y-2 border-t border-cyan-500/15">
+        <p className="text-[11px] text-muted-foreground leading-snug pt-2">
+          Pick <strong>one</strong> layout source below (uploaded sketch works best). Quick
+          Generate uses it as <strong>image 1</strong> for blocking; character collages are
+          images 2+ for faces. Do not upload blocking and then click &quot;Use this shot&quot; —
+          that replaces your upload with the current shot image.
+        </p>
 
       {layout.url ? (
         <div className="flex items-center gap-2">
@@ -335,6 +360,7 @@ export function StoryboardLayoutReferenceControl({
           </Select>
         </div>
       </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
