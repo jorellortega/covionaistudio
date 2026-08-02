@@ -116,8 +116,13 @@ import {
   loadAssignedStoryboardReferenceFiles,
   storyboardReferenceImageLimit,
   buildEntityReferenceMapping,
+  normalizeReferenceUrl,
   SINGLE_FRAME_STORYBOARD_INSTRUCTION,
 } from "@/lib/storyboard-image-generation"
+import {
+  enrichPromptWithLayoutReference,
+  getStoryboardLayoutReference,
+} from "@/lib/storyboard-layout-reference"
 import { VideoWithLinkedAudio } from "@/components/video-with-linked-audio"
 import { LinkAudioPanel } from "@/components/linked-audio-picker"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
@@ -3424,6 +3429,7 @@ export default function CinemaProductionPage() {
       projectLocations,
       projectStoryObjects,
     )
+    const layoutRef = getStoryboardLayoutReference(storyboard)
     const limit =
       refLimit ??
       storyboardReferenceImageLimit(
@@ -3438,9 +3444,18 @@ export default function CinemaProductionPage() {
     if (
       assignmentContext.characterIds.length === 0 &&
       assignmentContext.locationIds.length === 0 &&
-      assignmentContext.objectIds.length === 0
+      assignmentContext.objectIds.length === 0 &&
+      !layoutRef.url
     ) {
-      return { files: [], urls: [], loaded: [], failed: [], assignmentContext, limit }
+      return {
+        files: [],
+        urls: [],
+        loaded: [],
+        failed: [],
+        assignmentContext,
+        limit,
+        layoutRef,
+      }
     }
 
     const result = await loadAssignedStoryboardReferenceFiles({
@@ -3454,6 +3469,7 @@ export default function CinemaProductionPage() {
       characterAssets: characterImageAssets,
       objectAssets: objectImageAssets,
       maxImages: limit,
+      excludeUrls: layoutRef.url ? [layoutRef.url] : [],
     })
 
     return {
@@ -3463,6 +3479,7 @@ export default function CinemaProductionPage() {
       failed: result.failed,
       assignmentContext,
       limit,
+      layoutRef,
     }
   }
 
@@ -3503,17 +3520,18 @@ export default function CinemaProductionPage() {
         objectCount: assignmentContext.objectIds.length,
       })
       const {
-        urls: referenceUrls,
+        urls: entityReferenceUrls,
         loaded: loadedReferences,
         failed: failedReferences,
+        layoutRef,
       } = await loadStoryboardAssignmentReferences(storyboard, refLimit)
 
       if (failedReferences.length > 0) {
         toast({
           title: `${failedReferences.length} reference image${failedReferences.length === 1 ? "" : "s"} couldn't load`,
           description:
-            referenceUrls.length > 0
-              ? `Used ${referenceUrls.length} valid reference${referenceUrls.length === 1 ? "" : "s"}. Generation continued without the broken links.`
+            entityReferenceUrls.length > 0 || layoutRef.url
+              ? `Used ${entityReferenceUrls.length} valid reference${entityReferenceUrls.length === 1 ? "" : "s"}. Generation continued without the broken links.`
               : "No valid character/location references loaded. Generating from shot text only.",
           variant: "destructive",
         })
@@ -3527,21 +3545,42 @@ export default function CinemaProductionPage() {
         locationDetails: assignmentContext.locationDetails,
         objectDetails: assignmentContext.objectDetails,
         masterPrompts: assignmentContext.masterPrompts,
-        referenceCount: referenceUrls.length,
+        referenceCount: entityReferenceUrls.length,
         entityRefMapping:
           loadedReferences.length > 0
-            ? buildEntityReferenceMapping(loadedReferences)
+            ? buildEntityReferenceMapping(loadedReferences, {
+                startIndex: layoutRef.url ? 2 : 1,
+              })
             : undefined,
       })
       enhancedPrompt = `${enhancedPrompt}, cinematic storyboard frame, film production still. ${SINGLE_FRAME_STORYBOARD_INSTRUCTION}`
 
+      if (layoutRef.url) {
+        enhancedPrompt = enrichPromptWithLayoutReference(enhancedPrompt, {
+          layoutLabel: layoutRef.label,
+          characterNames: assignmentContext.characterNames,
+          layoutMatchesCurrentShot: Boolean(
+            layoutRef.url &&
+              storyboard.image_url &&
+              normalizeReferenceUrl(layoutRef.url) ===
+                normalizeReferenceUrl(storyboard.image_url),
+          ),
+        })
+      }
+
+      const primaryReferenceUrl = layoutRef.url ?? entityReferenceUrls[0]
+      const styleReferenceUrls = layoutRef.url
+        ? entityReferenceUrls
+        : entityReferenceUrls.slice(1)
+
       const response = await requestLockedImageGeneration(
         enhancedPrompt,
         config,
-        referenceUrls.length > 0
+        primaryReferenceUrl
           ? {
-              referenceImageUrl: referenceUrls[0],
-              styleReferenceUrls: referenceUrls.slice(1),
+              referenceImageUrl: primaryReferenceUrl,
+              styleReferenceUrls:
+                styleReferenceUrls.length > 0 ? styleReferenceUrls : undefined,
             }
           : undefined,
       )

@@ -73,6 +73,7 @@ import {
   summarizeStoryboardReferenceCoverage,
   summarizeObjectReferenceCoverage,
   buildEntityReferenceMapping,
+  normalizeReferenceUrl,
   SINGLE_FRAME_STORYBOARD_INSTRUCTION,
   urlsToReferenceFiles,
   type StoryboardReferenceLoadFailure,
@@ -85,6 +86,13 @@ import {
   traceAsyncStep,
 } from "@/lib/storyboard-image-debug"
 import { StoryboardReferenceIssues } from "@/components/storyboard-reference-issues"
+import { StoryboardLayoutReferenceControl } from "@/components/storyboard-layout-reference"
+import {
+  buildStoryboardLayoutMetadataPatch,
+  enrichPromptWithLayoutReference,
+  getStoryboardLayoutReference,
+  type StoryboardLayoutReference,
+} from "@/lib/storyboard-layout-reference"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 const IMAGE_GENERATION_FETCH_TIMEOUT_MS = 240_000
@@ -1923,6 +1931,7 @@ export default function SceneStoryboardsPage() {
     )
     try {
       const styleReferenceUrls: string[] = []
+      const layoutRef = getStoryboardLayoutReference(storyboard)
       for (const assetId of styleLinkAssetIds) {
         const styleAsset = findStyleLinkAsset(assetId)
         if (styleAsset?.content_url) {
@@ -1939,32 +1948,38 @@ export default function SceneStoryboardsPage() {
         )
       }
 
-      if (
+      const shouldAutoLoadEntityRefs =
         isCreateMode &&
-        styleReferenceUrls.length === 0 &&
         (assignmentContext.characterIds.length > 0 ||
           assignmentContext.locationIds.length > 0 ||
-          assignmentContext.objectIds.length > 0)
-      ) {
-        const refSources = collectStoryboardReferenceSources({
-          characterIds: assignmentContext.characterIds,
-          locationIds: assignmentContext.locationIds,
-          objectIds: assignmentContext.objectIds,
-          characters,
-          locations,
-          storyObjects,
-          avatarImages: projectAvatarImages,
-          characterAssets: characterImageAssets,
-          objectAssets: objectImageAssets,
-          maxImages: storyboardReferenceImageLimit(),
-        })
+          assignmentContext.objectIds.length > 0) &&
+        (layoutRef.url || styleReferenceUrls.length === 0)
+
+      const entityStyleUrls = shouldAutoLoadEntityRefs
+        ? collectStoryboardReferenceSources({
+            characterIds: assignmentContext.characterIds,
+            locationIds: assignmentContext.locationIds,
+            objectIds: assignmentContext.objectIds,
+            characters,
+            locations,
+            storyObjects,
+            avatarImages: projectAvatarImages,
+            characterAssets: characterImageAssets,
+            objectAssets: objectImageAssets,
+            maxImages: storyboardReferenceImageLimit(),
+            excludeUrls: layoutRef.url ? [layoutRef.url] : [],
+          }).map((source) => source.url)
+        : []
+
+      if (entityStyleUrls.length > 0) {
         pushStoryboardImageTrace(
           "info",
-          "Auto-loading assigned reference URLs",
-          `${refSources.length} source(s)`,
+          "Auto-loading assigned character/location/object references",
+          `${entityStyleUrls.length} URL(s)`,
         )
-        styleReferenceUrls.push(...refSources.map((source) => source.url))
       }
+
+      const linkedStyleUrls = [...styleReferenceUrls, ...entityStyleUrls]
 
       setReferenceEditProgressForShot(
         storyboardId,
@@ -1973,9 +1988,27 @@ export default function SceneStoryboardsPage() {
       const config = isCreateMode
         ? requireLockedImageConfig()
         : requireLockedImageConfig({ withReferenceImage: true })
-      const prompt = isCreateMode
+      let prompt = isCreateMode
         ? buildStoryboardCreatePrompt(direction, storyboard)
         : buildStoryboardEditPrompt(direction, storyboard)
+
+      if (isCreateMode && layoutRef.url) {
+        prompt = enrichPromptWithLayoutReference(prompt, {
+          layoutLabel: layoutRef.label,
+          characterNames: assignmentContext.characterNames,
+          layoutMatchesCurrentShot: Boolean(
+            layoutRef.url &&
+              storyboard.image_url &&
+              normalizeReferenceUrl(layoutRef.url) ===
+                normalizeReferenceUrl(storyboard.image_url),
+          ),
+        })
+        pushStoryboardImageTrace(
+          "info",
+          "Using saved layout reference for blocking",
+          layoutRef.label ?? layoutRef.url.slice(0, 80),
+        )
+      }
 
       pushStoryboardImageTrace(
         "info",
@@ -1998,6 +2031,9 @@ export default function SceneStoryboardsPage() {
             referenceImageUrl = storyboard.image_url
             pushStoryboardImageTrace("ok", "Using shot image URL as primary reference", referenceImageUrl.slice(0, 80))
           }
+        } else if (layoutRef.url) {
+          referenceImageUrl = layoutRef.url
+          pushStoryboardImageTrace("ok", "Layout reference as primary", referenceImageUrl.slice(0, 80))
         } else if (shotReferenceFile) {
           referenceFile = shotReferenceFile
           pushStoryboardImageTrace(
@@ -2005,8 +2041,8 @@ export default function SceneStoryboardsPage() {
             "Using uploaded primary reference",
             `${shotReferenceFile.size} bytes`,
           )
-        } else if (styleReferenceUrls.length > 0) {
-          referenceImageUrl = styleReferenceUrls[0]
+        } else if (linkedStyleUrls.length > 0) {
+          referenceImageUrl = linkedStyleUrls[0]
           pushStoryboardImageTrace("ok", "Using first linked URL as primary reference")
         }
       }
@@ -2015,7 +2051,7 @@ export default function SceneStoryboardsPage() {
         throw new Error("No reference image available for edit mode")
       }
 
-      const extraStyleReferenceUrls = styleReferenceUrls.filter(
+      const extraStyleReferenceUrls = linkedStyleUrls.filter(
         (url) => url !== referenceImageUrl,
       )
 
@@ -3253,6 +3289,21 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  const saveStoryboardLayoutReference = async (
+    storyboardId: string,
+    layout: StoryboardLayoutReference | null,
+  ) => {
+    const storyboard = storyboards.find((row) => row.id === storyboardId)
+    if (!storyboard) return
+    const metadata = buildStoryboardLayoutMetadataPatch(storyboard.metadata, layout)
+    const updated = await StoryboardsService.updateStoryboard(storyboardId, { metadata })
+    setStoryboards((prev) =>
+      sortStoryboardRows(
+        prev.map((existing) => (existing.id === storyboardId ? updated : existing)),
+      ),
+    )
+  }
+
 
 
   // Reset form when form is closed
@@ -3614,6 +3665,7 @@ export default function SceneStoryboardsPage() {
       })
 
       const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
+      const layoutRef = getStoryboardLayoutReference(storyboard)
 
       // Prepare the enhanced prompt for storyboard shots
       let enhancedPrompt = generationPrompt
@@ -3653,15 +3705,18 @@ export default function SceneStoryboardsPage() {
         assignmentContext.characterIds.length > 0 ||
         assignmentContext.locationIds.length > 0 ||
         assignmentContext.objectIds.length > 0
-      // Quick regen on a shot with images used to skip all refs → text-only random faces.
-      // Still exclude this shot's own URLs; when characters/locations are assigned, use collage/avatars.
-      const skipReferenceImages = isQuick && hasShotImages && !hasAssignedRefs
+      // Quick regen on a shot with images used to skip entity refs only when nothing to guide generation.
+      const skipReferenceImages =
+        isQuick && hasShotImages && !hasAssignedRefs && !layoutRef.url
       const excludeReferenceUrls = isQuick
         ? [
             ...(storyboard.image_url ? [storyboard.image_url] : []),
             ...shotGallery.map((image) => image.image_url).filter(Boolean),
           ]
         : []
+      if (layoutRef.url) {
+        excludeReferenceUrls.push(layoutRef.url)
+      }
 
       const referenceSources = skipReferenceImages
         ? []
@@ -3683,9 +3738,18 @@ export default function SceneStoryboardsPage() {
         pushStoryboardImageTrace(
           "info",
           skipReferenceImages
-            ? "Quick generate — no character/location assignments; references skipped"
-            : "Quick generate — using assigned references (shot gallery URLs excluded)",
-          `sources=${referenceSources.length}, excludedUrls=${excludeReferenceUrls.length}`,
+            ? "Quick generate — no assignments or layout ref; references skipped"
+            : layoutRef.url
+              ? "Quick generate — layout ref + character/location refs"
+              : "Quick generate — using assigned references (shot gallery URLs excluded)",
+          `sources=${referenceSources.length}, layout=${layoutRef.url ? "yes" : "no"}`,
+        )
+      }
+      if (layoutRef.url) {
+        pushStoryboardImageTrace(
+          "info",
+          "Layout / blocking reference",
+          layoutRef.label ?? layoutRef.url.slice(0, 80),
         )
       }
       for (const source of referenceSources) {
@@ -3785,8 +3849,8 @@ export default function SceneStoryboardsPage() {
         toast({
           title: `${referenceLoad.failed.length} reference image${referenceLoad.failed.length === 1 ? "" : "s"} couldn't load`,
           description:
-            referenceFiles.length > 0
-              ? `Used ${referenceFiles.length} valid reference${referenceFiles.length === 1 ? "" : "s"}. See the warning on this shot for what to fix.`
+            referenceFiles.length > 0 || layoutRef.url
+              ? `Used ${referenceFiles.length} valid reference${referenceFiles.length === 1 ? "" : "s"}${layoutRef.url ? " plus layout reference" : ""}. See the warning on this shot for what to fix.`
               : "No valid references were found. Generation continued with text only — see the warning on this shot.",
           variant: "destructive",
         })
@@ -3809,7 +3873,25 @@ export default function SceneStoryboardsPage() {
           objectDetails: assignmentContext.objectDetails,
           masterPrompts: [],
           referenceCount: referenceFiles.length,
-          entityRefMapping: buildEntityReferenceMapping(referenceLoad.loaded),
+          entityRefMapping: buildEntityReferenceMapping(
+            referenceLoad.loaded,
+            { startIndex: layoutRef.url ? 2 : 1 },
+          ),
+        })
+      }
+
+      const layoutMatchesCurrentShot = Boolean(
+        layoutRef.url &&
+          storyboard.image_url &&
+          normalizeReferenceUrl(layoutRef.url) ===
+            normalizeReferenceUrl(storyboard.image_url),
+      )
+
+      if (!skipEnrichment && layoutRef.url) {
+        enhancedPrompt = enrichPromptWithLayoutReference(enhancedPrompt, {
+          layoutLabel: layoutRef.label,
+          characterNames: assignmentContext.characterNames,
+          layoutMatchesCurrentShot,
         })
       }
 
@@ -3823,19 +3905,25 @@ export default function SceneStoryboardsPage() {
         referenceFileCount: referenceFiles.length,
         skipReferenceImages,
         useExactPrompt,
+        layoutReferenceUrl: layoutRef.url,
       })
 
+      const entityReferenceUrls = referenceLoad.loaded.map((source) => source.url)
+      const hasReferencePayload = Boolean(layoutRef.url) || entityReferenceUrls.length > 0
       const lockedImageConfig =
         imagesSetting?.is_locked && imagesSetting.locked_model
-          ? getLockedImageConfig({ withReferenceImage: referenceFiles.length > 0 })
+          ? getLockedImageConfig({ withReferenceImage: hasReferencePayload })
           : null
       const supportsReference =
         lockedImageConfig?.supportsReference ||
         displayModelSupportsReferenceImage(modelLabel)
 
       let response: Response
-      const loadedReferenceUrls = referenceLoad.loaded.map((source) => source.url)
-      if (loadedReferenceUrls.length > 0 && supportsReference) {
+      if (hasReferencePayload && supportsReference) {
+        const primaryReferenceUrl = layoutRef.url ?? entityReferenceUrls[0]
+        const styleReferenceUrls = layoutRef.url
+          ? entityReferenceUrls
+          : entityReferenceUrls.slice(1)
         const generationConfig = lockedImageConfig ?? {
           service: serviceToUse,
           apiModel: modelToUse,
@@ -3845,14 +3933,15 @@ export default function SceneStoryboardsPage() {
           service: generationConfig.service,
           model: generationConfig.apiModel,
           apiKey,
-          referenceImageUrl: loadedReferenceUrls[0],
-          styleReferenceUrls: loadedReferenceUrls.slice(1),
+          referenceImageUrl: primaryReferenceUrl,
+          styleReferenceUrls:
+            styleReferenceUrls.length > 0 ? styleReferenceUrls : undefined,
           supportsReference: true,
         })
         pushStoryboardImageTrace(
           "info",
           "GPT Image reference payload",
-          `primary=${loadedReferenceUrls[0]?.slice(0, 60) ?? "none"}, styleRefs=${loadedReferenceUrls.length - 1}, total=${loadedReferenceUrls.length}`,
+          `primary=${layoutRef.url ? "layout" : "entity"} (${primaryReferenceUrl?.slice(0, 60) ?? "none"}), styleRefs=${styleReferenceUrls.length}, total=${1 + styleReferenceUrls.length}`,
         )
       } else {
         debugStoryboardImage("request-sent", {
@@ -5896,6 +5985,18 @@ export default function SceneStoryboardsPage() {
                         return next
                       })
                     }
+                  />
+                ) : null}
+
+                {sceneProjectId ? (
+                  <StoryboardLayoutReferenceControl
+                    storyboard={storyboard}
+                    projectId={sceneProjectId}
+                    disabled={
+                      quickGeneratingShotIds.has(storyboard.id) ||
+                      referenceEditingShotIds.has(storyboard.id)
+                    }
+                    onLayoutChange={saveStoryboardLayoutReference}
                   />
                 ) : null}
                 

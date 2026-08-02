@@ -60,6 +60,7 @@ import {
 } from "@/lib/image-model-utils"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import {
   buildLinkedAssetGroups,
   getProjectAssetSourceLabel,
@@ -145,6 +146,10 @@ export default function ObjectsPage() {
   const [formColor, setFormColor] = useState("")
   const [formEra, setFormEra] = useState("")
   const [formNotes, setFormNotes] = useState("")
+  const [savedObjectPrompts, setSavedObjectPrompts] = useState<SavedPrompt[]>([])
+  const [isLoadingSavedPrompts, setIsLoadingSavedPrompts] = useState(false)
+  const [selectedImagePromptId, setSelectedImagePromptId] = useState("")
+  const [selectedEditPromptId, setSelectedEditPromptId] = useState("")
 
   const selectedObject = objects.find((item) => item.id === selectedObjectId) ?? null
   const imageAssets = useMemo(
@@ -301,6 +306,79 @@ export default function ObjectsPage() {
       .then(setAiSettings)
       .catch((error) => console.error("Failed to load AI settings:", error))
   }, [ready])
+
+  useEffect(() => {
+    if (!ready || !userId) {
+      setSavedObjectPrompts([])
+      return
+    }
+    setIsLoadingSavedPrompts(true)
+    SavedPromptsService.getSavedPrompts(userId, projectId || null)
+      .then((prompts) => {
+        setSavedObjectPrompts(
+          prompts.filter(
+            (p) =>
+              p.type === "prop" ||
+              p.type === "style" ||
+              p.type === "prompt" ||
+              p.type === "environment",
+          ),
+        )
+      })
+      .catch(() => setSavedObjectPrompts([]))
+      .finally(() => setIsLoadingSavedPrompts(false))
+  }, [ready, userId, projectId])
+
+  const applySavedPromptText = (promptText: string, target: "image" | "edit") => {
+    const text = promptText.trim()
+    if (!text) return
+    if (target === "image") {
+      setImagePrompt(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into image prompt for object generation.",
+      })
+    } else {
+      setInlineCustomShotPrompt(text)
+      toast({
+        title: "Prompt applied",
+        description: "Loaded into the edit prompt for this image.",
+      })
+    }
+  }
+
+  const handleSavedPromptSelect = (value: string, target: "image" | "edit") => {
+    if (value === "__none__") {
+      if (target === "image") setSelectedImagePromptId("")
+      else setSelectedEditPromptId("")
+      return
+    }
+
+    if (value === "__object_visual__") {
+      const visual = selectedObject?.visual_description?.trim()
+      if (!visual) {
+        toast({
+          title: "No visual description",
+          description: "Add a visual description on this object first.",
+          variant: "destructive",
+        })
+        return
+      }
+      if (target === "image") setSelectedImagePromptId(value)
+      else setSelectedEditPromptId(value)
+      applySavedPromptText(visual, target)
+      return
+    }
+
+    const saved = savedObjectPrompts.find((p) => p.id === value)
+    if (!saved) return
+    if (target === "image") setSelectedImagePromptId(value)
+    else setSelectedEditPromptId(value)
+    applySavedPromptText(saved.prompt, target)
+  }
+
+  const hasSavedPromptOptions =
+    savedObjectPrompts.length > 0 || Boolean(selectedObject?.visual_description?.trim())
 
   useEffect(() => {
     const load = async () => {
@@ -819,13 +897,60 @@ export default function ObjectsPage() {
 
         {inDialog ? (
           <div className="space-y-2">
+            {hasSavedPromptOptions ? (
+              <div className="space-y-2">
+                <Label htmlFor={`${idPrefix}-saved-prompt`} className="text-xs sm:text-sm">
+                  Saved prompt
+                </Label>
+                <Select
+                  value={selectedEditPromptId || "__none__"}
+                  onValueChange={(v) => handleSavedPromptSelect(v, "edit")}
+                  disabled={isGeneratingShot}
+                >
+                  <SelectTrigger
+                    id={`${idPrefix}-saved-prompt`}
+                    className="bg-input border-border text-xs sm:text-sm"
+                  >
+                    <SelectValue
+                      placeholder={
+                        isLoadingSavedPrompts
+                          ? "Loading prompts…"
+                          : "Apply a saved prompt…"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">None (custom edit)</SelectItem>
+                    {selectedObject?.visual_description?.trim() ? (
+                      <SelectItem value="__object_visual__">
+                        Object visual description
+                      </SelectItem>
+                    ) : null}
+                    {savedObjectPrompts.map((prompt) => (
+                      <SelectItem key={prompt.id} value={prompt.id}>
+                        {prompt.title}
+                        {prompt.type === "style" ? " (style)" : ""}
+                        {prompt.type === "prop" ? " (prop)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Loads into the edit field below — then click Edit Image to apply.
+                </p>
+              </div>
+            ) : null}
+
             <Label htmlFor={`${idPrefix}-inline-edit`} className="text-xs sm:text-sm">
               Describe your edit
             </Label>
             <Textarea
               id={`${idPrefix}-inline-edit`}
               value={inlineCustomShotPrompt}
-              onChange={(e) => setInlineCustomShotPrompt(e.target.value)}
+              onChange={(e) => {
+                setInlineCustomShotPrompt(e.target.value)
+                if (selectedEditPromptId) setSelectedEditPromptId("")
+              }}
               placeholder='e.g., add rust on the bumper, change to matte black paint, closer detail on the handle'
               className="bg-input border-border min-h-[72px] text-xs sm:text-sm resize-none"
               disabled={isGeneratingShot}
@@ -1444,11 +1569,53 @@ export default function ObjectsPage() {
                     </div>
 
                     <div className="space-y-3 border-t border-border pt-4">
+                      {hasSavedPromptOptions ? (
+                        <div className="space-y-2">
+                          <Label htmlFor="object-saved-prompt">Saved prompt</Label>
+                          <Select
+                            value={selectedImagePromptId || "__none__"}
+                            onValueChange={(v) => handleSavedPromptSelect(v, "image")}
+                            disabled={isLoadingSavedPrompts || isGeneratingImage}
+                          >
+                            <SelectTrigger id="object-saved-prompt" className="bg-input border-border">
+                              <SelectValue
+                                placeholder={
+                                  isLoadingSavedPrompts
+                                    ? "Loading prompts…"
+                                    : "Apply a saved prompt…"
+                                }
+                              />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">None (custom prompt)</SelectItem>
+                              {selectedObject?.visual_description?.trim() ? (
+                                <SelectItem value="__object_visual__">
+                                  Object visual description
+                                </SelectItem>
+                              ) : null}
+                              {savedObjectPrompts.map((prompt) => (
+                                <SelectItem key={prompt.id} value={prompt.id}>
+                                  {prompt.title}
+                                  {prompt.type === "style" ? " (style)" : ""}
+                                  {prompt.type === "prop" ? " (prop)" : ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground">
+                            Applies to Generate Image below. Saved in VisDev or prompt library.
+                          </p>
+                        </div>
+                      ) : null}
+
                       <Label htmlFor="object-image-prompt">Image prompt</Label>
                       <Textarea
                         id="object-image-prompt"
                         value={imagePrompt}
-                        onChange={(e) => setImagePrompt(e.target.value)}
+                        onChange={(e) => {
+                          setImagePrompt(e.target.value)
+                          if (selectedImagePromptId) setSelectedImagePromptId("")
+                        }}
                         className="min-h-[80px]"
                         placeholder="Describe the object image you want..."
                       />

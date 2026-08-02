@@ -246,9 +246,11 @@ export function summarizeObjectReferenceCoverage(
 
 export function buildEntityReferenceMapping(
   loaded: StoryboardReferenceSource[],
+  options?: { startIndex?: number },
 ): Array<{ index: number; name: string; sourceType: string; label: string }> {
+  const startIndex = options?.startIndex ?? 1
   return loaded.map((source, index) => ({
-    index: index + 1,
+    index: startIndex + index,
     name: source.entityName ?? source.label,
     sourceType: source.sourceType,
     label: source.label,
