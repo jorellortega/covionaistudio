@@ -2298,7 +2298,6 @@ export default function AvatarsPage() {
                       </Label>
                       <p className="text-xs text-muted-foreground">
                         Pick one image and AI will create the other angles while keeping the same character likeness.
-                        Requires GPT Image 2 or Runway locked in AI Settings.
                       </p>
                       {sourceReference ? (
                         <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
