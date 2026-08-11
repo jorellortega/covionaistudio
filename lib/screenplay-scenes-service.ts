@@ -160,5 +160,42 @@ export class ScreenplayScenesService {
       .map((scene) => scene.content!.trim())
       .join('\n\n')
   }
+
+  static buildSceneCharBoundaries(
+    scenes: ScreenplayScene[],
+  ): Array<{
+    sceneId: string
+    sceneNumber: string
+    sceneName: string
+    startChar: number
+    endChar: number
+  }> {
+    const boundaries: Array<{
+      sceneId: string
+      sceneNumber: string
+      sceneName: string
+      startChar: number
+      endChar: number
+    }> = []
+
+    let currentCharPosition = 0
+    for (const scene of scenes) {
+      const content = scene.content?.trim()
+      if (!content) continue
+
+      const startChar = currentCharPosition
+      const endChar = currentCharPosition + content.length
+      boundaries.push({
+        sceneId: scene.id,
+        sceneNumber: scene.scene_number || '',
+        sceneName: scene.name || '',
+        startChar,
+        endChar,
+      })
+      currentCharPosition = endChar + 2
+    }
+
+    return boundaries
+  }
 }
 

@@ -49,6 +49,7 @@ import {
   Paperclip,
   X,
   Clapperboard,
+  Layers,
 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
@@ -58,9 +59,12 @@ import {
   detectCharacterContent,
   detectLocationContent,
   parseTreatmentFields,
+  parseTreatmentActs,
+  getBestTreatmentActSource,
   parseCharacterFields,
   parseLocationFields,
   parseSceneFields,
+  findSceneContentInThread,
   detectSceneContent,
   isSceneImportConfirmation,
   extractImportedSceneFromThread,
@@ -74,6 +78,9 @@ import { SaveLocationDialog } from "@/components/creative-workspace/save-locatio
 import { SaveSceneDialog } from "@/components/creative-workspace/save-scene-dialog"
 import { SaveAvatarImageDialog } from "@/components/creative-workspace/save-avatar-image-dialog"
 import { LinkProjectDialog } from "@/components/creative-workspace/link-project-dialog"
+import { CharactersService, type Character } from "@/lib/characters-service"
+import { LocationsService, type Location } from "@/lib/locations-service"
+import { Checkbox } from "@/components/ui/checkbox"
 import { useAuthReady } from "@/components/auth-hooks"
 import { useToast } from "@/hooks/use-toast"
 import { AISettingsService } from "@/lib/ai-settings-service"
@@ -157,7 +164,6 @@ function getMessageImageArtifacts(messageId: string, artifacts: CreativeArtifact
   return artifacts.filter(
     (artifact) =>
       artifact.message_id === messageId &&
-      artifact.artifact_type === "image" &&
       artifact.content &&
       (artifact.content.startsWith("http") || artifact.content.startsWith("data:image/")),
   )
@@ -254,7 +260,10 @@ export function ChatPanel({
   const [isGeneratingImage, setIsGeneratingImage] = useState<string | null>(null)
   const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null)
-  const [treatmentDialog, setTreatmentDialog] = useState<CreativeMessage | null>(null)
+  const [treatmentDialog, setTreatmentDialog] = useState<{
+    message: CreativeMessage
+    treatmentContent: string
+  } | null>(null)
   const [characterDialog, setCharacterDialog] = useState<DialogTarget | null>(null)
   const [locationDialog, setLocationDialog] = useState<DialogTarget | null>(null)
   const [sceneDialog, setSceneDialog] = useState<DialogTarget | null>(null)
@@ -267,7 +276,14 @@ export function ChatPanel({
   const [saveTitle, setSaveTitle] = useState("")
   const [saveLabel, setSaveLabel] = useState("")
   const [saveType, setSaveType] = useState<ArtifactType>("document")
+  const [saveCharacterId, setSaveCharacterId] = useState("")
+  const [saveLocationId, setSaveLocationId] = useState("")
+  const [saveCharacters, setSaveCharacters] = useState<Character[]>([])
+  const [saveLocations, setSaveLocations] = useState<Location[]>([])
+  const [loadingSaveLinks, setLoadingSaveLinks] = useState(false)
+  const [saveAsPrimaryImage, setSaveAsPrimaryImage] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [isSavingActs, setIsSavingActs] = useState(false)
   const [sceneImportDebugByMessageId, setSceneImportDebugByMessageId] = useState<Record<string, unknown>>({})
   const [viewSceneDialog, setViewSceneDialog] = useState<{ title: string; content: string } | null>(null)
   const [expandedSceneMessages, setExpandedSceneMessages] = useState<Set<string>>(new Set())
@@ -596,28 +612,293 @@ export function ChatPanel({
     }
   }
 
-  const openSaveDialog = (message: CreativeMessage, contextContent?: string) => {
+  const openSaveDialog = async (message: CreativeMessage, contextContent?: string) => {
     const source = contextContent || message.content
-    const isCharacter = detectCharacterContent(source)
-    const isLocation = !isCharacter && detectLocationContent(source)
+    const isTreatment = detectTreatmentContent(source)
+    const isCharacter = !isTreatment && detectCharacterContent(source)
+    const isLocation = !isTreatment && !isCharacter && detectLocationContent(source)
+    const parsedTreatment = isTreatment ? parseTreatmentFields(source, workspaceTitle) : null
     const parsedCharacter = isCharacter ? parseCharacterFields(source, workspaceTitle) : null
     const parsedLocation = isLocation ? parseLocationFields(source, workspaceTitle) : null
+    const projectId = linkedProject?.id || ""
     setSaveDialog({ message, content: message.content })
     setSaveTitle(
-      parsedCharacter?.name
-        ? `${parsedCharacter.name} - Character`
-        : parsedLocation?.name
-          ? `${parsedLocation.name} - Location`
-          : workspaceTitle !== "Untitled Project"
-            ? `${workspaceTitle} - Note`
-            : "Saved Document",
+      parsedTreatment?.title
+        ? `${parsedTreatment.title} - Treatment`
+        : parsedCharacter?.name
+          ? `${parsedCharacter.name} - Character`
+          : parsedLocation?.name
+            ? `${parsedLocation.name} - Location`
+            : workspaceTitle !== "Untitled Project"
+              ? `${workspaceTitle} - Note`
+              : "Saved Document",
     )
-    setSaveLabel(parsedCharacter?.name || parsedLocation?.name || "")
-    setSaveType(isCharacter ? "character" : isLocation ? "location" : "document")
+    setSaveLabel(
+      parsedTreatment?.title || parsedCharacter?.name || parsedLocation?.name || "",
+    )
+    setSaveType(
+      isTreatment ? "treatment" : isCharacter ? "character" : isLocation ? "location" : "document",
+    )
+    setSaveCharacterId("")
+    setSaveLocationId("")
+    setSaveAsPrimaryImage(true)
+    if (projectId) {
+      setLoadingSaveLinks(true)
+      try {
+        const [characters, locations] = await Promise.all([
+          CharactersService.getCharacters(projectId),
+          LocationsService.getLocations(projectId),
+        ])
+        setSaveCharacters(characters)
+        setSaveLocations(locations)
+        if (parsedCharacter?.name) {
+          const match = characters.find(
+            (character) => character.name.toLowerCase() === parsedCharacter.name.toLowerCase(),
+          )
+          if (match) setSaveCharacterId(match.id)
+        }
+        if (parsedLocation?.name) {
+          const match = locations.find(
+            (location) => location.name.toLowerCase() === parsedLocation.name.toLowerCase(),
+          )
+          if (match) setSaveLocationId(match.id)
+        }
+      } catch {
+        setSaveCharacters([])
+        setSaveLocations([])
+      } finally {
+        setLoadingSaveLinks(false)
+      }
+    } else {
+      setSaveCharacters([])
+      setSaveLocations([])
+    }
+  }
+
+  const handleSaveActs = async (
+    message: CreativeMessage,
+    actSource: string,
+    actCount: number,
+  ) => {
+    if (!workspaceId || actCount === 0) return
+
+    setIsSavingActs(true)
+    try {
+      const res = await fetch(`/api/creative-workspace/${workspaceId}/save-treatment-acts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: actSource,
+          projectId: linkedProject?.id || null,
+          messageId: message.id.startsWith("temp-") ? null : message.id,
+          title: workspaceTitle !== "Untitled Project" ? workspaceTitle : undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Failed to save acts")
+
+      onArtifactCreated()
+      toast({
+        title: "Acts saved",
+        description: `${data.count || actCount} act${actCount === 1 ? "" : "s"} saved to Created Assets → Acts.`,
+      })
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to save acts",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSavingActs(false)
+    }
   }
 
   const handleSaveArtifact = async () => {
     if (!workspaceId || !saveDialog) return
+
+    const imageArtifacts = getMessageImageArtifacts(saveDialog.message.id, artifacts)
+    const hasImages = imageArtifacts.length > 0
+    const projectId = linkedProject?.id || null
+
+    if (hasImages && (saveType === "character" || saveType === "location")) {
+      if (!projectId) {
+        toast({
+          title: "Project required",
+          description: "Link a movie project to save this image to a character or location.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const creatingCharacter = saveType === "character" && saveCharacterId === "__new__"
+      const creatingLocation = saveType === "location" && saveLocationId === "__new__"
+      const selectedCharacter =
+        saveType === "character" && saveCharacterId && saveCharacterId !== "__new__"
+          ? saveCharacters.find((character) => character.id === saveCharacterId)
+          : null
+      const selectedLocation =
+        saveType === "location" && saveLocationId && saveLocationId !== "__new__"
+          ? saveLocations.find((location) => location.id === saveLocationId)
+          : null
+
+      if (saveType === "character" && !selectedCharacter && !creatingCharacter) {
+        toast({
+          title: "Character required",
+          description: "Choose an existing character or create a new one.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      if (saveType === "location" && !selectedLocation && !creatingLocation) {
+        toast({
+          title: "Location required",
+          description: "Choose an existing location or create a new one.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      if (creatingCharacter && !saveLabel.trim()) {
+        toast({
+          title: "Name required",
+          description: "Enter a name for the new character.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      if (creatingLocation && !saveLabel.trim()) {
+        toast({
+          title: "Name required",
+          description: "Enter a name for the new location.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const label =
+        saveType === "character"
+          ? selectedCharacter?.name || saveLabel.trim()
+          : selectedLocation?.name || saveLabel.trim()
+
+      setIsSaving(true)
+      try {
+        let syncMessage: string | null = null
+        for (const artifact of imageArtifacts) {
+          const res = await fetch(
+            `/api/creative-workspace/${workspaceId}/artifacts/${artifact.id}`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                title: saveTitle.trim() || artifact.title,
+                label,
+                project_id: projectId,
+                character_id:
+                  saveType === "character" && selectedCharacter ? selectedCharacter.id : null,
+                location_id:
+                  saveType === "location" && selectedLocation ? selectedLocation.id : null,
+                create_character: creatingCharacter,
+                create_location: creatingLocation,
+                set_as_primary_image: saveAsPrimaryImage,
+                sync_to_project: true,
+              }),
+            },
+          )
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(err.error || "Failed to save image")
+          }
+          const result = await res.json()
+          if (result.artifact) onArtifactCreated(result.artifact)
+          syncMessage = result.syncMessage || syncMessage
+        }
+
+        toast({
+          title: "Saved to project",
+          description:
+            syncMessage ||
+            `Image linked to ${label} in ${linkedProject?.name || "your project"}.`,
+        })
+        setSaveDialog(null)
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to save",
+          variant: "destructive",
+        })
+      } finally {
+        setIsSaving(false)
+      }
+      return
+    }
+
+    if (saveType === "treatment") {
+      setIsSaving(true)
+      try {
+        const parsed = parseTreatmentFields(saveDialog.content, workspaceTitle)
+        if (projectId) {
+          const res = await fetch(`/api/creative-workspace/${workspaceId}/save-treatment`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: saveTitle.trim() || parsed.title,
+              genre: parsed.genre,
+              logline: parsed.logline,
+              synopsis: parsed.synopsis,
+              prompt: saveDialog.content,
+              projectId,
+              messageId: saveDialog.message.id.startsWith("temp-") ? null : saveDialog.message.id,
+            }),
+          })
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || "Failed to save treatment")
+          onArtifactCreated()
+          const actCount = Array.isArray(data.acts) ? data.acts.length : 0
+          toast({
+            title: data.updated ? "Treatment updated" : "Treatment saved",
+            description:
+              actCount > 0
+                ? `Saved to ${linkedProject?.name || "your project"} with ${actCount} acts in Created Assets → Treatments.`
+                : `Saved to ${linkedProject?.name || "your project"}. View it in Created Assets → Treatments.`,
+          })
+        } else {
+          const res = await fetch(`/api/creative-workspace/${workspaceId}/artifacts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              artifact_type: "treatment",
+              title: saveTitle.trim() || parsed.title,
+              label: saveLabel || "Treatment",
+              content: saveDialog.content,
+              message_id: saveDialog.message.id.startsWith("temp-") ? null : saveDialog.message.id,
+            }),
+          })
+          if (!res.ok) {
+            const err = await res.json()
+            throw new Error(err.error || "Failed to save")
+          }
+          const data = await res.json()
+          onArtifactCreated(data.artifact)
+          toast({
+            title: "Treatment saved",
+            description: "Saved to Created Assets. Link a movie project to sync to Treatments.",
+          })
+        }
+        setSaveDialog(null)
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: error instanceof Error ? error.message : "Failed to save treatment",
+          variant: "destructive",
+        })
+      } finally {
+        setIsSaving(false)
+      }
+      return
+    }
+
     setIsSaving(true)
     try {
       const res = await fetch(`/api/creative-workspace/${workspaceId}/artifacts`, {
@@ -939,14 +1220,42 @@ export function ChatPanel({
               const messageDocuments = getMessageDocuments(message.id, artifacts)
               const messageContext = message.role === "assistant"
                 ? resolveCreativeMessageContext(message, messageIndex, messages, workspaceTitle)
-                : { isCharacter: false, isLocation: false, contextContent: message.content }
-              const isTreatment = message.role === "assistant" && detectTreatmentContent(message.content)
-              const isCharacter = message.role === "assistant" && messageContext.isCharacter
-              const isLocation = message.role === "assistant" && messageContext.isLocation
-              const sceneSource =
-                message.role === "user"
+                : {
+                    isCharacter: false,
+                    isLocation: false,
+                    isTreatment: false,
+                    contextContent: message.content,
+                    treatmentContent: null,
+                  }
+              const isCurrentMessageScene =
+                message.role === "assistant" && detectSceneContent(message.content)
+              const treatmentContent = isCurrentMessageScene
+                ? null
+                : messageContext.treatmentContent ||
+                  (detectTreatmentContent(message.content) ? message.content : null)
+              const actSource = isCurrentMessageScene
+                ? ""
+                : getBestTreatmentActSource(message.content, treatmentContent)
+              const detectedActs = actSource ? parseTreatmentActs(actSource) : []
+              const isTreatment =
+                message.role === "assistant" &&
+                !isCurrentMessageScene &&
+                (!!treatmentContent || detectedActs.length > 0)
+              const isCharacter =
+                message.role === "assistant" && messageContext.isCharacter && !isTreatment && !isCurrentMessageScene
+              const isLocation =
+                message.role === "assistant" && messageContext.isLocation && !isTreatment && !isCurrentMessageScene
+              const sceneSource = isCurrentMessageScene
+                ? message.content
+                : message.role === "user"
                   ? message.content
-                  : messageContext.contextContent
+                  : findSceneContentInThread(
+                      messages.map((m) => ({ role: m.role, content: m.content })),
+                      messageIndex,
+                    ) || messageContext.contextContent
+              const parsedScenePreview = isCurrentMessageScene
+                ? parseSceneFields(message.content, workspaceTitle)
+                : null
               const sceneAlreadySaved = messageHasSavedScene(message.id, artifacts)
               const isSceneImportReply =
                 message.role === "assistant" && isSceneImportConfirmation(message.content)
@@ -956,16 +1265,20 @@ export function ChatPanel({
               const isScene =
                 !sceneAlreadySaved &&
                 !isSceneImportReply &&
+                !isTreatment &&
                 detectSceneContent(sceneSource)
               const openCharacterDialog = () =>
                 setCharacterDialog({ message, contextContent: messageContext.contextContent })
               const openLocationDialog = () =>
                 setLocationDialog({ message, contextContent: messageContext.contextContent })
               const openSceneDialog = () => {
+                const contentToSave = isCurrentMessageScene
+                  ? message.content
+                  : sceneSource
                 const priorMessages = messages
                   .slice(0, messageIndex)
                   .map((m) => ({ role: m.role, content: m.content }))
-                const threadImport = extractImportedSceneFromThread(priorMessages, sceneSource, {
+                const threadImport = extractImportedSceneFromThread(priorMessages, contentToSave, {
                   collectDebug: true,
                 })
                 console.group("[scene-import] Save dialog preview")
@@ -973,7 +1286,7 @@ export function ChatPanel({
                 console.groupEnd()
                 setSceneDialog({
                   message,
-                  contextContent: threadImport.content,
+                  contextContent: threadImport.content || contentToSave,
                 })
               }
               const openAvatarDialog = () =>
@@ -1155,16 +1468,44 @@ export function ChatPanel({
                     </div>
                   )}
                   {isTreatment && (
-                    <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary flex items-center justify-between gap-2">
-                      <span>Treatment detected — save to a movie project</span>
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => setTreatmentDialog(message)}
-                      >
-                        <FileText className="h-3 w-3 mr-1" />
-                        Save to Movie
-                      </Button>
+                    <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-primary flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span>
+                        Treatment detected
+                        {detectedActs.length > 0
+                          ? ` — ${detectedActs.length} act${detectedActs.length === 1 ? "" : "s"} found`
+                          : " — save to a movie project"}
+                      </span>
+                      <div className="flex flex-wrap gap-1 shrink-0">
+                        {detectedActs.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs border-primary/40"
+                            disabled={isSavingActs}
+                            onClick={() => void handleSaveActs(message, actSource, detectedActs.length)}
+                          >
+                            {isSavingActs ? (
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            ) : (
+                              <Layers className="h-3 w-3 mr-1" />
+                            )}
+                            Save Acts
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          className="h-7 text-xs"
+                          onClick={() =>
+                            setTreatmentDialog({
+                              message,
+                              treatmentContent: actSource || treatmentContent || message.content,
+                            })
+                          }
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Save to Movie
+                        </Button>
+                      </div>
                     </div>
                   )}
                   {isCharacter && (
@@ -1216,10 +1557,18 @@ export function ChatPanel({
                   )}
                   {isScene && !isTreatment && (
                     <div className="rounded-md border border-cyan-500/30 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-700 dark:text-cyan-400 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <span>Scene detected — save full scene to movie</span>
+                      <span>
+                        Scene detected
+                        {parsedScenePreview?.sceneNumber
+                          ? ` — Scene ${parsedScenePreview.sceneNumber}`
+                          : ""}
+                        {parsedScenePreview?.location
+                          ? ` · ${parsedScenePreview.location}`
+                          : " — save to screenplay"}
+                      </span>
                       <Button
                         size="sm"
-                        className="h-7 text-xs"
+                        className="h-7 text-xs shrink-0"
                         onClick={openSceneDialog}
                       >
                         <Clapperboard className="h-3 w-3 mr-1" />
@@ -1298,12 +1647,33 @@ export function ChatPanel({
                   )}
                   {message.role === "assistant" && (
                     <div className="flex flex-wrap gap-1">
+                      {isTreatment && detectedActs.length > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs text-primary"
+                          disabled={isSavingActs}
+                          onClick={() => void handleSaveActs(message, actSource, detectedActs.length)}
+                        >
+                          {isSavingActs ? (
+                            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                          ) : (
+                            <Layers className="h-3 w-3 mr-1" />
+                          )}
+                          Save Acts
+                        </Button>
+                      )}
                       {isTreatment && (
                         <Button
                           variant="ghost"
                           size="sm"
                           className="h-7 text-xs text-primary"
-                          onClick={() => setTreatmentDialog(message)}
+                          onClick={() =>
+                            setTreatmentDialog({
+                              message,
+                              treatmentContent: actSource || treatmentContent || message.content,
+                            })
+                          }
                         >
                           <FileText className="h-3 w-3 mr-1" />
                           Save to Movie
@@ -1534,15 +1904,17 @@ export function ChatPanel({
           open={!!treatmentDialog}
           onOpenChange={(open) => !open && setTreatmentDialog(null)}
           workspaceId={workspaceId}
-          messageId={treatmentDialog.id}
-          parsed={parseTreatmentFields(treatmentDialog.content, workspaceTitle)}
+          messageId={treatmentDialog.message.id}
+          parsed={parseTreatmentFields(treatmentDialog.treatmentContent, workspaceTitle)}
+          linkedProjectId={linkedProject?.id}
+          linkedProjectName={linkedProject?.name}
           onSaved={({ updated, projectId, projectName }) => {
-            toast({
-              title: updated ? "Treatment updated" : "Treatment saved",
-              description: `Linked to ${projectName}. Open Treatments or View Movie to edit.`,
-            })
             onProjectLinked(projectId, projectName)
             onArtifactCreated()
+            toast({
+              title: updated ? "Treatment updated" : "Treatment saved",
+              description: `Linked to ${projectName}. Acts and treatment appear in Created Assets → Treatments.`,
+            })
             setTreatmentDialog(null)
           }}
         />
@@ -1651,16 +2023,15 @@ export function ChatPanel({
               <Input value={saveTitle} onChange={(e) => setSaveTitle(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label>Label</Label>
-              <Input
-                value={saveLabel}
-                onChange={(e) => setSaveLabel(e.target.value)}
-                placeholder="Character name, scene title..."
-              />
-            </div>
-            <div className="space-y-2">
               <Label>Type</Label>
-              <Select value={saveType} onValueChange={(v) => setSaveType(v as ArtifactType)}>
+              <Select
+                value={saveType}
+                onValueChange={(v) => {
+                  setSaveType(v as ArtifactType)
+                  setSaveCharacterId("")
+                  setSaveLocationId("")
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {SAVE_TYPES.map((t) => (
@@ -1669,6 +2040,124 @@ export function ChatPanel({
                 </SelectContent>
               </Select>
             </div>
+
+            {(saveType === "character" || saveType === "location") &&
+            getMessageImageArtifacts(saveDialog?.message.id || "", artifacts).length > 0 ? (
+              <div className="space-y-3 rounded-lg border border-border/60 p-3 bg-muted/20">
+                {linkedProject ? (
+                  <p className="text-sm text-muted-foreground">
+                    Saving to <span className="font-medium text-foreground">{linkedProject.name}</span>
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-sm text-muted-foreground">
+                      Link this workspace to a movie project to save images to characters or locations.
+                    </p>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setShowLinkProject(true)}>
+                      Link project
+                    </Button>
+                  </div>
+                )}
+
+                {saveType === "character" && (
+                  <div className="space-y-2">
+                    <Label>Character</Label>
+                    <Select
+                      value={saveCharacterId || (saveLabel.trim() ? "__new__" : "")}
+                      onValueChange={setSaveCharacterId}
+                      disabled={!linkedProject?.id || loadingSaveLinks}
+                    >
+                      <SelectTrigger>
+                        <SelectValue
+                          placeholder={
+                            !linkedProject?.id
+                              ? "Link a project first"
+                              : loadingSaveLinks
+                                ? "Loading characters..."
+                                : "Choose a character"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__new__">
+                          Create new{saveLabel.trim() ? `: ${saveLabel.trim()}` : " character"}
+                        </SelectItem>
+                        {saveCharacters.map((character) => (
+                          <SelectItem key={character.id} value={character.id}>
+                            {character.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {saveCharacterId === "__new__" && (
+                      <Input
+                        value={saveLabel}
+                        onChange={(e) => setSaveLabel(e.target.value)}
+                        placeholder="New character name"
+                      />
+                    )}
+                  </div>
+                )}
+
+                {saveType === "location" && (
+                  <div className="space-y-2">
+                    <Label>Location</Label>
+                    <Select
+                      value={saveLocationId || (saveLabel.trim() ? "__new__" : "")}
+                      onValueChange={setSaveLocationId}
+                      disabled={!linkedProject?.id || loadingSaveLinks}
+                    >
+                      <SelectTrigger>
+                        <SelectValue
+                          placeholder={
+                            !linkedProject?.id
+                              ? "Link a project first"
+                              : loadingSaveLinks
+                                ? "Loading locations..."
+                                : "Choose a location"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__new__">
+                          Create new{saveLabel.trim() ? `: ${saveLabel.trim()}` : " location"}
+                        </SelectItem>
+                        {saveLocations.map((location) => (
+                          <SelectItem key={location.id} value={location.id}>
+                            {location.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {saveLocationId === "__new__" && (
+                      <Input
+                        value={saveLabel}
+                        onChange={(e) => setSaveLabel(e.target.value)}
+                        placeholder="New location name"
+                      />
+                    )}
+                  </div>
+                )}
+
+                <label className="flex items-center gap-2 text-sm">
+                  <Checkbox
+                    checked={saveAsPrimaryImage}
+                    onCheckedChange={(checked) => setSaveAsPrimaryImage(checked === true)}
+                  />
+                  Set as primary image
+                </label>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label>Label</Label>
+                <Input
+                  value={saveLabel}
+                  onChange={(e) => setSaveLabel(e.target.value)}
+                  placeholder="Character name, scene title..."
+                />
+              </div>
+            )}
+
             <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground max-h-32 overflow-y-auto">
               {saveDialog?.content.slice(0, 300)}{(saveDialog?.content.length ?? 0) > 300 ? "..." : ""}
             </div>

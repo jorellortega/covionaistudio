@@ -12,7 +12,50 @@ const IMAGE_REQUEST_PATTERNS = [
   /\b(more|additional|another|extra)\s+(images?|pictures?|photos?|locations?|shots?)\b/i,
 ]
 
-export function detectImageRequest(message: string): boolean {
+const IMAGE_FOLLOW_UP_STYLE_PATTERNS = [
+  /\b(3d|pixar|animated|animation|cartoon|stylized|realistic|photoreal|cgi|anime|illustration)\b/i,
+  /\b(make|needs? to be|should be|try|redo|regenerate|instead|update|change)\b/i,
+  /\b(new|another|different)\s+(version|look|style|image)\b/i,
+]
+
+type ConversationMessage = { role: string; content: string }
+
+function hadPriorImageConversation(history: ConversationMessage[]): boolean {
+  return history.some((message) => {
+    if (message.role !== 'user') return false
+    const content = message.content
+    return (
+      IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(content)) ||
+      /\b(generate|create|make)\b[\s\S]{0,50}\b(image|picture|photo|portrait)\b/i.test(content) ||
+      /\b(image|picture|photo|portrait)\s+of\b/i.test(content) ||
+      isLocationImageRequest(content) ||
+      isCharacterImageRequest(content)
+    )
+  }) || history.some(
+    (message) =>
+      message.role === 'assistant' &&
+      /\b(Images panel|generated (an? )?image|visuali[sz]e|3D image|Pixar-style|portrait of)\b/i.test(
+        message.content,
+      ),
+  )
+}
+
+function detectImageFollowUpRequest(
+  message: string,
+  conversationHistory: ConversationMessage[] = [],
+): boolean {
+  if (!hadPriorImageConversation(conversationHistory)) return false
+
+  return (
+    IMAGE_FOLLOW_UP_STYLE_PATTERNS.some((pattern) => pattern.test(message)) ||
+    /\b(her|him|he|she|them|it|this character|the character)\b/i.test(message)
+  )
+}
+
+export function detectImageRequest(
+  message: string,
+  conversationHistory: ConversationMessage[] = [],
+): boolean {
   const trimmed = message.trim()
   if (!trimmed) return false
   if (IMAGE_REQUEST_PATTERNS.some((pattern) => pattern.test(trimmed))) return true
@@ -21,6 +64,7 @@ export function detectImageRequest(message: string): boolean {
   }
   if (isLocationImageRequest(trimmed)) return true
   if (isCharacterImageRequest(trimmed)) return true
+  if (detectImageFollowUpRequest(trimmed, conversationHistory)) return true
   return false
 }
 
@@ -215,6 +259,18 @@ export function detectImageRequestFocus(
     return 'character'
   }
 
+  if (detectImageFollowUpRequest(userMessage, conversationHistory)) {
+    const recentCharacterImage = [...conversationHistory].reverse().find(
+      (m) =>
+        m.role === 'user' &&
+        (isCharacterImageRequest(m.content) ||
+          /\b(generate|create|make)\b[\s\S]{0,40}\b(image|picture|photo|portrait)\b/i.test(m.content) ||
+          /\b(image|picture|photo|portrait)\s+of\b/i.test(m.content) ||
+          /\b(her|him|he|she|them|character)\b/i.test(m.content)),
+    )
+    if (recentCharacterImage) return 'character'
+  }
+
   if (
     /\b(image|picture|photo|show me|generate|visualize|draw)\b/i.test(userMessage) &&
     /\b(it|this|the scene|the setting|the place)\b/i.test(userMessage)
@@ -244,7 +300,7 @@ export function buildImagePromptText(
 ): string {
   const focus = detectImageRequestFocus(userMessage, conversationHistory)
 
-  if (storyContext?.combinedText?.trim()) {
+  if (focus !== 'character' && storyContext?.combinedText?.trim()) {
     const sluglines = extractScreenplayLocationSluglines(storyContext.combinedText)
     if (sluglines.length > 0) {
       return buildLocationImagePromptsFromSluglines(sluglines, storyContext.projectName, 1)[0]
@@ -270,7 +326,12 @@ export function buildImagePromptText(
       (m) => m.role === 'assistant' && detectCharacterContent(m.content),
     )?.content || userMessage
     const parsed = parseCharacterFields(characterSource, 'Untitled')
-    return `Cinematic film still, portrait of ${parsed.name}, ${parsed.description}`.slice(0, 500)
+    const styleDirection = userMessage.trim()
+    const base = `Cinematic film still, portrait of ${parsed.name}, ${parsed.description}`
+    if (styleDirection && styleDirection !== characterSource) {
+      return `${base}, ${styleDirection}`.slice(0, 500)
+    }
+    return base.slice(0, 500)
   }
 
   return `Cinematic film still, ${userMessage}`.slice(0, 500)
@@ -282,9 +343,12 @@ const TREATMENT_SIGNAL_PATTERNS = [
   /\bgenre\s*:/i,
   /\bact\s*[1-3]\b/i,
   /\bact\s+(one|two|three|i{1,3}|iv|v)\b/i,
+  /\bact\s+[ivxlc]+\b/i,
   /\bsynopsis\b/i,
   /\bstory\s+treatment\b/i,
   /\bthree[\s-]?act\b/i,
+  /\b(character|story)\s+arc/i,
+  /\bsetup\b.*\bconfrontation\b|\bconfrontation\b.*\bresolution\b/i,
 ]
 
 export interface ParsedTreatment {
@@ -295,15 +359,218 @@ export interface ParsedTreatment {
   prompt: string
 }
 
+export function isScreenplaySceneContent(content: string): boolean {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  if (isSceneImportConfirmation(trimmed)) return false
+
+  const hasSlugline = /\b(INT\.|EXT\.|INT\/EXT\.|I\/E\.)\s+/i.test(trimmed)
+  const hasSceneHeader = /^Scene\s+\d+\s*:?/im.test(trimmed) || /\bscene\s+\d+\s*:/i.test(trimmed)
+  const actCount = parseTreatmentActs(trimmed).length
+
+  if (hasSlugline && actCount === 0) return true
+  if (hasSceneHeader && hasSlugline) return true
+  if (hasSceneHeader && actCount === 0 && trimmed.length < 8000) return true
+  if (detectScreenplayContent(trimmed) && hasSceneHeader && actCount === 0) return true
+
+  return false
+}
+
 export function detectTreatmentContent(content: string): boolean {
   const trimmed = content.trim()
+  if (isScreenplaySceneContent(trimmed)) return false
+  const acts = parseTreatmentActs(trimmed)
+  if (acts.length >= 2) return true
+  if (acts.length >= 1 && trimmed.length >= 80) return true
+  if (/\b(three|3)\s+acts?\b/i.test(trimmed) && trimmed.length >= 80) return true
   if (trimmed.length < 150) return false
   const matchCount = TREATMENT_SIGNAL_PATTERNS.filter((p) => p.test(trimmed)).length
   return matchCount >= 2
 }
 
+export function isTreatmentActFollowUp(message: string): boolean {
+  const trimmed = message.trim()
+  return (
+    /\b(show|list|break down|what are|give me|see|tell me)\b[\s\S]{0,50}\b(acts?|three[\s-]?act)\b/i.test(
+      trimmed,
+    ) ||
+    /\bacts?\s+(of|for|in|from)\b/i.test(trimmed) ||
+    /\b(the\s+)?three\s+acts\b/i.test(trimmed)
+  )
+}
+
 function stripWrappingQuotes(value: string): string {
   return value.trim().replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, "").trim()
+}
+
+export function extractTreatmentActLabels(content: string): string[] {
+  return parseTreatmentActs(content).map((act) => act.title)
+}
+
+function romanOrWordToActNumber(value: string): number {
+  const normalized = value.trim().toLowerCase()
+  const wordMap: Record<string, number> = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+  }
+  if (wordMap[normalized]) return wordMap[normalized]
+
+  const romanMap: Record<string, number> = {
+    i: 1,
+    ii: 2,
+    iii: 3,
+    iv: 4,
+    v: 5,
+  }
+  if (romanMap[normalized]) return romanMap[normalized]
+
+  const parsed = Number.parseInt(normalized, 10)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export interface ParsedTreatmentAct {
+  actNumber: number
+  title: string
+  content: string
+}
+
+const ACT_HEADER_PATTERN =
+  /^(?:#+\s*)?Act\s+([IVXLC\d]+|One|Two|Three|Four|Five)\s*:?\s*(?:[-–—]\s*)?(.*)$/i
+
+const INLINE_ACT_SPLIT_PATTERN =
+  /(?=(?:^|\n|\s)(?:#+\s*)?Act\s+(?:[IVXLC\d]+|One|Two|Three|Four|Five)\s*:)/gi
+
+function buildParsedAct(actToken: string, subtitle: string, body: string, fallbackIndex: number): ParsedTreatmentAct {
+  const actNumber = romanOrWordToActNumber(actToken) || fallbackIndex
+  const trimmedSubtitle = subtitle.trim()
+  const title = trimmedSubtitle
+    ? `Act ${actToken} — ${trimmedSubtitle}`
+    : `Act ${actToken}`
+  return {
+    actNumber,
+    title,
+    content: body.trim(),
+  }
+}
+
+function parseTreatmentActsByLine(content: string): ParsedTreatmentAct[] {
+  const acts: ParsedTreatmentAct[] = []
+  let current: { actNumber: number; title: string; lines: string[]; actToken: string } | null = null
+
+  const flushCurrent = () => {
+    if (!current) return
+    const body = current.lines.join('\n').trim()
+    if (body.length > 0) {
+      acts.push(buildParsedAct(current.actToken, '', body, acts.length + 1))
+    }
+  }
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim()
+    const normalized = trimmed.replace(/^\*+/, '').replace(/\*+$/, '').trim()
+    const headerMatch = normalized.match(ACT_HEADER_PATTERN)
+    if (headerMatch) {
+      flushCurrent()
+      const actToken = headerMatch[1]
+      const subtitle = headerMatch[2]?.trim() || ''
+      const actNumber = romanOrWordToActNumber(actToken) || acts.length + 1
+      current = {
+        actNumber,
+        title: subtitle ? `Act ${actToken} — ${subtitle}` : `Act ${actToken}`,
+        lines: subtitle ? [subtitle] : [],
+        actToken,
+      }
+      continue
+    }
+
+    if (current) {
+      current.lines.push(line)
+    }
+  }
+
+  flushCurrent()
+  return acts
+}
+
+function parseTreatmentActsInline(content: string): ParsedTreatmentAct[] {
+  const chunks = content.split(INLINE_ACT_SPLIT_PATTERN).map((chunk) => chunk.trim()).filter(Boolean)
+  if (chunks.length < 2) return []
+
+  const acts: ParsedTreatmentAct[] = []
+  for (const chunk of chunks) {
+    const headerMatch = chunk.match(
+      /^(?:#+\s*)?Act\s+([IVXLC\d]+|One|Two|Three|Four|Five)\s*:?\s*(?:[-–—]\s*)?(.*)$/is,
+    )
+    if (!headerMatch) continue
+    const body = (headerMatch[2] || '').trim()
+    if (!body) continue
+    acts.push(buildParsedAct(headerMatch[1], '', body, acts.length + 1))
+  }
+  return acts
+}
+
+export function parseTreatmentActs(content: string): ParsedTreatmentAct[] {
+  const fromLines = parseTreatmentActsByLine(content)
+  if (fromLines.length > 0) return fromLines
+  return parseTreatmentActsInline(content)
+}
+
+export function getBestTreatmentActSource(...sources: Array<string | null | undefined>): string {
+  let best = ''
+  let bestCount = 0
+  for (const source of sources) {
+    if (!source?.trim()) continue
+    const count = parseTreatmentActs(source).length
+    if (count > bestCount || (count === bestCount && source.length > best.length)) {
+      bestCount = count
+      best = source
+    }
+  }
+  return best
+}
+
+export function findSceneContentInThread(
+  messages: { role: string; content: string }[],
+  upToIndex: number,
+): string | null {
+  const slice = messages.slice(0, upToIndex + 1)
+
+  for (let i = upToIndex; i >= 0; i--) {
+    const msg = slice[i]
+    if (detectSceneContent(msg.content)) {
+      return msg.content
+    }
+  }
+
+  return null
+}
+
+export function findTreatmentContentInThread(
+  messages: { role: string; content: string }[],
+  upToIndex: number,
+): string | null {
+  const slice = messages.slice(0, upToIndex + 1)
+  let best: { content: string; score: number } | null = null
+
+  for (let i = 0; i <= upToIndex; i++) {
+    const msg = slice[i]
+    if (msg.role !== 'assistant') continue
+    if (isScreenplaySceneContent(msg.content)) continue
+
+    const acts = parseTreatmentActs(msg.content)
+    const hasTreatmentSignals = detectTreatmentContent(msg.content)
+    if (acts.length === 0 && !hasTreatmentSignals) continue
+
+    const score = acts.length * 1000 + msg.content.length + (hasTreatmentSignals ? 100 : 0)
+    if (!best || score > best.score) {
+      best = { content: msg.content, score }
+    }
+  }
+
+  return best?.content || null
 }
 
 export function parseTreatmentFields(content: string, fallbackTitle: string): ParsedTreatment {
@@ -513,6 +780,8 @@ export interface ParsedLocation {
 export function detectLocationContent(content: string): boolean {
   const trimmed = content.trim()
   if (trimmed.length < 80) return false
+  if (parseTreatmentActs(trimmed).length >= 1) return false
+  if (/\bact\s*[1-3]\s*:/i.test(trimmed)) return false
   if (detectTreatmentContent(trimmed)) return false
   if (detectCharacterContent(trimmed)) return false
   const matchCount = LOCATION_SIGNAL_PATTERNS.filter((p) => p.test(trimmed)).length
@@ -528,14 +797,23 @@ function isLocationImageRequest(content: string): boolean {
 }
 
 function isCharacterImageRequest(content: string): boolean {
-  return /\b(image|picture|visual|photo|show me|generate|create|draw|portrait|avatar)\b/i.test(content) &&
-    /\b(character|protagonist|avatar|portrait)\b/i.test(content)
+  if (
+    /\b(image|picture|visual|photo|show me|generate|create|draw|portrait|avatar)\b/i.test(content) &&
+    /\b(character|protagonist|avatar|portrait|her|him|them)\b/i.test(content)
+  ) {
+    return true
+  }
+  return /\b(generate|create|make)\b[\s\S]{0,40}\b(image|picture|photo|portrait)\b[\s\S]{0,20}\b(of\s+)?(her|him|them)\b/i.test(
+    content,
+  )
 }
 
 export interface ResolvedMessageContext {
   isCharacter: boolean
   isLocation: boolean
+  isTreatment: boolean
   contextContent: string
+  treatmentContent: string | null
 }
 
 export function resolveCreativeMessageContext(
@@ -545,16 +823,47 @@ export function resolveCreativeMessageContext(
   workspaceTitle: string,
 ): ResolvedMessageContext {
   if (message.role !== 'assistant') {
-    return { isCharacter: false, isLocation: false, contextContent: message.content }
+    return {
+      isCharacter: false,
+      isLocation: false,
+      isTreatment: false,
+      contextContent: message.content,
+      treatmentContent: null,
+    }
   }
 
-  const directCharacter = detectCharacterContent(message.content)
-  const directLocation = !directCharacter && detectLocationContent(message.content)
+  if (isScreenplaySceneContent(message.content) || detectSceneContent(message.content)) {
+    return {
+      isCharacter: false,
+      isLocation: false,
+      isTreatment: false,
+      contextContent: message.content,
+      treatmentContent: null,
+    }
+  }
+
+  const treatmentContent = findTreatmentContentInThread(allMessages, messageIndex)
+  const isTreatment = !!treatmentContent
+
+  const directCharacter = !isTreatment && detectCharacterContent(message.content)
+  const directLocation = !isTreatment && !directCharacter && detectLocationContent(message.content)
   if (directCharacter || directLocation) {
     return {
       isCharacter: directCharacter,
       isLocation: directLocation,
+      isTreatment: false,
       contextContent: message.content,
+      treatmentContent: null,
+    }
+  }
+
+  if (isTreatment) {
+    return {
+      isCharacter: false,
+      isLocation: false,
+      isTreatment: true,
+      contextContent: treatmentContent || message.content,
+      treatmentContent,
     }
   }
 
@@ -568,27 +877,59 @@ export function resolveCreativeMessageContext(
       return {
         isCharacter: false,
         isLocation: false,
+        isTreatment: false,
         contextContent: recentUserImageRequest.content,
+        treatmentContent: null,
       }
     }
     if (isCharacterImageRequest(recentUserImageRequest.content)) {
       return {
         isCharacter: false,
         isLocation: false,
+        isTreatment: false,
         contextContent: recentUserImageRequest.content,
+        treatmentContent: null,
       }
     }
   }
 
   const combined = recent.map((m) => m.content).join('\n\n')
+  const combinedTreatment = findTreatmentContentInThread(allMessages, messageIndex)
+  if (combinedTreatment) {
+    return {
+      isCharacter: false,
+      isLocation: false,
+      isTreatment: true,
+      contextContent: combinedTreatment,
+      treatmentContent: combinedTreatment,
+    }
+  }
   if (detectCharacterContent(combined)) {
-    return { isCharacter: true, isLocation: false, contextContent: combined }
+    return {
+      isCharacter: true,
+      isLocation: false,
+      isTreatment: false,
+      contextContent: combined,
+      treatmentContent: null,
+    }
   }
   if (detectLocationContent(combined)) {
-    return { isCharacter: false, isLocation: true, contextContent: combined }
+    return {
+      isCharacter: false,
+      isLocation: true,
+      isTreatment: false,
+      contextContent: combined,
+      treatmentContent: null,
+    }
   }
 
-  return { isCharacter: false, isLocation: false, contextContent: message.content }
+  return {
+    isCharacter: false,
+    isLocation: false,
+    isTreatment: false,
+    contextContent: message.content,
+    treatmentContent: null,
+  }
 }
 
 function extractLocationName(content: string, fallbackTitle: string): string {
@@ -945,7 +1286,8 @@ export function detectSceneContent(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed) return false
   if (isSceneImportConfirmation(trimmed)) return false
-  if (detectScreenplayContent(trimmed)) return true
+  if (isScreenplaySceneContent(trimmed)) return true
+  if (detectScreenplayContent(trimmed) && parseTreatmentActs(trimmed).length === 0) return true
   if (/^Scene\s+\d+/im.test(trimmed)) return true
   if (/\bscene\s+\d+\b/i.test(trimmed) && /\b(INT\.|EXT\.|dialogue|action)\b/i.test(trimmed)) {
     return true
@@ -954,6 +1296,9 @@ export function detectSceneContent(text: string): boolean {
 }
 
 export function parseSceneFields(content: string, fallbackTitle: string): ParsedScene {
+  const sceneHeaderMatch = content.match(/(?:^|\n)Scene\s+(\d+)\s*:?\s*(?:\n|$)/i)
+  const sceneNumberFromHeader = sceneHeaderMatch?.[1] || null
+
   if (/\b(INT\.|EXT\.)/i.test(content) || detectSceneImportRequest(content)) {
     const imported = extractImportedSceneContent(content)
     const headingMatch = imported.content.match(/^(INT\.|EXT\.)\s*(.+)$/im)
@@ -961,7 +1306,7 @@ export function parseSceneFields(content: string, fallbackTitle: string): Parsed
     const characters = extractSceneCharacterNames(imported.content)
     return {
       name: imported.title,
-      sceneNumber: imported.sceneNumber,
+      sceneNumber: imported.sceneNumber || sceneNumberFromHeader,
       location,
       characters,
       content: imported.content,
@@ -970,16 +1315,19 @@ export function parseSceneFields(content: string, fallbackTitle: string): Parsed
   }
 
   const sceneNumMatch = content.match(/\bscene\s+(\d+)\b/i)
-  const sceneNumber = sceneNumMatch?.[1] || null
+  const sceneNumber = sceneNumberFromHeader || sceneNumMatch?.[1] || null
+  const sluglineMatch = content.match(/^(INT\.|EXT\.)\s*(.+)$/im)
+  const locationFromSlugline = sluglineMatch?.[2]?.split('-')[0]?.trim() || null
   const titleMatch = content.match(/(?:^|\n)Scene\s+\d+[:\s-]+(.+?)(?:\n|$)/im)
   const name =
     titleMatch?.[1]?.trim() ||
+    locationFromSlugline ||
     (sceneNumber ? `Scene ${sceneNumber}` : fallbackTitle !== 'Untitled Project' ? `${fallbackTitle} - Scene` : 'Imported Scene')
 
   return {
     name,
     sceneNumber,
-    location: null,
+    location: locationFromSlugline,
     characters: extractSceneCharacterNames(content),
     content: content.trim(),
     prompt: content.trim(),

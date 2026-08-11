@@ -3,7 +3,7 @@ import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-rout
 
 type RouteContext = { params: Promise<{ id: string; artifactId: string }> }
 
-const VALID_TYPES = ['image', 'document', 'treatment', 'cover', 'character', 'location', 'scene', 'other']
+const VALID_TYPES = ['image', 'document', 'treatment', 'treatment_act', 'cover', 'character', 'location', 'scene', 'other']
 
 function isImageUrl(value: string | null | undefined): value is string {
   return !!value && (value.startsWith('http://') || value.startsWith('https://'))
@@ -70,7 +70,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       let resolvedCharacterId: string | null = characterId || null
       let resolvedLocationId: string | null = locationId || null
 
-      if (artifactType === 'character' && !resolvedCharacterId && createCharacter && label) {
+      if (!resolvedCharacterId && createCharacter && label) {
         const { data: createdCharacter, error: characterError } = await supabase
           .from('characters')
           .insert({
@@ -90,7 +90,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
         syncMessage = `Saved to new character "${label}"`
       }
 
-      if (artifactType === 'location' && !resolvedLocationId && createLocation && label) {
+      if (!resolvedLocationId && createLocation && label) {
         const { data: createdLocation, error: locationError } = await supabase
           .from('locations')
           .insert({

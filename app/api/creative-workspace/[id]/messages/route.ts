@@ -594,7 +594,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (settingsError) return NextResponse.json({ error: 'Failed to load AI configuration' }, { status: 500 })
 
     const settings = mapSettings(settingsData || [])
-    const wantsImage = detectImageRequest(trimmedMessage)
+    const wantsImage = detectImageRequest(trimmedMessage, historyForAi)
     const isSceneImport = detectSceneImportRequest(trimmedMessage)
     const hasAttachments = attachmentArtifacts.length > 0
 

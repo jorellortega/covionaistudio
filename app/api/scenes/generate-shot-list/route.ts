@@ -4,9 +4,9 @@ import {
   applyShotListAssignments,
   formatAssignmentPromptSection,
 } from '@/lib/shot-list-assignment-utils'
+import { resolveUserAiApiKey } from '@/lib/resolve-user-ai-api-key'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
-import { createClient } from '@supabase/supabase-js'
 
 export async function POST(request: NextRequest) {
   try {
@@ -126,56 +126,19 @@ export async function POST(request: NextRequest) {
       locationCatalog,
     )
 
-    // Get API key
-    let actualApiKey = ''
     const serviceToUse = service || 'openai'
-    const normalizedService = serviceToUse.toLowerCase().includes('gpt') || serviceToUse.toLowerCase().includes('openai') 
-      ? 'openai' 
-      : serviceToUse.toLowerCase().includes('claude') || serviceToUse.toLowerCase().includes('anthropic') 
-      ? 'anthropic' 
-      : 'openai'
-
-    // Fetch API key from database
-    if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const supabaseAdmin = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        {
-          auth: {
-            autoRefreshToken: false,
-            persistSession: false
-          }
-        }
-      )
-
-      const { data, error } = await supabaseAdmin
-        .from('users')
-        .select('openai_api_key, anthropic_api_key')
-        .eq('id', targetUserId)
-        .single()
-
-      if (!error && data) {
-        if (normalizedService === 'openai' && data.openai_api_key) {
-          actualApiKey = data.openai_api_key.trim()
-        } else if (normalizedService === 'anthropic' && data.anthropic_api_key) {
-          actualApiKey = data.anthropic_api_key.trim()
-        }
-      }
-    }
-
-    // Fallback to environment variables
-    if (!actualApiKey) {
-      if (normalizedService === 'openai') {
-        actualApiKey = process.env.OPENAI_API_KEY || ''
-      } else if (normalizedService === 'anthropic') {
-        actualApiKey = process.env.ANTHROPIC_API_KEY || ''
-      }
-    }
+    const { apiKey: actualApiKey, normalizedService } = await resolveUserAiApiKey({
+      userId: targetUserId,
+      service: serviceToUse,
+      supabase: supabaseServer,
+    })
 
     if (!actualApiKey) {
       return NextResponse.json(
-        { error: `API key not configured for ${normalizedService}. Please configure it in Settings → AI Settings.` },
-        { status: 400 }
+        {
+          error: `API key not configured for ${normalizedService}. Add your personal key in Settings, ask an admin to set the site-wide key in Settings → AI Settings Admin, or set ${normalizedService === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY'} in the server environment.`,
+        },
+        { status: 400 },
       )
     }
 

@@ -22,6 +22,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
   Image as ImageIcon,
   Trash2,
   Tag,
@@ -36,6 +46,8 @@ import {
   ExternalLink,
   FolderOpen,
   Clapperboard,
+  Layers,
+  ScrollText,
 } from "lucide-react"
 import Link from "next/link"
 import { cn } from "@/lib/utils"
@@ -47,6 +59,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
+import { extractTreatmentActLabels } from "@/lib/creative-chat-utils"
 
 export interface UpdateArtifactPayload {
   title?: string
@@ -70,6 +83,7 @@ interface ArtifactPanelProps {
   onUpdate: (id: string, data: UpdateArtifactPayload) => Promise<{ syncMessage?: string | null } | void>
   onDelete: (id: string) => Promise<void>
   onArtifactRenamed?: (artifact: CreativeArtifact) => void
+  onArtifactsRefresh?: () => void
 }
 
 const ARTIFACT_TYPES: { value: ArtifactType; label: string }[] = [
@@ -88,6 +102,7 @@ const TYPE_COLORS: Record<ArtifactType, string> = {
   location: "bg-green-500/20 text-green-300",
   cover: "bg-blue-500/20 text-blue-300",
   treatment: "bg-amber-500/20 text-amber-300",
+  treatment_act: "bg-orange-500/20 text-orange-300",
   scene: "bg-cyan-500/20 text-cyan-300",
   document: "bg-slate-500/20 text-slate-300",
   image: "bg-pink-500/20 text-pink-300",
@@ -99,6 +114,21 @@ function isCharacterArtifact(artifact: CreativeArtifact): boolean {
     artifact.artifact_type === "character" ||
     typeof artifact.metadata?.character_id === "string" ||
     !!artifact.metadata?.avatar_image_id
+  )
+}
+
+function isTreatmentArtifact(artifact: CreativeArtifact): boolean {
+  return (
+    artifact.artifact_type === "treatment" ||
+    (typeof artifact.metadata?.treatment_id === "string" &&
+      artifact.artifact_type !== "treatment_act")
+  )
+}
+
+function isTreatmentActArtifact(artifact: CreativeArtifact): boolean {
+  return (
+    artifact.artifact_type === "treatment_act" ||
+    typeof artifact.metadata?.treatment_act_id === "string"
   )
 }
 
@@ -150,27 +180,62 @@ function dedupeCharacterArtifacts(artifacts: CreativeArtifact[]): CreativeArtifa
   return result
 }
 
+function isScreenplayGeneratedScene(scene: ScreenplayScene): boolean {
+  return (
+    scene.status === "screenplay" ||
+    scene.metadata?.screenplay_generated === true
+  )
+}
+
 function partitionArtifacts(artifacts: CreativeArtifact[]) {
   const characterArtifacts = dedupeCharacterArtifacts(artifacts.filter(isCharacterArtifact))
   const locationArtifacts = artifacts.filter(isLocationArtifact)
   const sceneArtifacts = artifacts.filter(isSceneArtifact)
+  const treatmentArtifacts = artifacts.filter(
+    (a) => isTreatmentArtifact(a) && !isTreatmentActArtifact(a),
+  )
+  const treatmentActArtifacts = [...artifacts.filter(isTreatmentActArtifact)].sort((a, b) => {
+    const actA = typeof a.metadata?.act_number === "number" ? a.metadata.act_number : 0
+    const actB = typeof b.metadata?.act_number === "number" ? b.metadata.act_number : 0
+    return actA - actB
+  })
   const documentArtifacts = artifacts.filter(
     (a) =>
-      a.artifact_type === "document" ||
-      (a.metadata?.imported === true && a.artifact_type !== "image"),
+      a.artifact_type === "document" &&
+      !isTreatmentArtifact(a) &&
+      !isTreatmentActArtifact(a),
   )
+  const screenplaySceneArtifacts = documentArtifacts.filter(
+    (a) => a.metadata?.screenplay_generated === true,
+  )
+  const generalDocumentArtifacts = documentArtifacts.filter(
+    (a) => a.metadata?.screenplay_generated !== true,
+  )
+  const textArtifacts = [...treatmentArtifacts, ...generalDocumentArtifacts]
   const imageArtifacts = artifacts.filter(
     (a) =>
       !isCharacterArtifact(a) &&
       !isLocationArtifact(a) &&
       !isSceneArtifact(a) &&
+      !isTreatmentArtifact(a) &&
+      !isTreatmentActArtifact(a) &&
+      a.artifact_type !== "document" &&
       (a.artifact_type === "image" ||
         a.artifact_type === "cover" ||
         (a.content?.startsWith("http") &&
-          a.artifact_type !== "document" &&
           a.artifact_type !== "treatment")),
   )
-  return { characterArtifacts, locationArtifacts, sceneArtifacts, imageArtifacts, documentArtifacts }
+  return {
+    characterArtifacts,
+    locationArtifacts,
+    sceneArtifacts,
+    treatmentArtifacts,
+    treatmentActArtifacts,
+    documentArtifacts,
+    screenplaySceneArtifacts,
+    textArtifacts,
+    imageArtifacts,
+  }
 }
 
 export function ArtifactPanel({
@@ -181,6 +246,7 @@ export function ArtifactPanel({
   onUpdate,
   onDelete,
   onArtifactRenamed,
+  onArtifactsRefresh,
 }: ArtifactPanelProps) {
   const { toast } = useToast()
   const [editingArtifact, setEditingArtifact] = useState<CreativeArtifact | null>(null)
@@ -205,8 +271,36 @@ export function ArtifactPanel({
   const [loadingAssets, setLoadingAssets] = useState(false)
   const [screenplayScenes, setScreenplayScenes] = useState<ScreenplayScene[]>([])
   const [loadingScenes, setLoadingScenes] = useState(false)
+  const [viewTextDialog, setViewTextDialog] = useState<{ title: string; content: string } | null>(null)
+  const [sceneToDelete, setSceneToDelete] = useState<ScreenplayScene | null>(null)
+  const [deletingSceneId, setDeletingSceneId] = useState<string | null>(null)
+  const [generatingScreenplaySceneId, setGeneratingScreenplaySceneId] = useState<string | null>(null)
 
-  const { characterArtifacts, locationArtifacts, sceneArtifacts, imageArtifacts } = partitionArtifacts(artifacts)
+  const {
+    characterArtifacts,
+    locationArtifacts,
+    sceneArtifacts,
+    treatmentArtifacts,
+    treatmentActArtifacts,
+    documentArtifacts,
+    screenplaySceneArtifacts,
+    textArtifacts,
+    imageArtifacts,
+  } = partitionArtifacts(artifacts)
+
+  const orphanScreenplaySceneArtifacts = screenplaySceneArtifacts.filter(
+    (artifact) =>
+      !screenplayScenes.some(
+        (scene) => scene.id === artifact.metadata?.screenplay_scene_id,
+      ),
+  )
+
+  const draftScenes = screenplayScenes.filter((scene) => !isScreenplayGeneratedScene(scene))
+  const generatedScreenplayScenes = screenplayScenes.filter((scene) =>
+    isScreenplayGeneratedScene(scene),
+  )
+  const screenplayTabCount =
+    generatedScreenplayScenes.length + orphanScreenplaySceneArtifacts.length
 
   const loadProjectAssets = useCallback(async () => {
     if (!linkedProjectId) {
@@ -246,7 +340,119 @@ export function ArtifactPanel({
 
   useEffect(() => {
     void loadProjectScenes()
-  }, [loadProjectScenes, artifacts.length])
+  }, [loadProjectScenes, artifacts.length, sceneArtifacts.length])
+
+  const handleGenerateScreenplayScene = async (scene: ScreenplayScene) => {
+    if (!workspaceId) {
+      toast({
+        title: "Workspace required",
+        description: "Open a workspace before generating screenplay scenes.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const sourceContent = (scene.content || scene.description || "").trim()
+    if (!sourceContent) {
+      toast({
+        title: "No scene content",
+        description: "This scene has no text to convert into screenplay format.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setGeneratingScreenplaySceneId(scene.id)
+    try {
+      const res = await fetch(
+        `/api/creative-workspace/${workspaceId}/generate-screenplay-scene`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ screenplaySceneId: scene.id }),
+        },
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to generate screenplay scene")
+      }
+
+      if (typeof data.screenplay === "string" && data.screenplay.trim()) {
+        setScreenplayScenes((prev) =>
+          prev.map((item) =>
+            item.id === scene.id
+              ? {
+                  ...item,
+                  content: data.screenplay,
+                  status: "screenplay",
+                  metadata: {
+                    ...(item.metadata || {}),
+                    screenplay_generated: true,
+                    ...(data.timelineSceneId
+                      ? { timeline_scene_id: data.timelineSceneId }
+                      : {}),
+                  },
+                }
+              : item,
+          ),
+        )
+      }
+      await loadProjectScenes()
+
+      onArtifactsRefresh?.()
+      toast({
+        title: "Screenplay scene generated",
+        description: data.treatmentUsed
+          ? `Used your treatment${data.actCount ? ` (${data.actCount} acts)` : ""}${data.priorSceneCount ? ` and ${data.priorSceneCount} prior scene(s)` : ""} for story continuity.${data.timelineSceneId ? " Added to timeline." : ""}`
+          : data.usedAi
+            ? "Formatted screenplay saved to your project and Created Assets."
+            : "Screenplay synced to your project editor.",
+      })
+    } catch (error) {
+      toast({
+        title: "Generation failed",
+        description: error instanceof Error ? error.message : "Could not generate screenplay scene",
+        variant: "destructive",
+      })
+    } finally {
+      setGeneratingScreenplaySceneId(null)
+    }
+  }
+
+  const handleDeleteScene = async (scene: ScreenplayScene) => {
+    setDeletingSceneId(scene.id)
+    try {
+      await ScreenplayScenesService.deleteScreenplayScene(scene.id)
+      const linkedSceneArtifact = sceneArtifacts.find(
+        (artifact) => artifact.metadata?.screenplay_scene_id === scene.id,
+      )
+      if (linkedSceneArtifact) {
+        await onDelete(linkedSceneArtifact.id)
+      }
+      const linkedScreenplayArtifact = screenplaySceneArtifacts.find(
+        (artifact) => artifact.metadata?.screenplay_scene_id === scene.id,
+      )
+      if (linkedScreenplayArtifact) {
+        await onDelete(linkedScreenplayArtifact.id)
+      }
+      setScreenplayScenes((prev) => prev.filter((item) => item.id !== scene.id))
+      setSceneToDelete(null)
+      toast({ title: "Scene deleted" })
+    } catch (error) {
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Could not delete scene",
+        variant: "destructive",
+      })
+    } finally {
+      setDeletingSceneId(null)
+    }
+  }
+
+  const getSceneCardTitle = (scene: ScreenplayScene) => {
+    if (scene.scene_number) return `Scene ${scene.scene_number} — ${scene.name}`
+    return scene.name || "Scene"
+  }
 
   const loadProjectLinks = async (projectId: string) => {
     setLoadingLinks(true)
@@ -572,7 +778,7 @@ export function ArtifactPanel({
         </div>
         {renamingId !== artifact.id && (
           <Badge className={cn("text-xs flex-shrink-0", TYPE_COLORS[artifact.artifact_type])}>
-            {artifact.artifact_type}
+            {artifact.artifact_type === "treatment_act" ? "act" : artifact.artifact_type}
           </Badge>
         )}
       </div>
@@ -587,16 +793,61 @@ export function ArtifactPanel({
           <img
             src={artifact.content}
             alt={artifact.title}
-            className="h-full w-full object-cover hover:opacity-90 transition-opacity"
+            className="h-full w-full object-contain hover:opacity-90 transition-opacity"
           />
         </button>
       )}
 
       {artifact.content && !artifact.content.startsWith("http") && (
-        <p className="text-xs text-muted-foreground line-clamp-3">{artifact.content}</p>
+        <div className="space-y-2">
+          {isTreatmentActArtifact(artifact) && (
+            <p className="text-[10px] uppercase tracking-wide text-orange-400/90">Act</p>
+          )}
+          {isTreatmentArtifact(artifact) && artifact.content && (
+            <div className="flex flex-wrap gap-1">
+              {extractTreatmentActLabels(artifact.content).map((act) => (
+                <Badge key={act} variant="secondary" className="text-[10px] font-normal">
+                  {act}
+                </Badge>
+              ))}
+            </div>
+          )}
+          <p
+            className={cn(
+              "text-xs text-muted-foreground",
+              isTreatmentArtifact(artifact) ? "line-clamp-6 whitespace-pre-wrap" : "line-clamp-3",
+            )}
+          >
+            {artifact.content}
+          </p>
+          {isTreatmentArtifact(artifact) && artifact.content.length > 240 && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() =>
+                setViewTextDialog({
+                  title: artifact.title,
+                  content: artifact.content!,
+                })
+              }
+            >
+              View full treatment
+            </Button>
+          )}
+        </div>
       )}
 
       <div className="flex gap-2 border-t border-border/60 pt-2">
+        {typeof artifact.metadata?.treatment_id === "string" && (
+          <Button type="button" variant="outline" size="sm" className="h-8 flex-1 text-xs" asChild>
+            <Link href={`/treatments/${artifact.metadata.treatment_id}`}>
+              <FileText className="h-3.5 w-3.5 mr-1" />
+              Open
+            </Link>
+          </Button>
+        )}
         <Button
           type="button"
           variant="outline"
@@ -634,6 +885,7 @@ export function ArtifactPanel({
         <p className="text-xs text-primary flex items-center gap-1">
           <Link2 className="h-3 w-3" />
           Linked to project
+          {typeof artifact.metadata?.treatment_id === "string" && " · Treatment"}
           {typeof artifact.metadata?.character_id === "string" && " · Character"}
           {typeof artifact.metadata?.location_id === "string" && " · Location"}
         </p>
@@ -643,40 +895,98 @@ export function ArtifactPanel({
 
   return (
     <>
-      <div className="flex w-80 flex-col border-l border-border bg-muted/20">
+      <div className="flex h-full min-h-0 w-80 shrink-0 flex-col overflow-hidden border-l border-border bg-muted/20">
         <div className="border-b border-border p-3">
           <h2 className="text-sm font-medium">Created Assets</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Images, movie assets, characters, locations, and scenes
+            Images, acts, treatments, scenes, and screenplay
           </p>
         </div>
 
-        <Tabs defaultValue="images" className="flex flex-col flex-1 min-h-0">
-          <TabsList className="mx-3 mt-2 grid grid-cols-5">
-            <TabsTrigger value="images" className="text-[10px] px-1">
-              <ImageIcon className="h-3 w-3 mr-0.5" />
-              Images ({imageArtifacts.length})
+        <Tabs defaultValue="images" className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
+          <TabsList className="mx-3 mt-2 grid grid-cols-4 gap-1 h-auto w-[calc(100%-1.5rem)] p-1">
+            <TabsTrigger
+              value="images"
+              title={`Images (${imageArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <ImageIcon className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Images</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">{imageArtifacts.length}</span>
             </TabsTrigger>
-            <TabsTrigger value="assets" className="text-[10px] px-1">
-              <FolderOpen className="h-3 w-3 mr-0.5" />
-              Assets ({projectAssets.length})
+            <TabsTrigger
+              value="assets"
+              title={`Assets (${projectAssets.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Assets</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">{projectAssets.length}</span>
             </TabsTrigger>
-            <TabsTrigger value="characters" className="text-[10px] px-1">
-              <User className="h-3 w-3 mr-0.5" />
-              Chars ({characterArtifacts.length})
+            <TabsTrigger
+              value="acts"
+              title={`Acts (${treatmentActArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <Layers className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Acts</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">
+                {treatmentActArtifacts.length}
+              </span>
             </TabsTrigger>
-            <TabsTrigger value="locations" className="text-[10px] px-1">
-              <MapPin className="h-3 w-3 mr-0.5" />
-              Locs ({locationArtifacts.length})
+            <TabsTrigger
+              value="treatments"
+              title={`Treatments (${textArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <FileText className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Treats</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">{textArtifacts.length}</span>
             </TabsTrigger>
-            <TabsTrigger value="scenes" className="text-[10px] px-1">
-              <Clapperboard className="h-3 w-3 mr-0.5" />
-              Scenes ({screenplayScenes.length || sceneArtifacts.length})
+            <TabsTrigger
+              value="characters"
+              title={`Characters (${characterArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <User className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Chars</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">{characterArtifacts.length}</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="locations"
+              title={`Locations (${locationArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <MapPin className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Locs</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">{locationArtifacts.length}</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="scenes"
+              title={`Scenes (${draftScenes.length || sceneArtifacts.length})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <Clapperboard className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Scenes</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">
+                {draftScenes.length || sceneArtifacts.length}
+              </span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="screenplay"
+              title={`Screenplay (${screenplayTabCount})`}
+              className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
+            >
+              <ScrollText className="h-3.5 w-3.5 shrink-0" />
+              <span className="leading-tight">Script</span>
+              <span className="leading-tight text-[9px] text-muted-foreground">
+                {screenplayTabCount}
+              </span>
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="images" className="flex-1 min-h-0 mt-0">
-            <ScrollArea className="h-[calc(100vh-220px)]">
+          <TabsContent value="images" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-3 pb-6 space-y-3">
                 {imageArtifacts.length === 0 ? (
                   <p className="text-xs text-muted-foreground text-center py-8">
@@ -689,8 +999,8 @@ export function ArtifactPanel({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="assets" className="flex-1 min-h-0 mt-0">
-            <ScrollArea className="h-[calc(100vh-220px)]">
+          <TabsContent value="assets" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-3 pb-6 space-y-3">
                 {!linkedProjectId ? (
                   <p className="text-xs text-muted-foreground text-center py-8">
@@ -741,13 +1051,13 @@ export function ArtifactPanel({
                             {previewUrl && isImage && (
                               <button
                                 type="button"
-                                className="block w-full overflow-hidden rounded-md border border-border"
+                                className="block w-full overflow-hidden rounded-md border border-border bg-muted"
                                 onClick={() => setPreviewImage(previewUrl)}
                               >
                                 <img
                                   src={previewUrl}
                                   alt={asset.title}
-                                  className="w-full h-28 object-cover"
+                                  className="w-full h-28 object-contain"
                                 />
                               </button>
                             )}
@@ -793,8 +1103,45 @@ export function ArtifactPanel({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="characters" className="flex-1 min-h-0 mt-0">
-            <ScrollArea className="h-[calc(100vh-220px)]">
+          <TabsContent value="acts" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
+              <div className="p-3 pb-6 space-y-3">
+                {treatmentActArtifacts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Story acts appear here when you click &quot;Save Acts&quot; on a treatment message in chat.
+                  </p>
+                ) : (
+                  treatmentActArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="treatments" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
+              <div className="p-3 pb-6 space-y-3">
+                {linkedProjectId && treatmentArtifacts.length > 0 && (
+                  <Link
+                    href={`/treatments?project=${linkedProjectId}`}
+                    className="flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                  >
+                    Open Treatments
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                )}
+                {textArtifacts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Full treatments and story notes appear here when you save from chat.
+                  </p>
+                ) : (
+                  textArtifacts.map((a) => <ArtifactCard key={a.id} artifact={a} />)
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          <TabsContent value="characters" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-3 pb-6 space-y-3">
                 {linkedProjectId && (
                   <div className="flex gap-2">
@@ -825,8 +1172,8 @@ export function ArtifactPanel({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="locations" className="flex-1 min-h-0 mt-0">
-            <ScrollArea className="h-[calc(100vh-220px)]">
+          <TabsContent value="locations" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-3 pb-6 space-y-3">
                 {linkedProjectId && (
                   <Link
@@ -848,9 +1195,9 @@ export function ArtifactPanel({
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="scenes" className="flex-1 min-h-0 mt-0">
-            <ScrollArea className="h-[calc(100vh-220px)]">
-              <div className="p-3 pb-6 space-y-3">
+          <TabsContent value="scenes" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <div className="space-y-3 p-3 pb-32">
                 {!linkedProjectId ? (
                   <p className="text-xs text-muted-foreground text-center py-8">
                     Link a movie project to save scenes from chat and view them here.
@@ -858,9 +1205,145 @@ export function ArtifactPanel({
                 ) : (
                   <>
                     <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => void loadProjectScenes()}
+                        disabled={loadingScenes}
+                      >
+                        {loadingScenes ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Refresh"
+                        )}
+                      </Button>
+                    </div>
+                    {loadingScenes ? (
+                      <div className="flex justify-center py-8">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : draftScenes.length === 0 && sceneArtifacts.length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-8">
+                        No scenes yet. Paste a scene in chat or use &quot;Save to Scene&quot; when one is detected. Generated screenplays appear in the Script tab.
+                      </p>
+                    ) : (
+                      <>
+                        {draftScenes.map((scene) => (
+                          <div
+                            key={scene.id}
+                            className="rounded-lg border border-border bg-card p-3 space-y-3"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium break-words leading-snug">
+                                  {getSceneCardTitle(scene)}
+                                </p>
+                                {scene.location && (
+                                  <p className="text-xs text-muted-foreground break-words mt-0.5">
+                                    {scene.location}
+                                  </p>
+                                )}
+                              </div>
+                              <Badge variant="outline" className="text-[10px] shrink-0">
+                                {scene.status || "draft"}
+                              </Badge>
+                            </div>
+                            {(scene.content || scene.description) && (
+                              <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                                <p className="text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words line-clamp-8">
+                                  {scene.content || scene.description}
+                                </p>
+                              </div>
+                            )}
+                            {scene.characters && scene.characters.length > 0 && (
+                              <p className="text-[10px] text-muted-foreground break-words">
+                                Characters: {scene.characters.join(", ")}
+                              </p>
+                            )}
+                            <div className="flex flex-wrap gap-2 border-t border-border/60 pt-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 flex-1 min-w-[140px] text-xs text-primary border-primary/40 hover:border-primary/60"
+                                disabled={generatingScreenplaySceneId === scene.id}
+                                onClick={() => void handleGenerateScreenplayScene(scene)}
+                              >
+                                {generatingScreenplaySceneId === scene.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3.5 w-3.5 mr-1" />
+                                )}
+                                Generate screenplay
+                              </Button>
+                              {(scene.content || scene.description) && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 flex-1 min-w-[120px] text-xs"
+                                  onClick={() =>
+                                    setViewTextDialog({
+                                      title: getSceneCardTitle(scene),
+                                      content: scene.content || scene.description || "",
+                                    })
+                                  }
+                                >
+                                  <FileText className="h-3.5 w-3.5 mr-1" />
+                                  View full text
+                                </Button>
+                              )}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 flex-1 text-xs text-destructive hover:text-destructive border-destructive/40 hover:border-destructive/60"
+                                disabled={deletingSceneId === scene.id}
+                                onClick={() => setSceneToDelete(scene)}
+                              >
+                                {deletingSceneId === scene.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                )}
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                        {sceneArtifacts
+                          .filter(
+                            (a) =>
+                              !screenplayScenes.some(
+                                (s) => s.id === a.metadata?.screenplay_scene_id,
+                              ),
+                          )
+                          .map((a) => (
+                            <ArtifactCard key={a.id} artifact={a} />
+                          ))}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="screenplay" className="mt-0 flex h-full min-h-0 flex-1 flex-col overflow-hidden data-[state=inactive]:hidden">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <div className="space-y-3 p-3 pb-32">
+                {!linkedProjectId ? (
+                  <p className="text-xs text-muted-foreground text-center py-8">
+                    Link a movie project to generate and view screenplay scenes here.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex gap-2">
                       <Link
                         href={`/screenplay/${linkedProjectId}`}
-                        className="flex-1 flex items-center justify-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-xs hover:bg-muted transition-colors"
+                        className="flex-1 flex items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/5 px-2 py-1.5 text-xs text-primary hover:bg-primary/10 transition-colors"
                       >
                         Open Screenplay
                         <ExternalLink className="h-3 w-3" />
@@ -884,58 +1367,135 @@ export function ArtifactPanel({
                       <div className="flex justify-center py-8">
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                       </div>
-                    ) : screenplayScenes.length === 0 && sceneArtifacts.length === 0 ? (
+                    ) : screenplayTabCount === 0 ? (
                       <p className="text-xs text-muted-foreground text-center py-8">
-                        No scenes yet. Paste a screenplay scene in chat or use &quot;Save to Scene&quot; when one is detected.
+                        No screenplay scenes yet. Save a scene in the Scenes tab, then click &quot;Generate screenplay&quot; to create formatted screenplay here.
                       </p>
                     ) : (
                       <>
-                        {screenplayScenes.map((scene) => (
+                        {generatedScreenplayScenes.map((scene) => (
                           <div
                             key={scene.id}
-                            className="rounded-lg border border-border bg-card p-3 space-y-2"
+                            className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-3"
                           >
                             <div className="flex items-start justify-between gap-2">
-                              <div className="min-w-0">
-                                <p className="text-sm font-medium truncate">
-                                  {scene.scene_number ? `Scene ${scene.scene_number}` : "Scene"} — {scene.name}
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium break-words leading-snug">
+                                  {getSceneCardTitle(scene)}
                                 </p>
                                 {scene.location && (
-                                  <p className="text-xs text-muted-foreground truncate">{scene.location}</p>
+                                  <p className="text-xs text-muted-foreground break-words mt-0.5">
+                                    {scene.location}
+                                  </p>
                                 )}
                               </div>
-                              <Badge variant="outline" className="text-[10px] shrink-0">
-                                {scene.status || "draft"}
+                              <Badge className="text-[10px] shrink-0 bg-primary/20 text-primary">
+                                Screenplay
                               </Badge>
                             </div>
                             {scene.content && (
-                              <p className="text-xs text-muted-foreground line-clamp-3 font-mono whitespace-pre-wrap">
-                                {scene.content}
-                              </p>
+                              <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                                <p className="text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words line-clamp-8">
+                                  {scene.content}
+                                </p>
+                              </div>
                             )}
-                            {scene.characters && scene.characters.length > 0 && (
-                              <p className="text-[10px] text-muted-foreground">
-                                {scene.characters.join(", ")}
+                            <div className="flex flex-wrap gap-2 border-t border-border/60 pt-2">
+                              {scene.content && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 flex-1 min-w-[120px] text-xs"
+                                  onClick={() =>
+                                    setViewTextDialog({
+                                      title: getSceneCardTitle(scene),
+                                      content: scene.content!,
+                                    })
+                                  }
+                                >
+                                  <FileText className="h-3.5 w-3.5 mr-1" />
+                                  View full screenplay
+                                </Button>
+                              )}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 flex-1 min-w-[120px] text-xs text-primary border-primary/40 hover:border-primary/60"
+                                disabled={generatingScreenplaySceneId === scene.id}
+                                onClick={() => void handleGenerateScreenplayScene(scene)}
+                              >
+                                {generatingScreenplaySceneId === scene.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3.5 w-3.5 mr-1" />
+                                )}
+                                Regenerate
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 flex-1 min-w-[100px] text-xs text-destructive hover:text-destructive border-destructive/40 hover:border-destructive/60"
+                                disabled={deletingSceneId === scene.id}
+                                onClick={() => setSceneToDelete(scene)}
+                              >
+                                {deletingSceneId === scene.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                                )}
+                                Delete
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                        {orphanScreenplaySceneArtifacts.map((artifact) => (
+                          <div
+                            key={artifact.id}
+                            className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-sm font-medium break-words leading-snug">
+                                {artifact.title}
                               </p>
+                              <Badge className="text-[10px] shrink-0 bg-primary/20 text-primary">
+                                Screenplay
+                              </Badge>
+                            </div>
+                            {artifact.content && (
+                              <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+                                <p className="text-xs text-muted-foreground font-mono whitespace-pre-wrap break-words line-clamp-8">
+                                  {artifact.content}
+                                </p>
+                              </div>
+                            )}
+                            {artifact.content && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 w-full text-xs"
+                                onClick={() =>
+                                  setViewTextDialog({
+                                    title: artifact.title,
+                                    content: artifact.content!,
+                                  })
+                                }
+                              >
+                                <FileText className="h-3.5 w-3.5 mr-1" />
+                                View full screenplay
+                              </Button>
                             )}
                           </div>
                         ))}
-                        {sceneArtifacts
-                          .filter(
-                            (a) =>
-                              !screenplayScenes.some(
-                                (s) => s.id === a.metadata?.screenplay_scene_id,
-                              ),
-                          )
-                          .map((a) => (
-                            <ArtifactCard key={a.id} artifact={a} />
-                          ))}
                       </>
                     )}
                   </>
                 )}
               </div>
-            </ScrollArea>
+            </div>
           </TabsContent>
         </Tabs>
       </div>
@@ -1074,6 +1634,60 @@ export function ArtifactPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {sceneToDelete && (
+        <AlertDialog open onOpenChange={(open) => !open && setSceneToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete scene?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently remove{" "}
+                <span className="font-medium text-foreground">
+                  {getSceneCardTitle(sceneToDelete)}
+                </span>{" "}
+                from your screenplay. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={!!deletingSceneId}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={!!deletingSceneId}
+                onClick={(event) => {
+                  event.preventDefault()
+                  void handleDeleteScene(sceneToDelete)
+                }}
+              >
+                {deletingSceneId === sceneToDelete.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  "Delete scene"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
+
+      {viewTextDialog && (
+        <Dialog open onOpenChange={(open) => !open && setViewTextDialog(null)}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+            <DialogHeader>
+              <DialogTitle>{viewTextDialog.title}</DialogTitle>
+            </DialogHeader>
+            <ScrollArea className="flex-1 max-h-[60vh] rounded-md border border-border p-3">
+              <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground">
+                {viewTextDialog.content}
+              </pre>
+            </ScrollArea>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setViewTextDialog(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {previewImage && (
         <div

@@ -3,7 +3,7 @@ import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-rout
 
 type RouteContext = { params: Promise<{ id: string }> }
 
-const VALID_TYPES = ['image', 'document', 'treatment', 'cover', 'character', 'location', 'scene', 'other']
+const VALID_TYPES = ['image', 'document', 'treatment', 'treatment_act', 'cover', 'character', 'location', 'scene', 'other']
 
 export async function GET(request: NextRequest, context: RouteContext) {
   try {

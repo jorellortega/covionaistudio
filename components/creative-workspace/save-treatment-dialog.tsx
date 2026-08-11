@@ -17,6 +17,8 @@ import {
 import { ProjectSelector } from "@/components/project-selector"
 import { Loader2, Film, FileText } from "lucide-react"
 import type { ParsedTreatment } from "@/lib/creative-chat-utils"
+import { parseTreatmentActs } from "@/lib/creative-chat-utils"
+import { Badge } from "@/components/ui/badge"
 
 function stripWrappingQuotes(value: string): string {
   return value.trim().replace(/^["'“”‘’«»]+|["'“”‘’«»]+$/g, "").trim()
@@ -28,7 +30,15 @@ interface SaveTreatmentDialogProps {
   workspaceId: string
   messageId: string
   parsed: ParsedTreatment
-  onSaved: (result: { projectId: string; treatmentId: string; updated: boolean; projectName: string }) => void
+  linkedProjectId?: string | null
+  linkedProjectName?: string | null
+  onSaved: (result: {
+    projectId: string
+    treatmentId: string
+    updated: boolean
+    projectName: string
+    artifact?: { id: string }
+  }) => void
 }
 
 export function SaveTreatmentDialog({
@@ -37,27 +47,31 @@ export function SaveTreatmentDialog({
   workspaceId,
   messageId,
   parsed,
+  linkedProjectId,
+  linkedProjectName,
   onSaved,
 }: SaveTreatmentDialogProps) {
-  const [mode, setMode] = useState<"existing" | "new">("new")
-  const [projectId, setProjectId] = useState("")
+  const [mode, setMode] = useState<"existing" | "new">(linkedProjectId ? "existing" : "new")
+  const [projectId, setProjectId] = useState(linkedProjectId || "")
   const [movieName, setMovieName] = useState(parsed.title)
   const [title, setTitle] = useState(parsed.title)
   const [genre, setGenre] = useState(parsed.genre)
   const [logline, setLogline] = useState(parsed.logline)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  const detectedActs = parseTreatmentActs(parsed.prompt)
 
   useEffect(() => {
     if (open) {
-      setMode("new")
+      setMode(linkedProjectId ? "existing" : "new")
+      setProjectId(linkedProjectId || "")
       setTitle(parsed.title)
       setGenre(parsed.genre)
       setLogline(parsed.logline)
       setMovieName(parsed.title)
       setError("")
     }
-  }, [open, parsed])
+  }, [open, parsed, linkedProjectId])
 
   const handleSave = async () => {
     setError("")
@@ -95,6 +109,7 @@ export function SaveTreatmentDialog({
         treatmentId: data.treatment.id,
         updated: data.updated,
         projectName: data.projectName || movieName || title,
+        artifact: data.artifact,
       })
       onOpenChange(false)
     } catch (err) {
@@ -143,6 +158,11 @@ export function SaveTreatmentDialog({
           <TabsContent value="existing" className="space-y-4 mt-4">
             <div className="space-y-2">
               <Label>Movie Project</Label>
+              {linkedProjectId && projectId === linkedProjectId && linkedProjectName && (
+                <p className="text-xs text-muted-foreground">
+                  Saving to linked workspace project: {linkedProjectName}
+                </p>
+              )}
               <ProjectSelector
                 selectedProject={projectId}
                 onProjectChange={setProjectId}
@@ -173,6 +193,21 @@ export function SaveTreatmentDialog({
           <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground max-h-32 overflow-y-auto">
             {parsed.prompt.slice(0, 400)}{parsed.prompt.length > 400 ? "..." : ""}
           </div>
+          {detectedActs.length > 0 && (
+            <div className="space-y-2">
+              <Label>Detected Acts</Label>
+              <div className="flex flex-wrap gap-1">
+                {detectedActs.map((act) => (
+                  <Badge key={`${act.actNumber}-${act.title}`} variant="secondary" className="text-xs font-normal">
+                    {act.title}
+                  </Badge>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Each act will be saved to the database and listed separately in Created Assets.
+              </p>
+            </div>
+          )}
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}

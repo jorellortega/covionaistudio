@@ -347,9 +347,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
         const scripts = assets.filter(a => a.content_type === 'script' && a.is_latest_version)
 
         const screenplayTableScenes = await ScreenplayScenesService.getScreenplayScenes(id)
-        const scenesWithContent = sortScreenplayScenes(screenplayTableScenes).filter(
-          (scene) => scene.content?.trim(),
-        )
+        const sortedScenes = sortScreenplayScenes(screenplayTableScenes)
+        const scenesWithContent = sortedScenes.filter((scene) => scene.content?.trim())
 
         if (scenesWithContent.length > 0) {
           const combinedFromScenes = ScreenplayScenesService.combineSceneContents(scenesWithContent)
@@ -357,6 +356,10 @@ function ScreenplayPageClient({ id }: { id: string }) {
             `[screenplay] Loaded ${scenesWithContent.length} scenes from screenplay_scenes (${combinedFromScenes.length} chars)`,
           )
           setFullScript(combinedFromScenes)
+          setScreenplayScenes(sortedScenes)
+          setSceneCharBoundaries(
+            ScreenplayScenesService.buildSceneCharBoundaries(scenesWithContent),
+          )
 
           const projectScripts = scripts.filter((s) => s.project_id && !s.scene_id)
           if (projectScripts.length > 0) {
@@ -760,6 +763,29 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
     setPages(pageArray)
   }, [fullScript])
+
+  useEffect(() => {
+    if (!fullScript) return
+
+    const scenesWithContent = sortScreenplayScenes(screenplayScenes).filter((scene) =>
+      scene.content?.trim(),
+    )
+    if (scenesWithContent.length === 0) return
+
+    setSceneCharBoundaries(ScreenplayScenesService.buildSceneCharBoundaries(scenesWithContent))
+  }, [fullScript, screenplayScenes])
+
+  useEffect(() => {
+    if (!fullScript || pages.length === 0) return
+    if (editedPages.size > 0) return
+
+    const initialPages = new Map<number, string>()
+    pages.forEach((pageContent, index) => {
+      initialPages.set(index + 1, pageContent)
+    })
+    setEditedPages(initialPages)
+    setCurrentPageContent(pages[currentPage - 1] || pages[0] || "")
+  }, [fullScript, pages, editedPages.size, currentPage])
 
   // Handle script editing
   const handleEdit = () => {
@@ -4319,6 +4345,38 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         })
                         
                         console.log(`🎬 RENDERING DEBUG - Created ${elements.length} elements for page ${currentPage}`)
+
+                        if (elements.length === 0) {
+                          return (
+                            <Textarea
+                              key={`page-${currentPage}-fallback`}
+                              ref={textareaRef}
+                              data-screenplay-editor
+                              value={pageContent}
+                              onChange={(e) => saveCurrentPageEdit(e.target.value)}
+                              onSelect={handleTextSelection}
+                              className="min-h-[600px] font-mono text-sm leading-relaxed pt-8 relative z-10 w-full max-w-full sm:max-w-[calc(80ch+24px)] sm:mx-auto block"
+                              style={{
+                                fontFamily:
+                                  '"Courier New", Courier, "Lucida Console", Monaco, monospace',
+                                tabSize: 1,
+                                letterSpacing: '0px',
+                                paddingLeft: '12px',
+                                paddingRight: '12px',
+                                textAlign: 'left',
+                                whiteSpace: 'pre-wrap',
+                                overflowWrap: 'break-word',
+                                wordWrap: 'break-word',
+                                fontVariantNumeric: 'normal',
+                                fontFeatureSettings: 'normal',
+                                overflowX: 'hidden',
+                                backgroundColor: 'transparent',
+                                boxSizing: 'border-box',
+                              }}
+                              placeholder="Enter your screenplay here..."
+                            />
+                          )
+                        }
                         
                         return (
                           <div

@@ -1653,58 +1653,32 @@ export default function SceneShotListPage() {
       let projectId = ""
       
       try {
-        // Check if scene has project_id or timeline_id
-        const sceneProjectId = scene.project_id || (scene as any).timeline_id
-        console.log("🎬 Scene project_id:", scene.project_id)
-        console.log("🎬 Scene timeline_id:", (scene as any).timeline_id)
-        console.log("🎬 Using sceneProjectId:", sceneProjectId)
-        
-        if (sceneProjectId) {
-          // First try to get timeline directly by ID
-          console.log("🎬 Looking for timeline with ID:", sceneProjectId)
-          
-          // Query the timeline directly by ID
-          console.log("🎬 Querying timelines table for ID:", sceneProjectId)
+        const timelineId = (scene as { timeline_id?: string }).timeline_id
+        console.log("🎬 Scene timeline_id:", timelineId)
+
+        if (timelineId) {
           const { data: timeline, error: timelineError } = await getSupabaseClient()
             .from('timelines')
             .select('*')
-            .eq('id', sceneProjectId)
+            .eq('id', timelineId)
             .eq('user_id', userId)
             .single()
-          
+
           console.log("🎬 Timeline query result:", { timeline, error: timelineError })
-          
-          if (timelineError) {
-            console.log("🎬 Timeline lookup error:", timelineError)
-          } else if (timeline) {
+
+          if (!timelineError && timeline) {
             timelineName = timeline.name
             projectId = timeline.project_id
             console.log("🎬 Found timeline:", timelineName, "for project:", projectId)
-            
-            // Get project name from timeline
+
             const project = await TimelineService.getMovieById(timeline.project_id)
             if (project) {
               projectName = project.name
               console.log("🎬 Found project:", projectName)
             }
-          } else {
-            console.log("🎬 No timeline found, trying alternative approach...")
-            
-            // Alternative: try to get project directly from scene's project_id/timeline_id
-            try {
-              const directProject = await TimelineService.getMovieById(sceneProjectId)
-              if (directProject) {
-                projectName = directProject.name
-                projectId = directProject.id
-                timelineName = "Main Timeline"
-                console.log("🎬 Found direct project reference:", projectName)
-              }
-            } catch (directError) {
-              console.log("🎬 Direct project lookup also failed:", directError)
-            }
           }
         } else {
-          console.log("🎬 No project_id or timeline_id found in scene")
+          console.log("🎬 No timeline_id found on scene")
         }
       } catch (error) {
         console.warn("Could not fetch timeline/project info:", error)

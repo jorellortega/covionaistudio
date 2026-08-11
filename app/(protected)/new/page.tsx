@@ -307,6 +307,9 @@ export default function NewCreativePage() {
             linkedProjectName={linkedProject?.name}
             onUpdate={handleUpdateArtifact}
             onDelete={handleDeleteArtifact}
+            onArtifactsRefresh={() => {
+              if (activeWorkspaceId) loadWorkspaceData(activeWorkspaceId)
+            }}
             onArtifactRenamed={(artifact) => {
               setArtifacts((prev) =>
                 prev.map((a) => (a.id === artifact.id ? artifact : a)),

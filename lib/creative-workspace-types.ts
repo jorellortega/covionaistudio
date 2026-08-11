@@ -2,6 +2,7 @@ export type ArtifactType =
   | 'image'
   | 'document'
   | 'treatment'
+  | 'treatment_act'
   | 'cover'
   | 'character'
   | 'location'
