@@ -258,6 +258,9 @@ type VideoModel =
   | "Veo 3.1 Fast (Frame-to-Frame)"
   | "Hedra Character 3"
 
+/** Default video output resolution when a shot’s generation state is first created. */
+const DEFAULT_VIDEO_RESOLUTION = "1920x1080"
+
 function isRunwayGen4ImageToVideoModel(model: string): boolean {
   return model === "Runway Gen-4 Turbo" || model === "Runway Gen-3A Turbo"
 }
@@ -2715,7 +2718,7 @@ export default function CinemaProductionPage() {
         model: "",
         prompt: "",
         duration: "5s",
-        resolution: "1280x720",
+        resolution: DEFAULT_VIDEO_RESOLUTION,
         uploadedFile: null,
         startFrame: null,
         endFrame: null,
@@ -2748,7 +2751,7 @@ export default function CinemaProductionPage() {
         model: "",
         prompt: "",
         duration: "5s",
-        resolution: "1280x720",
+        resolution: DEFAULT_VIDEO_RESOLUTION,
         uploadedFile: null,
         startFrame: null,
         endFrame: null,
@@ -4753,7 +4756,7 @@ export default function CinemaProductionPage() {
         model: "Kling Lip Sync",
         prompt: audioOption.label,
         duration: generation?.duration || "5",
-        resolution: generation?.resolution || "1280x720",
+        resolution: generation?.resolution || DEFAULT_VIDEO_RESOLUTION,
       })
 
       toast({
@@ -7978,7 +7981,7 @@ export default function CinemaProductionPage() {
                           model: "",
                           prompt: "",
                           duration: "5s",
-                          resolution: "1280x720",
+                          resolution: DEFAULT_VIDEO_RESOLUTION,
                           uploadedFile: null,
                           startFrame: null,
                           endFrame: null,
@@ -8305,7 +8308,7 @@ export default function CinemaProductionPage() {
                     model: "",
                     prompt: "",
                     duration: "5s",
-                    resolution: "1280x720",
+                    resolution: DEFAULT_VIDEO_RESOLUTION,
                     uploadedFile: null,
                     startFrame: null,
                     endFrame: null,
@@ -8548,7 +8551,7 @@ export default function CinemaProductionPage() {
                           model: "",
                           prompt: "",
                           duration: "5s",
-                          resolution: "1280x720",
+                          resolution: DEFAULT_VIDEO_RESOLUTION,
                           uploadedFile: null,
                           startFrame: null,
                           endFrame: null,
@@ -9247,7 +9250,7 @@ export default function CinemaProductionPage() {
                             model: "",
                             prompt: "",
                             duration: "5s",
-                            resolution: "1280x720",
+                            resolution: DEFAULT_VIDEO_RESOLUTION,
                             uploadedFile: null,
                             startFrame: null,
                             endFrame: null,

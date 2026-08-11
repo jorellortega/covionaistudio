@@ -68,6 +68,11 @@ import {
   type StoryboardShotReference,
 } from "@/components/storyboard-shot-reference-picker"
 import {
+  StoryboardSceneShotImagePicker,
+  type SelectedSceneShotImage,
+} from "@/components/storyboard-scene-shot-image-picker"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
   buildStoryboardAssignmentPatch,
   getStoryboardCharacterIds,
   getStoryboardLocationIds,
@@ -385,6 +390,10 @@ export default function SceneStoryboardsPage() {
   const [linkImageDialogOpen, setLinkImageDialogOpen] = useState(false)
   const [linkingStoryboard, setLinkingStoryboard] = useState<Storyboard | null>(null)
   const [selectedLinkAssetId, setSelectedLinkAssetId] = useState<string | null>(null)
+  const [selectedLinkShotImage, setSelectedLinkShotImage] = useState<SelectedSceneShotImage | null>(
+    null,
+  )
+  const [linkImageSource, setLinkImageSource] = useState<"project" | "scene">("scene")
   const [linkImageSearch, setLinkImageSearch] = useState("")
   const [isLinkingImage, setIsLinkingImage] = useState(false)
 
@@ -949,13 +958,43 @@ export default function SceneStoryboardsPage() {
   const openLinkImageDialog = (storyboard: Storyboard) => {
     setLinkingStoryboard(storyboard)
     setSelectedLinkAssetId(null)
+    setSelectedLinkShotImage(null)
+    setLinkImageSource("scene")
     setLinkImageSearch("")
     setLinkImageDialogOpen(true)
   }
 
   const handleLinkExistingImageToShot = async () => {
-    if (!linkingStoryboard || !selectedLinkAssetId) return
-    const asset = projectImageAssets.find((a) => a.id === selectedLinkAssetId)
+    if (!linkingStoryboard) return
+
+    if (linkImageSource === "scene") {
+      if (!selectedLinkShotImage?.imageUrl) return
+      setIsLinkingImage(true)
+      try {
+        await saveStoryboardImage(linkingStoryboard.id, selectedLinkShotImage.imageUrl, {
+          imageName: selectedLinkShotImage.label,
+        })
+        setLinkImageDialogOpen(false)
+        setLinkingStoryboard(null)
+        setSelectedLinkShotImage(null)
+        toast({
+          title: "Image inserted into shot",
+          description: `Shot ${linkingStoryboard.shot_number} now uses ${selectedLinkShotImage.label}.`,
+        })
+      } catch (error) {
+        toast({
+          title: "Insert failed",
+          description: error instanceof Error ? error.message : "Could not insert image into shot.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsLinkingImage(false)
+      }
+      return
+    }
+
+    if (!selectedLinkAssetId) return
+    const asset = linkableImageAssets.find((a) => a.id === selectedLinkAssetId)
     if (!asset?.content_url) return
 
     setIsLinkingImage(true)
@@ -4811,14 +4850,14 @@ export default function SceneStoryboardsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
-                        title="Link a different project image"
+                        title="Insert an image from a scene shot or project asset"
                         onClick={(e) => {
                           e.stopPropagation()
                           openLinkImageDialog(storyboard)
                         }}
                       >
                         <Link2 className="h-4 w-4 mr-2" />
-                        Link
+                        Insert
                       </Button>
                       <Button
                         variant="secondary"
@@ -4890,7 +4929,7 @@ export default function SceneStoryboardsPage() {
                           className="flex flex-col items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
                         >
                           <Link2 className="h-5 w-5" />
-                          <span className="text-xs">or link existing image</span>
+                          <span className="text-xs">or insert from scene / assets</span>
                         </button>
                       </>
                     )}
@@ -5066,12 +5105,12 @@ export default function SceneStoryboardsPage() {
                       <Eye className="h-4 w-4" />
                     </Button>
                     
-                    {/* Link existing project image */}
+                    {/* Insert image from scene shot or project asset */}
                     <Button
                       variant="ghost"
                       size="sm"
                       className="h-8 w-8 p-0 hover:text-violet-500 flex-shrink-0"
-                      title="Link existing project image"
+                      title="Insert image from a scene shot or project asset"
                       onClick={() => openLinkImageDialog(storyboard)}
                     >
                       <Link2 className="h-4 w-4" />
@@ -5258,7 +5297,7 @@ export default function SceneStoryboardsPage() {
         )}
       </div>
 
-      {/* Link Existing Project Image */}
+      {/* Link Existing Image — project assets or scene shot */}
       <Dialog
         open={linkImageDialogOpen}
         onOpenChange={(open) => {
@@ -5266,107 +5305,154 @@ export default function SceneStoryboardsPage() {
           if (!open) {
             setLinkingStoryboard(null)
             setSelectedLinkAssetId(null)
+            setSelectedLinkShotImage(null)
             setLinkImageSearch("")
+            setLinkImageSource("scene")
           }
         }}
       >
         <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-2xl max-h-[90vh] overflow-y-auto p-4 sm:p-6">
           <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg sm:text-xl">Link Existing Image</DialogTitle>
+            <DialogTitle className="text-lg sm:text-xl">Insert Image into Shot</DialogTitle>
             <DialogDescription className="text-xs sm:text-sm">
               {linkingStoryboard
-                ? `Choose an image you've already generated for Shot ${linkingStoryboard.shot_number}${linkingStoryboard.title ? ` · ${linkingStoryboard.title}` : ""}.`
-                : "Choose a project image to use on this storyboard shot."}
+                ? `Add an image to Shot ${linkingStoryboard.shot_number}${linkingStoryboard.title ? ` · ${linkingStoryboard.title}` : ""} from another scene shot or a project asset.`
+                : "Choose an image to use on this storyboard shot."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="link-image-search">Search</Label>
-              <Input
-                id="link-image-search"
-                value={linkImageSearch}
-                onChange={(e) => setLinkImageSearch(e.target.value)}
-                placeholder="Search by title, character, or location…"
-                className="bg-input border-border"
-              />
-            </div>
+          <Tabs
+            value={linkImageSource}
+            onValueChange={(value) => {
+              const next = value === "project" ? "project" : "scene"
+              setLinkImageSource(next)
+              setSelectedLinkAssetId(null)
+              setSelectedLinkShotImage(null)
+            }}
+            className="w-full"
+          >
+            <TabsList className="w-full grid grid-cols-2">
+              <TabsTrigger value="scene" className="gap-1.5 text-xs sm:text-sm">
+                <Film className="h-3.5 w-3.5" />
+                Scene shots
+              </TabsTrigger>
+              <TabsTrigger value="project" className="gap-1.5 text-xs sm:text-sm">
+                <ImageIcon className="h-3.5 w-3.5" />
+                Project assets
+              </TabsTrigger>
+            </TabsList>
 
-            {isLoadingProjectAssets ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Loading project images…
-              </div>
-            ) : filteredLinkImageGroups.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-2">
-                <p className="text-sm text-muted-foreground">
-                  {projectImageAssets.length === 0
-                    ? "No images in this project yet. Generate some on the Characters or Locations pages first."
-                    : "No images match your search."}
+            <TabsContent value="scene" className="mt-4">
+              {sceneProjectId ? (
+                <StoryboardSceneShotImagePicker
+                  projectId={sceneProjectId}
+                  scenes={allScenes}
+                  currentSceneId={sceneId}
+                  currentSceneStoryboards={storyboards}
+                  excludeStoryboardId={linkingStoryboard?.id}
+                  selected={selectedLinkShotImage}
+                  onSelect={setSelectedLinkShotImage}
+                  userId={userId}
+                  disabled={isLinkingImage}
+                />
+              ) : (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  Loading project…
                 </p>
-                {projectImageAssets.length === 0 && sceneProjectId && (
-                  <div className="flex flex-wrap justify-center gap-2 pt-2">
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/characters?movie=${sceneProjectId}`}>Characters</Link>
-                    </Button>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href={`/locations?movie=${sceneProjectId}`}>Locations</Link>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
-                {filteredLinkImageGroups.map((group) => (
-                  <div key={group.label} className="space-y-2">
-                    <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-                      {group.label}
-                    </p>
-                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                      {group.assets.map((asset) => (
-                        <button
-                          key={asset.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedLinkAssetId((prev) =>
-                              prev === asset.id ? null : asset.id,
-                            )
-                          }
-                          className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                            selectedLinkAssetId === asset.id
-                              ? "border-primary ring-2 ring-primary/40"
-                              : "border-border hover:border-primary/50"
-                          }`}
-                          title={`${getProjectAssetSourceLabel(asset, locations, characters)} — ${asset.title}`}
-                        >
-                          <img
-                            src={asset.content_url!}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+              )}
+            </TabsContent>
 
-            {selectedLinkAssetId && (
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-2 flex gap-3 items-center">
-                <div className="w-16 h-16 rounded overflow-hidden flex-shrink-0">
-                  <img
-                    src={projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.content_url || ""}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
+            <TabsContent value="project" className="mt-4 space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="link-image-search">Search</Label>
+                <Input
+                  id="link-image-search"
+                  value={linkImageSearch}
+                  onChange={(e) => setLinkImageSearch(e.target.value)}
+                  placeholder="Search by title, character, or location…"
+                  className="bg-input border-border"
+                />
+              </div>
+
+              {isLoadingProjectAssets ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-6 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading project images…
                 </div>
-                <p className="text-xs text-muted-foreground line-clamp-3">
-                  {projectImageAssets.find((a) => a.id === selectedLinkAssetId)?.title}
-                </p>
-              </div>
-            )}
-          </div>
+              ) : filteredLinkImageGroups.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border p-6 text-center space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    {projectImageAssets.length === 0
+                      ? "No images in this project yet. Generate some on the Characters or Locations pages first."
+                      : "No images match your search."}
+                  </p>
+                  {projectImageAssets.length === 0 && sceneProjectId && (
+                    <div className="flex flex-wrap justify-center gap-2 pt-2">
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href={`/characters?movie=${sceneProjectId}`}>Characters</Link>
+                      </Button>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href={`/locations?movie=${sceneProjectId}`}>Locations</Link>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-1">
+                  {filteredLinkImageGroups.map((group) => (
+                    <div key={group.label} className="space-y-2">
+                      <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {group.label}
+                      </p>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                        {group.assets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() =>
+                              setSelectedLinkAssetId((prev) =>
+                                prev === asset.id ? null : asset.id,
+                              )
+                            }
+                            className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                              selectedLinkAssetId === asset.id
+                                ? "border-primary ring-2 ring-primary/40"
+                                : "border-border hover:border-primary/50"
+                            }`}
+                            title={`${getProjectAssetSourceLabel(asset, locations, characters)} — ${asset.title}`}
+                          >
+                            <img
+                              src={asset.content_url!}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {selectedLinkAssetId && (
+                <div className="rounded-lg border border-primary/30 bg-primary/5 p-2 flex gap-3 items-center">
+                  <div className="w-16 h-16 rounded overflow-hidden flex-shrink-0">
+                    <img
+                      src={
+                        linkableImageAssets.find((a) => a.id === selectedLinkAssetId)?.content_url ||
+                        ""
+                      }
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-3">
+                    {linkableImageAssets.find((a) => a.id === selectedLinkAssetId)?.title}
+                  </p>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
 
           <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
             <Button
@@ -5378,18 +5464,24 @@ export default function SceneStoryboardsPage() {
             </Button>
             <Button
               onClick={() => void handleLinkExistingImageToShot()}
-              disabled={isLinkingImage || !selectedLinkAssetId || !linkingStoryboard}
+              disabled={
+                isLinkingImage ||
+                !linkingStoryboard ||
+                (linkImageSource === "scene"
+                  ? !selectedLinkShotImage
+                  : !selectedLinkAssetId)
+              }
               className="gap-2"
             >
               {isLinkingImage ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Linking…
+                  Inserting…
                 </>
               ) : (
                 <>
                   <Link2 className="h-4 w-4" />
-                  Link to Shot
+                  Insert into Shot
                 </>
               )}
             </Button>
