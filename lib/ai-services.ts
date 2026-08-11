@@ -24,6 +24,8 @@ interface GenerateScriptRequest {
   model: string
   apiKey: string
   maxTokens?: number
+  /** When true, GPT-5 uses maxTokens as the output cap instead of multiplying it. */
+  strictOutputCap?: boolean
 }
 
 interface GenerateImageRequest {
@@ -129,12 +131,10 @@ export class OpenAIService {
       // Note: max_completion_tokens is for OUTPUT tokens only, reasoning tokens are separate
       // So we need to set it higher to account for both reasoning and output
       if (isGPT5Model) {
-        // For GPT-5, increase tokens significantly to allow for reasoning + output
-        // If reasoning_effort is "none", reasoning should be minimal, but we still need buffer
         const baseTokens = request.maxTokens || 1000
-        // Increase significantly (4-5x) to ensure there's room for both reasoning and actual output
-        // GPT-5 can use a lot of reasoning tokens even with reasoning_effort="none"
-        requestBody.max_completion_tokens = Math.max(baseTokens * 5, 8000)
+        requestBody.max_completion_tokens = request.strictOutputCap
+          ? baseTokens
+          : Math.max(baseTokens * 5, 8000)
       } else {
         requestBody.max_tokens = request.maxTokens || 1000
       }
@@ -594,8 +594,8 @@ export class AnthropicService {
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-3-sonnet-20240229',
-          max_tokens: 1000,
+          model: request.model || 'claude-3-sonnet-20240229',
+          max_tokens: request.maxTokens || 1000,
           messages: [
             { role: "user", content: `${request.template}\n\n${request.prompt}` }
           ],

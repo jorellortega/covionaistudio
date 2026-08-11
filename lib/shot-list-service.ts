@@ -359,6 +359,35 @@ export class ShotListService {
     }
   }
 
+  /** Delete every shot list row shown for a timeline scene (does not affect other scenes). */
+  static async clearShotListsForScene(sceneId: string): Promise<number> {
+    try {
+      const user = await this.ensureAuthenticated()
+      const { shots } = await this.getShotListsForSceneDisplay(sceneId)
+
+      if (shots.length === 0) {
+        return 0
+      }
+
+      const shotIds = shots.map((shot) => shot.id)
+      const { error } = await getSupabaseClient()
+        .from('shot_lists')
+        .delete()
+        .in('id', shotIds)
+        .eq('user_id', user.id)
+
+      if (error) {
+        console.error('Error clearing shot lists for scene:', error)
+        throw error
+      }
+
+      return shotIds.length
+    } catch (error) {
+      console.error('Error in clearShotListsForScene:', error)
+      throw error
+    }
+  }
+
   // Get shot list by ID
   static async getShotListById(shotListId: string): Promise<ShotList | null> {
     try {

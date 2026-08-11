@@ -15,6 +15,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import {
   buildLinkedAssetGroups,
@@ -38,6 +48,7 @@ import { SavedPromptsService } from "@/lib/saved-prompts-service"
 import { PreferencesService } from "@/lib/preferences-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
+import { parseScriptSelection } from "@/lib/script-selection"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
@@ -46,6 +57,7 @@ import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
 import { resolveCameraAngleValue, resolveMovementValue } from "@/lib/shot-options"
+import { resolveSceneScreenplayContent } from "@/lib/resolve-scene-screenplay-content"
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -194,6 +206,8 @@ export default function SceneShotListPage() {
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
   const [isAssigningShotEntities, setIsAssigningShotEntities] = useState(false)
+  const [showClearShotListConfirm, setShowClearShotListConfirm] = useState(false)
+  const [isClearingShotList, setIsClearingShotList] = useState(false)
   const sceneNumberForSync = useMemo(() => {
     if (sceneInfo?.scene_number) return sceneInfo.scene_number
     const raw = sceneInfo?.metadata?.sceneNumber
@@ -884,6 +898,41 @@ export default function SceneShotListPage() {
       })
     } finally {
       setIsAssigningShotEntities(false)
+    }
+  }
+
+  const handleClearShotList = async () => {
+    if (!sceneId) {
+      toast({
+        title: "Error",
+        description: "Scene ID missing.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsClearingShotList(true)
+      const deletedCount = await ShotListService.clearShotListsForScene(sceneId)
+      setShowClearShotListConfirm(false)
+      setShots([])
+      setShotListRefreshKey((prev) => prev + 1)
+      toast({
+        title: "Shot list cleared",
+        description:
+          deletedCount > 0
+            ? `Removed ${deletedCount} shot${deletedCount === 1 ? "" : "s"} from this scene.`
+            : "This scene had no shots to remove.",
+      })
+    } catch (error) {
+      console.error("Error clearing shot list:", error)
+      toast({
+        title: "Could not clear shot list",
+        description: error instanceof Error ? error.message : "Failed to clear shots for this scene.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsClearingShotList(false)
     }
   }
 
@@ -1948,38 +1997,26 @@ export default function SceneShotListPage() {
     try {
       setIsLoadingScript(true)
       console.log("🎬 Fetching script for scene:", sceneId)
-      
-      // First, check if scene has screenplay_content
-      if (sceneInfo && (sceneInfo as any).screenplay_content) {
-        console.log("🎬 Found screenplay_content in scene")
-        setSceneScript((sceneInfo as any).screenplay_content)
-        return
-      }
-      
-      // Look for script assets for this scene
-      const { data: scriptAssets, error } = await getSupabaseClient()
-        .from('assets')
-        .select('*')
-        .eq('scene_id', sceneId)
-        .eq('content_type', 'script')
-        .order('created_at', { ascending: false })
-        .limit(1)
-      
-      if (error) {
-        console.error("Error fetching scene script:", error)
-        return
-      }
-      
-      if (scriptAssets && scriptAssets.length > 0) {
-        const latestScript = scriptAssets[0]
-        console.log("🎬 Found scene script:", latestScript.title)
-        setSceneScript(latestScript.content || "")
-      } else {
-        console.log("🎬 No script found for scene")
+
+      if (!userId || !sceneInfo) {
         setSceneScript("")
+        return
       }
+
+      const resolved = await resolveSceneScreenplayContent({
+        sceneId,
+        projectId: sceneInfo.project_id,
+        sceneName: sceneInfo.name,
+        sceneMetadata: sceneInfo.metadata as Record<string, unknown> | null,
+        screenplayContent: (sceneInfo as { screenplay_content?: string }).screenplay_content,
+        userId,
+      })
+
+      console.log("🎬 Resolved scene script source:", resolved.source)
+      setSceneScript(resolved.content)
     } catch (error) {
       console.error("Error fetching scene script:", error)
+      setSceneScript("")
     } finally {
       setIsLoadingScript(false)
     }
@@ -2217,6 +2254,11 @@ export default function SceneShotListPage() {
           attemptShotNumber = await getAvailableShotNumberWithFetch(preferredShotNumber)
         }
         
+        const screenplayDialogue =
+          shot.dialogue?.trim() ||
+          parseScriptSelection(getAllScreenplayContent()).dialogue ||
+          undefined
+
         // Create storyboard from shot list data
         const storyboardData: CreateStoryboardData = {
           title: shot.description || `Shot ${attemptShotNumber}`,
@@ -2226,7 +2268,7 @@ export default function SceneShotListPage() {
           shot_type: mapShotType(shot.shot_type),
           camera_angle: mapCameraAngle(shot.camera_angle),
           movement: mapMovement(shot.movement),
-          dialogue: shot.dialogue || undefined,
+          dialogue: screenplayDialogue,
           action: shot.action || undefined,
           visual_notes: shot.visual_notes || undefined,
           scene_id: sceneId,
@@ -3529,20 +3571,37 @@ export default function SceneShotListPage() {
                 </div>
                 <div className="flex flex-wrap gap-2 shrink-0">
                   {shots.length > 0 ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      disabled={isAssigningShotEntities || isGeneratingShotList}
-                      onClick={() => void handleAutoAssignShotEntities()}
-                    >
-                      {isAssigningShotEntities ? (
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      ) : (
-                        <Wand2 className="h-4 w-4 mr-2" />
-                      )}
-                      Fill Characters & Locations
-                    </Button>
+                    <>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={isAssigningShotEntities || isGeneratingShotList || isClearingShotList}
+                        onClick={() => void handleAutoAssignShotEntities()}
+                      >
+                        {isAssigningShotEntities ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Wand2 className="h-4 w-4 mr-2" />
+                        )}
+                        Fill Characters & Locations
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isAssigningShotEntities || isGeneratingShotList || isClearingShotList}
+                        onClick={() => setShowClearShotListConfirm(true)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        {isClearingShotList ? (
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4 mr-2" />
+                        )}
+                        Clear Shot List
+                      </Button>
+                    </>
                   ) : null}
                   {sceneScript.trim() ? (
                     <>
@@ -3591,6 +3650,38 @@ export default function SceneShotListPage() {
             </CardContent>
           </Card>
         </div>
+
+        <AlertDialog open={showClearShotListConfirm} onOpenChange={setShowClearShotListConfirm}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Clear shot list for this scene?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete all {shots.length} shot{shots.length === 1 ? "" : "s"} in this scene so you can start over.
+                Shot lists in other scenes will not be affected.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isClearingShotList}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault()
+                  void handleClearShotList()
+                }}
+                disabled={isClearingShotList}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {isClearingShotList ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Clearing...
+                  </>
+                ) : (
+                  "Clear shot list"
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
       </div>
     </div>

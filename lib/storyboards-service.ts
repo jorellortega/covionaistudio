@@ -245,6 +245,34 @@ export class StoryboardsService {
     }
   }
 
+  /** Delete every storyboard shown for a timeline scene (does not affect other scenes). */
+  static async clearStoryboardsForScene(sceneId: string): Promise<number> {
+    try {
+      const storyboards = await this.getStoryboardsBySceneOrdered(sceneId)
+
+      if (storyboards.length === 0) {
+        return 0
+      }
+
+      const storyboardIds = storyboards.map((storyboard) => storyboard.id)
+      const { error } = await getSupabaseClient()
+        .from('storyboards')
+        .delete()
+        .in('id', storyboardIds)
+        .eq('scene_id', sceneId)
+
+      if (error) {
+        console.error('Error clearing storyboards for scene:', error)
+        throw error
+      }
+
+      return storyboardIds.length
+    } catch (error) {
+      console.error('Error in clearStoryboardsForScene:', error)
+      throw error
+    }
+  }
+
   // Get storyboards by project
   static async getStoryboardsByProject(projectId: string): Promise<Storyboard[]> {
     try {

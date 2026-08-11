@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -17,6 +17,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -60,6 +61,8 @@ import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 import { extractTreatmentActLabels } from "@/lib/creative-chat-utils"
+
+const SCREENPLAY_PAGE_QUICK_OPTIONS = [3, 5, 7, 10, 15, 20] as const
 
 export interface UpdateArtifactPayload {
   title?: string
@@ -187,6 +190,47 @@ function isScreenplayGeneratedScene(scene: ScreenplayScene): boolean {
   )
 }
 
+function sortScreenplayScenes(scenes: ScreenplayScene[]): ScreenplayScene[] {
+  return [...scenes].sort((a, b) => {
+    const aOrder = a.order_index ?? 0
+    const bOrder = b.order_index ?? 0
+    if (aOrder !== bOrder) return aOrder - bOrder
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  })
+}
+
+function screenplaySceneFromArtifact(
+  artifact: CreativeArtifact,
+  projectId: string,
+  screenplayScenes: ScreenplayScene[],
+): ScreenplayScene | null {
+  const screenplaySceneId =
+    typeof artifact.metadata?.screenplay_scene_id === "string"
+      ? artifact.metadata.screenplay_scene_id
+      : null
+  if (!screenplaySceneId) return null
+
+  const existing = screenplayScenes.find((scene) => scene.id === screenplaySceneId)
+  if (existing) return existing
+
+  return {
+    id: screenplaySceneId,
+    project_id: projectId,
+    user_id: "",
+    name: artifact.title || "Scene",
+    description: artifact.content || undefined,
+    content: artifact.content || undefined,
+    scene_number:
+      typeof artifact.metadata?.scene_number === "string"
+        ? artifact.metadata.scene_number
+        : undefined,
+    status: "draft",
+    metadata: artifact.metadata ?? {},
+    created_at: artifact.created_at,
+    updated_at: artifact.updated_at,
+  }
+}
+
 function partitionArtifacts(artifacts: CreativeArtifact[]) {
   const characterArtifacts = dedupeCharacterArtifacts(artifacts.filter(isCharacterArtifact))
   const locationArtifacts = artifacts.filter(isLocationArtifact)
@@ -275,6 +319,9 @@ export function ArtifactPanel({
   const [sceneToDelete, setSceneToDelete] = useState<ScreenplayScene | null>(null)
   const [deletingSceneId, setDeletingSceneId] = useState<string | null>(null)
   const [generatingScreenplaySceneId, setGeneratingScreenplaySceneId] = useState<string | null>(null)
+  const [screenplayGenerateDialog, setScreenplayGenerateDialog] = useState<ScreenplayScene | null>(null)
+  const [targetPageCount, setTargetPageCount] = useState("1")
+  const [assetsTab, setAssetsTab] = useState("images")
 
   const {
     characterArtifacts,
@@ -299,6 +346,24 @@ export function ArtifactPanel({
   const generatedScreenplayScenes = screenplayScenes.filter((scene) =>
     isScreenplayGeneratedScene(scene),
   )
+  const displayDraftScenes = useMemo(() => {
+    if (!linkedProjectId) return sortScreenplayScenes(draftScenes)
+
+    const merged = new Map<string, ScreenplayScene>()
+    for (const scene of draftScenes) {
+      merged.set(scene.id, scene)
+    }
+
+    for (const artifact of sceneArtifacts) {
+      const scene = screenplaySceneFromArtifact(artifact, linkedProjectId, screenplayScenes)
+      if (!scene || isScreenplayGeneratedScene(scene)) continue
+      if (!merged.has(scene.id)) {
+        merged.set(scene.id, scene)
+      }
+    }
+
+    return sortScreenplayScenes([...merged.values()])
+  }, [draftScenes, sceneArtifacts, screenplayScenes, linkedProjectId])
   const screenplayTabCount =
     generatedScreenplayScenes.length + orphanScreenplaySceneArtifacts.length
 
@@ -331,7 +396,8 @@ export function ArtifactPanel({
     try {
       const scenes = await ScreenplayScenesService.getScreenplayScenes(linkedProjectId)
       setScreenplayScenes(scenes)
-    } catch {
+    } catch (error) {
+      console.error("[artifact-panel] Failed to load screenplay scenes:", error)
       setScreenplayScenes([])
     } finally {
       setLoadingScenes(false)
@@ -340,18 +406,9 @@ export function ArtifactPanel({
 
   useEffect(() => {
     void loadProjectScenes()
-  }, [loadProjectScenes, artifacts.length, sceneArtifacts.length])
+  }, [loadProjectScenes, linkedProjectId, artifacts.length])
 
-  const handleGenerateScreenplayScene = async (scene: ScreenplayScene) => {
-    if (!workspaceId) {
-      toast({
-        title: "Workspace required",
-        description: "Open a workspace before generating screenplay scenes.",
-        variant: "destructive",
-      })
-      return
-    }
-
+  const openScreenplayGenerateDialog = (scene: ScreenplayScene) => {
     const sourceContent = (scene.content || scene.description || "").trim()
     if (!sourceContent) {
       toast({
@@ -362,14 +419,37 @@ export function ArtifactPanel({
       return
     }
 
+    setTargetPageCount("1")
+    setScreenplayGenerateDialog(scene)
+  }
+
+  const handleGenerateScreenplayScene = async (
+    scene: ScreenplayScene,
+    targetPages: number,
+  ) => {
+    if (!workspaceId) {
+      toast({
+        title: "Workspace required",
+        description: "Open a workspace before generating screenplay scenes.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setScreenplayGenerateDialog(null)
     setGeneratingScreenplaySceneId(scene.id)
+    console.log("[generate-screenplay-scene:page-length] requesting", {
+      screenplaySceneId: scene.id,
+      sceneName: scene.name,
+      targetPagesRequested: targetPages,
+    })
     try {
       const res = await fetch(
         `/api/creative-workspace/${workspaceId}/generate-screenplay-scene`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ screenplaySceneId: scene.id }),
+          body: JSON.stringify({ screenplaySceneId: scene.id, targetPages }),
         },
       )
       const data = await res.json().catch(() => ({}))
@@ -377,38 +457,32 @@ export function ArtifactPanel({
         throw new Error(data.error || "Failed to generate screenplay scene")
       }
 
-      if (typeof data.screenplay === "string" && data.screenplay.trim()) {
-        setScreenplayScenes((prev) =>
-          prev.map((item) =>
-            item.id === scene.id
-              ? {
-                  ...item,
-                  content: data.screenplay,
-                  status: "screenplay",
-                  metadata: {
-                    ...(item.metadata || {}),
-                    screenplay_generated: true,
-                    ...(data.timelineSceneId
-                      ? { timeline_scene_id: data.timelineSceneId }
-                      : {}),
-                  },
-                }
-              : item,
-          ),
-        )
+      if (data.pageLengthDebug) {
+        console.log("[generate-screenplay-scene:page-length] result", data.pageLengthDebug)
       }
-      await loadProjectScenes()
 
+      setAssetsTab("screenplay")
+      await loadProjectScenes()
       onArtifactsRefresh?.()
+
+      const warningText =
+        Array.isArray(data.warnings) && data.warnings.length > 0
+          ? ` ${data.warnings[0]}`
+          : ""
+
       toast({
         title: "Screenplay scene generated",
-        description: data.treatmentUsed
-          ? `Used your treatment${data.actCount ? ` (${data.actCount} acts)` : ""}${data.priorSceneCount ? ` and ${data.priorSceneCount} prior scene(s)` : ""} for story continuity.${data.timelineSceneId ? " Added to timeline." : ""}`
-          : data.usedAi
-            ? "Formatted screenplay saved to your project and Created Assets."
-            : "Screenplay synced to your project editor.",
+        description: `${
+          data.treatmentUsed
+            ? `Used your treatment${data.actCount ? ` (${data.actCount} acts)` : ""}${data.priorSceneCount ? ` and ${data.priorSceneCount} prior scene(s)` : ""} for story continuity.`
+            : data.usedAi
+              ? "Formatted screenplay saved to your project."
+              : "Screenplay synced to your project editor."
+        }${data.timelineSceneId ? " Added to timeline." : ""} Target: ${data.targetPages ?? targetPages} page${(data.targetPages ?? targetPages) === 1 ? "" : "s"}.${warningText}`,
       })
     } catch (error) {
+      await loadProjectScenes()
+      onArtifactsRefresh?.()
       toast({
         title: "Generation failed",
         description: error instanceof Error ? error.message : "Could not generate screenplay scene",
@@ -903,7 +977,7 @@ export function ArtifactPanel({
           </p>
         </div>
 
-        <Tabs defaultValue="images" className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
+        <Tabs value={assetsTab} onValueChange={setAssetsTab} className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden">
           <TabsList className="mx-3 mt-2 grid grid-cols-4 gap-1 h-auto w-[calc(100%-1.5rem)] p-1">
             <TabsTrigger
               value="images"
@@ -963,13 +1037,13 @@ export function ArtifactPanel({
             </TabsTrigger>
             <TabsTrigger
               value="scenes"
-              title={`Scenes (${draftScenes.length || sceneArtifacts.length})`}
+              title={`Scenes (${displayDraftScenes.length || sceneArtifacts.length})`}
               className="text-[10px] px-1 py-1.5 h-auto flex-col gap-0.5 min-w-0 flex-none"
             >
               <Clapperboard className="h-3.5 w-3.5 shrink-0" />
               <span className="leading-tight">Scenes</span>
               <span className="leading-tight text-[9px] text-muted-foreground">
-                {draftScenes.length || sceneArtifacts.length}
+                {displayDraftScenes.length || sceneArtifacts.length}
               </span>
             </TabsTrigger>
             <TabsTrigger
@@ -1224,13 +1298,17 @@ export function ArtifactPanel({
                       <div className="flex justify-center py-8">
                         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                       </div>
-                    ) : draftScenes.length === 0 && sceneArtifacts.length === 0 ? (
+                    ) : displayDraftScenes.length === 0 && sceneArtifacts.length === 0 ? (
                       <p className="text-xs text-muted-foreground text-center py-8">
                         No scenes yet. Paste a scene in chat or use &quot;Save to Scene&quot; when one is detected. Generated screenplays appear in the Script tab.
                       </p>
+                    ) : displayDraftScenes.length === 0 && generatedScreenplayScenes.length > 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-8">
+                        Your scene screenplay is ready. Open the <span className="font-medium text-foreground">Script</span> tab to view, regenerate, or edit it.
+                      </p>
                     ) : (
                       <>
-                        {draftScenes.map((scene) => (
+                        {displayDraftScenes.map((scene) => (
                           <div
                             key={scene.id}
                             className="rounded-lg border border-border bg-card p-3 space-y-3"
@@ -1269,7 +1347,7 @@ export function ArtifactPanel({
                                 size="sm"
                                 className="h-8 flex-1 min-w-[140px] text-xs text-primary border-primary/40 hover:border-primary/60"
                                 disabled={generatingScreenplaySceneId === scene.id}
-                                onClick={() => void handleGenerateScreenplayScene(scene)}
+                                onClick={() => openScreenplayGenerateDialog(scene)}
                               >
                                 {generatingScreenplaySceneId === scene.id ? (
                                   <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -1313,16 +1391,20 @@ export function ArtifactPanel({
                             </div>
                           </div>
                         ))}
-                        {sceneArtifacts
-                          .filter(
-                            (a) =>
-                              !screenplayScenes.some(
-                                (s) => s.id === a.metadata?.screenplay_scene_id,
-                              ),
-                          )
-                          .map((a) => (
-                            <ArtifactCard key={a.id} artifact={a} />
-                          ))}
+                        {linkedProjectId
+                          ? sceneArtifacts
+                              .filter((artifact) => {
+                                const scene = screenplaySceneFromArtifact(
+                                  artifact,
+                                  linkedProjectId,
+                                  screenplayScenes,
+                                )
+                                return !scene
+                              })
+                              .map((artifact) => (
+                                <ArtifactCard key={artifact.id} artifact={artifact} />
+                              ))
+                          : null}
                       </>
                     )}
                   </>
@@ -1424,7 +1506,7 @@ export function ArtifactPanel({
                                 size="sm"
                                 className="h-8 flex-1 min-w-[120px] text-xs text-primary border-primary/40 hover:border-primary/60"
                                 disabled={generatingScreenplaySceneId === scene.id}
-                                onClick={() => void handleGenerateScreenplayScene(scene)}
+                                onClick={() => openScreenplayGenerateDialog(scene)}
                               >
                                 {generatingScreenplaySceneId === scene.id ? (
                                   <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
@@ -1635,6 +1717,99 @@ export function ArtifactPanel({
         </DialogContent>
       </Dialog>
 
+      {screenplayGenerateDialog && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !generatingScreenplaySceneId) {
+              setScreenplayGenerateDialog(null)
+            }
+          }}
+        >
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Generate screenplay</DialogTitle>
+              <DialogDescription>
+                How many pages should this scene be? Standard screenplay pages are about 55 lines each.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <Label htmlFor="screenplay-page-count">Target pages</Label>
+              <Input
+                id="screenplay-page-count"
+                type="number"
+                min={1}
+                max={20}
+                step={1}
+                value={targetPageCount}
+                onChange={(event) => setTargetPageCount(event.target.value)}
+                disabled={!!generatingScreenplaySceneId}
+              />
+              <div className="flex flex-wrap gap-1.5">
+                {SCREENPLAY_PAGE_QUICK_OPTIONS.map((pages) => (
+                  <Button
+                    key={pages}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(
+                      "h-7 min-w-[2.25rem] px-2 text-xs",
+                      targetPageCount === String(pages) &&
+                        "border-primary bg-primary/10 text-primary hover:bg-primary/15",
+                    )}
+                    disabled={!!generatingScreenplaySceneId}
+                    onClick={() => setTargetPageCount(String(pages))}
+                  >
+                    {pages}
+                  </Button>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Scene: {getSceneCardTitle(screenplayGenerateDialog)}
+              </p>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setScreenplayGenerateDialog(null)}
+                disabled={!!generatingScreenplaySceneId}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={() => {
+                  const parsed = Number.parseInt(targetPageCount, 10)
+                  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 20) {
+                    toast({
+                      title: "Invalid page count",
+                      description: "Enter a whole number between 1 and 20.",
+                      variant: "destructive",
+                    })
+                    return
+                  }
+                  void handleGenerateScreenplayScene(screenplayGenerateDialog, parsed)
+                }}
+                disabled={!!generatingScreenplaySceneId}
+              >
+                {generatingScreenplaySceneId === screenplayGenerateDialog.id ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Generate
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
       {sceneToDelete && (
         <AlertDialog open onOpenChange={(open) => !open && setSceneToDelete(null)}>
           <AlertDialogContent>
@@ -1675,11 +1850,11 @@ export function ArtifactPanel({
             <DialogHeader>
               <DialogTitle>{viewTextDialog.title}</DialogTitle>
             </DialogHeader>
-            <ScrollArea className="flex-1 max-h-[60vh] rounded-md border border-border p-3">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-md border border-border p-3">
               <pre className="text-xs whitespace-pre-wrap font-sans text-muted-foreground">
                 {viewTextDialog.content}
               </pre>
-            </ScrollArea>
+            </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setViewTextDialog(null)}>
                 Close

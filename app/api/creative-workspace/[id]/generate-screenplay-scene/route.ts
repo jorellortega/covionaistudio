@@ -4,8 +4,62 @@ import { OpenAIService, AnthropicService } from '@/lib/ai-services'
 import { syncScreenplaySceneToProject } from '@/lib/sync-screenplay-scene'
 import { buildTreatmentContextForScreenplay } from '@/lib/build-treatment-context'
 import { resolveUserAiApiKey } from '@/lib/resolve-user-ai-api-key'
+import { isCompleteScreenplayFormat } from '@/lib/screenplay-format-utils'
+import { resolveScreenplaySceneForGeneration } from '@/lib/resolve-workspace-screenplay-scene'
+
+export const maxDuration = 300
+
+const SCREENPLAY_LINES_PER_PAGE = 55
 
 type RouteContext = { params: Promise<{ id: string }> }
+
+function estimateScreenplayPages(content: string): {
+  lineCount: number
+  estimatedPages: number
+  characterCount: number
+} {
+  const trimmed = content.trim()
+  const lineCount = trimmed ? trimmed.split('\n').length : 0
+  const estimatedPages = lineCount > 0 ? Math.ceil(lineCount / SCREENPLAY_LINES_PER_PAGE) : 0
+  return {
+    lineCount,
+    estimatedPages,
+    characterCount: trimmed.length,
+  }
+}
+
+function buildPageLengthDebug(input: {
+  screenplaySceneId: string
+  sceneName: string
+  targetPages: number
+  screenplay: string
+  usedAi: boolean
+  skippedBecauseAlreadyFormatted?: boolean
+  maxLineCountAllowed?: number
+  truncated?: boolean
+  originalLineCount?: number
+}) {
+  const { lineCount, estimatedPages, characterCount } = estimateScreenplayPages(input.screenplay)
+  const pageDelta = estimatedPages - input.targetPages
+
+  return {
+    screenplaySceneId: input.screenplaySceneId,
+    sceneName: input.sceneName,
+    targetPagesRequested: input.targetPages,
+    estimatedPagesReturned: estimatedPages,
+    pageDelta,
+    lineCount,
+    characterCount,
+    linesPerPageAssumption: SCREENPLAY_LINES_PER_PAGE,
+    usedAi: input.usedAi,
+    skippedBecauseAlreadyFormatted: input.skippedBecauseAlreadyFormatted ?? false,
+    withinOnePage: Math.abs(pageDelta) <= 1,
+    hitTarget: Math.abs(pageDelta) <= 1 ? 'yes' : pageDelta > 0 ? 'too long' : 'too short',
+    maxLineCountAllowed: input.maxLineCountAllowed,
+    truncated: input.truncated ?? false,
+    originalLineCountBeforeTrim: input.originalLineCount,
+  }
+}
 
 function cleanGeneratedScreenplay(text: string): string {
   let output = text.trim()
@@ -19,8 +73,7 @@ function cleanGeneratedScreenplay(text: string): string {
 }
 
 function isAlreadyScreenplayFormat(content: string): boolean {
-  const trimmed = content.trim()
-  return /\b(INT\.|EXT\.|INT\/EXT\.)\s+/i.test(trimmed) && trimmed.length > 80
+  return isCompleteScreenplayFormat(content)
 }
 
 async function getUserScriptAiConfig(
@@ -51,6 +104,36 @@ async function getUserScriptAiConfig(
   return { apiKey, service: normalizedService, model }
 }
 
+function maxTokensForTargetPages(targetPages: number, model: string): number {
+  const ceiling = model.startsWith('gpt-5') ? 16000 : 12000
+  const estimated = Math.round(targetPages * SCREENPLAY_LINES_PER_PAGE * 18) + 400
+  return Math.max(1200, Math.min(estimated, ceiling))
+}
+
+function trimScreenplayToMaxLines(
+  content: string,
+  maxLines: number,
+): { text: string; truncated: boolean; originalLineCount: number } {
+  const trimmed = content.trim()
+  const lines = trimmed ? trimmed.split('\n') : []
+  const originalLineCount = lines.length
+
+  if (originalLineCount <= maxLines) {
+    return { text: trimmed, truncated: false, originalLineCount }
+  }
+
+  let cut = lines.slice(0, maxLines)
+  while (cut.length > 0 && !cut[cut.length - 1]?.trim()) {
+    cut = cut.slice(0, -1)
+  }
+
+  return {
+    text: cut.join('\n').trim(),
+    truncated: true,
+    originalLineCount,
+  }
+}
+
 async function generateScreenplayText({
   sourceContent,
   sceneName,
@@ -58,6 +141,7 @@ async function generateScreenplayText({
   location,
   characters,
   treatmentContext,
+  targetPages,
   apiKey,
   service,
   model,
@@ -68,13 +152,26 @@ async function generateScreenplayText({
   location?: string | null
   characters?: string[] | null
   treatmentContext?: string | null
+  targetPages: number
   apiKey: string
   service: 'openai' | 'anthropic'
   model: string
-}): Promise<string> {
-  const systemPrompt = `You are a professional screenwriter. Write in standard screenplay format with scene heading, action lines, character names in caps, dialogue, and parentheticals when needed.
+}): Promise<{
+  screenplay: string
+  maxLineCount: number
+  truncated: boolean
+  originalLineCount?: number
+}> {
+  const targetLineCount = targetPages * SCREENPLAY_LINES_PER_PAGE
+  const maxLineCount = Math.round(targetLineCount * 1.08)
 
-You MUST read the full treatment and prior scenes provided for story continuity — match character voices, plot beats, tone, and world details. The screenplay scene must feel like a natural part of the same story, not a standalone piece.
+  const systemPrompt = `You are a professional screenwriter. Write in standard screenplay format with scene heading, action lines, character names in ALL CAPS, dialogue, and parentheticals when needed.
+
+You MUST read the full treatment and prior scenes provided for story continuity — match character voices, plot beats, tone, and world details.
+
+CRITICAL: If characters speak in the treatment or source material, you MUST write their dialogue in proper screenplay format (CHARACTER NAME on its own line, then dialogue). Do not output action-only prose. Every speaking character needs at least one dialogue block unless they only appear silently.
+
+LENGTH IS MANDATORY: The user requested exactly ${targetPages} standard screenplay page${targetPages === 1 ? '' : 's'}. Your output must stay within ${maxLineCount} lines total (~${targetLineCount} lines target at 55 lines/page). Stop when you reach that length even if more story beats remain.
 
 Output only the screenplay text for this one scene.`
 
@@ -93,19 +190,24 @@ Characters: ${characters?.length ? characters.join(', ') : 'Not specified'}
 SOURCE MATERIAL FOR THIS SCENE:
 ${sourceContent}
 
-Write the full screenplay scene now. Stay faithful to the treatment's story while expanding this scene into proper screenplay format.`
+TARGET LENGTH (STRICT): ${targetPages} page${targetPages === 1 ? '' : 's'} = about ${targetLineCount} lines (55 lines/page). Do NOT exceed ${maxLineCount} lines. Condense or expand to hit this length — not shorter than ${Math.round(targetLineCount * 0.85)} lines and not longer than ${maxLineCount} lines.
+
+Write the full screenplay scene now. Stay faithful to the treatment's story while expanding this scene into proper screenplay format with character dialogue where characters speak.`
+
+  const maxTokens = maxTokensForTargetPages(targetPages, model)
 
   if (service === 'anthropic') {
-    const response = await AnthropicService.generateScript({
+      const response = await AnthropicService.generateScript({
       prompt: userPrompt,
       template: systemPrompt,
       model,
       apiKey,
+      maxTokens,
     })
     if (!response.success) {
       throw new Error(response.error || 'Failed to generate screenplay')
     }
-    return cleanGeneratedScreenplay(response.data.content[0].text)
+    return finalizeScreenplay(cleanGeneratedScreenplay(response.data.content[0].text), maxLineCount)
   }
 
   const response = await OpenAIService.generateScript({
@@ -113,7 +215,8 @@ Write the full screenplay scene now. Stay faithful to the treatment's story whil
     template: systemPrompt,
     model,
     apiKey,
-    maxTokens: model.startsWith('gpt-5') ? 12000 : 8000,
+    maxTokens,
+    strictOutputCap: true,
   })
 
   if (!response.success) {
@@ -125,7 +228,31 @@ Write the full screenplay scene now. Stay faithful to the treatment's story whil
     throw new Error('No screenplay content returned from AI')
   }
 
-  return cleanGeneratedScreenplay(typeof content === 'string' ? content : String(content))
+  return finalizeScreenplay(
+    cleanGeneratedScreenplay(typeof content === 'string' ? content : String(content)),
+    maxLineCount,
+  )
+}
+
+function finalizeScreenplay(
+  screenplay: string,
+  maxLineCount: number,
+): {
+  screenplay: string
+  maxLineCount: number
+  truncated: boolean
+  originalLineCount?: number
+} {
+  const { text, truncated, originalLineCount } = trimScreenplayToMaxLines(
+    screenplay,
+    maxLineCount,
+  )
+  return {
+    screenplay: text,
+    maxLineCount,
+    truncated,
+    originalLineCount: truncated ? originalLineCount : undefined,
+  }
 }
 
 export async function POST(request: NextRequest, context: RouteContext) {
@@ -136,21 +263,39 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
-    const { screenplaySceneId } = body
+    const { screenplaySceneId, targetPages: rawTargetPages } = body
 
     if (!screenplaySceneId || typeof screenplaySceneId !== 'string') {
       return NextResponse.json({ error: 'screenplaySceneId is required' }, { status: 400 })
     }
 
-    const { data: scene, error: sceneError } = await supabase
-      .from('screenplay_scenes')
-      .select('*')
-      .eq('id', screenplaySceneId)
-      .eq('user_id', user.id)
-      .single()
+    const parsedTargetPages =
+      typeof rawTargetPages === 'number'
+        ? rawTargetPages
+        : typeof rawTargetPages === 'string'
+          ? Number.parseInt(rawTargetPages, 10)
+          : 1
+    const targetPages =
+      Number.isFinite(parsedTargetPages) && parsedTargetPages >= 1
+        ? Math.min(Math.floor(parsedTargetPages), 20)
+        : 1
 
-    if (sceneError || !scene) {
-      return NextResponse.json({ error: 'Screenplay scene not found' }, { status: 404 })
+    const scene =
+      (await resolveScreenplaySceneForGeneration({
+        supabase,
+        userId: user.id,
+        workspaceId,
+        screenplaySceneId,
+      })) ?? null
+
+    if (!scene) {
+      return NextResponse.json(
+        {
+          error:
+            'Screenplay scene not found. Re-save the scene from chat (Save to Scene) or refresh the workspace and try again.',
+        },
+        { status: 404 },
+      )
     }
 
     const sourceContent = (scene.content || scene.description || '').trim()
@@ -170,7 +315,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
     })
 
     let screenplay = ''
-    if (isAlreadyScreenplayFormat(sourceContent)) {
+    let pageLengthTrim: {
+      maxLineCount: number
+      truncated: boolean
+      originalLineCount?: number
+    } | null = null
+    const skippedBecauseAlreadyFormatted = isAlreadyScreenplayFormat(sourceContent)
+    if (skippedBecauseAlreadyFormatted) {
       screenplay = sourceContent
     } else {
       const aiConfig = await getUserScriptAiConfig(user.id, supabase)
@@ -194,18 +345,40 @@ export async function POST(request: NextRequest, context: RouteContext) {
         )
       }
 
-      screenplay = await generateScreenplayText({
+      const generated = await generateScreenplayText({
         sourceContent,
         sceneName: scene.name,
         sceneNumber: scene.scene_number,
         location: scene.location,
         characters: scene.characters,
         treatmentContext: treatmentResult.context,
+        targetPages,
         apiKey: aiConfig.apiKey,
         service: aiConfig.service,
         model: aiConfig.model,
       })
+      screenplay = generated.screenplay
+      pageLengthTrim = {
+        maxLineCount: generated.maxLineCount,
+        truncated: generated.truncated,
+        originalLineCount: generated.originalLineCount,
+      }
     }
+
+    const maxLineCountForDebug =
+      pageLengthTrim?.maxLineCount ?? Math.round(targetPages * SCREENPLAY_LINES_PER_PAGE * 1.08)
+
+    const pageLengthDebug = buildPageLengthDebug({
+      screenplaySceneId: scene.id,
+      sceneName: scene.name,
+      targetPages,
+      screenplay,
+      usedAi: !skippedBecauseAlreadyFormatted,
+      skippedBecauseAlreadyFormatted,
+      maxLineCountAllowed: maxLineCountForDebug,
+      truncated: pageLengthTrim?.truncated,
+      originalLineCount: pageLengthTrim?.originalLineCount,
+    })
 
     const syncResult = await syncScreenplaySceneToProject({
       supabase,
@@ -218,17 +391,19 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
     return NextResponse.json({
       success: true,
-      screenplay,
       sceneId: scene.id,
-      artifact: syncResult.artifact,
-      assetId: syncResult.assetId,
-      usedAi: !isAlreadyScreenplayFormat(sourceContent),
+      screenplaySceneId: scene.id,
+      usedAi: !skippedBecauseAlreadyFormatted,
       timelineSceneId: syncResult.timelineSceneId,
       treatmentUsed: treatmentResult.hasTreatment,
       actCount: treatmentResult.actCount,
       priorSceneCount: treatmentResult.priorSceneCount,
+      targetPages,
+      warnings: syncResult.warnings,
+      pageLengthDebug,
     })
   } catch (error) {
+    console.error('[generate-screenplay-scene]', error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 },

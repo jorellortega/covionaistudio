@@ -154,7 +154,7 @@ export default function DashboardPage() {
             <Button asChild className="gradient-button neon-glow text-white">
               <Link href="/new">
                 <Sparkles className="h-4 w-4 mr-2" />
-                New Project
+                Workspace
               </Link>
             </Button>
             <Button 

@@ -15,6 +15,16 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import {
   buildLinkedAssetGroups,
@@ -309,8 +319,8 @@ export default function SceneStoryboardsPage() {
   // Loading states
   const [isLoadingScene, setIsLoadingScene] = useState(true)
   const [isLoadingStoryboards, setIsLoadingStoryboards] = useState(true)
-  
-  // Edit form state
+  const [showClearStoryboardsConfirm, setShowClearStoryboardsConfirm] = useState(false)
+  const [isClearingStoryboards, setIsClearingStoryboards] = useState(false)
   const [showEditForm, setShowEditForm] = useState(false)
   const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
   const [formCharacterIds, setFormCharacterIds] = useState<string[]>([])
@@ -2287,9 +2297,41 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  const handleClearStoryboards = async () => {
+    if (!sceneId) {
+      toast({
+        title: "Error",
+        description: "Scene ID missing.",
+        variant: "destructive",
+      })
+      return
+    }
 
-
-
+    try {
+      setIsClearingStoryboards(true)
+      const deletedCount = await StoryboardsService.clearStoryboardsForScene(sceneId)
+      setShowClearStoryboardsConfirm(false)
+      setStoryboards([])
+      setStoryboardImages(new Map())
+      await fetchStoryboards()
+      toast({
+        title: "Storyboards cleared",
+        description:
+          deletedCount > 0
+            ? `Removed ${deletedCount} storyboard${deletedCount === 1 ? "" : "s"} from this scene.`
+            : "This scene had no storyboards to remove.",
+      })
+    } catch (error) {
+      console.error("Error clearing storyboards:", error)
+      toast({
+        title: "Could not clear storyboards",
+        description: error instanceof Error ? error.message : "Failed to clear storyboards for this scene.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsClearingStoryboards(false)
+    }
+  }
 
   const resolveCreateShotPlacement = (): { shot_number: number; sequence_order: number } | { error: string } => {
     const formShot = formData.shot_number ?? 0
@@ -3792,6 +3834,23 @@ export default function SceneStoryboardsPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
             <h2 className="text-xl sm:text-2xl font-bold">Storyboards</h2>
             <div className="flex gap-2 w-full sm:w-auto">
+              {storyboards.length > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive hover:text-destructive border-destructive/40 hover:border-destructive/60 w-full sm:w-auto text-xs sm:text-sm"
+                  disabled={isClearingStoryboards}
+                  onClick={() => setShowClearStoryboardsConfirm(true)}
+                >
+                  {isClearingStoryboards ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4 mr-2" />
+                  )}
+                  Clear All
+                </Button>
+              ) : null}
               <Button 
                 onClick={() => setShowCreateForm(true)}
                 className="gradient-button neon-glow text-white w-full sm:w-auto text-xs sm:text-sm"
@@ -5436,6 +5495,39 @@ export default function SceneStoryboardsPage() {
           document.getElementById("storyboard-image-prompt")?.focus()
         }}
       />
+
+      <AlertDialog open={showClearStoryboardsConfirm} onOpenChange={setShowClearStoryboardsConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear all storyboards for this scene?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete all {storyboards.length} storyboard
+              {storyboards.length === 1 ? "" : "s"} in this scene so you can start over.
+              Storyboards in other scenes will not be affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isClearingStoryboards}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                void handleClearStoryboards()
+              }}
+              disabled={isClearingStoryboards}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isClearingStoryboards ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Clearing...
+                </>
+              ) : (
+                "Clear all storyboards"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
   

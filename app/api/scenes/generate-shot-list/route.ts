@@ -153,7 +153,7 @@ For each shot, provide:
 - movement: static, panning, tilting, tracking, zooming, dolly, crane, handheld, or steadicam
 - description: Brief description of what the shot shows
 - action: What happens in this shot
-- dialogue: Key dialogue if any (can be empty string)
+- dialogue: Spoken lines in this shot — copy exact dialogue from the screenplay when characters speak. Use empty string ONLY for silent shots with no speaking.
 - characters: Array of character names in the shot (use exact names from AVAILABLE CHARACTERS when provided)
 - duration_seconds: Estimated duration in seconds (number)
 - location: Location name for this shot (use exact name from AVAILABLE LOCATIONS when provided)
@@ -164,9 +164,9 @@ Return ONLY a valid JSON array. Example format:
     "shot_type": "wide",
     "camera_angle": "eye-level",
     "movement": "static",
-    "description": "Establishing shot of the location",
-    "action": "Camera shows the full scene",
-    "dialogue": "",
+    "description": "Medium shot of Maria at the table",
+    "action": "Maria looks up from her work",
+    "dialogue": "MARIA\\nWhen will they arrive?",
     "characters": ["Character1"],
     "duration_seconds": 5,
     "location": "Location Name",
@@ -180,6 +180,8 @@ IMPORTANT: Return ONLY the JSON array, no markdown, no code blocks, no explanati
     const userPrompt = `Analyze this screenplay content and create a comprehensive shot list. Break down the scene into individual shots that would be needed to film it. Consider camera movements, angles, and shot types that best serve the story.
 
 For each shot, assign the correct characters and location from the project lists when they appear. Use exact names.
+
+CRITICAL DIALOGUE RULE: When a character speaks in the screenplay, put their spoken lines in the shot's "dialogue" field for the shot that covers that moment. Include character name and line if helpful. Do not omit dialogue — storyboards and lip-sync depend on it.
 
 SCREENPLAY CONTENT:
 ${screenplayContent}

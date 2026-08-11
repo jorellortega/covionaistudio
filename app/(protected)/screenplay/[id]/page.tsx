@@ -37,6 +37,7 @@ import {
   AlignCenter,
   AlignRight,
   Image as ImageIcon,
+  List,
 } from "lucide-react"
 import jsPDF from "jspdf"
 import { useToast } from "@/hooks/use-toast"
@@ -184,8 +185,7 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
   const [editingScene, setEditingScene] = useState<Partial<ScreenplayScene>>({})
   const [isSavingScene, setIsSavingScene] = useState(false)
-  
-  // Delete confirmation states
+  const [activeTimelineSceneId, setActiveTimelineSceneId] = useState<string | null>(null)
   const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false)
   const [showDeleteEntireConfirm, setShowDeleteEntireConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -2144,31 +2144,109 @@ ${centerText('AUTHOR NAME')}
 
   // Helper function to get timeline scene ID for navigation
   const getTimelineSceneId = async (scene: ScreenplayScene): Promise<string | null> => {
-    // If scene.id exists and looks like a UUID, use it (it should be a timeline scene ID)
-    if (scene.id && scene.id.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
-      return scene.id
+    const metadata =
+      scene.metadata && typeof scene.metadata === 'object'
+        ? (scene.metadata as Record<string, unknown>)
+        : null
+
+    if (typeof metadata?.timeline_scene_id === 'string') {
+      return metadata.timeline_scene_id
     }
-    
-    // Otherwise, try to find the timeline scene by scene number
+
     if (!id || !ready || !userId) return null
-    
+
     try {
       const timeline = await TimelineService.getTimelineForMovie(id)
       if (!timeline) return null
-      
+
       const scenes = await TimelineService.getScenesForTimeline(timeline.id)
-      const sceneNumber = scene.scene_number || scene.metadata?.sceneNumber || ''
-      const matchingScene = scenes.find(s => 
-        s.metadata?.sceneNumber === sceneNumber || 
-        s.metadata?.sceneNumber === scene.scene_number
+      const directMatch = scenes.find((timelineScene) => timelineScene.id === scene.id)
+      if (directMatch) return directMatch.id
+
+      const linkedByScreenplayScene = scenes.find((timelineScene) => {
+        const timelineMetadata = timelineScene.metadata as Record<string, unknown> | null
+        return timelineMetadata?.screenplay_scene_id === scene.id
+      })
+      if (linkedByScreenplayScene) return linkedByScreenplayScene.id
+
+      const sceneNumber = scene.scene_number || String(metadata?.sceneNumber || '')
+      const matchingScene = scenes.find(
+        (timelineScene) =>
+          timelineScene.metadata?.sceneNumber === sceneNumber ||
+          timelineScene.metadata?.sceneNumber === scene.scene_number ||
+          timelineScene.name === scene.name,
       )
-      
+
       return matchingScene?.id || null
     } catch (error) {
       console.error('Error finding timeline scene:', error)
       return null
     }
   }
+
+  const getSceneForCurrentPage = (): ScreenplayScene | null => {
+    const sortedScenes = sortScreenplayScenes(
+      screenplayScenes.filter((scene) => (scene.content || scene.description || '').trim()),
+    )
+    if (sortedScenes.length === 0) return null
+    if (!fullScript?.trim() || sceneCharBoundaries.length === 0) {
+      return sortedScenes[0]
+    }
+
+    const lines = fullScript.split('\n')
+    const pageStartLine = (currentPage - 1) * LINES_PER_PAGE
+    const pageEndLine = Math.min(pageStartLine + LINES_PER_PAGE, lines.length)
+
+    let pageStartChar = 0
+    let pageEndChar = fullScript.length
+
+    if (pageStartLine > 0) {
+      const linesBeforePage = lines.slice(0, pageStartLine)
+      pageStartChar = linesBeforePage.join('\n').length + (linesBeforePage.length > 0 ? 1 : 0)
+    }
+
+    if (pageEndLine < lines.length) {
+      const linesUpToPageEnd = lines.slice(0, pageEndLine)
+      pageEndChar = linesUpToPageEnd.join('\n').length + (linesUpToPageEnd.length > 0 ? 1 : 0)
+    }
+
+    for (const scene of sortedScenes) {
+      const boundary = sceneCharBoundaries.find((item) => item.sceneId === scene.id)
+      if (!boundary) continue
+
+      const sceneStartsOnPage =
+        boundary.startChar >= pageStartChar && boundary.startChar < pageEndChar
+      const sceneEndsOnPage =
+        boundary.endChar > pageStartChar && boundary.endChar <= pageEndChar
+      const sceneSpansPage =
+        boundary.startChar < pageStartChar && boundary.endChar > pageEndChar
+
+      if (sceneStartsOnPage || sceneEndsOnPage || sceneSpansPage) {
+        return scene
+      }
+    }
+
+    return sortedScenes[0]
+  }
+
+  useEffect(() => {
+    const scene = getSceneForCurrentPage()
+    if (!scene) {
+      setActiveTimelineSceneId(null)
+      return
+    }
+
+    let cancelled = false
+    void getTimelineSceneId(scene).then((timelineSceneId) => {
+      if (!cancelled) {
+        setActiveTimelineSceneId(timelineSceneId)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentPage, fullScript, screenplayScenes, sceneCharBoundaries, id, ready, userId])
 
   // Generate scenes from screenplay using AI
   const generateScenesFromScreenplay = async () => {
@@ -3675,8 +3753,15 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             </Button>
             
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+              <Button variant="outline" size="sm" asChild className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 text-xs sm:text-sm flex-1 sm:flex-initial">
+                <Link href={activeTimelineSceneId ? `/shotlist/${activeTimelineSceneId}` : `/shotlist?movie=${id}`}>
+                  <List className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Shot List</span>
+                  <span className="sm:hidden">Shots</span>
+                </Link>
+              </Button>
               <Button variant="outline" size="sm" asChild className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial">
-                <Link href={`/storyboards?movie=${id}`}>
+                <Link href={activeTimelineSceneId ? `/storyboards/${activeTimelineSceneId}` : `/storyboards?movie=${id}`}>
                   <ImageIcon className="h-4 w-4 sm:mr-2" />
                   <span className="hidden sm:inline">Storyboards</span>
                   <span className="sm:hidden">Boards</span>
