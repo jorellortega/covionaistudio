@@ -40,6 +40,7 @@ import {
   CheckCircle,
   FileText,
   Film,
+  List,
   Volume2,
 } from "lucide-react"
 import Link from "next/link"
@@ -51,6 +52,10 @@ import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { AssetService } from "@/lib/asset-service"
 import { ProjectSelector } from "@/components/project-selector"
 import { TreatmentsService } from "@/lib/treatments-service"
+import {
+  mapDisplayModelToService,
+  normalizeDisplayModelToApiId,
+} from "@/lib/image-model-utils"
 
 const statusColors = {
   Planning: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
@@ -1122,50 +1127,14 @@ export default function TimelinePage() {
 
       console.log('🎬 DEBUG - Timeline setting is properly configured, proceeding with API call')
 
-      // Map service name to API service identifier (like storyboards does)
-      const mapServiceToAPI = (service: string | null | undefined): string => {
-        if (!service) return "dalle"
-        switch (service) {
-          case "DALL-E 3": return "dalle"
-          case "GPT Image": return "dalle" // GPT Image uses the dalle service but different endpoint
-          case "OpenArt": return "openart"
-          case "Runway ML": return "runway"
-          case "Leonardo AI": return "leonardo"
-          default: return "dalle"
-        }
-      }
+      const normalizedService = mapDisplayModelToService(timelineSetting.locked_model || "")
+      const normalizedModel = normalizeDisplayModelToApiId(timelineSetting.locked_model)
 
-      // Normalize the model name for API (exactly like storyboards)
-      const normalizeImageModel = (displayName: string | null | undefined): string => {
-        if (!displayName) {
-          console.log('🎬 DEBUG - No displayName provided, returning dall-e-3')
-          return "dall-e-3"
-        }
-        const model = displayName.toLowerCase().trim()
-        console.log('🎬 DEBUG - Normalizing model:', {
-          input: displayName,
-          lowercased: model,
-          check1: model === "gpt image",
-          check2: model.includes("gpt image"),
-          check3: model.includes("gpt-image"),
-          check4: model.startsWith("gpt"),
-          willReturnGPT: model === "gpt image" || model.includes("gpt image") || model.includes("gpt-image") || model.startsWith("gpt")
-        })
-        // Check for GPT Image (handles "GPT Image", "GPT Image 1", "gpt-image", "GPT-4.1-mini", etc.)
-        if (model === "gpt image" || model.includes("gpt image") || model.includes("gpt-image") || model.startsWith("gpt")) {
-          console.log('🎬 DEBUG - ✅ Returning gpt-image-1')
-          return "gpt-image-1"
-        } else if (model.includes("dall") || model.includes("dalle")) {
-          console.log('🎬 DEBUG - Returning dall-e-3')
-          return "dall-e-3"
-        }
-        // Default to DALL-E 3 for unknown models
-        console.log('🎬 DEBUG - ⚠️ Returning default dall-e-3 (no match found)')
-        return "dall-e-3"
-      }
-
-      const normalizedService = mapServiceToAPI(timelineSetting.locked_model)
-      const normalizedModel = normalizeImageModel(timelineSetting.locked_model)
+      console.log('🎬 DEBUG - Normalizing model:', {
+        input: timelineSetting.locked_model,
+        normalizedService,
+        normalizedModel,
+      })
 
       // Generate image using the locked service
       console.log('🎬 DEBUG - Timeline AI Setting:', {
@@ -1174,12 +1143,8 @@ export default function TimelinePage() {
         locked_model_length: timelineSetting.locked_model?.length,
         normalizedService: normalizedService,
         normalizedModel: normalizedModel,
-        isGPTImage: normalizedModel === 'gpt-image-1',
-        normalizationCheck: {
-          lowercased: timelineSetting.locked_model?.toLowerCase(),
-          includesGPTImage: timelineSetting.locked_model?.toLowerCase().includes('gpt image'),
-          includesGPTDash: timelineSetting.locked_model?.toLowerCase().includes('gpt-image')
-        }
+        isGPTImage2: normalizedModel === 'gpt-image-2',
+        isGPTImage1: normalizedModel === 'gpt-image-1',
       })
       
       console.log('🎬 DEBUG - Sending request to API with data:', {
@@ -1611,35 +1576,8 @@ export default function TimelinePage() {
     }
 
     // Normalize model name from display name to API model identifier
-    const normalizeImageModel = (displayName: string | null | undefined): string => {
-      if (!displayName) return "dall-e-3"
-      const model = displayName.toLowerCase()
-      if (model === "gpt image" || model.includes("gpt-image")) {
-        return "gpt-image-1"
-      } else if (model.includes("dall") || model.includes("dalle")) {
-        return "dall-e-3"
-      }
-      return "dall-e-3"
-    }
-
-    // Map service name to API service identifier
-    const mapServiceToAPI = (service: string): string => {
-      const serviceLower = service.toLowerCase()
-      if (serviceLower.includes('dall') || serviceLower === 'gpt image' || serviceLower.includes('gpt-image')) {
-        return 'dalle' // GPT Image uses the same service identifier as DALL-E
-      } else if (serviceLower.includes('openart')) {
-        return 'openart'
-      } else if (serviceLower.includes('runway')) {
-        return 'runway'
-      } else if (serviceLower.includes('leonardo')) {
-        return 'leonardo'
-      }
-      return 'dalle' // Default
-    }
-
-    // Normalize the model and service
-    const normalizedModel = normalizeImageModel(serviceToUse)
-    const normalizedService = mapServiceToAPI(serviceToUse)
+    const normalizedModel = normalizeDisplayModelToApiId(serviceToUse)
+    const normalizedService = mapDisplayModelToService(serviceToUse)
 
     // Store the service/model used for saving to asset later
     setLastUsedService(serviceToUse)
@@ -1998,6 +1936,23 @@ export default function TimelinePage() {
                 Assets
               </Button>
             </Link>
+
+            {movieId ? (
+              <>
+                <Link href={`/shotlist?movie=${movieId}`}>
+                  <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
+                    <List className="mr-2 h-4 w-4" />
+                    Shot List
+                  </Button>
+                </Link>
+                <Link href={`/storyboards?movie=${movieId}`}>
+                  <Button variant="outline" className="border-border bg-transparent hover:bg-muted">
+                    <Film className="mr-2 h-4 w-4" />
+                    Storyboards
+                  </Button>
+                </Link>
+              </>
+            ) : null}
 
             {treatmentId && (
               <Link href={`/treatments/${treatmentId}`}>
@@ -2772,18 +2727,6 @@ export default function TimelinePage() {
                                         >
                                           {scene.metadata.status || "Planning"}
                                         </Badge>
-                                        <button
-                                          onClick={(e) => {
-                                            e.preventDefault()
-                                            e.stopPropagation()
-                                            router.push(`/mood-boards?scope=scene&targetId=${scene.id}`)
-                                          }}
-                                          className="ml-2"
-                                        >
-                                          <Badge variant="outline" className="text-xs hover:bg-primary/10">
-                                            Mood Board
-                                          </Badge>
-                                        </button>
                                       </div>
                                     </div>
                                     {(scene.description || scene.metadata.notes) && (

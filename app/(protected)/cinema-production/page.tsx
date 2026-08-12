@@ -11099,7 +11099,7 @@ export default function CinemaProductionPage() {
               <p className="text-xs text-muted-foreground">
                 Uses your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
                 {getLockedImageConfig({ withReferenceImage: true })?.supportsReference
-                  ? " Pick a saved prompt from Visual Dev / Prompts List."
+                  ? " Pick a saved prompt from Prompts List."
                   : " Your locked model does not support reference editing — use GPT Image 2 or Runway ML."}
               </p>
 
@@ -11121,7 +11121,7 @@ export default function CinemaProductionPage() {
                   </div>
                 ) : savedStylePrompts.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-1">
-                    No saved prompts found for this project. Create style prompts in Visual Dev or{" "}
+                    No saved prompts found for this project. Create style prompts in{" "}
                     <Link href="/prompts-list" className="text-primary underline underline-offset-2">
                       Prompts List
                     </Link>

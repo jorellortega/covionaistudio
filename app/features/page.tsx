@@ -14,7 +14,6 @@ import {
   Box,
   Lightbulb,
   Palette,
-  PenTool,
   UserCircle,
   MapPin,
   FolderOpen,
@@ -144,24 +143,6 @@ const featureCategories = [
         href: "/ideas",
       },
       {
-        name: "Visual Development",
-        description: "AI-generated character designs, environments, props, and color scripts with intelligent visual creation",
-        icon: Palette,
-        href: "/visdev",
-      },
-      {
-        name: "Mood Boards",
-        description: "AI-enhanced mood board creation with intelligent visual suggestions at film, scene, and shot levels",
-        icon: Palette,
-        href: "/mood-boards",
-      },
-      {
-        name: "Writers",
-        description: "Advanced AI-powered writing tools for scripts, scenes, and dialogue with context-aware assistance",
-        icon: PenTool,
-        href: "/writers-page",
-      },
-      {
         name: "Characters",
         description: "AI-assisted character development with intelligent profile generation and design suggestions",
         icon: UserCircle,
@@ -181,12 +162,6 @@ const featureCategories = [
     icon: Bot,
     color: "from-orange-500 to-red-500",
     features: [
-      {
-        name: "AI Studio",
-        description: "Comprehensive AI workspace for generating content, images, and videos",
-        icon: Bot,
-        href: "/ai-studio",
-      },
       {
         name: "AI Chat",
         description: "Interactive AI assistant powered by Infinito AI for creative collaboration",

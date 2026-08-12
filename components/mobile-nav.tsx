@@ -19,7 +19,6 @@ import {
   Home,
   Lightbulb,
   Palette,
-  PenTool,
   ChevronRight,
   LayoutDashboard,
   Play,
@@ -38,7 +37,6 @@ import {
   List,
   AudioWaveform,
 } from "lucide-react"
-import { Palette as MoodPalette } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuthReady } from "@/components/auth-hooks"
 import { getSupabaseClient } from "@/lib/supabase"
@@ -62,7 +60,7 @@ const navigationCategories: NavCategory[] = [
     name: "Projects",
     icon: LayoutDashboard,
     items: [
-      { name: "New Project", href: "/new", icon: Sparkles },
+      { name: "Workspace", href: "/new", icon: Sparkles },
       { name: "Movies", href: "/movies", icon: Film },
       { name: "Treatments", href: "/treatments", icon: FileText },
       { name: "Create Cover", href: "/create-cover", icon: ImageIcon },
@@ -91,9 +89,6 @@ const navigationCategories: NavCategory[] = [
     icon: Palette,
     items: [
       { name: "Ideas", href: "/ideas", icon: Lightbulb },
-      { name: "Visual Dev", href: "/visdev", icon: Palette },
-      { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
-      { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
       { name: "Avatars", href: "/avatars", icon: ScanFace },
       { name: "Locations", href: "/locations", icon: MapPin },
@@ -104,7 +99,6 @@ const navigationCategories: NavCategory[] = [
     name: "AI Tools",
     icon: Bot,
     items: [
-      { name: "AI Studio", href: "/ai-studio", icon: Bot },
       { name: "Digital Twin", href: "/twin", icon: ScanFace },
       { name: "Runway ML", href: "/runwayml", icon: Video },
       { name: "Hedra Testing", href: "/hedra-testing", icon: UserCircle },

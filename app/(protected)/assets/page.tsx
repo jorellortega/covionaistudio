@@ -527,7 +527,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
               <span className="hidden sm:inline">Import Files</span>
               <span className="sm:hidden">Import</span>
             </Button>
-            <Link href="/ai-studio" className="flex-1 sm:flex-initial">
+            <Link href="/new" className="flex-1 sm:flex-initial">
               <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 w-full sm:w-auto text-xs sm:text-sm">
                 <Plus className="h-4 w-4 sm:mr-2" />
                 <span className="hidden sm:inline">Generate New</span>
@@ -701,7 +701,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                       : "No assets found for this project"
                     }
                   </p>
-                  <Link href="/ai-studio">
+                  <Link href="/new">
                     <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
                       <Plus className="h-4 w-4 sm:mr-2" />
                       <span className="hidden sm:inline">Generate Your First Asset</span>
@@ -889,7 +889,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                 <CardContent className="p-6 sm:p-8 text-center">
                   <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
                   <p className="text-sm sm:text-base text-muted-foreground mb-4">No scripts found for this project</p>
-                  <Link href="/ai-studio">
+                  <Link href="/new">
                     <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
                       <Plus className="h-4 w-4 sm:mr-2" />
                       <span className="hidden sm:inline">Generate Script</span>
@@ -929,7 +929,7 @@ function AssetsPageClient({ projectId, searchQuery }: { projectId: string | null
                   <CardContent className="p-6 sm:p-8 text-center">
                     <FileText className="h-12 w-12 sm:h-16 sm:w-16 text-muted-foreground mx-auto mb-4" />
                     <p className="text-sm sm:text-base text-muted-foreground mb-4">No {type} found for this project</p>
-                    <Link href="/ai-studio">
+                    <Link href="/new">
                       <Button className="bg-gradient-to-r from-blue-500 to-cyan-400 hover:opacity-90 text-xs sm:text-sm">
                         <Plus className="h-4 w-4 sm:mr-2" />
                         <span className="hidden sm:inline">Generate {type.slice(0, -1)}</span>

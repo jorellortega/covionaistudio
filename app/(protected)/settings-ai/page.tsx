@@ -877,7 +877,7 @@ export default function AISettingsPage() {
           <div className="flex items-center justify-between mb-2">
             <h1 className="text-3xl font-bold flex items-center gap-2">
               <Settings className="h-8 w-8" />
-              AI Studio Settings
+              AI Settings
             </h1>
             <Badge variant="outline" className="text-xs">
               CEO Only

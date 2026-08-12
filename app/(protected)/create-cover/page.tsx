@@ -813,7 +813,7 @@ export default function CreateCoverPage() {
                     <CardContent>
                       {importableReferences.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
-                          No new reference images available. Add images in Assets or Visual Dev first.
+                          No new reference images available. Add images in Assets first.
                         </p>
                       ) : (
                         <div className="grid grid-cols-3 gap-2 max-h-64 overflow-y-auto">

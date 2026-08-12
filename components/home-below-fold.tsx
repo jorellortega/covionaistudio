@@ -32,15 +32,15 @@ export function HomeBelowFold() {
 
         <div className="mt-6 sm:mt-8 md:mt-10 grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-3">
           <Link
-            href="/ai-studio"
+            href="/new"
             className="group rounded-lg sm:rounded-xl border border-border/60 bg-background/60 p-4 sm:p-6 backdrop-blur transition-colors hover:border-primary/40 hover:bg-background/80"
           >
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
               <Bot className="h-5 w-5" aria-hidden />
             </div>
-            <h4 className="mb-2 text-base font-semibold sm:text-lg">AI Studio</h4>
+            <h4 className="mb-2 text-base font-semibold sm:text-lg">Workspace</h4>
             <p className="text-xs text-muted-foreground sm:text-sm">
-              Images, video, and audio in one place—built for filmmakers, not generic chat tabs.
+              Build screenplays, characters, and assets in your creative workspace.
             </p>
           </Link>
           <Link
@@ -52,7 +52,7 @@ export function HomeBelowFold() {
             </div>
             <h4 className="mb-2 text-base font-semibold sm:text-lg">Preproduction</h4>
             <p className="text-xs text-muted-foreground sm:text-sm">
-              Projects, Treatments, Writers, Characters, Locations, and Visual Dev—scene-level prep and breakdowns before you hit the schedule.
+              Projects, Treatments, Characters, and Locations—scene-level prep and breakdowns before you hit the schedule.
             </p>
           </Link>
           <Link

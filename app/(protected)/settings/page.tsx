@@ -546,7 +546,7 @@ export default function SettingsPage() {
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
                     Set your preferred AI models for scripts, images, videos, and audio generation. 
-                    You can lock specific models to hide the selection interface in AI Studio.
+                    You can lock specific models to hide the selection interface where models are chosen.
                   </p>
                   <Button asChild className="w-full sm:w-auto">
                     <Link href="/settings-ai" className="flex items-center gap-2">
@@ -572,7 +572,7 @@ export default function SettingsPage() {
               <CardContent>
                 <div className="space-y-4">
                   <p className="text-sm text-muted-foreground">
-                    Configure your AI services, set up API keys, and manage your AI Studio preferences.
+                    Configure your AI services, set up API keys, and manage your AI preferences.
                   </p>
                   <Button asChild className="w-full sm:w-auto">
                     <Link href="/setup-ai" className="flex items-center gap-2">

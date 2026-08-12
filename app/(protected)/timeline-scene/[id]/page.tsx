@@ -3314,27 +3314,6 @@ ${centerText('AUTHOR NAME')}
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
-              
-              {/* Scene Mood Board Button */}
-              <Button
-                variant="outline"
-                size="sm"
-                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                onClick={() => {
-                  const params = new URLSearchParams({
-                    scope: 'scene',
-                    targetId: id,
-                  })
-                  if (projectId) {
-                    params.set('projectId', projectId)
-                  }
-                  router.push(`/mood-boards?${params.toString()}`)
-                }}
-              >
-                <ImageIcon className="h-4 w-4 mr-2" />
-                <span className="hidden sm:inline">Mood Board</span>
-                <span className="sm:hidden">Mood Board</span>
-              </Button>
             </div>
           </div>
         </div>
@@ -4266,7 +4245,7 @@ ${centerText('AUTHOR NAME')}
                                 size="sm"
                                 className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
                                 onClick={() => {
-                                  // Navigate to AI Studio with script data
+                                  // Navigate to Workspace with script data
                                   const scriptData = {
                                     title: selectedVersion.title,
                                     content: selectedVersion.content,
@@ -4282,20 +4261,20 @@ ${centerText('AUTHOR NAME')}
                                     metadata: selectedVersion.metadata
                                   }
                                   
-                                  // Store in sessionStorage for AI Studio to pick up
+                                  // Store in sessionStorage for Workspace to pick up
                                   sessionStorage.setItem('continueScriptData', JSON.stringify(scriptData))
                                   
-                                  // Navigate to AI Studio
-                                  router.push('/ai-studio')
+                                  // Navigate to Workspace
+                                  router.push('/new')
                                   
                                   toast({
-                                    title: "Script Loaded in AI Studio",
+                                    title: "Script Loaded in Workspace",
                                     description: "Your script is ready for editing and continuation.",
                                   })
                                 }}
                               >
                                 <Bot className="h-4 w-4 mr-2" />
-                                Continue in AI Studio
+                                Continue in Workspace
                               </Button>
                               
                               <Button
@@ -5457,7 +5436,7 @@ ${centerText('AUTHOR NAME')}
               <Button
                 size="sm"
                 className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90"
-                onClick={() => router.push('/ai-studio')}
+                onClick={() => router.push('/new')}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Generate Image
@@ -5498,7 +5477,7 @@ ${centerText('AUTHOR NAME')}
                           variant="outline"
                           className="border-green-500/30 text-green-400 hover:bg-green-500/10"
                           onClick={() => {
-                            // Navigate to AI Studio to generate variations
+                            // Navigate to Workspace to generate variations
                             const imageData = {
                               title: image.title,
                               prompt: image.prompt,
@@ -5512,10 +5491,10 @@ ${centerText('AUTHOR NAME')}
                             }
                             
                             sessionStorage.setItem('continueImageData', JSON.stringify(imageData))
-                            router.push('/ai-studio')
+                            router.push('/new')
                             
                             toast({
-                              title: "Image Loaded in AI Studio",
+                              title: "Image Loaded in Workspace",
                               description: "Ready to generate variations or new images.",
                             })
                           }}
@@ -5605,7 +5584,7 @@ ${centerText('AUTHOR NAME')}
                   <ImageIcon className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground mb-4">No images generated for this scene yet</p>
                   <Button
-                    onClick={() => router.push('/ai-studio')}
+                    onClick={() => router.push('/new')}
                     className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90"
                   >
                     <Bot className="h-4 w-4 mr-2" />
@@ -5623,7 +5602,7 @@ ${centerText('AUTHOR NAME')}
               <Button
                 size="sm"
                 className="bg-gradient-to-r from-red-500 to-orange-500 hover:opacity-90"
-                onClick={() => router.push('/ai-studio')}
+                onClick={() => router.push('/new')}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Generate Video
@@ -5691,7 +5670,7 @@ ${centerText('AUTHOR NAME')}
                           variant="outline"
                           className="border-green-500/30 text-green-400 hover:bg-green-500/10"
                           onClick={() => {
-                            // Navigate to AI Studio to generate variations
+                            // Navigate to Workspace to generate variations
                             const videoData = {
                               title: video.title,
                               prompt: video.prompt,
@@ -5705,10 +5684,10 @@ ${centerText('AUTHOR NAME')}
                             }
                             
                             sessionStorage.setItem('continueVideoData', JSON.stringify(videoData))
-                            router.push('/ai-studio')
+                            router.push('/new')
                             
                             toast({
-                              title: "Video Loaded in AI Studio",
+                              title: "Video Loaded in Workspace",
                               description: "Ready to generate variations or new videos.",
                             })
                           }}
@@ -5791,7 +5770,7 @@ ${centerText('AUTHOR NAME')}
                   <Play className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground mb-4">No videos generated for this scene yet</p>
                   <Button
-                    onClick={() => router.push('/ai-studio')}
+                    onClick={() => router.push('/new')}
                     className="bg-gradient-to-r from-red-500 to-orange-500 hover:opacity-90"
                   >
                     <Bot className="h-4 w-4 mr-2" />
@@ -5814,7 +5793,7 @@ ${centerText('AUTHOR NAME')}
               <Button
                 size="sm"
                 className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:opacity-90"
-                onClick={() => router.push('/ai-studio')}
+                onClick={() => router.push('/new')}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Generate Audio
@@ -5885,7 +5864,7 @@ ${centerText('AUTHOR NAME')}
                           variant="outline"
                           className="border-green-500/30 text-green-400 hover:bg-green-500/10"
                           onClick={() => {
-                            // Navigate to AI Studio to generate variations
+                            // Navigate to Workspace to generate variations
                             const audioData = {
                               title: audio.title,
                               prompt: audio.prompt,
@@ -5899,10 +5878,10 @@ ${centerText('AUTHOR NAME')}
                             }
                             
                             sessionStorage.setItem('continueAudioData', JSON.stringify(audioData))
-                            router.push('/ai-studio')
+                            router.push('/new')
                             
                             toast({
-                              title: "Audio Loaded in AI Studio",
+                              title: "Audio Loaded in Workspace",
                               description: "Ready to generate variations or new audio.",
                             })
                           }}
@@ -5985,7 +5964,7 @@ ${centerText('AUTHOR NAME')}
                   <MessageSquare className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                   <p className="text-muted-foreground mb-4">No audio generated for this scene yet</p>
                   <Button
-                    onClick={() => router.push('/ai-studio')}
+                    onClick={() => router.push('/new')}
                     className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:opacity-90"
                   >
                     <Bot className="h-4 w-4 mr-2" />
@@ -6180,7 +6159,7 @@ ${centerText('AUTHOR NAME')}
                   Refresh
                 </Button>
                 <Button
-                  onClick={() => router.push('/ai-studio')}
+                  onClick={() => router.push('/new')}
                   className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
                   size="sm"
                 >
@@ -6325,13 +6304,13 @@ ${centerText('AUTHOR NAME')}
                                       Compare
                                     </Button>
                                     
-                                    {/* Continue in AI Studio Button */}
+                                    {/* Continue in Workspace Button */}
                                     <Button
                                       variant="outline"
                                       size="sm"
                                       className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
                                       onClick={() => {
-                                        // Navigate to AI Studio with script data
+                                        // Navigate to Workspace with script data
                                         const scriptData = {
                                           title: latestVersion.title,
                                           content: latestVersion.content,
@@ -6347,20 +6326,20 @@ ${centerText('AUTHOR NAME')}
                                           metadata: latestVersion.metadata
                                         }
                                         
-                                        // Store in sessionStorage for AI Studio to pick up
+                                        // Store in sessionStorage for Workspace to pick up
                                         sessionStorage.setItem('continueScriptData', JSON.stringify(scriptData))
                                         
-                                        // Navigate to AI Studio
-                                        router.push('/ai-studio')
+                                        // Navigate to Workspace
+                                        router.push('/new')
                                         
                                         toast({
-                                          title: "Script Loaded in AI Studio",
+                                          title: "Script Loaded in Workspace",
                                           description: "Your script is ready for editing and continuation.",
                                         })
                                       }}
                                     >
                                       <Bot className="h-4 w-4 mr-2" />
-                                      Continue in AI Studio
+                                      Continue in Workspace
                                     </Button>
                                     
                                     <Button
@@ -6618,7 +6597,7 @@ ${centerText('AUTHOR NAME')}
                         Generate your first {type} for this scene to get started.
                       </p>
                       <Button
-                        onClick={() => router.push('/ai-studio')}
+                        onClick={() => router.push('/new')}
                         className="bg-gradient-to-r from-green-500 to-blue-500 hover:opacity-90"
                       >
                         <Plus className="h-4 w-4 mr-2" />

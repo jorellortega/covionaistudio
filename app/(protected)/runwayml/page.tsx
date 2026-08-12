@@ -780,9 +780,6 @@ export default function RunwayMLPage() {
             <Button variant="outline" size="sm" asChild>
               <Link href="/create-titles">Create Titles (reference stylize + video)</Link>
             </Button>
-            <Button variant="outline" size="sm" asChild>
-              <Link href="/ai-studio">AI Studio</Link>
-            </Button>
           </CardContent>
         </Card>
       </main>

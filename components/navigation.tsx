@@ -12,7 +12,6 @@ import {
   Home, 
   Lightbulb, 
   Palette, 
-  PenTool, 
   ChevronDown,
   Play,
   Image as ImageIcon,
@@ -30,7 +29,6 @@ import {
   List,
   AudioWaveform,
 } from "lucide-react"
-import { Palette as MoodPalette } from "lucide-react"
 import { useIsMobile } from "@/hooks/use-mobile"
 import {
   DropdownMenu,
@@ -79,16 +77,13 @@ const navigationCategories: NavCategory[] = [
     name: "Creative",
     icon: Palette,
     items: [
-      { name: "New Project", href: "/new", icon: Sparkles },
+      { name: "Workspace", href: "/new", icon: Sparkles },
       { name: "Treatments", href: "/treatments", icon: FileText },
       { name: "Create Cover", href: "/create-cover", icon: ImageIcon },
       { name: "Create Voice", href: "/create-voice", icon: Mic },
       { name: "Create Titles", href: "/create-titles", icon: Type },
       { name: "Projects", href: "/ideas", icon: Lightbulb },
-      { name: "Visual Dev", href: "/visdev", icon: Palette },
       { name: "Prompt Create", href: "/prompt-create", icon: Sparkles },
-      { name: "Mood Boards", href: "/mood-boards", icon: MoodPalette },
-      { name: "Writers", href: "/writers-page", icon: PenTool },
       { name: "Characters", href: "/characters", icon: UserCircle },
       { name: "Avatars", href: "/avatars", icon: ScanFace },
       { name: "Locations", href: "/locations", icon: MapPin },
@@ -99,7 +94,6 @@ const navigationCategories: NavCategory[] = [
     name: "AI Tools",
     icon: Bot,
     items: [
-      { name: "AI Studio", href: "/ai-studio", icon: Bot },
       { name: "Digital Twin", href: "/twin", icon: ScanFace },
       { name: "Runway ML", href: "/runwayml", icon: Video },
       { name: "Hedra Testing", href: "/hedra-testing", icon: UserCircle },

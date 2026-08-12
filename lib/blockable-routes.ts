@@ -11,7 +11,6 @@ export const DEFAULT_BLOCKED_ROUTES_FOR_NEW_USERS = [
   '/share-control',
   '/settings-ai',
   '/setup-ai',
-  '/ai-studio',
   '/ai-info',
   '/cinema-production',
 ] as const
@@ -36,7 +35,6 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
 
   { group: 'AI & keys', path: '/settings-ai', label: 'AI API keys' },
   { group: 'AI & keys', path: '/setup-ai', label: 'Setup AI' },
-  { group: 'AI & keys', path: '/ai-studio', label: 'AI studio' },
   { group: 'AI & keys', path: '/runwayml', label: 'Runway ML' },
   { group: 'AI & keys', path: '/hedra-testing', label: 'Hedra testing' },
   { group: 'AI & keys', path: '/mirelo-ai-test', label: 'Mirelo AI test' },
@@ -62,9 +60,6 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'Productions', path: '/objects', label: 'Objects' },
   { group: 'Productions', path: '/assets', label: 'Assets' },
   { group: 'Productions', path: '/viewmovie', label: 'View movie' },
-  { group: 'Productions', path: '/visdev', label: 'Vis dev' },
-  { group: 'Productions', path: '/mood-boards', label: 'Mood boards' },
-  { group: 'Productions', path: '/writers-page', label: 'Writers page' },
 
   { group: 'Pre-production', path: '/casting', label: 'Casting' },
   { group: 'Pre-production', path: '/crew-sheet', label: 'Crew sheet' },

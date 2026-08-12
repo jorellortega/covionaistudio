@@ -3841,17 +3841,9 @@ export default function SceneStoryboardsPage() {
                 <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
                 <h3 className="text-lg font-medium mb-2">No Script Available</h3>
                 <p className="text-sm text-muted-foreground mb-4">
-                  This scene doesn't have a script yet. Scripts are typically created in the AI Studio or imported from files.
+                  This scene doesn't have a script yet. Import a script or add one from the scene page.
                 </p>
                 <div className="flex gap-2 justify-center">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => router.push('/ai-studio')}
-                  >
-                    <Sparkles className="h-3 w-3 mr-1" />
-                    Create Script in AI Studio
-                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
