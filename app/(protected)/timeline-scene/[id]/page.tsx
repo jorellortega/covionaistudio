@@ -47,6 +47,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Film,
+  List,
   ChevronDown,
   ChevronUp,
   Sparkles,
@@ -3238,6 +3239,32 @@ ${centerText('AUTHOR NAME')}
                   </Link>
                 </Button>
               )}
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 bg-transparent"
+                asChild
+              >
+                <Link href={`/shotlist/${id}`}>
+                  <List className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">Shot List</span>
+                  <span className="sm:hidden">Shots</span>
+                </Link>
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10 bg-transparent"
+                asChild
+              >
+                <Link href={`/storyboards/${id}`}>
+                  <Film className="h-4 w-4 mr-2" />
+                  <span className="hidden sm:inline">Storyboards</span>
+                  <span className="sm:hidden">Boards</span>
+                </Link>
+              </Button>
           
               {/* Treatment Button */}
               <Button
