@@ -10,6 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { 
   Film, 
   Loader2, 
@@ -2506,6 +2512,135 @@ export default function CinemaProductionPage() {
   const openEditShotDialog = (storyboard: Storyboard) => {
     setEditingStoryboard(storyboard)
     setEditShotDialogOpen(true)
+  }
+
+  const getStatusBadgeStyle = (status: string) => {
+    switch (status) {
+      case "draft":
+        return "bg-gray-500/20 text-gray-500 border-gray-500/30"
+      case "in-progress":
+        return "bg-yellow-500/20 text-yellow-500 border-yellow-500/30"
+      case "review":
+        return "bg-orange-500/20 text-orange-500 border-orange-500/30"
+      case "approved":
+        return "bg-green-500/20 text-green-500 border-green-500/30"
+      case "rejected":
+        return "bg-red-500/20 text-red-500 border-red-500/30"
+      case "completed":
+        return "bg-blue-500/20 text-blue-500 border-blue-500/30"
+      default:
+        return "bg-gray-500/20 text-gray-500 border-gray-500/30"
+    }
+  }
+
+  const getStatusDisplayText = (status: string) => {
+    switch (status) {
+      case "draft":
+        return "Draft"
+      case "in-progress":
+        return "In Progress"
+      case "review":
+        return "Review"
+      case "approved":
+        return "Approved"
+      case "rejected":
+        return "Rejected"
+      case "completed":
+        return "Completed"
+      default:
+        return "Draft"
+    }
+  }
+
+  const handleStatusUpdate = async (storyboardId: string, newStatus: string) => {
+    const previousStatus =
+      storyboards.find((sb) => sb.id === storyboardId)?.status || "draft"
+    try {
+      setStoryboards((prev) =>
+        prev.map((sb) =>
+          sb.id === storyboardId ? { ...sb, status: newStatus as Storyboard["status"] } : sb,
+        ),
+      )
+      if (selectedStoryboard?.id === storyboardId) {
+        setSelectedStoryboard((prev) =>
+          prev ? { ...prev, status: newStatus as Storyboard["status"] } : prev,
+        )
+      }
+
+      const updatedStoryboard = await StoryboardsService.updateStoryboard(storyboardId, {
+        status: newStatus as Storyboard["status"],
+      })
+      setStoryboards((prev) =>
+        prev.map((sb) => (sb.id === storyboardId ? updatedStoryboard : sb)),
+      )
+      if (selectedStoryboard?.id === storyboardId) {
+        setSelectedStoryboard(updatedStoryboard)
+      }
+
+      toast({
+        title: "Status Updated",
+        description: `Shot status changed to ${getStatusDisplayText(newStatus)}`,
+      })
+    } catch (error) {
+      console.error("Error updating status:", error)
+      setStoryboards((prev) =>
+        prev.map((sb) =>
+          sb.id === storyboardId
+            ? { ...sb, status: previousStatus as Storyboard["status"] }
+            : sb,
+        ),
+      )
+      if (selectedStoryboard?.id === storyboardId) {
+        setSelectedStoryboard((prev) =>
+          prev ? { ...prev, status: previousStatus as Storyboard["status"] } : prev,
+        )
+      }
+      toast({
+        title: "Error",
+        description: "Failed to update status",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const renderShotStatusDropdown = (storyboard: Storyboard) => {
+    const status = storyboard.status || "draft"
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Badge
+            variant="secondary"
+            className={`px-2 py-1 text-xs font-mono border cursor-pointer hover:opacity-80 transition-opacity flex items-center gap-1 ${getStatusBadgeStyle(status)}`}
+          >
+            {getStatusDisplayText(status)}
+            <ChevronDown className="h-3 w-3" />
+          </Badge>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-40">
+          {(
+            [
+              { value: "draft", label: "Draft", color: "bg-gray-500" },
+              { value: "in-progress", label: "In Progress", color: "bg-yellow-500" },
+              { value: "review", label: "Review", color: "bg-orange-500" },
+              { value: "approved", label: "Approved", color: "bg-green-500" },
+              { value: "rejected", label: "Rejected", color: "bg-red-500" },
+              { value: "completed", label: "Completed", color: "bg-blue-500" },
+            ] as const
+          ).map((option) => (
+            <DropdownMenuItem
+              key={option.value}
+              onClick={() => void handleStatusUpdate(storyboard.id, option.value)}
+              className="cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${option.color}`} />
+                {option.label}
+              </div>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
   }
 
   const handleShotDetailsUpdated = (updated: Storyboard) => {
@@ -8343,13 +8478,7 @@ export default function CinemaProductionPage() {
                             >
                               <Edit className="h-4 w-4" />
                             </Button>
-                            <Badge className={
-                            storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                            storyboard.status === 'completed' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                            'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                          }>
-                            {storyboard.status}
-                          </Badge>
+                            {renderShotStatusDropdown(storyboard)}
                           </div>
                         </div>
                         <CardTitle className="text-base mt-2">{storyboard.title}</CardTitle>
@@ -8532,13 +8661,7 @@ export default function CinemaProductionPage() {
                             <Edit className="h-4 w-4" />
                             Edit Shot
                           </Button>
-                          <Badge className={
-                            storyboard.status === 'approved' ? 'bg-green-500/20 text-green-400 border-green-500/30' :
-                            storyboard.status === 'completed' ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' :
-                            'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                          }>
-                            {storyboard.status}
-                          </Badge>
+                          {renderShotStatusDropdown(storyboard)}
                         </div>
                       </div>
                     </CardHeader>
