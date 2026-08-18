@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ImageIcon, Loader2 } from "lucide-react"
+import { getStorageImageUrl } from "@/lib/storage-image-url"
 
 type LazyShotImageProps = {
   src: string | null | undefined
   alt: string
   className?: string
   imgClassName?: string
+  /** When set, load a resized Supabase thumbnail first; fall back to full `src` on error. */
+  thumbnailWidth?: number
+  thumbnailQuality?: number
   onLoad?: () => void
   onError?: () => void
 }
@@ -18,12 +22,28 @@ export function LazyShotImage({
   alt,
   className = "",
   imgClassName = "w-full h-full object-cover",
+  thumbnailWidth,
+  thumbnailQuality = 70,
   onLoad,
   onError,
 }: LazyShotImageProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [shouldLoad, setShouldLoad] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [useFull, setUseFull] = useState(false)
+
+  const fullSrc = src || ""
+  const thumbSrc =
+    thumbnailWidth && fullSrc
+      ? getStorageImageUrl(fullSrc, { width: thumbnailWidth, quality: thumbnailQuality })
+      : fullSrc
+  const displaySrc = useFull || thumbSrc === fullSrc ? fullSrc : thumbSrc
+
+  useEffect(() => {
+    setFailed(false)
+    setUseFull(false)
+    setShouldLoad(false)
+  }, [src, thumbnailWidth, thumbnailQuality])
 
   useEffect(() => {
     if (!src) return
@@ -64,13 +84,17 @@ export function LazyShotImage({
         </div>
       ) : (
         <img
-          src={src}
+          src={displaySrc}
           alt={alt}
           loading="lazy"
           decoding="async"
           className={imgClassName}
           onLoad={() => onLoad?.()}
           onError={() => {
+            if (!useFull && displaySrc !== fullSrc) {
+              setUseFull(true)
+              return
+            }
             setFailed(true)
             onError?.()
           }}

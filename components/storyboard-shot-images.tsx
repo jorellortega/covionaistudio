@@ -1,7 +1,9 @@
 "use client"
 
+import { useState } from "react"
 import { Loader2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { getStorageImageUrl } from "@/lib/storage-image-url"
 
 export interface StoryboardImage {
   id: string
@@ -21,6 +23,24 @@ interface StoryboardShotImagesProps {
   onSelect: (image: StoryboardImage) => void
   onDelete: (image: StoryboardImage) => void
   deletingImageId?: string | null
+}
+
+function StoryboardThumb({ src }: { src: string }) {
+  const thumb = getStorageImageUrl(src, { width: 160, quality: 65 })
+  const [displaySrc, setDisplaySrc] = useState(thumb)
+
+  return (
+    <img
+      src={displaySrc}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="h-full w-full object-contain"
+      onError={() => {
+        if (displaySrc !== src) setDisplaySrc(src)
+      }}
+    />
+  )
 }
 
 export function StoryboardShotImages({
@@ -55,11 +75,7 @@ export function StoryboardShotImages({
                     : "border-border hover:border-primary/50",
                 )}
               >
-                <img
-                  src={image.image_url}
-                  alt=""
-                  className="h-full w-full object-cover"
-                />
+                <StoryboardThumb src={image.image_url} />
               </button>
               <button
                 type="button"

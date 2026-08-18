@@ -55,6 +55,7 @@ import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { StoryboardShotNumberPopover } from "@/components/storyboard-shot-number-popover"
 import { StoryboardShotPositionEditor } from "@/components/storyboard-shot-position-editor"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { LazyShotImage } from "@/components/lazy-shot-image"
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
 import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { StoryboardShotImages, type StoryboardImage } from "@/components/storyboard-shot-images"
@@ -4818,10 +4819,13 @@ export default function SceneStoryboardsPage() {
                       title="Click to view full image"
                       onClick={() => openFullImageViewer(storyboard)}
                     >
-                      <img
+                      <LazyShotImage
                         src={storyboard.image_url}
                         alt={storyboard.title}
-                        className="w-full h-full object-cover transition-opacity group-hover:opacity-95"
+                        thumbnailWidth={720}
+                        thumbnailQuality={70}
+                        className="absolute inset-0 w-full h-full"
+                        imgClassName="w-full h-full object-contain transition-opacity group-hover:opacity-95"
                       />
                       <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/25">
                         <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5">
@@ -4829,7 +4833,6 @@ export default function SceneStoryboardsPage() {
                         </span>
                       </div>
                     </button>
-                    <ImageSizeBadge src={storyboard.image_url} />
                     {referenceEditingShotIds.has(storyboard.id) ? (
                       <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 pointer-events-none">
                         <Loader2 className="h-8 w-8 animate-spin text-violet-400" />

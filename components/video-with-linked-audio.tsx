@@ -8,9 +8,12 @@ interface VideoWithLinkedAudioProps {
   audioUrls?: string[]
   className?: string
   id?: string
+  poster?: string
   preload?: "auto" | "metadata" | "none"
   playsInline?: boolean
   muted?: boolean
+  /** When false, do not attach video src (poster-only until activated). */
+  loadVideo?: boolean
   onLoadedMetadata?: (event: SyntheticEvent<HTMLVideoElement>) => void
   onEnded?: (event: SyntheticEvent<HTMLVideoElement>) => void
 }
@@ -79,9 +82,11 @@ export function VideoWithLinkedAudio({
   audioUrls = [],
   className,
   id,
-  preload = "metadata",
+  poster,
+  preload = "none",
   playsInline = true,
   muted = false,
+  loadVideo = true,
   onLoadedMetadata,
   onEnded,
 }: VideoWithLinkedAudioProps) {
@@ -264,8 +269,9 @@ export function VideoWithLinkedAudio({
       <video
         ref={videoRef}
         id={id}
-        src={videoUrl}
-        controls
+        src={loadVideo ? videoUrl : undefined}
+        poster={poster}
+        controls={loadVideo}
         className={className}
         preload={preload}
         playsInline={playsInline}

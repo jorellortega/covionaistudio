@@ -136,6 +136,9 @@ import { LinkAudioPanel } from "@/components/linked-audio-picker"
 import { muxVideoWithAudios } from "@/lib/mux-video-audio"
 import "@/lib/linked-audio-debug"
 import { LazyShotImage } from "@/components/lazy-shot-image"
+import { LazyShotVideo } from "@/components/lazy-shot-video"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
+import { getStorageImageUrl } from "@/lib/storage-image-url"
 import { StoryboardShotEditDialog } from "@/components/storyboard-shot-edit-dialog"
 import type { StoryboardImage } from "@/components/storyboard-shot-images"
 import {
@@ -1380,6 +1383,8 @@ export default function CinemaProductionPage() {
   const [leonardoApiKey, setLeonardoApiKey] = useState<string>("")
   const [motionControlElements, setMotionControlElements] = useState<any[]>([])
   const [isPlayingSequence, setIsPlayingSequence] = useState(false)
+  /** Sequence strip clips that the user explicitly opened (poster-only until then). */
+  const [sequenceLoadedVideoIds, setSequenceLoadedVideoIds] = useState<Set<string>>(() => new Set())
   
   // Generation state for each storyboard
   const [storyboardGenerations, setStoryboardGenerations] = useState<Map<string, ShotGenerationState>>(new Map())
@@ -8183,14 +8188,27 @@ export default function CinemaProductionPage() {
                             <div className="pt-6 h-full bg-background relative group">
                               {hasVideo ? (
                                 <>
-                                  <video
+                                  <LazyShotVideo
                                     id={`video-${storyboard.id}`}
                                     data-storyboard-id={storyboard.id}
                                     src={generation.generatedVideoUrl!}
-                                    className="w-full h-full object-cover"
+                                    posterSrc={storyboard.image_url}
+                                    loadVideo={
+                                      isPlayingSequence ||
+                                      sequenceLoadedVideoIds.has(storyboard.id)
+                                    }
+                                    showPlayOverlay={!isPlayingSequence}
+                                    onRequestLoad={() => {
+                                      setSequenceLoadedVideoIds((prev) => {
+                                        const next = new Set(prev)
+                                        next.add(storyboard.id)
+                                        return next
+                                      })
+                                    }}
+                                    className="w-full h-full"
+                                    videoClassName="object-cover"
                                     muted
                                     playsInline
-                                    preload="metadata"
                                     onEnded={(e) => {
                                       if (!isPlayingSequence) return // Only chain if sequence is playing
                                       
@@ -8243,13 +8261,9 @@ export default function CinemaProductionPage() {
                                         }
                                       }
                                     }}
-                                    onLoadedMetadata={(e) => {
-                                      console.log(`📹 Video loaded: ${storyboard.id}`, e.currentTarget.duration)
-                                      showVideoFrameThumbnail(e.currentTarget)
-                                    }}
                                   />
                                   {/* Action buttons overlay */}
-                                  <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-20">
                                     <Button
                                       size="sm"
                                       variant="secondary"
@@ -8281,7 +8295,10 @@ export default function CinemaProductionPage() {
                                   <LazyShotImage
                                     src={storyboard.image_url}
                                     alt={storyboard.title || "Storyboard"}
+                                    thumbnailWidth={720}
+                                    thumbnailQuality={70}
                                     className="w-full h-full"
+                                    imgClassName="w-full h-full object-contain"
                                   />
                                   {/* Overlay for generate button */}
                                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -8366,11 +8383,11 @@ export default function CinemaProductionPage() {
                         return
                       }
                       
-                      // Play all videos in sequence - start with the first one
+                      // Attach video srcs via posters→load, then start the first clip
                       const storyboards = getDisplayedStoryboards()
                       console.log('▶️ Play All clicked - storyboards:', storyboards.length)
+                      setIsPlayingSequence(true)
                       
-                      // Wait a bit for DOM to be ready
                       setTimeout(() => {
                         const videosWithUrl = storyboards
                           .map(sb => {
@@ -8394,7 +8411,6 @@ export default function CinemaProductionPage() {
                         })
                         
                         if (videosWithUrl.length > 0) {
-                          setIsPlayingSequence(true)
                           // Start playing the first video
                           const firstVideo = videosWithUrl[0].video
                           console.log('▶️ Starting playback of first video:', firstVideo.id)
@@ -8407,6 +8423,7 @@ export default function CinemaProductionPage() {
                           })
                         } else {
                           console.log('⚠️ No videos available to play')
+                          setIsPlayingSequence(false)
                           const storyboardsWithVideos = storyboards.filter(sb => {
                             const gen = storyboardGenerations.get(sb.id)
                             return !!gen?.generatedVideoUrl
@@ -8417,7 +8434,7 @@ export default function CinemaProductionPage() {
                             console.log(`    - ${sb.id}: ${gen?.generatedVideoUrl?.substring(0, 50)}...`)
                           })
                         }
-                      }, 100)
+                      }, 250)
                     }}
                   >
                     {isPlayingSequence ? (
@@ -8493,7 +8510,10 @@ export default function CinemaProductionPage() {
                             <LazyShotImage
                               src={storyboard.image_url}
                               alt={storyboard.title || "Storyboard"}
+                              thumbnailWidth={720}
+                              thumbnailQuality={70}
                               className="absolute inset-0 w-full h-full"
+                              imgClassName="w-full h-full object-contain"
                             />
                           </div>
                         ) : (
@@ -8539,10 +8559,17 @@ export default function CinemaProductionPage() {
                                 <VideoWithLinkedAudio
                                   videoUrl={displayVideoUrl}
                                   audioUrls={gridLinkedAudioUrls}
+                                  poster={
+                                    storyboard.image_url
+                                      ? getStorageImageUrl(storyboard.image_url, {
+                                          width: 720,
+                                          quality: 70,
+                                        })
+                                      : undefined
+                                  }
                                   className="w-full rounded-md bg-muted"
-                                  preload="metadata"
+                                  preload="none"
                                   playsInline
-                                  onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
                                 />
                                 {gridLinkedCount > 0 ? (
                                   <Badge
@@ -8766,6 +8793,8 @@ export default function CinemaProductionPage() {
                                   <LazyShotImage
                                     src={displayImageUrl}
                                     alt={storyboard.title || "Storyboard"}
+                                    thumbnailWidth={720}
+                                    thumbnailQuality={70}
                                     className="w-full"
                                     imgClassName="w-full h-auto max-h-[600px] object-contain mx-auto transition-opacity group-hover:opacity-95"
                                     onLoad={() => {
@@ -8775,7 +8804,6 @@ export default function CinemaProductionPage() {
                                       console.error('🎬 Failed to load storyboard image:', displayImageUrl)
                                     }}
                                   />
-                                  <ImageSizeBadge src={displayImageUrl} />
                                   {imageEditingShotIds.has(storyboard.id) ? (
                                     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 pointer-events-none">
                                       <Loader2 className="h-8 w-8 animate-spin text-violet-400" />
@@ -8891,10 +8919,17 @@ export default function CinemaProductionPage() {
                                         key={`${displayVideoUrl}-${detailLinkedAudioUrls.join(",")}`}
                                         videoUrl={displayVideoUrl}
                                         audioUrls={detailLinkedAudioUrls}
-                                        preload="metadata"
+                                        poster={
+                                          storyboard.image_url
+                                            ? getStorageImageUrl(storyboard.image_url, {
+                                                width: 720,
+                                                quality: 70,
+                                              })
+                                            : undefined
+                                        }
+                                        preload="none"
                                         playsInline
-                                        className="w-full rounded-md bg-muted aspect-video object-cover"
-                                        onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
+                                        className="w-full rounded-md bg-muted aspect-video object-contain"
                                       />
                                       {detailLinkedCount > 0 ? (
                                         <Badge
@@ -9252,10 +9287,12 @@ export default function CinemaProductionPage() {
                                     onClick={() => setShotPreviewImage(storyboard.id, frame.url)}
                                     onDoubleClick={() => openFrameViewer(storyboard.id, frame)}
                                   >
-                                    <img
+                                    <StorageThumbImg
                                       src={frame.url}
                                       alt={frame.label}
-                                      className="h-16 w-20 object-cover"
+                                      width={160}
+                                      quality={65}
+                                      className="h-16 w-20 object-contain bg-muted"
                                     />
                                     <span className="block px-1.5 py-0.5 text-[10px] text-muted-foreground truncate max-w-[5rem]">
                                       {isOfficial && frame.label !== "Original" ? `${frame.label} · shot` : frame.label}
@@ -9567,10 +9604,12 @@ export default function CinemaProductionPage() {
                                                       : "hover:opacity-90 border-border"
                                                   }`}
                                                 >
-                                                  <img
+                                                  <StorageThumbImg
                                                     src={choice.url}
                                                     alt={choice.label}
-                                                    className="h-14 w-full object-cover"
+                                                    width={160}
+                                                    quality={65}
+                                                    className="h-14 w-full object-contain bg-muted"
                                                   />
                                                   <span className="block px-1 py-0.5 text-[9px] truncate bg-background/95">
                                                     {choice.label}
@@ -10184,10 +10223,11 @@ export default function CinemaProductionPage() {
                                         <Label>{slot.label}</Label>
                                         {slot.preview ? (
                                           <div className="relative">
-                                            <img
+                                            <StorageThumbImg
                                               src={slot.preview}
                                               alt={slot.label}
-                                              className="w-full h-40 object-cover rounded-md border"
+                                              width={720}
+                                              className="w-full h-40 object-contain rounded-md border bg-muted"
                                             />
                                             <Button
                                               variant="destructive"
@@ -10223,10 +10263,12 @@ export default function CinemaProductionPage() {
                                                       : "hover:opacity-90 border-border"
                                                   }`}
                                                 >
-                                                  <img
+                                                  <StorageThumbImg
                                                     src={choice.url}
                                                     alt={choice.label}
-                                                    className="h-20 w-full object-cover"
+                                                    width={240}
+                                                    quality={65}
+                                                    className="h-20 w-full object-contain bg-muted"
                                                   />
                                                   <span className="block px-1 py-0.5 text-[10px] truncate bg-background/90">
                                                     {choice.label}
@@ -10965,9 +11007,10 @@ export default function CinemaProductionPage() {
             <div className="space-y-3 min-w-0 w-full overflow-hidden">
               {imageToolsStoryboard.image_url && (
                 <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                  <img
+                  <StorageThumbImg
                     src={imageToolsStoryboard.image_url}
                     alt={imageToolsStoryboard.title}
+                    width={720}
                     className="w-full h-full max-h-40 object-contain"
                   />
                 </div>
@@ -11051,11 +11094,13 @@ export default function CinemaProductionPage() {
                     </>
                   ) : null}
                   {!imageEditReferencePreview && imageToolsStoryboard.image_url ? (
-                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-                      <img
+                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border bg-muted">
+                      <StorageThumbImg
                         src={imageToolsStoryboard.image_url}
                         alt="Current shot"
-                        className="w-full h-full object-cover"
+                        width={160}
+                        quality={65}
+                        className="w-full h-full object-contain"
                       />
                     </div>
                   ) : null}
@@ -11120,10 +11165,12 @@ export default function CinemaProductionPage() {
                               }`}
                               title={`${getProjectAssetSourceLabel(asset, projectLocations, projectCharacters)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
                             >
-                              <img
+                              <StorageThumbImg
                                 src={asset.content_url!}
                                 alt=""
-                                className="w-full h-full object-cover"
+                                width={160}
+                                quality={65}
+                                className="w-full h-full object-contain bg-muted"
                               />
                             </button>
                           ))}
@@ -11211,9 +11258,10 @@ export default function CinemaProductionPage() {
             <div className="space-y-3">
               {imageToolsStoryboard.image_url && (
                 <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                  <img
+                  <StorageThumbImg
                     src={imageToolsStoryboard.image_url}
                     alt={imageToolsStoryboard.title}
+                    width={720}
                     className="w-full h-full max-h-40 object-contain"
                   />
                 </div>
@@ -11340,9 +11388,10 @@ export default function CinemaProductionPage() {
           </DialogHeader>
           <div className="space-y-3">
             {imageToolsStoryboard?.image_url ? (
-              <img
+              <StorageThumbImg
                 src={imageToolsStoryboard.image_url}
                 alt=""
+                width={720}
                 className="w-full max-h-36 object-contain rounded-md border bg-muted"
               />
             ) : (
@@ -11433,10 +11482,12 @@ export default function CinemaProductionPage() {
                           title="Click to view full size"
                           onClick={() => openFrameViewer(imageToolsStoryboard.id, frame)}
                         >
-                          <img
+                          <StorageThumbImg
                             src={frame.url}
                             alt={frame.label}
-                            className="w-full h-24 object-cover transition-opacity group-hover:opacity-90"
+                            width={320}
+                            quality={70}
+                            className="w-full h-24 object-contain bg-muted transition-opacity group-hover:opacity-90"
                           />
                           <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none bg-black/30">
                             <span className="rounded-full bg-black/60 text-white text-[10px] px-2 py-1">
@@ -11591,19 +11642,24 @@ export default function CinemaProductionPage() {
                         }}
                       >
                         <div className="relative">
-                          <video
+                          <LazyShotVideo
                             src={video.video_url}
-                            className="w-full aspect-video object-cover bg-muted"
-                            muted
-                            preload="metadata"
-                            onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
-                            onMouseEnter={(e) => safeVideoPlay(e.currentTarget)}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.pause()
-                              showVideoFrameThumbnail(e.currentTarget)
+                            posterSrc={storyboard?.image_url}
+                            posterWidth={480}
+                            loadVideo={selectedVideoUrl === video.video_url}
+                            showPlayOverlay={selectedVideoUrl !== video.video_url}
+                            onRequestLoad={() => {
+                              setSelectedVideoUrl(video.video_url)
+                              if (selectedStoryboardForVideos) {
+                                setActiveVideoUrl(selectedStoryboardForVideos, video.video_url)
+                              }
                             }}
+                            className="w-full aspect-video"
+                            videoClassName="object-contain"
+                            muted
+                            playsInline
                           />
-                          <div className="absolute top-2 right-2 flex gap-1">
+                          <div className="absolute top-2 right-2 flex gap-1 z-20">
                             {video.id !== 'generated-temp' ? (
                               <Button
                                 size="sm"
@@ -11663,15 +11719,19 @@ export default function CinemaProductionPage() {
                   <div className="mt-4">
                     <video
                       src={selectedVideoUrl}
+                      poster={
+                        storyboard?.image_url
+                          ? getStorageImageUrl(storyboard.image_url, {
+                              width: 960,
+                              quality: 70,
+                            })
+                          : undefined
+                      }
                       controls
-                      className="w-full rounded-md bg-muted aspect-video object-cover"
+                      className="w-full rounded-md bg-muted aspect-video object-contain"
                       key={selectedVideoUrl}
-                      preload="metadata"
+                      preload="none"
                       playsInline
-                      onLoadedMetadata={(e) => showVideoFrameThumbnail(e.currentTarget)}
-                      onLoadedData={(e) => {
-                        safeVideoPlay(e.currentTarget)
-                      }}
                     />
                   </div>
                 )}
