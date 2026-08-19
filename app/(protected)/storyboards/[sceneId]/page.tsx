@@ -177,6 +177,55 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  // Card outline matching the status dropdown dots. Draft keeps the default cinema-card border.
+  const getStatusCardBorderStyle = (status: string) => {
+    switch (status) {
+      case 'in-progress':
+        return "!border-2 !border-yellow-500/80"
+      case 'review':
+        return "!border-2 !border-orange-500/80"
+      case 'approved':
+        return "!border-2 !border-green-500/80"
+      case 'rejected':
+        return "!border-2 !border-red-500/80"
+      case 'completed':
+        return "!border-2 !border-blue-500/80"
+      default:
+        return ""
+    }
+  }
+
+  const getStatusJumperStyle = (status: string) => {
+    switch (status) {
+      case 'in-progress':
+        return "text-yellow-500 border-yellow-500/50"
+      case 'review':
+        return "text-orange-500 border-orange-500/50"
+      case 'approved':
+        return "text-green-500 border-green-500/50"
+      case 'rejected':
+        return "text-red-500 border-red-500/50"
+      case 'completed':
+        return "text-blue-500 border-blue-500/50"
+      default:
+        return "text-muted-foreground border-border"
+    }
+  }
+
+  const scrollToShot = (storyboardId: string) => {
+    const el = document.getElementById(`storyboard-shot-${storyboardId}`)
+    if (!el) return
+    const headerOffset = 96
+    const top = el.getBoundingClientRect().top + window.scrollY - headerOffset
+    window.scrollTo({ top: Math.max(0, top), behavior: "auto" })
+    setJumpedShotId(storyboardId)
+    if (jumpTimeoutRef.current) window.clearTimeout(jumpTimeoutRef.current)
+    jumpTimeoutRef.current = window.setTimeout(() => {
+      setJumpedShotId((current) => (current === storyboardId ? null : current))
+      jumpTimeoutRef.current = null
+    }, 1400)
+  }
+
   // Function to get status display text
   const getStatusDisplayText = (status: string) => {
     switch (status) {
@@ -339,6 +388,8 @@ export default function SceneStoryboardsPage() {
   // Search and filter state
   const [searchTerm, setSearchTerm] = useState("")
   const [filterStatus, setFilterStatus] = useState("all")
+  const [jumpedShotId, setJumpedShotId] = useState<string | null>(null)
+  const jumpTimeoutRef = useRef<number | null>(null)
   
   // AI generation state
   const [aiPrompt, setAiPrompt] = useState("")
@@ -2807,6 +2858,12 @@ export default function SceneStoryboardsPage() {
     }
   }, [aiSettingsLoaded, aiSettings])
 
+  useEffect(() => {
+    return () => {
+      if (jumpTimeoutRef.current) window.clearTimeout(jumpTimeoutRef.current)
+    }
+  }, [])
+
   const filteredStoryboards = storyboards.filter(storyboard => {
     const matchesSearch = storyboard.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          storyboard.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -3560,7 +3617,7 @@ export default function SceneStoryboardsPage() {
   }
   
   return (
-    <div className="min-h-screen bg-background overflow-x-hidden">
+    <div className={`min-h-screen bg-background overflow-x-hidden ${filteredStoryboards.length > 0 ? "pb-14" : ""}`}>
       <Header />
       <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
         {/* Breadcrumb + view switcher */}
@@ -4712,8 +4769,14 @@ export default function SceneStoryboardsPage() {
             const hasDialogue = dialogueText.length > 0
 
             return (
-            <div key={storyboard.id} className="flex flex-col">
-            <Card className="cinema-card hover:neon-glow transition-all duration-300 flex-1">
+            <div
+              key={storyboard.id}
+              id={`storyboard-shot-${storyboard.id}`}
+              className={`flex flex-col scroll-mt-24 rounded-lg transition-shadow duration-300 ${
+                jumpedShotId === storyboard.id ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
+              }`}
+            >
+            <Card className={`cinema-card hover:neon-glow transition-all duration-300 flex-1 ${getStatusCardBorderStyle(storyboard.status || 'draft')}`}>
               <CardHeader className="p-4 sm:p-6">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -5615,6 +5678,40 @@ export default function SceneStoryboardsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {filteredStoryboards.length > 0 && (
+        <nav
+          aria-label="Jump to shot"
+          className="fixed bottom-0 inset-x-0 z-40 border-t border-border bg-background/90 backdrop-blur-md"
+        >
+          <div
+            className="flex items-stretch gap-px overflow-x-auto overflow-y-hidden overscroll-x-contain px-2 py-1.5 touch-pan-x"
+            onWheel={(event) => {
+              if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return
+              event.currentTarget.scrollLeft += event.deltaY
+              event.preventDefault()
+            }}
+          >
+            {filteredStoryboards.map((storyboard) => {
+              const label = displayShotNumber(storyboard)
+              const status = storyboard.status || "draft"
+              return (
+                <button
+                  key={storyboard.id}
+                  type="button"
+                  title={`Jump to shot ${label}`}
+                  onClick={() => scrollToShot(storyboard.id)}
+                  className={`h-8 min-w-fit flex-1 shrink-0 whitespace-nowrap rounded border px-1.5 font-mono text-[11px] leading-none tabular-nums hover:bg-muted ${getStatusJumperStyle(status)} ${
+                    jumpedShotId === storyboard.id ? "bg-muted text-foreground" : ""
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </nav>
+      )}
     </div>
   )
   
