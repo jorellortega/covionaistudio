@@ -19,179 +19,205 @@ import {
   Bot,
   Sparkles,
   ArrowRight,
-  Check,
   LayoutDashboard,
   Camera,
-  BookOpen,
-  Clock,
   Wand2,
-  MessageSquare,
   Share2,
+  List,
+  Mic,
+  Type,
+  ScanFace,
 } from "lucide-react"
 
 export const metadata: Metadata = {
   title: "AI-Powered Cinema Features – Ai Cinema Studio",
   description:
-    "Discover AI-powered filmmaking tools and cinema features. AI film production software with writing, storyboarding, visual development, and production management. Complete AI cinema platform for modern filmmakers.",
+    "Workspace, treatments, storyboards, shot lists, and cinema production in one platform. Write, visualize, and produce films with AI-powered tools.",
   keywords: [
     "AI filmmaking tools",
     "AI cinema features",
     "AI-powered film production",
     "AI filmmaking software",
-    "AI cinema tools",
-    "AI film production platform",
-    "AI-powered cinema",
-    "AI filmmaking features",
-    "cinema AI tools",
-    "filmmaking AI software",
+    "storyboard software",
+    "shot list",
+    "film treatment",
+    "cinema production platform",
   ],
   openGraph: {
     title: "AI-Powered Cinema Features – Ai Cinema Studio",
     description:
-      "Complete suite of AI-powered filmmaking tools and cinema features. AI film production software for writing, storyboarding, visual development, and production management.",
+      "From Workspace writing to storyboards, shot lists, and cinema production—everything in one filmmaking platform.",
   },
 }
 
 const featureCategories = [
   {
-    name: "AI Project Management",
-    description: "AI-powered tools to organize and manage your cinematic projects from start to finish",
-    icon: LayoutDashboard,
+    name: "Workspace",
+    description: "Start in one creative space: chat with AI, draft the story, and save characters, locations, and scenes to a project.",
+    icon: Sparkles,
     color: "from-blue-500 to-cyan-400",
     features: [
       {
-        name: "Movies",
-        description: "AI-enhanced project management for film projects with intelligent organization and tracking",
-        icon: Film,
-        href: "/movies",
+        name: "Workspace",
+        description: "AI chat that builds screenplays, treatments, characters, and assets, then links them to a movie project.",
+        icon: Sparkles,
+        href: "/new",
       },
       {
         name: "Treatments",
-        description: "AI-powered writing assistant to develop detailed treatments with intelligent suggestions and enhancements",
+        description: "Develop the story, acts, and tone before you schedule scenes.",
         icon: FileText,
         href: "/treatments",
       },
       {
-        name: "Videos",
-        description: "AI-assisted video content management and production organization",
-        icon: Video,
-        href: "/videos",
+        name: "Movies",
+        description: "Each film is a hub for timeline, storyboards, shot lists, production tools, and the shared asset library.",
+        icon: Film,
+        href: "/movies",
       },
     ],
   },
   {
-    name: "AI Production Tools",
-    description: "AI-enhanced production management tools for every aspect of filmmaking",
-    icon: Play,
-    color: "from-purple-500 to-pink-500",
-    features: [
-      {
-        name: "Timeline",
-        description: "AI-powered visual timeline to intelligently arrange scenes, track progress, and optimize production flow",
-        icon: Play,
-        href: "/timeline",
-      },
-      {
-        name: "Storyboards",
-        description: "AI-generated storyboards with intelligent scene composition and visual suggestions for your shots",
-        icon: ImageIcon,
-        href: "/storyboards",
-      },
-      {
-        name: "Lighting Plot",
-        description: "AI-assisted lighting design with intelligent suggestions for optimal scene lighting setups",
-        icon: Zap,
-        href: "/lighting-plot",
-      },
-      {
-        name: "Call Sheet",
-        description: "AI-powered call sheet generation and management with smart scheduling for production days",
-        icon: FileText,
-        href: "/call-sheet",
-      },
-      {
-        name: "Crew Sheet",
-        description: "AI-enhanced crew management with intelligent organization and role optimization",
-        icon: Users,
-        href: "/crew-sheet",
-      },
-      {
-        name: "Equipment List",
-        description: "AI-powered equipment tracking with smart suggestions and inventory management",
-        icon: Package,
-        href: "/equipment-list",
-      },
-      {
-        name: "Props List",
-        description: "AI-assisted props cataloging with intelligent organization and tracking for your production",
-        icon: Box,
-        href: "/props-list",
-      },
-    ],
-  },
-  {
-    name: "AI Creative Development",
-    description: "AI-powered visualization and creative tools to bring your cinematic vision to life",
+    name: "Preproduction",
+    description: "Scene-level prep: people, places, objects, and the covers, voices, and titles you need before cameras roll.",
     icon: Palette,
     color: "from-green-500 to-emerald-400",
     features: [
       {
         name: "Characters",
-        description: "AI-assisted character development with intelligent profile generation and design suggestions",
+        description: "Build character profiles, references, and casting-ready roles for each project.",
         icon: UserCircle,
         href: "/characters",
       },
       {
+        name: "Avatars",
+        description: "Create and manage digital avatar looks for character visualization.",
+        icon: ScanFace,
+        href: "/avatars",
+      },
+      {
         name: "Locations",
-        description: "AI-powered location scouting and management with intelligent cataloging and suggestions",
+        description: "Catalog locations with references so shots stay consistent across the storyboard and set.",
         icon: MapPin,
         href: "/locations",
+      },
+      {
+        name: "Objects",
+        description: "Track story objects and props as reusable production references.",
+        icon: Box,
+        href: "/objects",
+      },
+      {
+        name: "Create Cover",
+        description: "Generate poster and cover art for the project.",
+        icon: ImageIcon,
+        href: "/create-cover",
+      },
+      {
+        name: "Create Voice",
+        description: "Design and save voices for dialogue and character work.",
+        icon: Mic,
+        href: "/create-voice",
+      },
+      {
+        name: "Create Titles",
+        description: "Build title cards and on-screen type for the film.",
+        icon: Type,
+        href: "/create-titles",
       },
     ],
   },
   {
-    name: "AI-Powered Tools",
-    description: "Leverage artificial intelligence to enhance your creative workflow",
+    name: "Production",
+    description: "Per film: schedule scenes, board shots, generate picture and video, and run the day-of paperwork.",
+    icon: Play,
+    color: "from-purple-500 to-pink-500",
+    features: [
+      {
+        name: "Timeline",
+        description: "Arrange scenes for the movie and jump into storyboards or shot lists from each scene.",
+        icon: Play,
+        href: "/timeline",
+      },
+      {
+        name: "Storyboards",
+        description: "Board every shot, generate or insert images, set status, and jump between shot numbers.",
+        icon: ImageIcon,
+        href: "/storyboards",
+      },
+      {
+        name: "Shot List",
+        description: "Break scenes into shots with camera, action, and entity assignments.",
+        icon: List,
+        href: "/shotlist",
+      },
+      {
+        name: "Cinema Production",
+        description: "Generate stills and video for shots—image-to-video, lip sync, and motion tools in one production view.",
+        icon: Video,
+        href: "/cinema-production",
+      },
+      {
+        name: "Lighting Plot",
+        description: "Plan lighting setups per scene.",
+        icon: Zap,
+        href: "/lighting-plot",
+      },
+      {
+        name: "Call Sheet",
+        description: "Build call sheets for production days.",
+        icon: FileText,
+        href: "/call-sheet",
+      },
+      {
+        name: "Crew Sheet",
+        description: "Organize crew roles and contacts.",
+        icon: Users,
+        href: "/crew-sheet",
+      },
+      {
+        name: "Equipment List",
+        description: "Track cameras, lights, and kit for the shoot.",
+        icon: Package,
+        href: "/equipment-list",
+      },
+      {
+        name: "Props List",
+        description: "Keep the props inventory tied to the production.",
+        icon: Box,
+        href: "/props-list",
+      },
+      {
+        name: "Assets",
+        description: "Shared library of images, video, and files used across storyboards and cinema production.",
+        icon: FolderOpen,
+        href: "/assets",
+      },
+    ],
+  },
+  {
+    name: "Collaboration & AI",
+    description: "Share work, keep a prompt library, and use AI inside the tools you already opened—not a separate studio.",
     icon: Bot,
     color: "from-orange-500 to-red-500",
     features: [
       {
-        name: "AI Chat",
-        description: "Interactive AI assistant powered by Infinito AI for creative collaboration",
-        icon: MessageSquare,
-        href: "/",
-      },
-      {
-        name: "AI Text Editor",
-        description: "Context-aware text editing with AI-powered rewriting and enhancement",
-        icon: Wand2,
-        href: null,
-      },
-      {
-        name: "Live Editor",
-        description: "Real-time collaborative editing with access codes. Share your projects with team members and guests for seamless live collaboration on scripts and scenes",
+        name: "Live collaboration",
+        description: "Invite others with a share or access code to work on scripts and scenes together.",
         icon: Share2,
         href: null,
       },
       {
-        name: "Saved Prompts",
-        description: "Build a library of effective AI prompts for consistent creative output",
-        icon: Sparkles,
+        name: "Prompt Create & List",
+        description: "Write reusable prompts and keep a library for consistent image, video, and writing output.",
+        icon: Wand2,
         href: "/prompts-list",
       },
-    ],
-  },
-  {
-    name: "AI Asset Management",
-    description: "AI-powered centralized storage and intelligent organization for all your creative assets",
-    icon: FolderOpen,
-    color: "from-indigo-500 to-purple-500",
-    features: [
       {
-        name: "Asset Library",
-        description: "AI-enhanced asset management with intelligent tagging, organization, and search for images, videos, and creative assets",
-        icon: FolderOpen,
-        href: "/assets",
+        name: "Digital Twin",
+        description: "HeyGen-powered digital twin tools for on-camera character work.",
+        icon: ScanFace,
+        href: "/twin",
       },
     ],
   },
@@ -199,23 +225,23 @@ const featureCategories = [
 
 const keyHighlights = [
   {
-    title: "AI-Powered Workflow",
-    description: "Every cinema feature is enhanced with AI capabilities to accelerate your filmmaking process",
-    icon: Bot,
-  },
-  {
-    title: "Complete AI Cinema Platform",
-    description: "From initial idea to final production, AI-powered tools manage everything in one cinema platform",
-    icon: LayoutDashboard,
-  },
-  {
-    title: "AI Context-Aware Tools",
-    description: "AI features understand your film project context for smarter, more relevant cinema suggestions",
+    title: "Workspace first",
+    description: "Write and develop in Workspace, then attach the work to a movie.",
     icon: Sparkles,
   },
   {
-    title: "AI Production Ready",
-    description: "Professional AI-powered filmmaking tools designed for real-world cinema and video production",
+    title: "One film, one pipeline",
+    description: "Timeline, storyboards, shot lists, and cinema production all live on the movie.",
+    icon: LayoutDashboard,
+  },
+  {
+    title: "AI where you work",
+    description: "Image, video, voice, and writing generation happen on the shot, scene, or workspace you're already in.",
+    icon: Bot,
+  },
+  {
+    title: "Production ready",
+    description: "Call sheets, crew, equipment, props, lighting, and assets sit next to the boards so prep turns into a shoot.",
     icon: Camera,
   },
 ]
@@ -253,10 +279,10 @@ export default function FeaturesPage() {
         <section className="container mx-auto px-4 sm:px-6 py-16 sm:py-24 text-center">
           <div className="max-w-4xl mx-auto">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold mb-6 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent leading-tight">
-              AI-Powered Cinema Features for Modern Filmmaking
+              From Workspace to the shoot
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground mb-8 max-w-2xl mx-auto leading-relaxed">
-              Complete suite of AI-powered filmmaking tools and cinema features. From AI writing and storyboarding to AI visual development and production management—everything enhanced with artificial intelligence.
+              Write in Workspace, prep characters and locations, then board shots and generate picture and video on the film itself.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
               <Link href="/login">
@@ -318,10 +344,11 @@ export default function FeaturesPage() {
                   <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                     {category.features.map((feature, featureIndex) => {
                       const FeatureIcon = feature.icon
-                      return (
+                      const card = (
                         <Card
-                          key={featureIndex}
-                          className="border-border/60 bg-background/60 backdrop-blur hover:shadow-lg transition-all duration-300 hover:border-primary/30"
+                          className={`h-full border-border/60 bg-background/60 backdrop-blur hover:shadow-lg transition-all duration-300 hover:border-primary/30 ${
+                            feature.href ? "cursor-pointer" : ""
+                          }`}
                         >
                           <CardHeader>
                             <div className="flex items-start gap-4">
@@ -337,6 +364,13 @@ export default function FeaturesPage() {
                             </div>
                           </CardHeader>
                         </Card>
+                      )
+                      return feature.href ? (
+                        <Link key={featureIndex} href={feature.href} className="block h-full">
+                          {card}
+                        </Link>
+                      ) : (
+                        <div key={featureIndex}>{card}</div>
                       )
                     })}
                   </div>
@@ -361,7 +395,7 @@ export default function FeaturesPage() {
               <CardContent className="flex flex-col sm:flex-row items-center justify-center gap-4">
                 <Link href="/login">
                   <Button size="lg" className="gradient-button neon-glow text-white">
-                    Get Started Free
+                    Get Started
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </Button>
                 </Link>
@@ -389,7 +423,7 @@ export default function FeaturesPage() {
               </span>
             </div>
             <div className="text-sm text-muted-foreground text-center md:text-right">
-              © 2025 Ai Cinema Studio. All rights reserved.
+              © 2026 Ai Cinema Studio. All rights reserved.
             </div>
           </div>
         </div>

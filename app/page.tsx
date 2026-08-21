@@ -16,7 +16,7 @@ import {
 import { useAuth } from "@/components/AuthProvider"
 import { useAuthReady } from "@/components/auth-hooks"
 import Header from "@/components/header"
-import { HomeBelowFold } from "@/components/home-below-fold"
+import { HomeBelowFold, HomeWhatIsCard } from "@/components/home-below-fold"
 
 export default function HomePage() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -40,6 +40,8 @@ export default function HomePage() {
               </p>
             </div>
           </section>
+
+          <HomeWhatIsCard />
 
           {/* AI Chat Section */}
           <section className="container mx-auto px-4 sm:px-6 pt-4 pb-12 sm:pb-16">
@@ -229,10 +231,12 @@ export default function HomePage() {
             <p className="text-base sm:text-lg md:text-xl text-muted-foreground mb-4 max-w-2xl mx-auto leading-relaxed px-2">
               The Future of Cinema Production
             </p>
-          </div>
-        </section>
+            </div>
+          </section>
 
-        {/* AI Chat Section */}
+          <HomeWhatIsCard />
+
+          {/* AI Chat Section */}
         <section className="container mx-auto px-4 sm:px-6 pt-4 pb-12 sm:pb-16">
           <div className="max-w-4xl mx-auto">
             <div className="flex flex-col items-center justify-center gap-2 sm:gap-3 mb-4">

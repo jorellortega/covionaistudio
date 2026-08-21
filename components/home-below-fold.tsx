@@ -1,5 +1,42 @@
 import Link from "next/link"
-import { Bot, Lightbulb, Film } from "lucide-react"
+import { Bot, Lightbulb, Film, ArrowRight } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+
+export function HomeWhatIsCard() {
+  return (
+    <section className="container mx-auto px-4 sm:px-6 pb-8 sm:pb-12">
+      <div className="max-w-4xl mx-auto">
+        <Card className="border-primary/30 bg-gradient-to-br from-primary/5 via-cyan-500/5 to-purple-500/5">
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-start gap-3 sm:gap-4">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center flex-shrink-0">
+                <Film className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <CardTitle className="text-xl sm:text-2xl mb-2 bg-gradient-to-r from-blue-500 to-cyan-400 bg-clip-text text-transparent">
+                  What is Ai Cinema Studio?
+                </CardTitle>
+                <CardDescription className="text-sm sm:text-base leading-relaxed">
+                  A new generation AI film studio—built to make cinema with artificial intelligence.
+                  Take a story from script and development through preproduction all the way to picture and video.
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <Button variant="outline" className="group w-full sm:w-auto" asChild>
+              <Link href="/features">
+                Learn more
+                <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  )
+}
 
 /**
  * Shared homepage content below the "Choose Your Plan" card.
