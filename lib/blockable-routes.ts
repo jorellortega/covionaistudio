@@ -43,7 +43,6 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
 
   { group: 'Productions', path: '/movies', label: 'Movies' },
   { group: 'Productions', path: '/cinema-production', label: 'Cinema production' },
-  { group: 'Productions', path: '/ideas', label: 'Ideas' },
   { group: 'Productions', path: '/new', label: 'New project (AI chat)' },
   { group: 'Productions', path: '/treatments', label: 'Treatments' },
   { group: 'Productions', path: '/create-cover', label: 'Create cover' },

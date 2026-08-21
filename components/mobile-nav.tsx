@@ -17,7 +17,6 @@ import {
   Settings,
   FileText,
   Home,
-  Lightbulb,
   Palette,
   ChevronRight,
   LayoutDashboard,
@@ -88,7 +87,6 @@ const navigationCategories: NavCategory[] = [
     name: "Creative",
     icon: Palette,
     items: [
-      { name: "Ideas", href: "/ideas", icon: Lightbulb },
       { name: "Characters", href: "/characters", icon: UserCircle },
       { name: "Avatars", href: "/avatars", icon: ScanFace },
       { name: "Locations", href: "/locations", icon: MapPin },

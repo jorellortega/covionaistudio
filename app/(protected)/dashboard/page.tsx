@@ -7,7 +7,6 @@ import { Film, Plus, ArrowRight, User, LogOut, Sparkles } from "lucide-react"
 import Link from "next/link"
 import { useAuthReady } from "@/components/auth-hooks"
 import { Skeleton } from "@/components/ui/skeleton"
-import { MovieIdeasService } from "@/lib/movie-ideas-service"
 import { useRouter } from "next/navigation"
 import { getSupabaseClient } from "@/lib/supabase"
 import Header from "@/components/header"
@@ -16,8 +15,6 @@ export default function DashboardPage() {
   const { session, user, userId, ready } = useAuthReady()
   const router = useRouter()
 
-  const [ideasCount, setIdeasCount] = useState(0)
-  const [hasFetchedData, setHasFetchedData] = useState(false)
   const [userName, setUserName] = useState<string>('User')
 
   // Fetch user name from public.users table
@@ -53,28 +50,6 @@ export default function DashboardPage() {
       fetchUserName()
     }
   }, [ready, userId, session?.user?.email])
-
-  // Memoize the fetch data function to prevent unnecessary re-renders
-  const fetchData = useCallback(async () => {
-    if (!ready || hasFetchedData) return
-    
-    console.log('🏠 DASHBOARD - Starting data fetch')
-    
-    try {
-      // Fetch ideas count
-      const ideas = await MovieIdeasService.getUserIdeas(userId!)
-      setIdeasCount(ideas.length)
-      
-      setHasFetchedData(true)
-    } catch (error) {
-      console.error('🏠 DASHBOARD - Error fetching dashboard data:', error)
-    }
-  }, [ready, userId, hasFetchedData])
-
-  // Fetch data only once when user is available
-  useEffect(() => {
-    fetchData()
-  }, [fetchData])
 
   const handleSignOut = useCallback(async () => {
     console.log('🏠 DASHBOARD - Sign out initiated')
@@ -162,8 +137,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">
-                  <span className="text-4xl font-bold text-cyan-400">{ideasCount}</span>
-                  <span className="text-sm text-muted-foreground">Projects</span>
                   <ArrowRight className="h-6 w-6 text-cyan-400 group-hover:translate-x-1 transition-transform" />
                 </div>
               </div>

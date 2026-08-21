@@ -13,13 +13,6 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/hooks/use-toast';
 import { SIGNUP_DISABLED } from '@/lib/signup-config';
 import {
-  diagnoseAuthError,
-  probeSupabaseAuthFromBrowser,
-  probeSupabaseAuthFromServer,
-  summarizeDiagnosis,
-  type SupabaseProbeResult,
-} from '@/lib/debug-supabase-auth';
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogContent,
@@ -97,53 +90,6 @@ function LoginPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [signupBlockedOpen, setSignupBlockedOpen] = useState(false);
-  const [authDebugSummary, setAuthDebugSummary] = useState('Checking Auth…');
-  const [authDebugBrowser, setAuthDebugBrowser] = useState<SupabaseProbeResult | null>(null);
-  const [authDebugServerAuth, setAuthDebugServerAuth] = useState<SupabaseProbeResult | null>(null);
-  const [authDebugServerRest, setAuthDebugServerRest] = useState<SupabaseProbeResult | null>(null);
-  const [authDebugSignIn, setAuthDebugSignIn] = useState<{
-    kind: string
-    label: string
-    detail: string
-  } | null>(null);
-  const [authDebugRunning, setAuthDebugRunning] = useState(false);
-
-  const runAuthDebug = useCallback(async (signInErr?: unknown) => {
-    setAuthDebugRunning(true);
-    const signIn = signInErr ? diagnoseAuthError(signInErr) : null;
-    if (signIn) setAuthDebugSignIn(signIn);
-
-    const [browser, server] = await Promise.all([
-      probeSupabaseAuthFromBrowser(),
-      probeSupabaseAuthFromServer(),
-    ]);
-
-    const serverAuth = server?.auth ?? null;
-    const serverRest = server?.rest ?? null;
-    const summary = summarizeDiagnosis({
-      browser,
-      serverAuth,
-      serverRest,
-      signIn,
-    });
-
-    setAuthDebugBrowser(browser);
-    setAuthDebugServerAuth(serverAuth);
-    setAuthDebugServerRest(serverRest);
-    setAuthDebugSummary(summary);
-
-    console.groupCollapsed(`[auth debug] ${summary}`);
-    console.log('sign-in error', signIn);
-    console.log('browser probe (subject to CORS)', browser);
-    console.log('server Auth probe (real HTTP status)', serverAuth);
-    console.log('server REST probe', serverRest);
-    console.groupEnd();
-    setAuthDebugRunning(false);
-  }, []);
-
-  useEffect(() => {
-    void runAuthDebug();
-  }, [runAuthDebug]);
 
   useEffect(() => {
     if (!loading && session) router.replace(next);
@@ -467,71 +413,13 @@ function LoginPageContent() {
         setMode('signin');
       }
     } catch (err: any) {
-      const diagnosed = diagnoseAuthError(err);
-      const isInfra =
-        diagnosed.kind === 'cors_or_network_blocked' ||
-        diagnosed.kind === 'timeout' ||
-        diagnosed.kind.startsWith('cloudflare_') ||
-        diagnosed.kind === 'project_paused';
-      setError(isInfra ? `${diagnosed.label}. ${diagnosed.detail}` : (err?.message ?? 'Something went wrong.'));
-      void runAuthDebug(err);
+      setError(err?.message ?? 'Something went wrong.');
     } finally {
       setSubmitting(false);
     }
   }
 
-  const authDebugPanel = (
-    <div className="rounded-md border border-dashed p-3 space-y-1.5 text-xs text-muted-foreground">
-      <div className="flex items-center justify-between gap-2">
-        <p className="font-medium text-foreground">Auth debug</p>
-        <button
-          type="button"
-          onClick={() => void runAuthDebug()}
-          className="underline-offset-2 hover:underline disabled:opacity-50"
-          disabled={authDebugRunning}
-        >
-          {authDebugRunning ? 'Checking…' : 'Re-check'}
-        </button>
-      </div>
-      <p className="text-foreground">{authDebugSummary}</p>
-      {authDebugSignIn && (
-        <p>Sign-in: {authDebugSignIn.label}</p>
-      )}
-      <p>
-        Browser: {authDebugBrowser
-          ? `${authDebugBrowser.label} (HTTP ${authDebugBrowser.status ?? 'none'}, ${authDebugBrowser.elapsedMs}ms)`
-          : '—'}
-      </p>
-      <p>
-        Server Auth: {authDebugServerAuth
-          ? `${authDebugServerAuth.label} (HTTP ${authDebugServerAuth.status ?? 'none'}, ${authDebugServerAuth.elapsedMs}ms)`
-          : '—'}
-      </p>
-      <p>
-        Server REST: {authDebugServerRest
-          ? `${authDebugServerRest.label} (HTTP ${authDebugServerRest.status ?? 'none'}, ${authDebugServerRest.elapsedMs}ms)`
-          : '—'}
-      </p>
-      {(authDebugServerAuth?.cfRay || authDebugBrowser?.origin) && (
-        <p>
-          {authDebugBrowser?.origin ? `from ${authDebugBrowser.origin}` : ''}
-          {authDebugServerAuth?.cfRay ? ` · cf-ray ${authDebugServerAuth.cfRay}` : ''}
-        </p>
-      )}
-      <p>Open the console group “[auth debug]” for the full probe.</p>
-    </div>
-  );
-
-  if (loading) {
-    return (
-      <div className="grid min-h-screen place-items-center p-6">
-        <div className="w-full max-w-sm space-y-4">
-          <p className="text-center">Initializing authentication…</p>
-          {authDebugPanel}
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <div className="grid min-h-screen place-items-center"><p>Initializing authentication…</p></div>;
   if (session) return null;
 
   return (
@@ -839,8 +727,6 @@ function LoginPageContent() {
             </div>
           </form>
         )}
-
-        {authDebugPanel}
       </div>
 
       <AlertDialog open={signupBlockedOpen} onOpenChange={setSignupBlockedOpen}>

@@ -12,7 +12,6 @@ import {
   Users,
   Package,
   Box,
-  Lightbulb,
   Palette,
   UserCircle,
   MapPin,
@@ -136,12 +135,6 @@ const featureCategories = [
     icon: Palette,
     color: "from-green-500 to-emerald-400",
     features: [
-      {
-        name: "Ideas",
-        description: "AI-powered idea development studio with intelligent prompt generation and creative suggestions",
-        icon: Lightbulb,
-        href: "/ideas",
-      },
       {
         name: "Characters",
         description: "AI-assisted character development with intelligent profile generation and design suggestions",
