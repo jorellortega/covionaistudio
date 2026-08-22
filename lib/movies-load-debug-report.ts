@@ -110,7 +110,7 @@ export function formatMoviesLoadDebugReport(input: MoviesLoadDebugReportInput): 
       `queryMs: ${apiMeta.queryMs ?? "?"}`,
       `cached: ${apiMeta.cached ?? false}`,
       `serviceRole: ${apiMeta.serviceRole ?? false}`,
-      (apiMeta.queryMs ?? 0) > 2000 ? "slowQuery: true (check idx_projects_user_type_created)" : "slowQuery: false",
+      (apiMeta.queryMs ?? 0) > 2000 ? "slowQuery: true (IPv6 hang — restart dev with ipv4first)" : "slowQuery: false",
     )
   } else {
     lines.push("(no API fetch completed yet)")

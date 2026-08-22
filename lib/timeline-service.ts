@@ -97,6 +97,25 @@ export class TimelineService {
     }
   }
 
+  static async clearScreenplayContentForMovie(movieId: string): Promise<void> {
+    const timeline = await this.getTimelineForMovie(movieId)
+    if (!timeline) return
+
+    const { data: cleared, error } = await getSupabaseClient()
+      .from('scenes')
+      .update({ screenplay_content: '' })
+      .eq('timeline_id', timeline.id)
+      .eq('user_id', (await this.ensureAuthenticated()).id)
+      .select('id')
+
+    if (error) {
+      console.error('Error clearing timeline screenplay content:', error)
+      throw error
+    }
+
+    console.log('Cleared screenplay_content on', cleared?.length ?? 0, 'timeline scenes')
+  }
+
   static async createTimelineForMovie(movieId: string, timelineData: CreateTimelineData): Promise<Timeline> {
     const user = await this.ensureAuthenticated()
     

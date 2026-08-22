@@ -72,6 +72,8 @@ import { Navigation } from "@/components/navigation"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { ShotListComponent } from "@/components/shot-list"
 import { ShotListService } from "@/lib/shot-list-service"
+import { GenerateShotListDialog } from "@/components/generate-shot-list-dialog"
+import type { ShotListGenerateOptions } from "@/lib/shot-list-generate-options"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { CollaborationService, type CreateCollaborationSessionData } from "@/lib/collaboration-service"
 import { CharactersService } from "@/lib/characters-service"
@@ -238,6 +240,7 @@ function ScenePageClient({ id }: { id: string }) {
   const [savingScreenplay, setSavingScreenplay] = useState(false)
   const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
+  const [showShotCountDialog, setShowShotCountDialog] = useState(false)
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isShotListExpanded, setIsShotListExpanded] = useState(false)
   
@@ -2283,7 +2286,7 @@ ${centerText('AUTHOR NAME')}
   }
 
   // Generate shot list from entire screenplay (all pages)
-  const generateShotListFromScreenplay = async () => {
+  const generateShotListFromScreenplay = async (options: ShotListGenerateOptions = { shotCountMode: "needed" }) => {
     if (!id || !userId) {
       toast({
         title: "Error",
@@ -2324,7 +2327,9 @@ ${centerText('AUTHOR NAME')}
 
       toast({
         title: "Generating shot list...",
-        description: "Creating shots from the entire screenplay. This may take a moment.",
+        description: options.shotCountMode === "range"
+          ? `Creating ${options.minShots}-${options.maxShots} shots from the entire screenplay.`
+          : "Creating only the shots this scene needs.",
       })
 
       const response = await fetch('/api/scenes/generate-shot-list', {
@@ -2339,6 +2344,7 @@ ${centerText('AUTHOR NAME')}
           service: normalizedService,
           model: modelToUse,
           userId: userId,
+          ...options,
         }),
       })
 
@@ -5401,7 +5407,7 @@ ${centerText('AUTHOR NAME')}
                               onClick={(e) => {
                                 e.preventDefault()
                                 e.stopPropagation()
-                                generateShotListFromScreenplay()
+                                setShowShotCountDialog(true)
                               }}
                               disabled={isGeneratingShotList}
                               size="sm"
@@ -6048,7 +6054,7 @@ ${centerText('AUTHOR NAME')}
                   <CardTitle>Shot List</CardTitle>
                   {getAllScreenplayContent() && getAllScreenplayContent().trim() && (
                     <Button
-                      onClick={generateShotListFromScreenplay}
+                      onClick={() => setShowShotCountDialog(true)}
                       disabled={isGeneratingShotList}
                       className="bg-gradient-to-r from-blue-500 to-purple-500 hover:opacity-90"
                     >
@@ -7526,6 +7532,17 @@ ${centerText('AUTHOR NAME')}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <GenerateShotListDialog
+        open={showShotCountDialog}
+        onOpenChange={setShowShotCountDialog}
+        sourceLabel="the full screenplay"
+        isGenerating={isGeneratingShotList}
+        onGenerate={(options) => {
+          setShowShotCountDialog(false)
+          void generateShotListFromScreenplay(options)
+        }}
+      />
 
         </div>
       </div>

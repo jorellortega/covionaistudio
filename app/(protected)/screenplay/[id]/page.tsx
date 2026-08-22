@@ -38,6 +38,7 @@ import {
   AlignRight,
   Image as ImageIcon,
   List,
+  Plus,
 } from "lucide-react"
 import jsPDF from "jspdf"
 import { useToast } from "@/hooks/use-toast"
@@ -78,6 +79,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 
 // Screenplay page number calculation (standard: ~55 lines per page)
 const LINES_PER_PAGE = 55
+const FULL_SCREENPLAY_ID = "all"
 
 // Helper function to parse scene number for sorting (same logic as TimelineService)
 function parseSceneNumber(sceneNumber: string): number {
@@ -182,6 +184,10 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [sceneCharBoundaries, setSceneCharBoundaries] = useState<Array<{sceneId: string, sceneNumber: string, sceneName: string, startChar: number, endChar: number}>>([])
   const [isLoadingScenes, setIsLoadingScenes] = useState(false)
   const [isGeneratingScenes, setIsGeneratingScenes] = useState(false)
+  const [isCreatingScene, setIsCreatingScene] = useState(false)
+  const [showCreateSceneDialog, setShowCreateSceneDialog] = useState(false)
+  const [newSceneName, setNewSceneName] = useState("")
+  const [newSceneNumber, setNewSceneNumber] = useState("")
   const [editingSceneId, setEditingSceneId] = useState<string | null>(null)
   const [editingScene, setEditingScene] = useState<Partial<ScreenplayScene>>({})
   const [isSavingScene, setIsSavingScene] = useState(false)
@@ -189,6 +195,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [showDeletePageConfirm, setShowDeletePageConfirm] = useState(false)
   const [showDeleteEntireConfirm, setShowDeleteEntireConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [selectedSceneId, setSelectedSceneId] = useState(FULL_SCREENPLAY_ID)
+  const [isLoadingSceneScript, setIsLoadingSceneScript] = useState(false)
   
   // Characters and locations for screenplay toolbar
   const [characters, setCharacters] = useState<Array<{id: string; name: string}>>([])
@@ -1243,6 +1251,37 @@ ${centerText('AUTHOR NAME')}
         saveCurrentPageEdit(textareaRef.current.value)
       }
 
+      if (selectedSceneId !== FULL_SCREENPLAY_ID) {
+        const scene = screenplayScenes.find((item) => item.id === selectedSceneId)
+        const timelineSceneId =
+          activeTimelineSceneId ||
+          (scene ? await getTimelineSceneId(scene) : null) ||
+          selectedSceneId
+
+        const { error: sceneSaveError } = await getSupabaseClient()
+          .from('scenes')
+          .update({ screenplay_content: combinedContent })
+          .eq('id', timelineSceneId)
+          .eq('user_id', userId)
+
+        if (sceneSaveError) {
+          throw new Error(sceneSaveError.message || 'Failed to save scene screenplay')
+        }
+
+        setScreenplayScenes((prev) =>
+          prev.map((item) =>
+            item.id === selectedSceneId ? { ...item, content: combinedContent } : item,
+          ),
+        )
+        setFullScript(combinedContent)
+        setIsEditing(true)
+        toast({
+          title: "Scene Saved",
+          description: `${scene?.name || 'Scene'} screenplay has been saved.`,
+        })
+        return
+      }
+
       // Check if this is a scene-based script or project-level script
       const isSceneBased = activeScriptAsset?.scene_id || scriptAssets.some(s => s.scene_id)
       
@@ -2009,35 +2048,16 @@ ${centerText('AUTHOR NAME')}
     
     try {
       setIsDeleting(true)
-      
-      // Delete all script assets for this project
-      const scriptAssetIds = scriptAssets
-        .filter(asset => asset.content_type === 'script')
-        .map(asset => asset.id)
-      
-      // Also check for any other script assets we might have missed
-      const { data: allScriptAssets, error: fetchError } = await getSupabaseClient()
-        .from('assets')
-        .select('id')
-        .eq('project_id', id)
-        .eq('user_id', userId)
-        .eq('content_type', 'script')
-      
-      if (!fetchError && allScriptAssets) {
-        const allIds = allScriptAssets.map(a => a.id)
-        const uniqueIds = Array.from(new Set([...scriptAssetIds, ...allIds]))
-        
-        // Delete all script assets
-        for (const assetId of uniqueIds) {
-          try {
-            await AssetService.deleteAsset(assetId)
-          } catch (error) {
-            console.error(`Error deleting asset ${assetId}:`, error)
-          }
-        }
+
+      const res = await fetch(`/api/screenplay/${id}/delete`, {
+        method: "POST",
+        credentials: "include",
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(body.error || `Delete failed (${res.status})`)
       }
-      
-      // Clear all state
+
       setFullScript("")
       setPages([])
       setTotalPages(1)
@@ -2046,6 +2066,11 @@ ${centerText('AUTHOR NAME')}
       setActiveScriptAsset(null)
       setEditedPages(new Map())
       setIsEditing(false)
+      setScreenplayScenes([])
+      setSceneCharBoundaries([])
+      setSceneBoundaries([])
+      setSelectedSceneId(FULL_SCREENPLAY_ID)
+      setActiveTimelineSceneId(null)
       
       toast({
         title: "Screenplay Deleted",
@@ -2057,11 +2082,170 @@ ${centerText('AUTHOR NAME')}
       console.error('Error deleting entire screenplay:', error)
       toast({
         title: "Error",
-        description: "Failed to delete screenplay. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to delete screenplay. Please try again.",
         variant: "destructive",
       })
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleCreateBlankPage = () => {
+    const blankContent = "\n"
+    setFullScript(blankContent)
+    setPages([""])
+    setEditedPages(new Map([[1, ""]]))
+    setTotalPages(1)
+    setCurrentPage(1)
+    setCurrentPageContent("")
+    setIsEditing(true)
+    const scene = screenplayScenes.find((item) => item.id === selectedSceneId)
+    toast({
+      title: "Blank Page Created",
+      description: scene
+        ? `You can now write or paste into ${scene.name}.`
+        : "You can now start writing your screenplay.",
+    })
+  }
+
+  const getSuggestedSceneNumber = () => {
+    const maxSceneNumber = screenplayScenes.reduce((max, scene) => {
+      const n = parseSceneNumber(scene.scene_number || '')
+      return n > max ? n : max
+    }, 0)
+    return String(Math.floor(maxSceneNumber) + 1)
+  }
+
+  const openCreateSceneDialog = () => {
+    setNewSceneName("")
+    setNewSceneNumber(getSuggestedSceneNumber())
+    setShowCreateSceneDialog(true)
+  }
+
+  const handleCreateScene = async () => {
+    if (!userId || !id) return
+
+    const sceneName = newSceneName.trim()
+    if (!sceneName) {
+      toast({
+        title: "Name required",
+        description: "Give the scene a name before creating it.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsCreatingScene(true)
+
+      let timeline = await TimelineService.getTimelineForMovie(id)
+      if (!timeline) {
+        timeline = await TimelineService.createTimelineForMovie(id, {
+          name: `${movie?.name || 'Movie'} Timeline`,
+          description: `Timeline for ${movie?.name || 'Movie'}`,
+          duration_seconds: 0,
+          fps: 24,
+          resolution_width: 1920,
+          resolution_height: 1080,
+        })
+      }
+
+      const existingScenes = await TimelineService.getScenesForTimeline(timeline.id, { skipThumbnails: true })
+      const maxSceneNumber = existingScenes.reduce((max, scene) => {
+        const n = parseSceneNumber(scene.metadata?.sceneNumber || '')
+        return n > max ? n : max
+      }, screenplayScenes.reduce((max, scene) => {
+        const n = parseSceneNumber(scene.scene_number || '')
+        return n > max ? n : max
+      }, 0))
+      const nextSceneNumber = newSceneNumber.trim() || String(Math.floor(maxSceneNumber) + 1)
+
+      const numberAlreadyUsed = existingScenes.some(
+        (scene) => (scene.metadata?.sceneNumber || '').trim() === nextSceneNumber,
+      ) || screenplayScenes.some(
+        (scene) => (scene.scene_number || '').trim() === nextSceneNumber,
+      )
+      if (numberAlreadyUsed) {
+        toast({
+          title: "Scene number in use",
+          description: `Scene ${nextSceneNumber} already exists. Pick a different number.`,
+          variant: "destructive",
+        })
+        return
+      }
+
+      const lastScene = existingScenes[existingScenes.length - 1]
+      const startTimeSeconds = lastScene
+        ? lastScene.start_time_seconds + lastScene.duration_seconds
+        : 0
+
+      const createdScene = await TimelineService.createScene({
+        timeline_id: timeline.id,
+        name: sceneName,
+        description: '',
+        start_time_seconds: startTimeSeconds,
+        duration_seconds: 60,
+        scene_type: 'video',
+        content_url: '',
+        metadata: {
+          sceneNumber: nextSceneNumber,
+          location: '',
+          characters: [],
+          shotType: '',
+          mood: '',
+          notes: '',
+          status: 'draft',
+        },
+      })
+
+      const screenplaySceneData: ScreenplayScene = {
+        id: createdScene.id,
+        project_id: id,
+        user_id: userId,
+        name: createdScene.name,
+        description: createdScene.description || '',
+        scene_number: nextSceneNumber,
+        location: '',
+        characters: [],
+        shot_type: '',
+        mood: '',
+        notes: '',
+        status: 'draft',
+        content: '',
+        metadata: createdScene.metadata || {},
+        order_index: createdScene.order_index || 0,
+        created_at: createdScene.created_at,
+        updated_at: createdScene.updated_at,
+      }
+
+      setScreenplayScenes(sortScreenplayScenes([...screenplayScenes, screenplaySceneData]))
+      setSelectedSceneId(createdScene.id)
+      setActiveTimelineSceneId(createdScene.id)
+      setIsScenesCardExpanded(true)
+      setShowCreateSceneDialog(false)
+      setNewSceneName("")
+      setNewSceneNumber("")
+      setFullScript("\n")
+      setPages([""])
+      setEditedPages(new Map([[1, ""]]))
+      setTotalPages(1)
+      setCurrentPage(1)
+      setCurrentPageContent("")
+      setIsEditing(true)
+
+      toast({
+        title: "Scene Created",
+        description: `${sceneName} is selected. You can write or paste on the blank page.`,
+      })
+    } catch (error) {
+      console.error('Error creating scene:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to create scene. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCreatingScene(false)
     }
   }
 
@@ -2184,6 +2368,59 @@ ${centerText('AUTHOR NAME')}
     }
   }
 
+  const handleSelectScene = async (sceneId: string) => {
+    setSelectedSceneId(sceneId)
+    setEditedPages(new Map())
+    setCurrentPage(1)
+    setCurrentPageContent("")
+    setIsEditing(true)
+
+    if (sceneId === FULL_SCREENPLAY_ID) {
+      setActiveTimelineSceneId(null)
+      setIsLoadingSceneScript(true)
+      try {
+        if (activeScriptAsset?.content) {
+          setFullScript(activeScriptAsset.content)
+        } else {
+          await fetchScriptsFromScenes()
+        }
+      } finally {
+        setIsLoadingSceneScript(false)
+      }
+      return
+    }
+
+    const scene = screenplayScenes.find((item) => item.id === sceneId)
+    if (!scene) return
+
+    setIsLoadingSceneScript(true)
+    try {
+      const timelineSceneId = await getTimelineSceneId(scene)
+      setActiveTimelineSceneId(timelineSceneId)
+
+      let content = scene.content || ""
+      if (timelineSceneId) {
+        const timelineScene = await TimelineService.getSceneById(timelineSceneId)
+        const sceneContent = (timelineScene as { screenplay_content?: string } | null)?.screenplay_content
+        if (sceneContent) {
+          content = sceneContent
+        }
+      }
+
+      setFullScript(content || "")
+      window.scrollTo({ top: 0, behavior: "smooth" })
+    } catch (error) {
+      console.error("Error loading scene screenplay:", error)
+      toast({
+        title: "Error",
+        description: "Failed to load that scene's screenplay.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingSceneScript(false)
+    }
+  }
+
   const getSceneForCurrentPage = (): ScreenplayScene | null => {
     const sortedScenes = sortScreenplayScenes(
       screenplayScenes.filter((scene) => (scene.content || scene.description || '').trim()),
@@ -2230,6 +2467,8 @@ ${centerText('AUTHOR NAME')}
   }
 
   useEffect(() => {
+    if (selectedSceneId !== FULL_SCREENPLAY_ID) return
+
     const scene = getSceneForCurrentPage()
     if (!scene) {
       setActiveTimelineSceneId(null)
@@ -2246,7 +2485,7 @@ ${centerText('AUTHOR NAME')}
     return () => {
       cancelled = true
     }
-  }, [currentPage, fullScript, screenplayScenes, sceneCharBoundaries, id, ready, userId])
+  }, [currentPage, fullScript, screenplayScenes, sceneCharBoundaries, id, ready, userId, selectedSceneId])
 
   // Generate scenes from screenplay using AI
   const generateScenesFromScreenplay = async () => {
@@ -3734,12 +3973,56 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             <h1 className="text-2xl sm:text-3xl font-bold mb-2 break-words">{movie?.name || "Loading..."}</h1>
             <p className="text-sm sm:text-base text-muted-foreground break-words">
               Screenplay
+              {selectedSceneId !== FULL_SCREENPLAY_ID && (
+                <span className="ml-2 text-purple-400">
+                  · {screenplayScenes.find((scene) => scene.id === selectedSceneId)?.name || "Scene"}
+                </span>
+              )}
               {fullScript && totalPages > 0 && (
                 <span className="ml-2 text-muted-foreground/70">
                   ({totalPages} {totalPages === 1 ? 'page' : 'pages'})
                 </span>
               )}
             </p>
+            <div className="mt-4 flex flex-col sm:flex-row sm:items-end gap-3 max-w-2xl">
+              <div className="flex-1 min-w-0">
+                <Label htmlFor="screenplay-scene-selector">Scene</Label>
+                <div className="relative mt-2">
+                  <Select
+                    value={selectedSceneId}
+                    onValueChange={(value) => {
+                      void handleSelectScene(value)
+                    }}
+                    disabled={isLoadingSceneScript}
+                  >
+                    <SelectTrigger id="screenplay-scene-selector" className="border-purple-500/30">
+                      <SelectValue placeholder="Select a scene..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={FULL_SCREENPLAY_ID}>All scenes (full screenplay)</SelectItem>
+                      {sortScreenplayScenes(screenplayScenes).map((scene) => {
+                        const sceneNumber = scene.scene_number || scene.metadata?.sceneNumber
+                        return (
+                          <SelectItem key={scene.id} value={scene.id}>
+                            {sceneNumber ? `Scene ${sceneNumber}: ${scene.name}` : scene.name}
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectContent>
+                  </Select>
+                  {isLoadingSceneScript && (
+                    <Loader2 className="absolute right-10 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+              </div>
+              {selectedSceneId !== FULL_SCREENPLAY_ID && activeTimelineSceneId && (
+                <Button variant="outline" size="sm" asChild className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10">
+                  <Link href={`/timeline-scene/${activeTimelineSceneId}`}>
+                    Open Scene
+                  </Link>
+                </Button>
+              )}
+            </div>
           </div>
           
           {/* Navigation and Actions */}
@@ -3880,6 +4163,20 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   <span className="sm:hidden">Delete</span>
                 </Button>
               )}
+              <Button
+                variant="outline"
+                onClick={openCreateSceneDialog}
+                disabled={isCreatingScene}
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 text-xs sm:text-sm flex-1 sm:flex-initial"
+              >
+                {isCreatingScene ? (
+                  <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4 sm:mr-2" />
+                )}
+                <span className="hidden sm:inline">Create Scene</span>
+                <span className="sm:hidden">Scene</span>
+              </Button>
               <Button onClick={handleSave} disabled={saving} className="text-xs sm:text-sm flex-1 sm:flex-initial">
                 {saving ? (
                   <>
@@ -3950,10 +4247,41 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
               {!fullScript ? (
                 <div className="text-center py-12">
                   <FileText className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <h3 className="text-lg font-medium mb-2">No Screenplay Found</h3>
-                  <p className="text-muted-foreground mb-4">
-                    This movie doesn't have a screenplay yet. Import a script file or start typing below.
+                  <h3 className="text-lg font-medium mb-2">
+                    {selectedSceneId !== FULL_SCREENPLAY_ID
+                      ? `No Screenplay Yet for ${screenplayScenes.find((scene) => scene.id === selectedSceneId)?.name || "this scene"}`
+                      : "No Screenplay Yet"}
+                  </h3>
+                  <p className="text-muted-foreground mb-6">
+                    {selectedSceneId !== FULL_SCREENPLAY_ID
+                      ? "Create a blank page to write or paste into this scene."
+                      : "Choose a scene above, create a blank page, or add a new scene."}
                   </p>
+                  <div className="flex flex-wrap gap-3 justify-center">
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50"
+                      onClick={handleCreateBlankPage}
+                    >
+                      <Plus className="h-5 w-5 mr-2" />
+                      Create Blank Page
+                    </Button>
+                    <Button
+                      size="lg"
+                      variant="outline"
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 hover:border-purple-500/50"
+                      onClick={openCreateSceneDialog}
+                      disabled={isCreatingScene}
+                    >
+                      {isCreatingScene ? (
+                        <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                      ) : (
+                        <Film className="h-5 w-5 mr-2" />
+                      )}
+                      Create Scene
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -4396,16 +4724,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                   onClick={async (e) => {
                                     e.preventDefault()
                                     e.stopPropagation()
-                                    const timelineSceneId = await getTimelineSceneId(scene)
-                                    if (timelineSceneId) {
-                                      router.push(`/timeline-scene/${timelineSceneId}`)
-                                    } else {
-                                      toast({
-                                        title: "Scene Not Available",
-                                        description: "This scene hasn't been added to the timeline yet. Please push it to the timeline first.",
-                                        variant: "destructive"
-                                      })
-                                    }
+                                    await handleSelectScene(scene.id)
                                   }}
                                   className="px-4 text-xs font-bold text-muted-foreground bg-background hover:text-foreground cursor-pointer transition-colors whitespace-nowrap"
                                   contentEditable={false}
@@ -4757,6 +5076,21 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={openCreateSceneDialog}
+                      disabled={isCreatingScene}
+                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10 flex-shrink-0"
+                    >
+                      {isCreatingScene ? (
+                        <Loader2 className="h-4 w-4 sm:mr-2 animate-spin" />
+                      ) : (
+                        <Plus className="h-4 w-4 sm:mr-2" />
+                      )}
+                      <span className="hidden sm:inline">Create Scene</span>
+                      <span className="sm:hidden">Scene</span>
+                    </Button>
                     {screenplayScenes.length > 0 && (
                       <Button
                         variant="outline"
@@ -4828,8 +5162,21 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                 <Film className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
                 <p className="text-muted-foreground mb-2">No scenes yet</p>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Click "Generate Scene Titles" to automatically break down your screenplay into scenes
+                  Create a scene to start, or generate titles from your screenplay
                 </p>
+                <Button
+                  variant="outline"
+                  onClick={openCreateSceneDialog}
+                  disabled={isCreatingScene}
+                  className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                >
+                  {isCreatingScene ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4 mr-2" />
+                  )}
+                  Create Scene
+                </Button>
               </div>
             ) : (
               <div className="space-y-4">
@@ -4839,7 +5186,10 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                   const sceneName = scene.name || ''
                   
                   return (
-                    <div key={scene.id}>
+                    <div
+                      key={scene.id}
+                      className={selectedSceneId === scene.id ? "rounded-lg ring-1 ring-purple-500/40 bg-purple-500/5 px-3 py-1" : ""}
+                    >
                       {/* Scene Separator - horizontal line with scene info */}
                       <div className="relative my-6 flex flex-col items-center py-2">
                         {(() => {
@@ -4864,18 +5214,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                 onClick={async (e) => {
                                   e.preventDefault()
                                   e.stopPropagation()
-                                  console.log('Scene clicked:', scene.id, sceneNumber)
-                                  const timelineSceneId = await getTimelineSceneId(scene)
-                                  console.log('Timeline scene ID:', timelineSceneId)
-                                  if (timelineSceneId) {
-                                    router.push(`/timeline-scene/${timelineSceneId}`)
-                                  } else {
-                                    toast({
-                                      title: "Scene Not Available",
-                                      description: "This scene hasn't been added to the timeline yet. Please push it to the timeline first.",
-                                      variant: "destructive"
-                                    })
-                                  }
+                                  await handleSelectScene(scene.id)
                                 }}
                                 className="px-4 text-sm font-bold text-muted-foreground bg-background hover:text-foreground cursor-pointer transition-colors relative z-10"
                                 style={{ pointerEvents: 'auto' }}
@@ -5209,7 +5548,10 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             <AlertDialogFooter>
               <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
               <AlertDialogAction
-                onClick={handleDeleteEntireScreenplay}
+                onClick={(event) => {
+                  event.preventDefault()
+                  void handleDeleteEntireScreenplay()
+                }}
                 disabled={isDeleting}
                 className="bg-red-500 hover:bg-red-600"
               >
@@ -5225,6 +5567,73 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        <Dialog
+          open={showCreateSceneDialog}
+          onOpenChange={(open) => {
+            setShowCreateSceneDialog(open)
+            if (!open) {
+              setNewSceneName("")
+              setNewSceneNumber("")
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create Scene</DialogTitle>
+              <DialogDescription>
+                Name the scene to add it to this screenplay.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="space-y-4"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void handleCreateScene()
+              }}
+            >
+              <div className="space-y-2">
+                <Label htmlFor="new-scene-name">Scene name</Label>
+                <Input
+                  id="new-scene-name"
+                  autoFocus
+                  value={newSceneName}
+                  onChange={(e) => setNewSceneName(e.target.value)}
+                  placeholder="Opening, Earth, Montage..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="new-scene-number">Scene number</Label>
+                <Input
+                  id="new-scene-number"
+                  value={newSceneNumber}
+                  onChange={(e) => setNewSceneNumber(e.target.value)}
+                  placeholder="1"
+                />
+              </div>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowCreateSceneDialog(false)}
+                  disabled={isCreatingScene}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isCreatingScene || !newSceneName.trim()}>
+                  {isCreatingScene ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Scene"
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
 
         {/* Collaboration Dialog */}
         <Dialog open={showCollaborationDialog} onOpenChange={(open) => {

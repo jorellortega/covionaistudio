@@ -30,6 +30,7 @@ import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { OpenAIService } from "@/lib/ai-services"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import { sanitizeFilename } from "@/lib/utils"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -2382,12 +2383,18 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
     setIsUploadingAsset(true)
     try {
-      // Upload file to Supabase storage
-      const filePath = `${projectId}/characters/${selectedCharacterId}/${Date.now()}_${file.name}`
+      // Upload file to Supabase storage (keys cannot contain spaces or unicode)
+      const ext = file.name.split(".").pop()?.replace(/[^a-zA-Z0-9]/g, "") || "png"
+      const safeName = sanitizeFilename(file.name) || "upload"
+      const filePath = `${projectId}/characters/${selectedCharacterId}/${Date.now()}_${safeName}.${ext}`
       
       const { data, error } = await getSupabaseClient().storage
         .from('cinema_files')
-        .upload(filePath, file)
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type || "image/png",
+        })
       
       if (error) {
         throw new Error(`Upload failed: ${error.message}`)

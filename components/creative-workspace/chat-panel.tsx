@@ -160,17 +160,84 @@ interface PendingFile {
   textContent?: string
 }
 
-function getMessageImageArtifacts(messageId: string, artifacts: CreativeArtifact[]): CreativeArtifact[] {
-  return artifacts.filter(
-    (artifact) =>
-      artifact.message_id === messageId &&
-      artifact.content &&
-      (artifact.content.startsWith("http") || artifact.content.startsWith("data:image/")),
+function getArtifactImageUrl(artifact: CreativeArtifact): string | null {
+  if (artifact.content?.startsWith("http") || artifact.content?.startsWith("data:image/")) {
+    return artifact.content
+  }
+  const metaUrl = artifact.metadata?.url
+  if (typeof metaUrl === "string" && (metaUrl.startsWith("http") || metaUrl.startsWith("data:image/"))) {
+    return metaUrl
+  }
+  return null
+}
+
+function parseAttachedFileNames(content: string): string[] {
+  const match = content.match(/\[Attached:\s*([^\]]+)\]/i)
+  if (!match?.[1]) return []
+  return match[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+}
+
+function stripAttachmentSummary(content: string): string {
+  return content.replace(/\n*\s*\[Attached:\s*[^\]]+\]\s*$/i, "").trim()
+}
+
+function artifactMatchesAttachedName(artifact: CreativeArtifact, attachedName: string): boolean {
+  const originalName =
+    typeof artifact.metadata?.originalName === "string" ? artifact.metadata.originalName.trim() : ""
+  const title = (artifact.title || "").trim()
+  const attachedBase = attachedName.replace(/\.[^.]+$/, "")
+  const names = [originalName, title].filter((name) => name.length > 0)
+  return names.some(
+    (name) =>
+      name === attachedName ||
+      name === attachedBase ||
+      attachedName === name ||
+      attachedBase === name,
   )
 }
 
-function getMessageImages(messageId: string, artifacts: CreativeArtifact[]): string[] {
-  const urls = getMessageImageArtifacts(messageId, artifacts).map((artifact) => artifact.content!)
+function getMessageImageArtifacts(
+  messageId: string,
+  artifacts: CreativeArtifact[],
+  messageContent?: string,
+): CreativeArtifact[] {
+  const seen = new Set<string>()
+  const matched: CreativeArtifact[] = []
+
+  const add = (artifact: CreativeArtifact) => {
+    if (seen.has(artifact.id) || !getArtifactImageUrl(artifact)) return
+    if (artifact.artifact_type && artifact.artifact_type !== "image") return
+    seen.add(artifact.id)
+    matched.push(artifact)
+  }
+
+  for (const artifact of artifacts) {
+    if (artifact.message_id === messageId) add(artifact)
+  }
+
+  const attachedNames = messageContent ? parseAttachedFileNames(messageContent) : []
+  if (attachedNames.length > 0) {
+    for (const artifact of artifacts) {
+      if (attachedNames.some((name) => artifactMatchesAttachedName(artifact, name))) {
+        add(artifact)
+      }
+    }
+  }
+
+  return matched
+}
+
+function getMessageImages(
+  messageId: string,
+  artifacts: CreativeArtifact[],
+  messageContent?: string,
+): string[] {
+  const urls = getMessageImageArtifacts(messageId, artifacts, messageContent)
+    .map((artifact) => getArtifactImageUrl(artifact))
+    .filter((url): url is string => !!url)
   return [...new Set(urls)]
 }
 
@@ -313,13 +380,16 @@ export function ChatPanel({
     }
   }, [messages, isSending, artifacts])
 
+  const pendingFilesRef = useRef(pendingFiles)
+  pendingFilesRef.current = pendingFiles
+
   useEffect(() => {
     return () => {
-      pendingFiles.forEach((pending) => {
+      pendingFilesRef.current.forEach((pending) => {
         if (pending.preview) URL.revokeObjectURL(pending.preview)
       })
     }
-  }, [pendingFiles])
+  }, [])
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = event.target.files
@@ -474,10 +544,6 @@ export function ChatPanel({
         }
       }
 
-      filesToUpload.forEach((pending) => {
-        if (pending.preview) URL.revokeObjectURL(pending.preview)
-      })
-
       const res = await fetch(`/api/creative-workspace/${workspaceId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -501,7 +567,12 @@ export function ChatPanel({
       ])
 
       if (data.attachmentArtifacts?.length) {
-        data.attachmentArtifacts.forEach((artifact: CreativeArtifact) => onArtifactCreated(artifact))
+        data.attachmentArtifacts.forEach((artifact: CreativeArtifact) =>
+          onArtifactCreated({
+            ...artifact,
+            message_id: artifact.message_id || data.userMessage?.id || null,
+          }),
+        )
       }
 
       if (data.imageGenerated) {
@@ -563,9 +634,23 @@ export function ChatPanel({
         const autoTitle = autoTitleSource.slice(0, 50) + (autoTitleSource.length > 50 ? "..." : "")
         onWorkspaceTitleChange(autoTitle)
       }
+
+      filesToUpload.forEach((pending) => {
+        if (pending.preview) URL.revokeObjectURL(pending.preview)
+      })
     } catch (error) {
       onMessagesChange(messages.filter((m) => m.id !== optimisticUser.id))
-      setPendingFiles(filesToUpload)
+      setPendingFiles(
+        filesToUpload.map((pending) => {
+          if (pending.preview) URL.revokeObjectURL(pending.preview)
+          return {
+            ...pending,
+            preview: pending.file.type.startsWith("image/")
+              ? URL.createObjectURL(pending.file)
+              : undefined,
+          }
+        }),
+      )
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to send message",
@@ -1215,8 +1300,19 @@ export function ChatPanel({
             </div>
           ) : (
             messages.map((message, messageIndex) => {
-              const messageImageArtifacts = getMessageImageArtifacts(message.id, artifacts)
-              const messageImages = messageImageArtifacts.map((artifact) => artifact.content!)
+              const messageImageArtifacts = getMessageImageArtifacts(
+                message.id,
+                artifacts,
+                message.content,
+              )
+              const messageImages = messageImageArtifacts
+                .map((artifact) => getArtifactImageUrl(artifact))
+                .filter((url): url is string => !!url)
+              const displayMessageContent = stripAttachmentSummary(message.content)
+              const userAttachmentImages =
+                message.role === "user" ? messageImageArtifacts : []
+              const generatedImageArtifacts =
+                message.role === "assistant" ? messageImageArtifacts : []
               const messageDocuments = getMessageDocuments(message.id, artifacts)
               const messageContext = message.role === "assistant"
                 ? resolveCreativeMessageContext(message, messageIndex, messages, workspaceTitle)
@@ -1330,7 +1426,34 @@ export function ChatPanel({
                       isLongUserScene && !isSceneMessageExpanded && "max-h-48 overflow-y-auto",
                     )}
                   >
-                    {message.content}
+                    {userAttachmentImages.length > 0 && (
+                      <div className={cn("flex flex-col gap-2", displayMessageContent && "mb-2")}>
+                        {userAttachmentImages.map((artifact) => {
+                          const url = getArtifactImageUrl(artifact)
+                          if (!url) return null
+                          const label =
+                            typeof artifact.metadata?.originalName === "string"
+                              ? artifact.metadata.originalName
+                              : artifact.title
+                          return (
+                            <a
+                              key={artifact.id}
+                              href={url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block overflow-hidden rounded-md"
+                            >
+                              <img
+                                src={url}
+                                alt={label}
+                                className="max-h-64 w-full max-w-sm object-contain bg-black/20"
+                              />
+                            </a>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {displayMessageContent}
                   </div>
                   {isLongUserScene && (
                     <Button
@@ -1372,9 +1495,12 @@ export function ChatPanel({
                       ))}
                     </div>
                   )}
-                  {messageImageArtifacts.length > 0 && (
+                  {generatedImageArtifacts.length > 0 && (
                     <div className="space-y-3 pt-1">
-                      {messageImageArtifacts.map((artifact, i) => (
+                      {generatedImageArtifacts.map((artifact, i) => {
+                        const imageUrl = getArtifactImageUrl(artifact)
+                        if (!imageUrl) return null
+                        return (
                         <div
                           key={artifact.id}
                           className="rounded-lg overflow-hidden border border-border bg-background"
@@ -1385,12 +1511,12 @@ export function ChatPanel({
                             </div>
                           )}
                           <img
-                            src={artifact.content!}
+                            src={imageUrl}
                             alt={artifact.label || `Generated image ${i + 1}`}
-                            className="w-full max-w-md object-cover"
+                            className="w-full max-w-md object-contain bg-muted"
                           />
                           <div className="flex flex-wrap gap-1 px-2 py-1.5 border-t border-border bg-muted/20">
-                            {(isLocation || messageImageArtifacts.length > 1) && (
+                            {(isLocation || generatedImageArtifacts.length > 1) && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1402,7 +1528,7 @@ export function ChatPanel({
                                       artifact,
                                       messageContext.contextContent,
                                     ),
-                                    imageUrls: [artifact.content!],
+                                    imageUrls: [imageUrl],
                                   })
                                 }
                               >
@@ -1422,7 +1548,7 @@ export function ChatPanel({
                                       artifact,
                                       messageContext.contextContent,
                                     ),
-                                    imageUrls: [artifact.content!],
+                                    imageUrls: [imageUrl],
                                   })
                                 }
                               >
@@ -1430,7 +1556,7 @@ export function ChatPanel({
                                 Save as Avatar
                               </Button>
                             )}
-                            {!isLocation && !isCharacter && messageImageArtifacts.length === 1 && (
+                            {!isLocation && !isCharacter && generatedImageArtifacts.length === 1 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1464,7 +1590,8 @@ export function ChatPanel({
                             </Button>
                           </div>
                         </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   )}
                   {isTreatment && (

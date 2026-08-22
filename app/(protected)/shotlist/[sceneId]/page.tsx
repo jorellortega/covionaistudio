@@ -53,6 +53,8 @@ import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
 import { ShotListService } from "@/lib/shot-list-service"
+import { GenerateShotListDialog } from "@/components/generate-shot-list-dialog"
+import type { ShotListGenerateOptions } from "@/lib/shot-list-generate-options"
 import { SceneViewSwitcher } from "@/components/scene-view-switcher"
 import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
@@ -205,6 +207,8 @@ export default function SceneShotListPage() {
   const [syncRefreshKey, setSyncRefreshKey] = useState(0)
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
+  const [showShotCountDialog, setShowShotCountDialog] = useState(false)
+  const [shotListGenerateSource, setShotListGenerateSource] = useState<"page" | "screenplay">("screenplay")
   const [isAssigningShotEntities, setIsAssigningShotEntities] = useState(false)
   const [showClearShotListConfirm, setShowClearShotListConfirm] = useState(false)
   const [isClearingShotList, setIsClearingShotList] = useState(false)
@@ -716,7 +720,7 @@ export default function SceneShotListPage() {
     return savedShots
   }
 
-  const generateShotListFromPage = async () => {
+  const generateShotListFromPage = async (options: ShotListGenerateOptions = { shotCountMode: "needed" }) => {
     if (!sceneId || !userId) {
       toast({
         title: "Error",
@@ -750,6 +754,7 @@ export default function SceneShotListPage() {
           service: normalizedService,
           model: modelToUse,
           userId,
+          ...options,
         }),
       })
 
@@ -780,7 +785,7 @@ export default function SceneShotListPage() {
     }
   }
 
-  const generateShotListFromScreenplay = async () => {
+  const generateShotListFromScreenplay = async (options: ShotListGenerateOptions = { shotCountMode: "needed" }) => {
     if (!sceneId || !userId) {
       toast({
         title: "Error",
@@ -806,7 +811,9 @@ export default function SceneShotListPage() {
 
       toast({
         title: "Generating shot list…",
-        description: "Creating shots from the full scene screenplay.",
+        description: options.shotCountMode === "range"
+          ? `Creating ${options.minShots}-${options.maxShots} shots from the full scene screenplay.`
+          : "Creating only the shots this scene needs.",
       })
 
       const response = await fetch("/api/scenes/generate-shot-list", {
@@ -819,6 +826,7 @@ export default function SceneShotListPage() {
           service: normalizedService,
           model: modelToUse,
           userId,
+          ...options,
         }),
       })
 
@@ -3602,7 +3610,10 @@ export default function SceneShotListPage() {
                       variant="outline"
                       size="sm"
                       disabled={isGeneratingShotList || isAssigningShotEntities || !getCurrentPageScript().trim()}
-                      onClick={() => void generateShotListFromPage()}
+                      onClick={() => {
+                        setShotListGenerateSource("page")
+                        setShowShotCountDialog(true)
+                      }}
                     >
                       {isGeneratingShotList ? (
                         <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -3615,7 +3626,10 @@ export default function SceneShotListPage() {
                       type="button"
                       size="sm"
                       disabled={isGeneratingShotList || isAssigningShotEntities}
-                      onClick={() => void generateShotListFromScreenplay()}
+                      onClick={() => {
+                        setShotListGenerateSource("screenplay")
+                        setShowShotCountDialog(true)
+                      }}
                       className="bg-gradient-to-r from-blue-500 to-purple-500 hover:opacity-90"
                     >
                       {isGeneratingShotList ? (
@@ -3642,6 +3656,21 @@ export default function SceneShotListPage() {
             </CardContent>
           </Card>
         </div>
+
+        <GenerateShotListDialog
+          open={showShotCountDialog}
+          onOpenChange={setShowShotCountDialog}
+          sourceLabel={shotListGenerateSource === "page" ? "this page" : "the full screenplay"}
+          isGenerating={isGeneratingShotList}
+          onGenerate={(options) => {
+            setShowShotCountDialog(false)
+            if (shotListGenerateSource === "page") {
+              void generateShotListFromPage(options)
+            } else {
+              void generateShotListFromScreenplay(options)
+            }
+          }}
+        />
 
         <AlertDialog open={showClearShotListConfirm} onOpenChange={setShowClearShotListConfirm}>
           <AlertDialogContent>

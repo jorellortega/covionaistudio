@@ -7,11 +7,12 @@ import {
 import { resolveUserAiApiKey } from '@/lib/resolve-user-ai-api-key'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
+import { buildShotCountPromptSection } from '@/lib/shot-list-generate-options'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { sceneId, screenplayContent, pageNumber, service, model, userId } = body
+    const { sceneId, screenplayContent, pageNumber, service, model, userId, shotCountMode, minShots, maxShots } = body
 
     if (!sceneId) {
       return NextResponse.json(
@@ -142,8 +143,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const shotCountPrompt = buildShotCountPromptSection({
+      shotCountMode,
+      minShots,
+      maxShots,
+    })
+
     // Build the AI prompt for shot list generation
-    const systemPrompt = `You are a professional director and cinematographer. Analyze the provided screenplay content and create a detailed shot list. 
+    const systemPrompt = `You are a professional director and cinematographer. Analyze the provided screenplay content and create a shot list of only the setups needed to film it.
+
+${shotCountPrompt}
 
 CRITICAL: You MUST return ONLY valid JSON. Do not include any explanatory text, markdown code blocks, or formatting. Return ONLY the JSON array.
 
@@ -177,7 +186,7 @@ Return ONLY a valid JSON array. Example format:
 
 IMPORTANT: Return ONLY the JSON array, no markdown, no code blocks, no explanations.${assignmentPromptSection}`
 
-    const userPrompt = `Analyze this screenplay content and create a comprehensive shot list. Break down the scene into individual shots that would be needed to film it. Consider camera movements, angles, and shot types that best serve the story.
+    const userPrompt = `Analyze this screenplay content and create a shot list. Follow the SHOT COUNT RULE exactly. Cover the story, but do not over-cover with extra angles or inserts.
 
 For each shot, assign the correct characters and location from the project lists when they appear. Use exact names.
 
@@ -188,7 +197,7 @@ ${screenplayContent}
 
 ${pageNumber ? `This is page ${pageNumber} of the screenplay. Focus on creating shots for this specific page.` : ''}
 
-Generate a shot list as a JSON array. Each shot should be detailed and specific to the screenplay content.`
+Generate a shot list as a JSON array. Each shot should be specific to the screenplay content.`
 
     // Generate shot list using AI
     let generatedResponse = ''

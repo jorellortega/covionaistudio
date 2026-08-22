@@ -67,6 +67,7 @@ import {
   referenceUrlToFile,
 } from "@/lib/project-image-linking"
 import { getSupabaseClient } from "@/lib/supabase"
+import { sanitizeFilename } from "@/lib/utils"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { ImageSizeBadge } from "@/components/image-size-badge"
 
@@ -623,10 +624,16 @@ export default function ObjectsPage() {
 
     setIsUploading(true)
     try {
-      const filePath = `${projectId}/objects/${selectedObject.id}/${Date.now()}_${file.name}`
+      const ext = file.name.split(".").pop()?.replace(/[^a-zA-Z0-9]/g, "") || "png"
+      const safeName = sanitizeFilename(file.name) || "upload"
+      const filePath = `${projectId}/objects/${selectedObject.id}/${Date.now()}_${safeName}.${ext}`
       const { error } = await getSupabaseClient().storage
         .from("cinema_files")
-        .upload(filePath, file)
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type || "image/png",
+        })
 
       if (error) throw new Error(error.message)
 

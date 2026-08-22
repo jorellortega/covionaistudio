@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "NODE_OPTIONS=--dns-result-order=ipv4first next dev",
     "lint": "next lint",
-    "start": "next start",
+    "start": "NODE_OPTIONS=--dns-result-order=ipv4first next start",
     "migrate": "node scripts/migrate.js migrate",
     "migrate:rollback": "node scripts/migrate.js rollback",
     "migrate:status": "node scripts/migrate.js status",

@@ -28,6 +28,7 @@ import {
   DEFAULT_CINEMATIC_IMAGE_HEIGHT,
 } from "@/lib/image-model-utils"
 import { getSupabaseClient } from "@/lib/supabase"
+import { sanitizeFilename } from "@/lib/utils"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { useAuthReady } from "@/components/auth-hooks"
@@ -2813,11 +2814,17 @@ export default function LocationsPage() {
 
     setIsUploadingAsset(true)
     try {
-      const filePath = `${projectId}/locations/${selectedLocationId}/${Date.now()}_${file.name}`
+      const ext = file.name.split(".").pop()?.replace(/[^a-zA-Z0-9]/g, "") || "png"
+      const safeName = sanitizeFilename(file.name) || "upload"
+      const filePath = `${projectId}/locations/${selectedLocationId}/${Date.now()}_${safeName}.${ext}`
       
       const { data, error } = await getSupabaseClient().storage
         .from('cinema_files')
-        .upload(filePath, file)
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: false,
+          contentType: file.type || "image/png",
+        })
       
       if (error) {
         throw new Error(`Upload failed: ${error.message}`)

@@ -80,6 +80,7 @@ import {
   Trash2,
   LayoutGrid,
   Star,
+  RefreshCw,
 } from "lucide-react"
 
 type GenerationMode = "description" | "from_reference"
@@ -1514,13 +1515,13 @@ export default function AvatarsPage() {
     try {
       const result = await generateAngle(angle)
       if (result) {
-        await addAvatarImage(angle, result)
+        await addAvatarImage(angle, result, { selectNew: true })
         const variantCount = (angleGalleries[angle.id]?.images.length ?? 0) + 1
         toast({
-          title: "Generated",
+          title: variantCount > 1 ? "Regenerated" : "Generated",
           description:
             variantCount > 1
-              ? `${angle.label} — variant ${variantCount} added`
+              ? `${angle.label} — new shot added as variant ${variantCount}`
               : angle.label,
         })
       }
@@ -2684,30 +2685,52 @@ export default function AvatarsPage() {
                   return (
                     <Card key={angle.id} className="overflow-hidden">
                       <CardHeader className="py-3 px-4">
-                        <div className="flex items-center justify-between">
-                          <CardTitle className="text-sm">{angle.label}</CardTitle>
-                          <div className="flex items-center gap-1">
-                            {gallery && gallery.images.length > 1 && (
-                              <Badge variant="outline" className="text-[10px]">
-                                {gallery.images.length} variants
-                              </Badge>
-                            )}
-                            {avatar?.source === "existing" && (
-                              <Badge variant="secondary" className="text-[10px]">Existing</Badge>
-                            )}
-                            {avatar?.source === "from_reference" && (
-                              <Badge variant="secondary" className="text-[10px]">From Ref</Badge>
-                            )}
-                            {avatar?.saved && (
-                              <Badge variant="outline" className="text-xs">Saved</Badge>
-                            )}
-                            {isDefaultPortrait && (
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 space-y-1">
+                            <CardTitle className="text-sm">{angle.label}</CardTitle>
+                            <div className="flex items-center gap-1 flex-wrap">
+                              {gallery && gallery.images.length > 1 && (
+                                <Badge variant="outline" className="text-[10px]">
+                                  {gallery.images.length} variants
+                                </Badge>
+                              )}
+                              {avatar?.source === "existing" && (
+                                <Badge variant="secondary" className="text-[10px]">Existing</Badge>
+                              )}
+                              {avatar?.source === "from_reference" && (
+                                <Badge variant="secondary" className="text-[10px]">From Ref</Badge>
+                              )}
+                              {avatar?.saved && (
+                                <Badge variant="outline" className="text-xs">Saved</Badge>
+                              )}
+                              {isDefaultPortrait && (
                                 <Badge className="text-[10px] bg-blue-500 hover:bg-blue-500">
                                   <Star className="h-2.5 w-2.5 mr-0.5 fill-current" />
                                   Portrait
                                 </Badge>
                               )}
+                            </div>
                           </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 shrink-0 text-xs"
+                            onClick={() => handleGenerateSingle(angle)}
+                            disabled={isLoading || isBatchGenerating}
+                            title={
+                              avatar
+                                ? "Redo this shot with the same settings. The current image is kept as a variant."
+                                : "Generate this shot"
+                            }
+                          >
+                            {isLoading ? (
+                              <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-3 w-3 mr-1" />
+                            )}
+                            {avatar ? "Regenerate" : "Generate"}
+                          </Button>
                         </div>
                       </CardHeader>
                       <CardContent className="p-0">
@@ -2731,14 +2754,9 @@ export default function AvatarsPage() {
                           ) : (
                             <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4 gap-2">
                               <ImageIcon className="h-8 w-8 opacity-50" />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleGenerateSingle(angle)}
-                                disabled={isLoading}
-                              >
-                                Generate
-                              </Button>
+                              <p className="text-xs text-center">
+                                Use Generate above to create this shot, or pick an existing image.
+                              </p>
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -2837,16 +2855,6 @@ export default function AvatarsPage() {
                                 />
                               )}
                               Portrait
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
-                              onClick={() => handleGenerateSingle(angle)}
-                              disabled={isLoading}
-                            >
-                              <Sparkles className="h-3 w-3 mr-1" />
-                              Add
                             </Button>
                             <Button
                               variant="ghost"

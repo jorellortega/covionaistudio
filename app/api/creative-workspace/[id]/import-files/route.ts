@@ -51,8 +51,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       const file = files[i]
       const category = getCreativeImportCategory(file)
       const timestamp = Date.now()
-      const extension = file.name.includes('.') ? file.name.split('.').pop() : ''
-      const safeName = sanitizeFilename(file.name)
+      const extension =
+        (file.name.split('.').pop() || '').replace(/[^a-zA-Z0-9]/g, '') ||
+        (category === 'image' ? 'png' : '')
+      const safeName = sanitizeFilename(file.name) || 'upload'
       const storageFileName = extension ? `${timestamp}_${safeName}.${extension}` : `${timestamp}_${safeName}`
       const filePath = `${user.id}/workspace-${workspaceId}/${category}/${storageFileName}`
 
@@ -61,6 +63,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
         .upload(filePath, file, {
           cacheControl: '3600',
           upsert: false,
+          contentType: file.type || (category === 'image' ? 'image/png' : undefined),
           metadata: {
             originalName: file.name,
             workspaceId,

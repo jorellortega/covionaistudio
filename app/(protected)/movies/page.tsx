@@ -435,7 +435,7 @@ export default function MoviesPage() {
         )
         if ((apiMeta.queryMs ?? 0) > 2000) {
           tracker.addNote(
-            "Slow DB query — ensure migration 082_projects_user_type_created_index is applied on Supabase",
+            "Slow Supabase round trip — Node may be hanging on IPv6. Restart `npm run dev` so ipv4first DNS is applied.",
           )
         }
       }

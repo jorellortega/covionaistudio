@@ -133,6 +133,24 @@ export class ScreenplayScenesService {
     }
   }
 
+  static async deleteAllForProject(projectId: string): Promise<number> {
+    const user = await this.ensureAuthenticated()
+
+    const { data, error } = await getSupabaseClient()
+      .from('screenplay_scenes')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('user_id', user.id)
+      .select('id')
+
+    if (error) {
+      console.error('Error deleting all screenplay scenes:', error)
+      throw error
+    }
+
+    return data?.length ?? 0
+  }
+
   static async bulkCreateScreenplayScenes(scenes: CreateScreenplaySceneData[]): Promise<ScreenplayScene[]> {
     const user = await this.ensureAuthenticated()
     

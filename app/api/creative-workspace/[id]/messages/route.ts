@@ -161,6 +161,10 @@ async function callOpenAI(
       } catch {
         // keep default message
       }
+      if (imageUrls.length > 0) {
+        console.warn('Creative workspace OpenAI vision failed, retrying without attached images:', message)
+        return callOpenAI(messages, settings)
+      }
       return { error: message }
     }
 
@@ -262,6 +266,10 @@ async function generateImageFromConversation(
   userId: string,
   imagePrompt: string,
   serviceSupabase: ReturnType<typeof createClient>,
+  options?: {
+    referenceImageUrl?: string
+    styleReferenceUrls?: string[]
+  },
 ): Promise<{ url: string | null; error?: string }> {
   const { apiModel, service } = await getImageModelSettings(serviceSupabase)
 
@@ -281,6 +289,12 @@ async function generateImageFromConversation(
       width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
       height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
       autoSaveToBucket: true,
+      ...(options?.referenceImageUrl
+        ? { referenceImageUrl: options.referenceImageUrl }
+        : {}),
+      ...(options?.styleReferenceUrls?.length
+        ? { styleReferenceUrls: options.styleReferenceUrls }
+        : {}),
     }),
   })
 
@@ -288,7 +302,7 @@ async function generateImageFromConversation(
   if (!response.ok) {
     return { url: null, error: data.error || `Image generation failed (${response.status})` }
   }
-  return { url: data.imageUrl || data.url || data.image || null }
+  return { url: data.bucketUrl || data.imageUrl || data.url || data.image || null }
 }
 
 async function loadStoryContextForImages(
@@ -511,6 +525,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       title: string
       content: string | null
       metadata: Record<string, unknown>
+      message_id?: string | null
     }> = []
 
     if (attachmentIds.length > 0) {
@@ -570,6 +585,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
         .in('id', attachmentArtifacts.map((a) => a.id))
 
       if (linkError) return NextResponse.json({ error: linkError.message }, { status: 500 })
+
+      attachmentArtifacts = attachmentArtifacts.map((artifact) => ({
+        ...artifact,
+        message_id: userMessage.id,
+      }))
     }
 
     const { data: history } = await supabase
@@ -767,7 +787,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
         ...historyMessages,
       ]
 
-      const openaiResult = await callOpenAI(aiMessages, settings, attachmentContext)
+      const openaiResult = await callOpenAI(
+        aiMessages,
+        settings,
+        wantsImage ? undefined : attachmentContext,
+      )
       if ('content' in openaiResult) {
         assistantContent = openaiResult.content
       } else {
@@ -782,20 +806,26 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
 
       if (!assistantContent) {
-        await supabase.from('creative_messages').delete().eq('id', userMessage.id)
-        if (attachmentArtifacts.length > 0) {
-          await supabase
-            .from('creative_artifacts')
-            .update({ message_id: null })
-            .in('id', attachmentArtifacts.map((a) => a.id))
-        }
+        if (wantsImage) {
+          assistantContent = attachmentContext.imageUrls.length > 0
+            ? "I'll generate that from your attached photo. It will appear in the Images panel."
+            : "I'll generate that image now. It will appear in the Images panel."
+        } else {
+          await supabase.from('creative_messages').delete().eq('id', userMessage.id)
+          if (attachmentArtifacts.length > 0) {
+            await supabase
+              .from('creative_artifacts')
+              .update({ message_id: null })
+              .in('id', attachmentArtifacts.map((a) => a.id))
+          }
 
-        return NextResponse.json(
-          {
-            error: aiError || 'AI service unavailable. Try a shorter document or send your request in smaller parts.',
-          },
-          { status: 503 },
-        )
+          return NextResponse.json(
+            {
+              error: aiError || 'AI service unavailable. Try a shorter document or send your request in smaller parts.',
+            },
+            { status: 503 },
+          )
+        }
       }
     }
 
@@ -856,7 +886,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
 
       if (imagePrompts.length === 0) {
-        const promptInstruction = buildImagePromptInstruction(historyForAi, trimmedMessage, storyContext ?? undefined)
+        let promptInstruction = buildImagePromptInstruction(historyForAi, trimmedMessage, storyContext ?? undefined)
+        if (attachmentContext.imageUrls.length > 0) {
+          promptInstruction += `\n\nThe user attached a reference photo. Write the prompt so the generated image uses that person's likeness. If they asked for parents, family, or related people, those people should clearly resemble the person in the photo.`
+        }
         const imagePromptMessages: AIMessage[] = [
           { role: 'system', content: 'You write cinematic image prompts grounded in the screenplay. Output only the prompt text.' },
           { role: 'user', content: promptInstruction },
@@ -884,14 +917,24 @@ export async function POST(request: NextRequest, context: RouteContext) {
         promptSluglines = [null]
       }
 
+      const referenceImageUrl = attachmentContext.imageUrls[0]
+      const styleReferenceUrls = attachmentContext.imageUrls.slice(1)
+
       for (let i = 0; i < imagePrompts.length; i++) {
-        const imagePrompt = imagePrompts[i]
+        const basePrompt = imagePrompts[i]
+        const imagePrompt = referenceImageUrl
+          ? `${basePrompt} Use the attached reference photo for likeness. Keep recognizable facial features, ethnicity, and coloring from the reference.`.slice(0, 990)
+          : basePrompt
         const slugline = promptSluglines[i] ?? null
         const generated = await generateImageFromConversation(
           request,
           user.id,
           imagePrompt,
           serviceSupabase,
+          {
+            referenceImageUrl,
+            styleReferenceUrls,
+          },
         )
 
         if (!generated.url) {

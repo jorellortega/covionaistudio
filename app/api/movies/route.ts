@@ -3,6 +3,7 @@ import { createServerClient } from "@supabase/ssr"
 import { createClient } from "@supabase/supabase-js"
 import { cookies } from "next/headers"
 import type { Movie } from "@/lib/movie-service"
+import { supabaseServerFetch } from "@/lib/supabase-server-fetch"
 
 export const runtime = "nodejs"
 
@@ -22,6 +23,7 @@ function getServiceClient() {
   if (!serviceClientSingleton) {
     serviceClientSingleton = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, key, {
       auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: supabaseServerFetch },
     })
   }
   return serviceClientSingleton
