@@ -271,6 +271,7 @@ export default function CharactersPage() {
   const [isPickExistingAssetDialogOpen, setIsPickExistingAssetDialogOpen] = useState(false)
   const [isLinkingExistingAsset, setIsLinkingExistingAsset] = useState(false)
   const [isCharacterEditDialogOpen, setIsCharacterEditDialogOpen] = useState(false)
+  const [isCreateCharacterDialogOpen, setIsCreateCharacterDialogOpen] = useState(false)
   // Description editing state
   const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null)
   const [editingDescriptionValue, setEditingDescriptionValue] = useState("")
@@ -1309,12 +1310,7 @@ export default function CharactersPage() {
     if (namePrefill) {
       setNewCharName(namePrefill)
     }
-    setTimeout(() => {
-      const charactersCard = document.getElementById("characters-form-card")
-      if (charactersCard) {
-        charactersCard.scrollIntoView({ behavior: "smooth", block: "start" })
-      }
-    }, 100)
+    setIsCreateCharacterDialogOpen(true)
   }
 
   const saveEdit = async (id: string) => {
@@ -2347,11 +2343,11 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         // Create new character
         characterData.project_id = projectId
         const created = await CharactersService.createCharacter(characterData)
-      setCharacters([created, ...characters])
-      if (!namePrefill) {
-          clearForm()
-      }
-      toast({ title: "Character created", description: `"${created.name}" added.` })
+        setCharacters([created, ...characters])
+        setSelectedCharacterId(created.id)
+        setIsCreateCharacterDialogOpen(false)
+        clearForm()
+        toast({ title: "Character created", description: `"${created.name}" added.` })
       }
     } catch (err) {
       console.error('Create/update character failed:', err)
@@ -4677,7 +4673,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
               <CardHeader className="pb-4 p-4 sm:p-6">
                 <CardTitle className="text-lg sm:text-xl">Characters</CardTitle>
                 <p className="text-xs sm:text-sm text-muted-foreground break-words">
-                  {editingCharacterInFormId ? "Edit character details below." : "Create and manage full character profiles for this movie."}
+                  {editingCharacterInFormId ? "Edit character details below." : "Select a character below or use Create Character to add a new profile."}
                 </p>
               </CardHeader>
               <CardContent className="space-y-4 p-4 sm:p-6">
@@ -5921,19 +5917,19 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     </AccordionItem>
                   </Accordion>
                 </div>
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <Button onClick={() => createCharacter()} disabled={isCreatingCharacter || !newCharName.trim()} className="gap-2 w-full sm:w-auto">
-                    {isCreatingCharacter ? <Loader2 className="h-4 w-4 animate-spin" /> : editingCharacterInFormId ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-                    <span className="hidden sm:inline">{editingCharacterInFormId ? "Update Character" : "Create Character"}</span>
-                    <span className="sm:hidden">{editingCharacterInFormId ? "Update" : "Create"}</span>
-                  </Button>
-                  {editingCharacterInFormId && (
+                {editingCharacterInFormId && (
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                    <Button onClick={() => createCharacter()} disabled={isCreatingCharacter || !newCharName.trim()} className="gap-2 w-full sm:w-auto">
+                      {isCreatingCharacter ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      <span className="hidden sm:inline">Update Character</span>
+                      <span className="sm:hidden">Update</span>
+                    </Button>
                     <Button variant="outline" onClick={clearForm} disabled={isCreatingCharacter} className="gap-2 w-full sm:w-auto">
                       <X className="h-4 w-4" />
                       Cancel
                     </Button>
-                  )}
-                </div>
+                  </div>
+                )}
                 <Separator />
                 <div className="space-y-2">
                   <div className="text-sm text-muted-foreground">
@@ -6158,7 +6154,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                 <Plus className="h-4 w-4" />
                               </Button>
                             )}
-                            <Button variant="ghost" size="icon" onClick={() => createCharacter(c.name)} disabled={isCreatingCharacter} title="Create Character">
+                            <Button variant="ghost" size="icon" onClick={() => openCreateCharacterForm(c.name)} disabled={isCreatingCharacter} title="Create Character">
                               <Save className="h-4 w-4" />
                             </Button>
                           </div>
@@ -6236,6 +6232,143 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           </>
         )}
       </main>
+
+      {/* Create Character Dialog */}
+      <Dialog
+        open={isCreateCharacterDialogOpen}
+        onOpenChange={(open) => {
+          setIsCreateCharacterDialogOpen(open)
+          if (!open) clearForm()
+        }}
+      >
+        <DialogContent className="cinema-card border-border max-w-[95vw] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create Character</DialogTitle>
+            <DialogDescription>
+              Add a new character profile. You can fill in more details after creating.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="create-char-name">Name *</Label>
+              <Input
+                id="create-char-name"
+                value={newCharName}
+                onChange={(e) => setNewCharName(e.target.value)}
+                className="bg-input border-border"
+                placeholder="e.g., Jane Carter"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newCharName.trim() && !isCreatingCharacter) {
+                    e.preventDefault()
+                    createCharacter()
+                  }
+                }}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="create-char-archetype">Archetype</Label>
+                <Input
+                  id="create-char-archetype"
+                  value={newCharArchetype}
+                  onChange={(e) => setNewCharArchetype(e.target.value)}
+                  className="bg-input border-border"
+                  placeholder="Protagonist, Mentor..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-char-type">Character Type</Label>
+                <Select value={newCharCharacterType} onValueChange={setNewCharCharacterType}>
+                  <SelectTrigger id="create-char-type" className="bg-input border-border">
+                    <SelectValue placeholder="Select type..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="main">Main Actor</SelectItem>
+                    <SelectItem value="supporting">Supporting Actor</SelectItem>
+                    <SelectItem value="extra">Extra</SelectItem>
+                    <SelectItem value="cameo">Cameo</SelectItem>
+                    <SelectItem value="voice">Voice Actor</SelectItem>
+                    <SelectItem value="stunt">Stunt Performer</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-char-gender">Gender</Label>
+                <Select value={newCharGender} onValueChange={setNewCharGender}>
+                  <SelectTrigger id="create-char-gender" className="bg-input border-border">
+                    <SelectValue placeholder="Select gender..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Male">Male</SelectItem>
+                    <SelectItem value="Female">Female</SelectItem>
+                    {newCharSpecies && newCharSpecies !== "Human" && (
+                      <>
+                        <SelectItem value="Other">Other</SelectItem>
+                        <SelectItem value="Unknown">Unknown</SelectItem>
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="create-char-species">Species</Label>
+                <Select
+                  value={newCharSpecies}
+                  onValueChange={(value) => {
+                    setNewCharSpecies(value)
+                    if (value === "Human" && (newCharGender === "Other" || newCharGender === "Unknown")) {
+                      setNewCharGender("")
+                    }
+                  }}
+                >
+                  <SelectTrigger id="create-char-species" className="bg-input border-border">
+                    <SelectValue placeholder="Select species..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Human">Human</SelectItem>
+                    <SelectItem value="Alien">Alien</SelectItem>
+                    <SelectItem value="Android">Android</SelectItem>
+                    <SelectItem value="Robot">Robot</SelectItem>
+                    <SelectItem value="AI">AI</SelectItem>
+                    <SelectItem value="Cyborg">Cyborg</SelectItem>
+                    <SelectItem value="Mutant">Mutant</SelectItem>
+                    <SelectItem value="Hybrid">Hybrid</SelectItem>
+                    <SelectItem value="Synthetic">Synthetic</SelectItem>
+                    <SelectItem value="Unknown">Unknown</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="create-char-description">Description</Label>
+              <Textarea
+                id="create-char-description"
+                value={newCharDescription}
+                onChange={(e) => setNewCharDescription(e.target.value)}
+                className="bg-input border-border min-h-[80px]"
+                placeholder="Brief overview of the character..."
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setIsCreateCharacterDialogOpen(false)}
+              disabled={isCreatingCharacter}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => createCharacter()}
+              disabled={isCreatingCharacter || !newCharName.trim()}
+              className="gap-2"
+            >
+              {isCreatingCharacter ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              Create Character
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Generate Image Dialog */}
       <Dialog open={isGenerateImageDialogOpen} onOpenChange={setIsGenerateImageDialogOpen}>
