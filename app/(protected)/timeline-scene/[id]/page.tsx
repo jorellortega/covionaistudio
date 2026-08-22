@@ -51,6 +51,7 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
+  Wand2,
   X,
   Share2,
   AlignLeft,
@@ -85,6 +86,23 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import jsPDF from "jspdf"
+
+function parseSceneNumber(sceneNumber: string): number {
+  if (!sceneNumber || !sceneNumber.trim()) return 0
+
+  const trimmed = sceneNumber.trim()
+  const numericMatch = trimmed.match(/^(\d+)/)
+  if (!numericMatch) return 0
+
+  const numericPart = parseInt(numericMatch[1], 10)
+  const letterMatch = trimmed.match(/^(\d+)([A-Za-z])/)
+  if (letterMatch) {
+    const letter = letterMatch[2].toUpperCase()
+    return numericPart + (letter.charCodeAt(0) - 64) / 10
+  }
+
+  return numericPart
+}
 
 export default function ScenePage() {
   const params = useParams()
@@ -241,6 +259,11 @@ function ScenePageClient({ id }: { id: string }) {
   const screenplayTextareaRef = useRef<HTMLTextAreaElement>(null)
   const [isGeneratingShotList, setIsGeneratingShotList] = useState(false)
   const [showShotCountDialog, setShowShotCountDialog] = useState(false)
+  const [isSuggestingSceneName, setIsSuggestingSceneName] = useState(false)
+  const [showCreateSceneDialog, setShowCreateSceneDialog] = useState(false)
+  const [newSceneName, setNewSceneName] = useState("")
+  const [newSceneNumber, setNewSceneNumber] = useState("")
+  const [isCreatingScene, setIsCreatingScene] = useState(false)
   const [shotListRefreshKey, setShotListRefreshKey] = useState(0)
   const [isShotListExpanded, setIsShotListExpanded] = useState(false)
   
@@ -481,6 +504,34 @@ function ScenePageClient({ id }: { id: string }) {
       }
       setCurrentPage(page)
     }
+  }
+
+  const handleAddPage = () => {
+    if (screenplayTextareaRef.current) {
+      saveCurrentPageEdit(screenplayTextareaRef.current.value)
+    }
+
+    let combined = combineEditedPages()
+    const lineCount = combined.length === 0 ? 0 : combined.split('\n').length
+
+    if (lineCount === 0) {
+      combined = '\n'
+    } else {
+      const remainder = lineCount % LINES_PER_PAGE
+      if (remainder !== 0) {
+        combined += '\n'.repeat(LINES_PER_PAGE - remainder)
+      }
+      combined += '\n'
+    }
+
+    const newPageCount = Math.max(1, Math.ceil(combined.split('\n').length / LINES_PER_PAGE))
+    setScreenplayContent(combined)
+    setCurrentPage(newPageCount)
+
+    toast({
+      title: 'Page added',
+      description: `You can keep writing on page ${newPageCount}.`,
+    })
   }
 
   // Get current page content
@@ -3066,6 +3117,167 @@ ${centerText('AUTHOR NAME')}
     saveInlineEdit()
   }
 
+  const handleSuggestSceneName = async () => {
+    if (!id || !scene || !userId) return
+
+    setIsSuggestingSceneName(true)
+    try {
+      if (screenplayTextareaRef.current) {
+        saveCurrentPageEdit(screenplayTextareaRef.current.value)
+      }
+
+      const combinedContent = combineEditedPages()
+      if (combinedContent.trim()) {
+        const { error: saveError } = await getSupabaseClient()
+          .from('scenes')
+          .update({ screenplay_content: combinedContent })
+          .eq('id', id)
+          .eq('user_id', userId)
+
+        if (saveError) {
+          throw new Error(saveError.message || 'Failed to save screenplay before renaming')
+        }
+
+        setScreenplayContent(combinedContent)
+        setScene((prev) => (prev ? { ...prev, screenplay_content: combinedContent } : prev))
+      }
+
+      const res = await fetch(`/api/timeline/scenes/${id}/suggest-name`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+
+      await TimelineService.updateScene(id, { name: data.name })
+      setScene((prev) => (prev ? { ...prev, name: data.name } : prev))
+      setAllScenes((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, name: data.name } : item)),
+      )
+
+      toast({
+        title: 'Scene renamed',
+        description: data.name,
+      })
+    } catch (error) {
+      toast({
+        title: 'Could not rename scene',
+        description: error instanceof Error ? error.message : 'AI naming failed',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSuggestingSceneName(false)
+    }
+  }
+
+  const getSuggestedSceneNumber = () => {
+    const maxSceneNumber = allScenes.reduce((max, item) => {
+      const n = parseSceneNumber(item.metadata?.sceneNumber || '')
+      return n > max ? n : max
+    }, 0)
+    return String(Math.floor(maxSceneNumber) + 1)
+  }
+
+  const openCreateSceneDialog = () => {
+    setNewSceneName("")
+    setNewSceneNumber(getSuggestedSceneNumber())
+    setShowCreateSceneDialog(true)
+  }
+
+  const handleCreateScene = async () => {
+    if (!userId || !scene?.timeline_id) {
+      toast({
+        title: "Error",
+        description: "Scene timeline not ready yet.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const sceneName = newSceneName.trim()
+    if (!sceneName) {
+      toast({
+        title: "Name required",
+        description: "Give the scene a name before creating it.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setIsCreatingScene(true)
+
+      const existingScenes =
+        allScenes.length > 0
+          ? allScenes
+          : await TimelineService.getScenesForTimeline(scene.timeline_id, { skipThumbnails: true })
+
+      const maxSceneNumber = existingScenes.reduce((max, item) => {
+        const n = parseSceneNumber(item.metadata?.sceneNumber || '')
+        return n > max ? n : max
+      }, 0)
+      const nextSceneNumber = newSceneNumber.trim() || String(Math.floor(maxSceneNumber) + 1)
+
+      if (
+        existingScenes.some(
+          (item) => (item.metadata?.sceneNumber || '').trim() === nextSceneNumber,
+        )
+      ) {
+        toast({
+          title: "Scene number in use",
+          description: `Scene ${nextSceneNumber} already exists. Pick a different number.`,
+          variant: "destructive",
+        })
+        return
+      }
+
+      const lastScene = existingScenes[existingScenes.length - 1]
+      const startTimeSeconds = lastScene
+        ? lastScene.start_time_seconds + lastScene.duration_seconds
+        : 0
+
+      const createdScene = await TimelineService.createScene({
+        timeline_id: scene.timeline_id,
+        name: sceneName,
+        description: '',
+        start_time_seconds: startTimeSeconds,
+        duration_seconds: 60,
+        scene_type: 'video',
+        content_url: '',
+        metadata: {
+          sceneNumber: nextSceneNumber,
+          location: '',
+          characters: [],
+          shotType: '',
+          mood: '',
+          notes: '',
+          status: 'draft',
+        },
+      })
+
+      const refreshedScenes = await TimelineService.getScenesForTimeline(scene.timeline_id, {
+        skipThumbnails: true,
+      })
+      setAllScenes(refreshedScenes)
+      setShowCreateSceneDialog(false)
+      setNewSceneName("")
+      setNewSceneNumber("")
+
+      toast({
+        title: "Scene Created",
+        description: `${sceneName} is ready.`,
+      })
+
+      router.push(`/timeline-scene/${createdScene.id}`)
+    } catch (error) {
+      console.error('Error creating scene:', error)
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to create scene.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCreatingScene(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground overflow-x-hidden">
       {/* Navigation Bar */}
@@ -3090,9 +3302,26 @@ ${centerText('AUTHOR NAME')}
                 </Button>
               </Link>
               <div className="flex-1 min-w-0">
-                <h1 className="text-2xl sm:text-3xl font-bold text-primary mb-1">
-                  Scene: {scene.name}
-                </h1>
+                <div className="flex items-center gap-2 mb-1">
+                  <h1 className="text-2xl sm:text-3xl font-bold text-primary">
+                    Scene: {scene.name}
+                  </h1>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 w-8 p-0 shrink-0 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                    title="Rename scene from screenplay"
+                    disabled={isSuggestingSceneName}
+                    onClick={() => void handleSuggestSceneName()}
+                  >
+                    {isSuggestingSceneName ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
                 {scene.description && (
                   <Button
                     variant="ghost"
@@ -3211,6 +3440,22 @@ ${centerText('AUTHOR NAME')}
             
             {/* Action Buttons - Grouped together */}
             <div className="flex flex-wrap items-center gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openCreateSceneDialog}
+                disabled={isCreatingScene || !scene?.timeline_id}
+                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+              >
+                {isCreatingScene ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4 mr-2" />
+                )}
+                <span className="hidden sm:inline">Create Scene</span>
+                <span className="sm:hidden">Scene</span>
+              </Button>
+
               {/* Start Collaboration Button */}
               {projectId && (
                 <Button
@@ -4793,6 +5038,16 @@ ${centerText('AUTHOR NAME')}
                       </p>
                       </div>
                       <div className="flex items-center gap-4">
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        onClick={handleAddPage}
+                        className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                        title="Add another page to this scene"
+                      >
+                        <Plus className="h-5 w-5 mr-2" />
+                        Add Page
+                      </Button>
                       {(screenplayContent || scene?.screenplay_content) && (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -4887,54 +5142,62 @@ ${centerText('AUTHOR NAME')}
                   <div className="space-y-4">
                       {/* Page number and action buttons row */}
                       <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-4 flex-wrap">
                           <Label className="text-sm font-medium text-muted-foreground">
                             Page {currentPage} of {totalPages}
                           </Label>
-                          {totalPages > 1 && (
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => goToPage(currentPage - 1)}
-                                disabled={currentPage === 1}
-                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                              >
-                                <ChevronLeft className="h-4 w-4" />
-                              </Button>
-                              <Input
-                                type="number"
-                                min={1}
-                                max={totalPages}
-                                value={currentPage}
-                                onChange={(e) => {
-                                  const page = parseInt(e.target.value)
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => goToPage(currentPage - 1)}
+                              disabled={currentPage === 1}
+                              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            >
+                              <ChevronLeft className="h-4 w-4" />
+                            </Button>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={totalPages}
+                              value={currentPage}
+                              onChange={(e) => {
+                                const page = parseInt(e.target.value)
+                                if (page && page >= 1 && page <= totalPages) {
+                                  goToPage(page)
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  const page = parseInt((e.target as HTMLInputElement).value)
                                   if (page && page >= 1 && page <= totalPages) {
                                     goToPage(page)
                                   }
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') {
-                                    e.preventDefault()
-                                    const page = parseInt((e.target as HTMLInputElement).value)
-                                    if (page && page >= 1 && page <= totalPages) {
-                                      goToPage(page)
-                                    }
-                                  }
-                                }}
-                                className="w-20 text-center"
-                              />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => goToPage(currentPage + 1)}
-                                disabled={currentPage === totalPages}
-                                className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                              >
-                                <ChevronRight className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          )}
+                                }
+                              }}
+                              className="w-20 text-center"
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => goToPage(currentPage + 1)}
+                              disabled={currentPage === totalPages}
+                              className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                            >
+                              <ChevronRight className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleAddPage}
+                              className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                              title="Add another page to this scene"
+                            >
+                              <Plus className="h-4 w-4 mr-1" />
+                              Add Page
+                            </Button>
+                          </div>
                         </div>
                         <div className="flex gap-2">
                           <Button
@@ -5339,53 +5602,60 @@ ${centerText('AUTHOR NAME')}
                     </div>
                 </CardContent>
                 {/* Bottom Pagination */}
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-center gap-4 py-4 border-t border-purple-500/20">
-                    <Badge variant="outline" className="px-4 py-2">
-                      Page {currentPage} of {totalPages}
-                    </Badge>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => goToPage(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={totalPages}
-                      value={currentPage}
-                      onChange={(e) => {
-                        const page = parseInt(e.target.value)
+                <div className="flex items-center justify-center gap-4 py-4 border-t border-purple-500/20 flex-wrap">
+                  <Badge variant="outline" className="px-4 py-2">
+                    Page {currentPage} of {totalPages}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToPage(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={currentPage}
+                    onChange={(e) => {
+                      const page = parseInt(e.target.value)
+                      if (page && page >= 1 && page <= totalPages) {
+                        goToPage(page)
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        const page = parseInt((e.target as HTMLInputElement).value)
                         if (page && page >= 1 && page <= totalPages) {
                           goToPage(page)
                         }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          const page = parseInt((e.target as HTMLInputElement).value)
-                          if (page && page >= 1 && page <= totalPages) {
-                            goToPage(page)
-                          }
-                        }
-                      }}
-                      className="w-20 text-center"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => goToPage(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
-                )}
+                      }
+                    }}
+                    className="w-20 text-center"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToPage(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="border-purple-500/30 text-purple-400 hover:bg-purple-500/10"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddPage}
+                    className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10"
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add Page
+                  </Button>
+                </div>
               </Card>
               </>
             )}
@@ -7543,6 +7813,73 @@ ${centerText('AUTHOR NAME')}
           void generateShotListFromScreenplay(options)
         }}
       />
+
+      <Dialog
+        open={showCreateSceneDialog}
+        onOpenChange={(open) => {
+          setShowCreateSceneDialog(open)
+          if (!open) {
+            setNewSceneName("")
+            setNewSceneNumber("")
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create Scene</DialogTitle>
+            <DialogDescription>
+              Name the new scene to add it after the current one in this movie.
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            className="space-y-4"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleCreateScene()
+            }}
+          >
+            <div className="space-y-2">
+              <Label htmlFor="timeline-new-scene-name">Scene name</Label>
+              <Input
+                id="timeline-new-scene-name"
+                autoFocus
+                value={newSceneName}
+                onChange={(e) => setNewSceneName(e.target.value)}
+                placeholder="Opening, Earth, Montage..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="timeline-new-scene-number">Scene number</Label>
+              <Input
+                id="timeline-new-scene-number"
+                value={newSceneNumber}
+                onChange={(e) => setNewSceneNumber(e.target.value)}
+                placeholder="1"
+              />
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCreateSceneDialog(false)}
+                disabled={isCreatingScene}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isCreatingScene || !newSceneName.trim()}>
+                {isCreatingScene ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Scene"
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
         </div>
       </div>

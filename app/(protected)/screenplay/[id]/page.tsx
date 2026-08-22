@@ -39,6 +39,7 @@ import {
   Image as ImageIcon,
   List,
   Plus,
+  Wand2,
 } from "lucide-react"
 import jsPDF from "jspdf"
 import { useToast } from "@/hooks/use-toast"
@@ -185,6 +186,7 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [isLoadingScenes, setIsLoadingScenes] = useState(false)
   const [isGeneratingScenes, setIsGeneratingScenes] = useState(false)
   const [isCreatingScene, setIsCreatingScene] = useState(false)
+  const [suggestingSceneNameId, setSuggestingSceneNameId] = useState<string | null>(null)
   const [showCreateSceneDialog, setShowCreateSceneDialog] = useState(false)
   const [newSceneName, setNewSceneName] = useState("")
   const [newSceneNumber, setNewSceneNumber] = useState("")
@@ -2835,6 +2837,68 @@ Return ONLY the JSON array, no other text:`
     }
   }
 
+  const handleSuggestSceneName = async (scene: ScreenplayScene) => {
+    if (!userId) return
+
+    setSuggestingSceneNameId(scene.id)
+    try {
+      const timelineSceneId =
+        scene.id === selectedSceneId && activeTimelineSceneId
+          ? activeTimelineSceneId
+          : (await getTimelineSceneId(scene)) || scene.id
+
+      if (scene.id === selectedSceneId && fullScript?.trim()) {
+        const combinedContent = combineEditedPages()
+        const { error: saveError } = await getSupabaseClient()
+          .from('scenes')
+          .update({ screenplay_content: combinedContent })
+          .eq('id', timelineSceneId)
+          .eq('user_id', userId)
+
+        if (saveError) {
+          throw new Error(saveError.message || 'Failed to save screenplay before renaming')
+        }
+
+        setScreenplayScenes((prev) =>
+          prev.map((item) =>
+            item.id === scene.id ? { ...item, content: combinedContent } : item,
+          ),
+        )
+      }
+
+      const res = await fetch(`/api/timeline/scenes/${timelineSceneId}/suggest-name`, {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+
+      await TimelineService.updateScene(timelineSceneId, { name: data.name })
+
+      setScreenplayScenes((prev) =>
+        sortScreenplayScenes(
+          prev.map((item) => (item.id === scene.id ? { ...item, name: data.name } : item)),
+        ),
+      )
+
+      if (editingSceneId === scene.id) {
+        setEditingScene((prev) => ({ ...prev, name: data.name }))
+      }
+
+      toast({
+        title: 'Scene renamed',
+        description: data.name,
+      })
+    } catch (error) {
+      toast({
+        title: 'Could not rename scene',
+        description: error instanceof Error ? error.message : 'AI naming failed',
+        variant: 'destructive',
+      })
+    } finally {
+      setSuggestingSceneNameId(null)
+    }
+  }
+
   // Delete a scene (deletes from timeline scenes directly)
   const handleDeleteScene = async (sceneId: string) => {
     try {
@@ -3974,8 +4038,26 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
             <p className="text-sm sm:text-base text-muted-foreground break-words">
               Screenplay
               {selectedSceneId !== FULL_SCREENPLAY_ID && (
-                <span className="ml-2 text-purple-400">
+                <span className="ml-2 inline-flex items-center gap-1 text-purple-400">
                   · {screenplayScenes.find((scene) => scene.id === selectedSceneId)?.name || "Scene"}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                    title="Rename scene from screenplay"
+                    disabled={suggestingSceneNameId === selectedSceneId}
+                    onClick={() => {
+                      const scene = screenplayScenes.find((item) => item.id === selectedSceneId)
+                      if (scene) void handleSuggestSceneName(scene)
+                    }}
+                  >
+                    {suggestingSceneNameId === selectedSceneId ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
                 </span>
               )}
               {fullScript && totalPages > 0 && (
@@ -5274,7 +5356,27 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                                     onClick={(e) => e.stopPropagation()}
                                   />
                                 ) : (
-                                  <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                  <div className="flex items-center gap-2">
+                                    <CardTitle className="text-lg">{scene.name}</CardTitle>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 w-7 p-0 text-purple-400 hover:text-purple-300 hover:bg-purple-500/10"
+                                      title="Rename scene from screenplay"
+                                      disabled={suggestingSceneNameId === scene.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        void handleSuggestSceneName(scene)
+                                      }}
+                                    >
+                                      {suggestingSceneNameId === scene.id ? (
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      ) : (
+                                        <Wand2 className="h-3.5 w-3.5" />
+                                      )}
+                                    </Button>
+                                  </div>
                                 )}
                               </div>
                               <div className="flex items-center gap-2">
