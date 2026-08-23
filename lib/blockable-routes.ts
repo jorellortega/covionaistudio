@@ -32,6 +32,7 @@ export const BLOCKABLE_ROUTES: BlockableRoute[] = [
   { group: 'Account & billing', path: '/preferences', label: 'Preferences' },
   { group: 'Account & billing', path: '/subscriptions', label: 'Subscriptions' },
   { group: 'Account & billing', path: '/settings/plans-credits', label: 'Plans & credits' },
+  { group: 'Account & billing', path: '/tracker', label: 'API cost tracker' },
 
   { group: 'AI & keys', path: '/settings-ai', label: 'AI API keys' },
   { group: 'AI & keys', path: '/setup-ai', label: 'Setup AI' },

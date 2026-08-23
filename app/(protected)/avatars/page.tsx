@@ -81,7 +81,9 @@ import {
   LayoutGrid,
   Star,
   RefreshCw,
+  Eye,
 } from "lucide-react"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
 
 type GenerationMode = "description" | "from_reference"
 
@@ -111,6 +113,12 @@ interface AngleGallery {
 type AngleGalleries = Record<string, AngleGallery>
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
+
+/** Resized previews — full URL is used for popup viewing and AI reference. */
+const EDIT_PREVIEW_THUMB_WIDTH = 480
+const EDIT_SMALL_THUMB_WIDTH = 128
+const CARD_THUMB_WIDTH = 720
+const EDIT_THUMB_QUALITY = 65
 
 function isAvatarAsset(asset: Asset): boolean {
   return (
@@ -349,6 +357,10 @@ export default function AvatarsPage() {
   const [imageEditReferenceFile, setImageEditReferenceFile] = useState<File | null>(null)
   const [imageEditReferencePreview, setImageEditReferencePreview] = useState<string | null>(null)
   const [imageEditStyleLinkAssetIds, setImageEditStyleLinkAssetIds] = useState<string[]>([])
+  const [viewImageDialog, setViewImageDialog] = useState<{
+    url: string
+    label: string
+  } | null>(null)
   const [shotDialogOpen, setShotDialogOpen] = useState(false)
   const [editingShotId, setEditingShotId] = useState<string | null>(null)
   const [shotFormLabel, setShotFormLabel] = useState("")
@@ -2297,15 +2309,28 @@ export default function AvatarsPage() {
                       <p className="text-xs text-muted-foreground">
                         Pick one image and AI will create the other angles while keeping the same character likeness.
                       </p>
-                      {sourceReference ? (
+                          {sourceReference ? (
                         <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
-                          <div className="w-16 h-20 rounded-md overflow-hidden border border-border flex-shrink-0">
-                            <img
+                          <button
+                            type="button"
+                            className="w-16 h-20 rounded-md overflow-hidden border border-border flex-shrink-0"
+                            title="Click to view full size"
+                            onClick={() =>
+                              setViewImageDialog({
+                                url: sourceReference.imageUrl,
+                                label: sourceReference.title || "Source reference",
+                              })
+                            }
+                          >
+                            <StorageThumbImg
                               src={sourceReference.previewUrl}
                               alt="Source reference"
+                              width={EDIT_SMALL_THUMB_WIDTH}
+                              quality={EDIT_THUMB_QUALITY}
+                              resize="cover"
                               className="w-full h-full object-cover"
                             />
-                          </div>
+                          </button>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium truncate">
                               {sourceReference.title || "Reference image"}
@@ -2451,9 +2476,12 @@ export default function AvatarsPage() {
                                   className="relative flex-shrink-0 w-12 h-12 rounded-md overflow-hidden border border-border"
                                   title={`${getProjectAssetSourceLabel(asset, projectLocations, characters)} — ${asset.title}`}
                                 >
-                                  <img
+                                  <StorageThumbImg
                                     src={asset.content_url!}
                                     alt=""
+                                    width={EDIT_SMALL_THUMB_WIDTH}
+                                    quality={EDIT_THUMB_QUALITY}
+                                    resize="cover"
                                     className="w-full h-full object-cover"
                                   />
                                 </div>
@@ -2743,11 +2771,32 @@ export default function AvatarsPage() {
                             </div>
                           )}
                           {avatar ? (
-                            <img
-                              src={avatar.imageUrl}
-                              alt={angle.label}
-                              className="w-full h-full object-cover"
-                            />
+                            <button
+                              type="button"
+                              className="w-full h-full block cursor-pointer group/view"
+                              onClick={() =>
+                                setViewImageDialog({
+                                  url: avatar.imageUrl,
+                                  label: angle.label,
+                                })
+                              }
+                              title="View full image"
+                            >
+                              <StorageThumbImg
+                                src={avatar.imageUrl}
+                                alt={angle.label}
+                                width={CARD_THUMB_WIDTH}
+                                quality={EDIT_THUMB_QUALITY}
+                                resize="cover"
+                                className="w-full h-full object-cover"
+                              />
+                              <div className="absolute inset-0 bg-black/0 group-hover/view:bg-black/40 transition-colors flex items-center justify-center opacity-0 group-hover/view:opacity-100">
+                                <span className="rounded-full bg-black/60 text-white text-xs px-3 py-1.5 flex items-center gap-1.5">
+                                  <Eye className="h-3.5 w-3.5" />
+                                  View
+                                </span>
+                              </div>
+                            </button>
                           ) : (
                             <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4 gap-2">
                               <ImageIcon className="h-8 w-8 opacity-50" />
@@ -2782,10 +2831,13 @@ export default function AvatarsPage() {
                                 )}
                                 title={`Variant ${idx + 1}`}
                               >
-                                <img
+                                <StorageThumbImg
                                   src={img.imageUrl}
                                   alt=""
-                                  className="w-full h-full object-cover"
+                                  width={EDIT_SMALL_THUMB_WIDTH}
+                                  quality={EDIT_THUMB_QUALITY}
+                                  resize="cover"
+                                  className="w-full h-full object-cover pointer-events-none"
                                 />
                                 {img.saved && (
                                   <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-green-500" />
@@ -2886,13 +2938,26 @@ export default function AvatarsPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {collageDisplayUrl ? (
-                    <div className="rounded-lg overflow-hidden border border-border bg-muted/30">
-                      <img
+                    <button
+                      type="button"
+                      className="w-full rounded-lg overflow-hidden border border-border bg-muted/30"
+                      title="Click to view full size"
+                      onClick={() =>
+                        setViewImageDialog({
+                          url: collageDisplayUrl,
+                          label: "Avatar reference collage",
+                        })
+                      }
+                    >
+                      <StorageThumbImg
                         src={collageDisplayUrl}
                         alt="Avatar reference collage"
+                        width={CARD_THUMB_WIDTH}
+                        quality={EDIT_THUMB_QUALITY}
+                        resize="contain"
                         className="w-full h-auto object-contain"
                       />
-                    </div>
+                    </button>
                   ) : (
                     <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
                       {collageSourceItems.length} angle{collageSourceItems.length === 1 ? "" : "s"} ready
@@ -2995,10 +3060,13 @@ export default function AvatarsPage() {
                         className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary hover:ring-2 hover:ring-primary/30 transition-all group text-left"
                         title={asset.title}
                       >
-                        <img
+                        <StorageThumbImg
                           src={asset.content_url!}
                           alt=""
-                          className="w-full h-full object-cover"
+                          width={EDIT_PREVIEW_THUMB_WIDTH}
+                          quality={EDIT_THUMB_QUALITY}
+                          resize="cover"
+                          className="w-full h-full object-cover pointer-events-none"
                         />
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <p className="text-[10px] text-white line-clamp-2">
@@ -3041,10 +3109,13 @@ export default function AvatarsPage() {
                         className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary hover:ring-2 hover:ring-primary/30 transition-all group text-left"
                         title={asset.title}
                       >
-                        <img
+                        <StorageThumbImg
                           src={asset.content_url!}
                           alt=""
-                          className="w-full h-full object-cover"
+                          width={EDIT_PREVIEW_THUMB_WIDTH}
+                          quality={EDIT_THUMB_QUALITY}
+                          resize="cover"
+                          className="w-full h-full object-cover pointer-events-none"
                         />
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                           <p className="text-[10px] text-white line-clamp-2">
@@ -3125,13 +3196,26 @@ export default function AvatarsPage() {
 
             {imageEditAngle && imageEditCurrentImage && (
               <div className="space-y-3">
-                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                  <img
+                <button
+                  type="button"
+                  className="w-full rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40 cursor-pointer"
+                  title="Click to view full size"
+                  onClick={() =>
+                    setViewImageDialog({
+                      url: imageEditCurrentImage.imageUrl,
+                      label: imageEditAngle.label,
+                    })
+                  }
+                >
+                  <StorageThumbImg
                     src={imageEditCurrentImage.imageUrl}
                     alt={imageEditAngle.label}
+                    width={EDIT_PREVIEW_THUMB_WIDTH}
+                    quality={EDIT_THUMB_QUALITY}
+                    resize="contain"
                     className="w-full h-full max-h-40 object-contain"
                   />
-                </div>
+                </button>
 
                 <p className="text-xs text-muted-foreground">
                   Edit using your locked model ({getLockedImageModelLabel() || "lock one in AI Settings"}).
@@ -3233,13 +3317,23 @@ export default function AvatarsPage() {
                     </Button>
                     {imageEditReferencePreview ? (
                       <>
-                        <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
+                        <button
+                          type="button"
+                          className="relative w-14 h-14 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40"
+                          title="Click to view full size"
+                          onClick={() =>
+                            setViewImageDialog({
+                              url: imageEditReferencePreview,
+                              label: "Uploaded reference",
+                            })
+                          }
+                        >
                           <img
                             src={imageEditReferencePreview}
                             alt="Uploaded reference"
                             className="w-full h-full object-cover"
                           />
-                        </div>
+                        </button>
                         <Button
                           type="button"
                           variant="ghost"
@@ -3253,13 +3347,26 @@ export default function AvatarsPage() {
                         </Button>
                       </>
                     ) : (
-                      <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-                        <img
+                      <button
+                        type="button"
+                        className="relative w-14 h-14 rounded-lg overflow-hidden border border-border"
+                        title="Click to view full size"
+                        onClick={() =>
+                          setViewImageDialog({
+                            url: imageEditCurrentImage.imageUrl,
+                            label: imageEditAngle.label,
+                          })
+                        }
+                      >
+                        <StorageThumbImg
                           src={imageEditCurrentImage.imageUrl}
                           alt={imageEditAngle.label}
+                          width={EDIT_SMALL_THUMB_WIDTH}
+                          quality={EDIT_THUMB_QUALITY}
+                          resize="cover"
                           className="w-full h-full object-cover"
                         />
-                      </div>
+                      </button>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
@@ -3303,18 +3410,29 @@ export default function AvatarsPage() {
                                 type="button"
                                 disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                                 onClick={() => toggleImageEditStyleLink(asset.id)}
+                                onDoubleClick={(e) => {
+                                  e.preventDefault()
+                                  if (!asset.content_url) return
+                                  setViewImageDialog({
+                                    url: asset.content_url,
+                                    label: asset.title || group.label,
+                                  })
+                                }}
                                 className={cn(
                                   "relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all",
                                   imageEditStyleLinkAssetIds.includes(asset.id)
                                     ? "border-violet-500 ring-2 ring-violet-500/40"
                                     : "border-border hover:border-violet-500/50",
                                 )}
-                                title={`${getProjectAssetSourceLabel(asset, projectLocations, characters)} — ${asset.title}`}
+                                title={`${getProjectAssetSourceLabel(asset, projectLocations, characters)} — ${asset.title} · double-click to view full size`}
                               >
-                                <img
+                                <StorageThumbImg
                                   src={asset.content_url!}
                                   alt=""
-                                  className="w-full h-full object-cover"
+                                  width={EDIT_SMALL_THUMB_WIDTH}
+                                  quality={EDIT_THUMB_QUALITY}
+                                  resize="cover"
+                                  className="w-full h-full object-cover pointer-events-none"
                                 />
                               </button>
                             ))}
@@ -3368,6 +3486,21 @@ export default function AvatarsPage() {
                 </Button>
               </div>
             )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={!!viewImageDialog} onOpenChange={(open) => !open && setViewImageDialog(null)}>
+          <DialogContent className="max-w-[95vw] sm:max-w-5xl max-h-[95vh] p-2 sm:p-4">
+            <DialogHeader className="sr-only">
+              <DialogTitle>{viewImageDialog?.label || "View image"}</DialogTitle>
+            </DialogHeader>
+            {viewImageDialog ? (
+              <img
+                src={viewImageDialog.url}
+                alt={viewImageDialog.label}
+                className="w-full h-auto max-h-[85vh] object-contain rounded-lg"
+              />
+            ) : null}
           </DialogContent>
         </Dialog>
 

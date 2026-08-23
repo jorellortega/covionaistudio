@@ -15,12 +15,13 @@ import {
   truncateDocumentText,
 } from '@/lib/creative-workspace-import'
 import { syncSceneTextToProjectAsset, syncSceneTextToScreenplayScene, syncCombinedScreenplayToProjectAsset } from '@/lib/creative-workspace-assets'
+import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
 
 export const maxDuration = 120
 
 type RouteContext = { params: Promise<{ id: string }> }
 
-type AIResult = { content: string } | { error: string }
+type AIResult = { content: string; model?: string; inputTokens?: number; outputTokens?: number } | { error: string }
 
 function mapSettings(settingsData: { setting_key: string; setting_value: string }[]): AISettingsMap {
   const settings: AISettingsMap = {}
@@ -175,7 +176,12 @@ async function callOpenAI(
       return { error: 'OpenAI returned an empty response' }
     }
 
-    return { content }
+    return {
+      content,
+      model,
+      inputTokens: data?.usage?.prompt_tokens,
+      outputTokens: data?.usage?.completion_tokens,
+    }
   } catch (error) {
     console.error('Creative workspace OpenAI call failed:', error)
     return { error: error instanceof Error ? error.message : 'OpenAI request failed' }
@@ -232,7 +238,12 @@ async function callAnthropic(
       return { error: 'Anthropic returned an empty response' }
     }
 
-    return { content }
+    return {
+      content,
+      model,
+      inputTokens: data?.usage?.input_tokens,
+      outputTokens: data?.usage?.output_tokens,
+    }
   } catch (error) {
     console.error('Creative workspace Anthropic call failed:', error)
     return { error: error instanceof Error ? error.message : 'Anthropic request failed' }
@@ -279,6 +290,7 @@ async function generateImageFromConversation(
     headers: {
       'Content-Type': 'application/json',
       cookie: request.headers.get('cookie') || '',
+      'x-cost-source': 'workspace',
     },
     body: JSON.stringify({
       prompt: imagePrompt,
@@ -286,6 +298,7 @@ async function generateImageFromConversation(
       apiKey: 'configured',
       userId,
       model: apiModel,
+      costSource: 'workspace',
       width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
       height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
       autoSaveToBucket: true,
@@ -794,12 +807,38 @@ export async function POST(request: NextRequest, context: RouteContext) {
       )
       if ('content' in openaiResult) {
         assistantContent = openaiResult.content
+        await logApiCostFromRequest({
+          request,
+          userId: user.id,
+          fallbackSource: 'workspace',
+          generationType: 'chat',
+          provider: 'openai',
+          model: openaiResult.model || settings['openai_model'] || 'gpt-4o-mini',
+          prompt: trimmedMessage,
+          inputTokens: openaiResult.inputTokens,
+          outputTokens: openaiResult.outputTokens,
+          inputText: trimmedMessage,
+          outputText: openaiResult.content,
+        })
       } else {
         aiError = openaiResult.error
         const anthropicResult = await callAnthropic(aiMessages, settings, systemPrompt)
         if ('content' in anthropicResult) {
           assistantContent = anthropicResult.content
           aiError = null
+          await logApiCostFromRequest({
+            request,
+            userId: user.id,
+            fallbackSource: 'workspace',
+            generationType: 'chat',
+            provider: 'anthropic',
+            model: anthropicResult.model || settings['anthropic_model'] || 'claude-3-5-sonnet-20241022',
+            prompt: trimmedMessage,
+            inputTokens: anthropicResult.inputTokens,
+            outputTokens: anthropicResult.outputTokens,
+            inputText: trimmedMessage,
+            outputText: anthropicResult.content,
+          })
         } else {
           aiError = anthropicResult.error || aiError
         }

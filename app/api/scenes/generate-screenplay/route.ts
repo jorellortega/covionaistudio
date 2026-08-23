@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
+import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage } from '@/lib/api-cost-tracker'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
@@ -407,6 +408,8 @@ Generate a full, professional screenplay scene that brings this scene to life. I
 
     // Generate screenplay using AI
     let generatedScreenplay = ''
+    let inputTokens: number | undefined
+    let outputTokens: number | undefined
     const modelToUse = model || (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
     
     // Check if this is a GPT-5 model and increase maxTokens accordingly
@@ -440,6 +443,9 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       }
 
       generatedScreenplay = typeof content === 'string' ? content.trim() : String(content)
+      const openaiUsage = extractOpenAIUsage(response.data)
+      inputTokens = openaiUsage.inputTokens
+      outputTokens = openaiUsage.outputTokens
       
       // Clean up markdown code block markers if present
       generatedScreenplay = generatedScreenplay.trim()
@@ -477,6 +483,9 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       }
 
       generatedScreenplay = response.data.content[0].text
+      const anthropicUsage = extractAnthropicUsage(response.data)
+      inputTokens = anthropicUsage.inputTokens
+      outputTokens = anthropicUsage.outputTokens
       
       // Clean up markdown code block markers if present
       generatedScreenplay = generatedScreenplay.trim()
@@ -555,6 +564,21 @@ Generate a full, professional screenplay scene that brings this scene to life. I
         { status: 500 }
       )
     }
+
+    await logApiCostFromRequest({
+      request,
+      userId: targetUserId,
+      fallbackSource: 'screenplay',
+      generationType: 'screenplay',
+      provider: normalizedService,
+      model: modelToUse,
+      prompt: userPrompt,
+      inputTokens,
+      outputTokens,
+      inputText: userPrompt,
+      outputText: generatedScreenplay,
+      metadata: { sceneId },
+    })
 
     return NextResponse.json({
       success: true,

@@ -75,6 +75,12 @@ import {
   type SavedPrompt,
 } from "@/lib/saved-prompts-service"
 import { cn } from "@/lib/utils"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
+
+/** Resized previews in Edit Image — full URL is used for popup + AI reference. */
+const EDIT_PREVIEW_THUMB_WIDTH = 480
+const EDIT_SMALL_THUMB_WIDTH = 128
+const EDIT_THUMB_QUALITY = 65
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -253,6 +259,7 @@ export function ObjectAngleStudio({
   const [isDeletingCollage, setIsDeletingCollage] = useState(false)
   const [settingThumbnailUrl, setSettingThumbnailUrl] = useState<string | null>(null)
   const [pickDialogAngleId, setPickDialogAngleId] = useState<string | null>(null)
+  const [sourcePickDialogOpen, setSourcePickDialogOpen] = useState(false)
   const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
   const [imageEditAngleId, setImageEditAngleId] = useState<string | null>(null)
   const [imageEditPrompt, setImageEditPrompt] = useState("")
@@ -1048,6 +1055,14 @@ export function ObjectAngleStudio({
 
   const selectReferenceAsset = (asset: Asset) => {
     if (!asset.content_url) return
+    if (isAngleCollageReferenceAsset(asset)) {
+      toast({
+        title: "Use a single photo",
+        description: "Pick a single object image as reference — not a collage sheet.",
+        variant: "destructive",
+      })
+      return
+    }
     if (sourceReference?.previewUrl?.startsWith("blob:")) {
       URL.revokeObjectURL(sourceReference.previewUrl)
     }
@@ -1058,6 +1073,21 @@ export function ObjectAngleStudio({
       assetId: asset.id,
       title: asset.title,
     })
+    setSourcePickDialogOpen(false)
+  }
+
+  const openSourcePickDialog = () => {
+    const hasThisObject = referencePickerAssets.length > 0
+    const hasProjectImages = allPickableAssets.length > 0
+    if (!hasThisObject && !hasProjectImages) {
+      toast({
+        title: "No images available",
+        description: "Upload an image or add images to this project first.",
+        variant: "destructive",
+      })
+      return
+    }
+    setSourcePickDialogOpen(true)
   }
 
   const handleDownloadCollage = () => {
@@ -1267,7 +1297,47 @@ export function ObjectAngleStudio({
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Source reference</Label>
-              <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                Upload or pick an existing project image — AI will generate the other angles from it.
+              </p>
+              {sourceReference ? (
+                <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+                  <div className="w-16 h-16 rounded-md overflow-hidden border border-border flex-shrink-0">
+                    <img
+                      src={sourceReference.previewUrl}
+                      alt="Source reference"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {sourceReference.title || "Reference image"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Angles will be generated from this image
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 flex-shrink-0"
+                    onClick={clearSourceReference}
+                    disabled={isBatchGenerating}
+                    title="Clear reference"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border p-4 text-center">
+                  <ImageIcon className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
+                  <p className="text-xs text-muted-foreground">
+                    Upload or pick an existing image as your source
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-2">
                 <input
                   id="object-angle-ref-upload"
                   type="file"
@@ -1280,34 +1350,24 @@ export function ObjectAngleStudio({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="flex-1 gap-2"
                   disabled={isBatchGenerating}
                   onClick={() => document.getElementById("object-angle-ref-upload")?.click()}
                 >
-                  <Upload className="h-4 w-4" />
+                  <Upload className="h-3.5 w-3.5" />
                   Upload
                 </Button>
-                {sourceReference ? (
-                  <>
-                    <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
-                      <img
-                        src={sourceReference.previewUrl}
-                        alt="Reference"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={clearSourceReference}
-                      title="Clear reference"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </>
-                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-2"
+                  disabled={isBatchGenerating}
+                  onClick={openSourcePickDialog}
+                >
+                  <Images className="h-3.5 w-3.5" />
+                  Pick Existing
+                </Button>
               </div>
               {referencePickerAssets.length > 0 ? (
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1328,11 +1388,7 @@ export function ObjectAngleStudio({
                     </button>
                   ))}
                 </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Upload or generate a base image first, then use it as the reference.
-                </p>
-              )}
+              ) : null}
             </div>
 
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
@@ -1813,6 +1869,82 @@ export function ObjectAngleStudio({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={sourcePickDialogOpen} onOpenChange={setSourcePickDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Pick source image</DialogTitle>
+            <DialogDescription>
+              Choose one image to generate object angles from. Prefer a single photo — not a collage.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+            {referencePickerAssets.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  This object
+                </p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {referencePickerAssets.map((asset) => (
+                    <button
+                      key={asset.id}
+                      type="button"
+                      onClick={() => selectReferenceAsset(asset)}
+                      className={cn(
+                        "relative aspect-square rounded-lg overflow-hidden border-2 transition-all group text-left",
+                        sourceReference?.assetId === asset.id
+                          ? "border-violet-500 ring-2 ring-violet-500/40"
+                          : "border-border hover:border-primary hover:ring-2 hover:ring-primary/30",
+                      )}
+                      title={asset.title}
+                    >
+                      <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <p className="text-[10px] text-white line-clamp-2">{asset.title}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {pickableImageGroups.map((group) => (
+              <div key={group.label} className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {group.label}
+                </p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {group.assets
+                    .filter((asset) => !isAngleCollageReferenceAsset(asset))
+                    .map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        onClick={() => selectReferenceAsset(asset)}
+                        className={cn(
+                          "relative aspect-square rounded-lg overflow-hidden border-2 transition-all group text-left",
+                          sourceReference?.assetId === asset.id
+                            ? "border-violet-500 ring-2 ring-violet-500/40"
+                            : "border-border hover:border-primary hover:ring-2 hover:ring-primary/30",
+                        )}
+                        title={asset.title}
+                      >
+                        <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <p className="text-[10px] text-white line-clamp-2">{asset.title}</p>
+                        </div>
+                      </button>
+                    ))}
+                </div>
+              </div>
+            ))}
+            {referencePickerAssets.length === 0 && pickableImageGroups.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                No project images yet. Upload one first.
+              </p>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!pickDialogAngleId} onOpenChange={(open) => !open && setPickDialogAngleId(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
@@ -1891,19 +2023,26 @@ export function ObjectAngleStudio({
 
           {imageEditAngle && imageEditCurrentImage && (
             <div className="space-y-3">
-              <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                <img
+              <button
+                type="button"
+                className="w-full rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40 cursor-pointer"
+                title="Click to view full size"
+                onClick={() =>
+                  setViewImageDialog({
+                    url: imageEditCurrentImage.imageUrl,
+                    label: imageEditAngle.label,
+                  })
+                }
+              >
+                <StorageThumbImg
                   src={imageEditCurrentImage.imageUrl}
                   alt={imageEditAngle.label}
-                  className="w-full h-full max-h-40 object-contain cursor-pointer"
-                  onClick={() =>
-                    setViewImageDialog({
-                      url: imageEditCurrentImage.imageUrl,
-                      label: imageEditAngle.label,
-                    })
-                  }
+                  width={EDIT_PREVIEW_THUMB_WIDTH}
+                  quality={EDIT_THUMB_QUALITY}
+                  resize="contain"
+                  className="w-full h-full max-h-40 object-contain"
                 />
-              </div>
+              </button>
 
               <p className="text-xs text-muted-foreground">
                 Edit using your locked model ({lockedImageModelLabel}).
@@ -2028,13 +2167,26 @@ export function ObjectAngleStudio({
                       </Button>
                     </>
                   ) : (
-                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-                      <img
+                    <button
+                      type="button"
+                      className="relative w-14 h-14 rounded-lg overflow-hidden border border-border"
+                      title="Click to view full size"
+                      onClick={() =>
+                        setViewImageDialog({
+                          url: imageEditCurrentImage.imageUrl,
+                          label: imageEditAngle.label,
+                        })
+                      }
+                    >
+                      <StorageThumbImg
                         src={imageEditCurrentImage.imageUrl}
                         alt={imageEditAngle.label}
+                        width={EDIT_SMALL_THUMB_WIDTH}
+                        quality={EDIT_THUMB_QUALITY}
+                        resize="cover"
                         className="w-full h-full object-cover"
                       />
-                    </div>
+                    </button>
                   )}
                 </div>
               </div>
@@ -2060,6 +2212,15 @@ export function ObjectAngleStudio({
                               type="button"
                               disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                               onClick={() => toggleImageEditStyleLinkAsset(asset.id)}
+                              onDoubleClick={(e) => {
+                                e.preventDefault()
+                                if (!asset.content_url) return
+                                setViewImageDialog({
+                                  url: asset.content_url,
+                                  label: asset.title || group.label,
+                                })
+                              }}
+                              title="Click to link · double-click to view full size"
                               className={cn(
                                 "relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all",
                                 imageEditStyleLinkAssetIds.includes(asset.id)
@@ -2067,10 +2228,13 @@ export function ObjectAngleStudio({
                                   : "border-border hover:border-violet-500/50",
                               )}
                             >
-                              <img
+                              <StorageThumbImg
                                 src={asset.content_url!}
                                 alt=""
-                                className="w-full h-full object-cover"
+                                width={EDIT_SMALL_THUMB_WIDTH}
+                                quality={EDIT_THUMB_QUALITY}
+                                resize="cover"
+                                className="w-full h-full object-cover pointer-events-none"
                               />
                             </button>
                           ))}

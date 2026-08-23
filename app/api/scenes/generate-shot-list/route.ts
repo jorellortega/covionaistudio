@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
+import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage } from '@/lib/api-cost-tracker'
 import {
   applyShotListAssignments,
   formatAssignmentPromptSection,
@@ -201,6 +202,8 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
 
     // Generate shot list using AI
     let generatedResponse = ''
+    let inputTokens: number | undefined
+    let outputTokens: number | undefined
     const modelToUse = model || (normalizedService === 'openai' ? 'gpt-4o' : 'claude-3-5-sonnet-20241022')
     
     // Check if GPT-5 model - these need higher token limits
@@ -224,6 +227,9 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
       }
 
       generatedResponse = response.data.choices[0].message.content || ''
+      const openaiUsage = extractOpenAIUsage(response.data)
+      inputTokens = openaiUsage.inputTokens
+      outputTokens = openaiUsage.outputTokens
       
       // Handle GPT-5 empty content issue (all tokens used for reasoning)
       if (!generatedResponse || generatedResponse.trim().length === 0) {
@@ -240,6 +246,9 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
           
           if (retryResponse.success && retryResponse.data?.choices?.[0]?.message?.content) {
             generatedResponse = retryResponse.data.choices[0].message.content
+            const retryUsage = extractOpenAIUsage(retryResponse.data)
+            inputTokens = retryUsage.inputTokens
+            outputTokens = retryUsage.outputTokens
             console.log('✅ Retry successful, got content:', generatedResponse.substring(0, 200))
           } else {
             return NextResponse.json(
@@ -274,6 +283,9 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
       }
 
       generatedResponse = response.data.content[0].text
+      const anthropicUsage = extractAnthropicUsage(response.data)
+      inputTokens = anthropicUsage.inputTokens
+      outputTokens = anthropicUsage.outputTokens
     } else {
       return NextResponse.json(
         { error: 'Unsupported AI service' },
@@ -601,6 +613,21 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
         locationCatalog,
       ),
     )
+
+    await logApiCostFromRequest({
+      request,
+      userId: targetUserId,
+      fallbackSource: 'shotlist',
+      generationType: 'shot_list',
+      provider: normalizedService,
+      model: modelToUse,
+      prompt: userPrompt,
+      inputTokens,
+      outputTokens,
+      inputText: userPrompt,
+      outputText: generatedResponse,
+      metadata: { sceneId },
+    })
 
     return NextResponse.json({
       success: true,

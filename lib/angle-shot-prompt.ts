@@ -30,11 +30,21 @@ export function buildCollageSourceItems(options: {
   const items: CollageSourceItem[] = []
 
   for (const shot of shots) {
+    const allowedUrls = new Set(
+      assets.filter((asset) => asset.content_url).map((asset) => asset.content_url!),
+    )
+    const allowedAssetIds = new Set(assets.map((asset) => asset.id))
+
     const gallery = angleGalleries[shot.id]
     if (gallery?.images.length) {
       const image = gallery.images[gallery.selectedIndex] ?? gallery.images[0]
-      items.push({ label: shot.label, imageUrl: image.imageUrl })
-      continue
+      const belongsToEntity =
+        (image.assetId && allowedAssetIds.has(image.assetId)) ||
+        allowedUrls.has(image.imageUrl)
+      if (belongsToEntity) {
+        items.push({ label: shot.label, imageUrl: image.imageUrl })
+        continue
+      }
     }
 
     const savedAsset = assets

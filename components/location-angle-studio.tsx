@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -75,6 +75,12 @@ import {
   type SavedPrompt,
 } from "@/lib/saved-prompts-service"
 import { cn } from "@/lib/utils"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
+
+/** Resized previews in Edit Image — full URL is used for popup + AI reference. */
+const EDIT_PREVIEW_THUMB_WIDTH = 480
+const EDIT_SMALL_THUMB_WIDTH = 128
+const EDIT_THUMB_QUALITY = 65
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -109,7 +115,7 @@ interface LocationAngleStudioProps {
   location: Location
   imageAssets: Asset[]
   locationAssets: Asset[]
-  onLocationAssetsChange: (assets: Asset[]) => void
+  onLocationAssetsChange: Dispatch<SetStateAction<Asset[]>>
   primaryReferenceAsset?: Asset | null
   pickableImageGroups?: { label: string; assets: Asset[] }[]
   onSetThumbnail?: (imageUrl: string) => Promise<void>
@@ -214,6 +220,67 @@ function saveCachedGalleries(
   }
 }
 
+function mergeAngleGalleries(...sources: AngleGalleries[]): AngleGalleries {
+  const merged: AngleGalleries = {}
+  for (const source of sources) {
+    for (const [angleId, gallery] of Object.entries(source)) {
+      const existing = merged[angleId]
+      if (!existing) {
+        merged[angleId] = {
+          images: [...gallery.images],
+          selectedIndex: gallery.selectedIndex,
+        }
+        continue
+      }
+      const seen = new Set(existing.images.map((img) => img.imageUrl))
+      const combined = [...existing.images]
+      for (const img of gallery.images) {
+        if (!seen.has(img.imageUrl)) {
+          combined.push(img)
+          seen.add(img.imageUrl)
+        }
+      }
+      merged[angleId] = {
+        images: combined,
+        selectedIndex: Math.min(
+          Math.max(existing.selectedIndex, gallery.selectedIndex),
+          Math.max(0, combined.length - 1),
+        ),
+      }
+    }
+  }
+  return merged
+}
+
+/** Drop saved gallery images whose assets were deleted (prevents cache from resurrecting them). */
+function pruneGalleriesToExistingAssets(
+  galleries: AngleGalleries,
+  assets: Asset[],
+): AngleGalleries {
+  if (assets.length === 0) return galleries
+  const allowedIds = new Set(assets.map((asset) => asset.id))
+  const pruned: AngleGalleries = {}
+
+  for (const [angleId, gallery] of Object.entries(galleries)) {
+    const images = gallery.images.filter((img) => {
+      if (!img.assetId) return true
+      return allowedIds.has(img.assetId)
+    })
+    if (images.length === 0) continue
+    pruned[angleId] = {
+      images,
+      selectedIndex: Math.min(gallery.selectedIndex, Math.max(0, images.length - 1)),
+    }
+  }
+
+  return pruned
+}
+
+function isAssetNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "")
+  return /not found|coerce the result/i.test(message)
+}
+
 export function LocationAngleStudio({
   projectId,
   userId,
@@ -230,6 +297,11 @@ export function LocationAngleStudio({
   const { toast } = useToast()
   const hydrationKeyRef = useRef<string | null>(null)
   const syncedPrimaryAssetIdRef = useRef<string | null>(null)
+
+  const scopedLocationAssets = useMemo(
+    () => locationAssets.filter((asset) => asset.location_id === location.id),
+    [locationAssets, location.id],
+  )
 
   const [selectedAngles, setSelectedAngles] = useState<string[]>([
     ...LOCATION_TURNAROUND_ANGLE_IDS,
@@ -252,7 +324,9 @@ export function LocationAngleStudio({
   const [isSavingCollage, setIsSavingCollage] = useState(false)
   const [isDeletingCollage, setIsDeletingCollage] = useState(false)
   const [settingThumbnailUrl, setSettingThumbnailUrl] = useState<string | null>(null)
+  const [deletingImageKey, setDeletingImageKey] = useState<string | null>(null)
   const [pickDialogAngleId, setPickDialogAngleId] = useState<string | null>(null)
+  const [sourcePickDialogOpen, setSourcePickDialogOpen] = useState(false)
   const [imageEditDialogOpen, setImageEditDialogOpen] = useState(false)
   const [imageEditAngleId, setImageEditAngleId] = useState<string | null>(null)
   const [imageEditPrompt, setImageEditPrompt] = useState("")
@@ -271,14 +345,13 @@ export function LocationAngleStudio({
 
   const savedCollageAsset = useMemo(
     () =>
-      locationAssets.find(
+      scopedLocationAssets.find(
         (asset) =>
-          asset.location_id === location.id &&
           asset.metadata?.type === "location_angle" &&
           asset.metadata?.location_angle === LOCATION_REFERENCE_COLLAGE_ANGLE_ID &&
           asset.content_url,
       ) ?? null,
-    [locationAssets, location.id],
+    [scopedLocationAssets],
   )
 
   const collageDisplayUrl = collagePreviewUrl || savedCollageAsset?.content_url || null
@@ -293,7 +366,7 @@ export function LocationAngleStudio({
       buildCollageSourceItems({
         shots: locationShots,
         angleGalleries,
-        assets: locationAssets,
+        assets: scopedLocationAssets,
         entityId: location.id,
         isAngleAsset: isLocationAngleAsset,
         readAngleId: (asset) =>
@@ -301,12 +374,12 @@ export function LocationAngleStudio({
             ? asset.metadata.location_angle
             : undefined,
       }),
-    [locationShots, angleGalleries, locationAssets, location.id],
+    [locationShots, angleGalleries, scopedLocationAssets, location.id],
   )
 
   const savedAngleAssetCount = useMemo(
-    () => locationAssets.filter((asset) => isLocationAngleAsset(asset, location.id)).length,
-    [locationAssets, location.id],
+    () => scopedLocationAssets.filter((asset) => isLocationAngleAsset(asset, location.id)).length,
+    [scopedLocationAssets, location.id],
   )
 
   const hasAnyImages = totalImageCount > 0 || savedAngleAssetCount > 0
@@ -425,43 +498,27 @@ export function LocationAngleStudio({
   }
 
   const hydrateGalleries = useCallback(() => {
-    const assetsSignature = locationAssets
+    const assetsSignature = scopedLocationAssets
       .map((asset) => asset.id)
       .sort()
       .join(",")
     const hydrationKey = `${projectId}:${userId}:${location.id}:${assetsSignature}`
     if (hydrationKeyRef.current === hydrationKey) return
 
-    const fromAssets = buildGalleriesFromLocationAssets(locationAssets, location.id)
+    const fromAssets = buildGalleriesFromLocationAssets(scopedLocationAssets, location.id)
     const cached = loadCachedGalleries(projectId, userId, location.id)
-    const merged: AngleGalleries = { ...cached }
 
-    for (const [angleId, assetGallery] of Object.entries(fromAssets)) {
-      const cachedGallery = merged[angleId]
-      if (!cachedGallery) {
-        merged[angleId] = assetGallery
-        continue
-      }
-      const seen = new Set(cachedGallery.images.map((img) => img.imageUrl))
-      const combined = [...cachedGallery.images]
-      for (const img of assetGallery.images) {
-        if (!seen.has(img.imageUrl)) {
-          combined.push(img)
-          seen.add(img.imageUrl)
-        }
-      }
-      merged[angleId] = {
-        images: combined,
-        selectedIndex: Math.min(
-          cachedGallery.selectedIndex,
-          Math.max(0, combined.length - 1),
-        ),
-      }
-    }
-
-    setAngleGalleries(merged)
+    // Merge into existing in-memory galleries so newly generated angles are never wiped
+    // when another angle finishes and locationAssets updates. Prune deleted assets so
+    // localStorage cache cannot resurrect shots after Delete.
+    setAngleGalleries((prev) =>
+      pruneGalleriesToExistingAssets(
+        mergeAngleGalleries(prev, cached, fromAssets),
+        scopedLocationAssets,
+      ),
+    )
     hydrationKeyRef.current = hydrationKey
-  }, [location.id, locationAssets, projectId, userId])
+  }, [location.id, scopedLocationAssets, projectId, userId])
 
   useEffect(() => {
     if (!ready || !userId) return
@@ -470,17 +527,28 @@ export function LocationAngleStudio({
 
   useEffect(() => {
     if (!ready || !userId) return
-    const hasSavedAngles = locationAssets.some((asset) =>
+    const hasSavedAngles = scopedLocationAssets.some((asset) =>
       isLocationAngleAsset(asset, location.id),
     )
     if (!hasSavedAngles || Object.keys(angleGalleries).length > 0) return
     hydrationKeyRef.current = null
     hydrateGalleries()
-  }, [ready, userId, locationAssets, location.id, angleGalleries, hydrateGalleries])
+  }, [ready, userId, scopedLocationAssets, location.id, angleGalleries, hydrateGalleries])
+
+  useEffect(() => {
+    hydrationKeyRef.current = null
+    syncedPrimaryAssetIdRef.current = null
+    setAngleGalleries({})
+    setSourceReference(null)
+    setCollagePreviewUrl(null)
+    setCollagePreviewBlob(null)
+    setLocationShots([...LOCATION_ANGLES])
+    setSelectedAngles([...LOCATION_TURNAROUND_ANGLE_IDS])
+  }, [location.id])
 
   useEffect(() => {
     if (!userId) return
-    if (Object.keys(angleGalleries).length === 0) return
+    // Always persist, including empty galleries, so deletes clear stale cache entries.
     saveCachedGalleries(projectId, userId, location.id, angleGalleries)
   }, [angleGalleries, userId, projectId, location.id])
 
@@ -489,16 +557,6 @@ export function LocationAngleStudio({
       if (collagePreviewUrl) URL.revokeObjectURL(collagePreviewUrl)
     }
   }, [collagePreviewUrl])
-
-  useEffect(() => {
-    hydrationKeyRef.current = null
-    syncedPrimaryAssetIdRef.current = null
-    setSourceReference(null)
-    setCollagePreviewUrl(null)
-    setCollagePreviewBlob(null)
-    setLocationShots([...LOCATION_ANGLES])
-    setSelectedAngles([...LOCATION_TURNAROUND_ANGLE_IDS])
-  }, [location.id])
 
   useEffect(() => {
     if (!primaryReferenceAsset?.content_url) return
@@ -605,7 +663,10 @@ export function LocationAngleStudio({
       },
     })
 
-    onLocationAssetsChange([savedAsset, ...locationAssets.filter((a) => a.id !== savedAsset.id)])
+    onLocationAssetsChange((prev) => [
+      savedAsset,
+      ...prev.filter((a) => a.id !== savedAsset.id),
+    ])
 
     return {
       id: savedAsset.id,
@@ -1001,16 +1062,49 @@ export function LocationAngleStudio({
     setShotFormPrompt("")
   }
 
-  const deleteShot = (shotId: string) => {
+  const deleteShot = async (shotId: string) => {
     const shot = locationShots.find((s) => s.id === shotId)
-    const imageCount = angleGalleries[shotId]?.images.length ?? 0
+    const galleryImages = angleGalleries[shotId]?.images ?? []
+    const savedAssets = scopedLocationAssets.filter(
+      (asset) =>
+        isLocationAngleAsset(asset, location.id) &&
+        asset.metadata?.location_angle === shotId,
+    )
+    const imageCount = Math.max(galleryImages.length, savedAssets.length)
     if (
       imageCount > 0 &&
       !window.confirm(
-        `Delete "${shot?.label || "this shot"}"? ${imageCount} saved image${imageCount === 1 ? "" : "s"} for this shot will be removed from the gallery.`,
+        `Delete "${shot?.label || "this shot"}"? ${imageCount} saved image${imageCount === 1 ? "" : "s"} for this shot will be removed.`,
       )
     ) {
       return
+    }
+
+    const assetIds = new Set<string>()
+    for (const img of galleryImages) {
+      if (img.assetId) assetIds.add(img.assetId)
+    }
+    for (const asset of savedAssets) {
+      assetIds.add(asset.id)
+    }
+
+    for (const assetId of assetIds) {
+      try {
+        await AssetService.deleteAsset(assetId)
+      } catch (error) {
+        if (!isAssetNotFoundError(error)) {
+          toast({
+            title: "Delete failed",
+            description: error instanceof Error ? error.message : "Could not delete shot images.",
+            variant: "destructive",
+          })
+          return
+        }
+      }
+    }
+
+    if (assetIds.size > 0) {
+      onLocationAssetsChange((prev) => prev.filter((asset) => !assetIds.has(asset.id)))
     }
 
     setLocationShots((prev) => prev.filter((s) => s.id !== shotId))
@@ -1018,9 +1112,37 @@ export function LocationAngleStudio({
     setAngleGalleries((prev) => {
       const next = { ...prev }
       delete next[shotId]
+      saveCachedGalleries(projectId, userId, location.id, next)
       return next
     })
     toast({ title: "Shot removed", description: shot?.label })
+  }
+
+  const removeImageFromGalleries = (angleId: string, image: LocationAngleImage) => {
+    setAngleGalleries((prev) => {
+      const gallery = prev[angleId]
+      if (!gallery) return prev
+      const nextImages = gallery.images.filter(
+        (item) =>
+          item.id !== image.id &&
+          item.imageUrl !== image.imageUrl &&
+          !(image.assetId && item.assetId === image.assetId),
+      )
+      const next = { ...prev }
+      if (nextImages.length === 0) {
+        delete next[angleId]
+      } else {
+        next[angleId] = {
+          images: nextImages,
+          selectedIndex: Math.min(
+            gallery.selectedIndex,
+            Math.max(0, nextImages.length - 1),
+          ),
+        }
+      }
+      saveCachedGalleries(projectId, userId, location.id, next)
+      return next
+    })
   }
 
   const handleSourceUpload = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1050,6 +1172,14 @@ export function LocationAngleStudio({
 
   const selectReferenceAsset = (asset: Asset) => {
     if (!asset.content_url) return
+    if (isAngleCollageReferenceAsset(asset)) {
+      toast({
+        title: "Use a single photo",
+        description: "Pick a single location image as reference — not a collage sheet.",
+        variant: "destructive",
+      })
+      return
+    }
     if (sourceReference?.previewUrl?.startsWith("blob:")) {
       URL.revokeObjectURL(sourceReference.previewUrl)
     }
@@ -1060,6 +1190,19 @@ export function LocationAngleStudio({
       assetId: asset.id,
       title: asset.title,
     })
+    setSourcePickDialogOpen(false)
+  }
+
+  const openSourcePickDialog = () => {
+    if (referencePickerAssets.length === 0) {
+      toast({
+        title: "No images available",
+        description: "Upload or generate an image for this location first.",
+        variant: "destructive",
+      })
+      return
+    }
+    setSourcePickDialogOpen(true)
   }
 
   const handleDownloadCollage = () => {
@@ -1090,7 +1233,9 @@ export function LocationAngleStudio({
       }
       if (savedCollageAsset) {
         await AssetService.deleteAsset(savedCollageAsset.id)
-        onLocationAssetsChange(locationAssets.filter((asset) => asset.id !== savedCollageAsset.id))
+        onLocationAssetsChange((prev) =>
+          prev.filter((asset) => asset.id !== savedCollageAsset.id),
+        )
       }
       toast({
         title: hasSaved ? "Collage deleted" : "Preview discarded",
@@ -1190,9 +1335,9 @@ export function LocationAngleStudio({
         },
       })
 
-      onLocationAssetsChange([
+      onLocationAssetsChange((prev) => [
         savedAsset,
-        ...locationAssets.filter((a) => a.id !== savedCollageAsset?.id && a.id !== savedAsset.id),
+        ...prev.filter((a) => a.id !== savedCollageAsset?.id && a.id !== savedAsset.id),
       ])
 
       if (collagePreviewUrl) URL.revokeObjectURL(collagePreviewUrl)
@@ -1215,32 +1360,32 @@ export function LocationAngleStudio({
   }
 
   const handleDeleteAngleImage = async (angle: LocationAngle, image: LocationAngleImage) => {
-    if (image.saved && image.assetId) {
-      try {
-        await AssetService.deleteAsset(image.assetId)
-        onLocationAssetsChange(locationAssets.filter((asset) => asset.id !== image.assetId))
-      } catch (error) {
-        toast({
-          title: "Delete failed",
-          description: error instanceof Error ? error.message : "Could not delete image.",
-          variant: "destructive",
-        })
-        return
-      }
-    }
+    const deleteKey = `${angle.id}:${image.assetId || image.id}`
+    if (deletingImageKey === deleteKey) return
+    setDeletingImageKey(deleteKey)
 
-    setAngleGalleries((prev) => {
-      const gallery = prev[angle.id]
-      if (!gallery) return prev
-      const nextImages = gallery.images.filter((item) => item.id !== image.id)
-      return {
-        ...prev,
-        [angle.id]: {
-          images: nextImages,
-          selectedIndex: Math.min(gallery.selectedIndex, Math.max(0, nextImages.length - 1)),
-        },
+    try {
+      if (image.saved && image.assetId) {
+        try {
+          await AssetService.deleteAsset(image.assetId)
+        } catch (error) {
+          if (!isAssetNotFoundError(error)) {
+            toast({
+              title: "Delete failed",
+              description: error instanceof Error ? error.message : "Could not delete image.",
+              variant: "destructive",
+            })
+            return
+          }
+        }
+        onLocationAssetsChange((prev) => prev.filter((asset) => asset.id !== image.assetId))
       }
-    })
+
+      removeImageFromGalleries(angle.id, image)
+      toast({ title: "Deleted", description: `${angle.label} image removed.` })
+    } finally {
+      setDeletingImageKey(null)
+    }
   }
 
   return (
@@ -1269,7 +1414,47 @@ export function LocationAngleStudio({
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Source reference</Label>
-              <div className="flex flex-wrap items-center gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                Upload or pick an existing project image — AI will generate the other angles from it.
+              </p>
+              {sourceReference ? (
+                <div className="flex items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3">
+                  <div className="w-16 h-16 rounded-md overflow-hidden border border-border flex-shrink-0">
+                    <img
+                      src={sourceReference.previewUrl}
+                      alt="Source reference"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {sourceReference.title || "Reference image"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Angles will be generated from this image
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 flex-shrink-0"
+                    onClick={clearSourceReference}
+                    disabled={isBatchGenerating}
+                    title="Clear reference"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border p-4 text-center">
+                  <ImageIcon className="h-8 w-8 mx-auto text-muted-foreground/50 mb-2" />
+                  <p className="text-xs text-muted-foreground">
+                    Upload or pick an existing image as your source
+                  </p>
+                </div>
+              )}
+              <div className="flex gap-2">
                 <input
                   id="location-angle-ref-upload"
                   type="file"
@@ -1282,34 +1467,24 @@ export function LocationAngleStudio({
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="gap-2"
+                  className="flex-1 gap-2"
                   disabled={isBatchGenerating}
                   onClick={() => document.getElementById("location-angle-ref-upload")?.click()}
                 >
-                  <Upload className="h-4 w-4" />
+                  <Upload className="h-3.5 w-3.5" />
                   Upload
                 </Button>
-                {sourceReference ? (
-                  <>
-                    <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-primary ring-2 ring-primary/40">
-                      <img
-                        src={sourceReference.previewUrl}
-                        alt="Reference"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
-                      onClick={clearSourceReference}
-                      title="Clear reference"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  </>
-                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="flex-1 gap-2"
+                  disabled={isBatchGenerating}
+                  onClick={openSourcePickDialog}
+                >
+                  <Images className="h-3.5 w-3.5" />
+                  Pick Existing
+                </Button>
               </div>
               {referencePickerAssets.length > 0 ? (
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1330,11 +1505,7 @@ export function LocationAngleStudio({
                     </button>
                   ))}
                 </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Upload or generate a base image first, then use it as the reference.
-                </p>
-              )}
+              ) : null}
             </div>
 
             <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
@@ -1368,7 +1539,7 @@ export function LocationAngleStudio({
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
-                    onClick={() => deleteShot(angle.id)}
+                    onClick={() => void deleteShot(angle.id)}
                     title="Delete shot"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -1424,7 +1595,7 @@ export function LocationAngleStudio({
                 (angle) =>
                   selectedAngles.includes(angle.id) ||
                   (angleGalleries[angle.id]?.images.length ?? 0) > 0 ||
-                  locationAssets.some(
+                  scopedLocationAssets.some(
                     (asset) =>
                       isLocationAngleAsset(asset, location.id) &&
                       asset.metadata?.location_angle === angle.id,
@@ -1434,7 +1605,7 @@ export function LocationAngleStudio({
                 const image =
                   gallery?.images[gallery?.selectedIndex ?? 0] ??
                   (() => {
-                    const asset = locationAssets
+                    const asset = scopedLocationAssets
                       .filter(
                         (item) =>
                           isLocationAngleAsset(item, location.id) &&
@@ -1650,7 +1821,10 @@ export function LocationAngleStudio({
                             size="sm"
                             className="flex-1 min-w-[4.5rem] h-8 text-xs text-destructive hover:text-destructive"
                             onClick={() => void handleDeleteAngleImage(angle, image)}
-                            disabled={isLoading}
+                            disabled={
+                              isLoading ||
+                              deletingImageKey === `${angle.id}:${image.assetId || image.id}`
+                            }
                           >
                             <Trash2 className="h-3 w-3 mr-1" />
                             Delete
@@ -1815,6 +1989,51 @@ export function LocationAngleStudio({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={sourcePickDialogOpen} onOpenChange={setSourcePickDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Pick source image</DialogTitle>
+            <DialogDescription>
+              Choose an image from this location to generate angles from.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+            {referencePickerAssets.length > 0 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {location.name}
+                </p>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                  {referencePickerAssets.map((asset) => (
+                    <button
+                      key={asset.id}
+                      type="button"
+                      onClick={() => selectReferenceAsset(asset)}
+                      className={cn(
+                        "relative aspect-square rounded-lg overflow-hidden border-2 transition-all group text-left",
+                        sourceReference?.assetId === asset.id
+                          ? "border-violet-500 ring-2 ring-violet-500/40"
+                          : "border-border hover:border-primary hover:ring-2 hover:ring-primary/30",
+                      )}
+                      title={asset.title}
+                    >
+                      <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <p className="text-[10px] text-white line-clamp-2">{asset.title}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                No images for this location yet. Upload or generate one first.
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!pickDialogAngleId} onOpenChange={(open) => !open && setPickDialogAngleId(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
@@ -1822,24 +2041,25 @@ export function LocationAngleStudio({
               Pick image{pickDialogAngle ? ` — ${pickDialogAngle.label}` : ""}
             </DialogTitle>
             <DialogDescription>
-              Choose an existing project image for this angle view.
+              Choose an existing image from this location for this angle view.
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-            {imageAssets.length > 0 && (
+            {referencePickerAssets.length > 0 && (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  This object
+                  This location
                 </p>
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                  {imageAssets.map((asset) => (
+                  {referencePickerAssets.map((asset) => (
                     <button
                       key={asset.id}
                       type="button"
-                      className="relative aspect-square rounded-lg overflow-hidden border-2 border-border hover:border-violet-500/50"
                       onClick={() =>
                         pickDialogAngle && handlePickExistingImage(pickDialogAngle, asset)
                       }
+                      className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary hover:ring-2 hover:ring-primary/30 transition-all group text-left"
+                      title={asset.title}
                     >
                       <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
                     </button>
@@ -1847,27 +2067,11 @@ export function LocationAngleStudio({
                 </div>
               </div>
             )}
-            {pickableImageGroups.map((group) => (
-              <div key={group.label} className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                  {group.label}
-                </p>
-                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                  {group.assets.map((asset) => (
-                    <button
-                      key={asset.id}
-                      type="button"
-                      className="relative aspect-square rounded-lg overflow-hidden border-2 border-border hover:border-violet-500/50"
-                      onClick={() =>
-                        pickDialogAngle && handlePickExistingImage(pickDialogAngle, asset)
-                      }
-                    >
-                      <img src={asset.content_url!} alt="" className="w-full h-full object-cover" />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+            {referencePickerAssets.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                No images for this location yet.
+              </p>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
@@ -1893,19 +2097,26 @@ export function LocationAngleStudio({
 
           {imageEditAngle && imageEditCurrentImage && (
             <div className="space-y-3">
-              <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                <img
+              <button
+                type="button"
+                className="w-full rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40 cursor-pointer"
+                title="Click to view full size"
+                onClick={() =>
+                  setViewImageDialog({
+                    url: imageEditCurrentImage.imageUrl,
+                    label: imageEditAngle.label,
+                  })
+                }
+              >
+                <StorageThumbImg
                   src={imageEditCurrentImage.imageUrl}
                   alt={imageEditAngle.label}
-                  className="w-full h-full max-h-40 object-contain cursor-pointer"
-                  onClick={() =>
-                    setViewImageDialog({
-                      url: imageEditCurrentImage.imageUrl,
-                      label: imageEditAngle.label,
-                    })
-                  }
+                  width={EDIT_PREVIEW_THUMB_WIDTH}
+                  quality={EDIT_THUMB_QUALITY}
+                  resize="contain"
+                  className="w-full h-full max-h-40 object-contain"
                 />
-              </div>
+              </button>
 
               <p className="text-xs text-muted-foreground">
                 Edit using your locked model ({lockedImageModelLabel}).
@@ -2032,13 +2243,26 @@ export function LocationAngleStudio({
                       </Button>
                     </>
                   ) : (
-                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-                      <img
+                    <button
+                      type="button"
+                      className="relative w-14 h-14 rounded-lg overflow-hidden border border-border"
+                      title="Click to view full size"
+                      onClick={() =>
+                        setViewImageDialog({
+                          url: imageEditCurrentImage.imageUrl,
+                          label: imageEditAngle.label,
+                        })
+                      }
+                    >
+                      <StorageThumbImg
                         src={imageEditCurrentImage.imageUrl}
                         alt={imageEditAngle.label}
+                        width={EDIT_SMALL_THUMB_WIDTH}
+                        quality={EDIT_THUMB_QUALITY}
+                        resize="cover"
                         className="w-full h-full object-cover"
                       />
-                    </div>
+                    </button>
                   )}
                 </div>
               </div>
@@ -2064,6 +2288,15 @@ export function LocationAngleStudio({
                               type="button"
                               disabled={imageEditAngleId != null && isAngleGenerating(imageEditAngleId)}
                               onClick={() => toggleImageEditStyleLinkAsset(asset.id)}
+                              onDoubleClick={(e) => {
+                                e.preventDefault()
+                                if (!asset.content_url) return
+                                setViewImageDialog({
+                                  url: asset.content_url,
+                                  label: asset.title || group.label,
+                                })
+                              }}
+                              title="Click to link · double-click to view full size"
                               className={cn(
                                 "relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all",
                                 imageEditStyleLinkAssetIds.includes(asset.id)
@@ -2071,10 +2304,13 @@ export function LocationAngleStudio({
                                   : "border-border hover:border-violet-500/50",
                               )}
                             >
-                              <img
+                              <StorageThumbImg
                                 src={asset.content_url!}
                                 alt=""
-                                className="w-full h-full object-cover"
+                                width={EDIT_SMALL_THUMB_WIDTH}
+                                quality={EDIT_THUMB_QUALITY}
+                                resize="cover"
+                                className="w-full h-full object-cover pointer-events-none"
                               />
                             </button>
                           ))}

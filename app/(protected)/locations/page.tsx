@@ -49,7 +49,13 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
 import { LocationAngleStudio } from "@/components/location-angle-studio"
+
+/** Resized previews in Edit Image — full URL is used for popup + AI reference. */
+const EDIT_PREVIEW_THUMB_WIDTH = 480
+const EDIT_SMALL_THUMB_WIDTH = 128
+const EDIT_THUMB_QUALITY = 65
 
 const LOCATION_SHOT_PRESETS = [
   "Establishing Shot",
@@ -279,6 +285,8 @@ export default function LocationsPage() {
   const [isLoadingAssets, setIsLoadingAssets] = useState(false)
   const [isUploadingAsset, setIsUploadingAsset] = useState(false)
   const [isImportingImage, setIsImportingImage] = useState(false)
+  const [isPickExistingAssetDialogOpen, setIsPickExistingAssetDialogOpen] = useState(false)
+  const [isLinkingExistingAsset, setIsLinkingExistingAsset] = useState(false)
   const [savedLocationPrompts, setSavedLocationPrompts] = useState<SavedPrompt[]>([])
   const [isLoadingSavedPrompts, setIsLoadingSavedPrompts] = useState(false)
   const [selectedImagePromptId, setSelectedImagePromptId] = useState("")
@@ -1076,6 +1084,28 @@ export default function LocationsPage() {
       ),
     [projectImageAssets, selectedLocationId],
   )
+
+  const pickableProjectAssetGroups = useMemo(() => {
+    const locationUrls = new Set(
+      locationAssets.filter((a) => a.content_url).map((a) => a.content_url!),
+    )
+    const locationIds = new Set(locationAssets.map((a) => a.id))
+    const candidates = linkableProjectAssets.filter(
+      (a) => a.content_url && !locationIds.has(a.id) && !locationUrls.has(a.content_url),
+    )
+    return buildLinkedAssetGroups(
+      candidates,
+      locations,
+      projectCharacters,
+      projectStoryObjects,
+    )
+  }, [
+    linkableProjectAssets,
+    locationAssets,
+    locations,
+    projectCharacters,
+    projectStoryObjects,
+  ])
 
   const linkedAssetGroups = useMemo(() => {
     const groups: { label: string; assets: Asset[] }[] = []
@@ -2474,13 +2504,24 @@ export default function LocationsPage() {
                 </>
               )}
               {!inlineShotReferencePreview && referenceAsset.content_url && (
-                <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-border">
-                  <img
+                <button
+                  type="button"
+                  className="relative w-14 h-14 rounded-lg overflow-hidden border border-border"
+                  title="Click to view full size"
+                  onClick={() => {
+                    setViewingImage(referenceAsset)
+                    setViewImageDialogOpen(true)
+                  }}
+                >
+                  <StorageThumbImg
                     src={referenceAsset.content_url}
                     alt="Current location image"
+                    width={EDIT_SMALL_THUMB_WIDTH}
+                    quality={EDIT_THUMB_QUALITY}
+                    resize="cover"
                     className="w-full h-full object-cover"
                   />
-                </div>
+                </button>
               )}
             </div>
             <p className="text-xs text-muted-foreground break-words">
@@ -2520,17 +2561,25 @@ export default function LocationsPage() {
                             type="button"
                             disabled={isGeneratingShot}
                             onClick={() => toggleInlineStyleLinkAsset(asset.id)}
+                            onDoubleClick={(e) => {
+                              e.preventDefault()
+                              setViewingImage(asset)
+                              setViewImageDialogOpen(true)
+                            }}
                             className={`relative flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
                               inlineStyleLinkAssetIds.includes(asset.id)
                                 ? "border-violet-500 ring-2 ring-violet-500/40"
                                 : "border-border hover:border-violet-500/50"
                             }`}
-                            title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters, projectStoryObjects)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                            title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters, projectStoryObjects)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")} · double-click to view full size`}
                           >
-                            <img
+                            <StorageThumbImg
                               src={asset.content_url!}
                               alt=""
-                              className="w-full h-full object-cover"
+                              width={EDIT_SMALL_THUMB_WIDTH}
+                              quality={EDIT_THUMB_QUALITY}
+                              resize="cover"
+                              className="w-full h-full object-cover pointer-events-none"
                             />
                           </button>
                         ))}
@@ -2920,6 +2969,103 @@ export default function LocationsPage() {
     }
   }
 
+  const openPickExistingAssetDialog = () => {
+    if (!projectId) {
+      toast({
+        title: "Select a project",
+        description: "Link a movie project to browse existing images.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!selectedLocationId) {
+      toast({
+        title: "Select a location",
+        description: "Choose a location before adding images.",
+        variant: "destructive",
+      })
+      return
+    }
+    if (isLoadingProjectAssets) {
+      toast({
+        title: "Loading images",
+        description: "Project images are still loading. Try again in a moment.",
+      })
+      return
+    }
+    if (pickableProjectAssetGroups.length === 0) {
+      toast({
+        title: "No images available",
+        description: "Add images in Assets, Characters, Avatars, or Objects first.",
+        variant: "destructive",
+      })
+      return
+    }
+    setIsPickExistingAssetDialogOpen(true)
+  }
+
+  const handlePickExistingProjectImage = async (asset: Asset) => {
+    if (!selectedLocationId || !projectId || !asset.content_url) return
+
+    const selectedLoc = locations.find((l) => l.id === selectedLocationId)
+    if (!selectedLoc) return
+
+    if (
+      locationAssets.some((a) => a.id === asset.id || a.content_url === asset.content_url)
+    ) {
+      toast({
+        title: "Already added",
+        description: "This image is already in this location's assets.",
+      })
+      setIsPickExistingAssetDialogOpen(false)
+      return
+    }
+
+    setIsLinkingExistingAsset(true)
+    try {
+      const now = new Date()
+      const savedAsset = await AssetService.createAsset({
+        project_id: projectId,
+        location_id: selectedLocationId,
+        title: `${selectedLoc.name} - ${asset.title.replace(/ - AI Generated Image.*$/, "")}`,
+        content_type: "image",
+        content: "",
+        content_url: asset.content_url,
+        prompt: asset.prompt || "",
+        model: asset.model || "linked",
+        generation_settings: {
+          ...(asset.generation_settings ?? {}),
+          source_asset_id: asset.id,
+        },
+        metadata: {
+          ...(asset.metadata ?? {}),
+          location_name: selectedLoc.name,
+          source: "linked_project_image",
+          source_asset_id: asset.id,
+          linked_at: now.toISOString(),
+        },
+      })
+
+      setLocationAssets((prev) => [savedAsset, ...prev])
+      setIsPickExistingAssetDialogOpen(false)
+      setTimeout(() => carouselApi?.scrollTo(0), 100)
+      toast({
+        title: "Image added",
+        description: "Linked an existing project image to this location.",
+      })
+    } catch (error) {
+      console.error("Failed to link project image:", error)
+      toast({
+        title: "Error",
+        description:
+          error instanceof Error ? error.message : "Could not add the project image.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLinkingExistingAsset(false)
+    }
+  }
+
   const handleSetThumbnailFromUrl = async (imageUrl: string) => {
     if (!selectedLocationId) return
     await LocationsService.updateLocation(selectedLocationId, { image_url: imageUrl })
@@ -3109,6 +3255,32 @@ export default function LocationsPage() {
                                 <span className="hidden sm:inline">View Full Page</span>
                                 <span className="sm:hidden">View</span>
                               </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={openPickExistingAssetDialog}
+                                disabled={
+                                  isUploadingAsset ||
+                                  isLinkingExistingAsset ||
+                                  isImportingImage ||
+                                  !projectId
+                                }
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isLinkingExistingAsset ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Adding...</span>
+                                    <span className="sm:hidden">Add...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Link2 className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Pick Existing</span>
+                                    <span className="sm:hidden">Pick</span>
+                                  </>
+                                )}
+                              </Button>
                               <input
                                 id="location-asset-upload"
                                 type="file"
@@ -3142,146 +3314,40 @@ export default function LocationsPage() {
                             </div>
                           </div>
 
-                          <div className="space-y-2">
-                            {hasSavedPromptOptions ? (
-                              <div className="space-y-2">
-                                <Label htmlFor="location-saved-prompt">Saved prompt</Label>
-                                <Select
-                                  value={selectedImagePromptId || "__none__"}
-                                  onValueChange={(v) => handleSavedPromptSelect(v, "image")}
-                                  disabled={isLoadingSavedPrompts || isGeneratingImage || isGeneratingQuickImage}
-                                >
-                                  <SelectTrigger id="location-saved-prompt" className="bg-input border-border">
-                                    <SelectValue
-                                      placeholder={
-                                        isLoadingSavedPrompts
-                                          ? "Loading prompts…"
-                                          : "Apply a saved prompt…"
-                                      }
-                                    />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="__none__">None (custom prompt)</SelectItem>
-                                    {imagePrompt.trim() ? (
-                                      <SelectItem value="__current_image_prompt__">
-                                        Current image prompt
-                                      </SelectItem>
-                                    ) : null}
-                                    {selectedLoc.visual_description?.trim() ||
-                                    selectedLoc.description?.trim() ? (
-                                      <SelectItem value="__location_visual__">
-                                        Location visual description
-                                      </SelectItem>
-                                    ) : null}
-                                    {savedLocationPrompts.map((prompt) => (
-                                      <SelectItem key={prompt.id} value={prompt.id}>
-                                        {formatSavedPromptOptionLabel(prompt)}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <p className="text-xs text-muted-foreground">
-                                  Applies to Quick Generate below. Saved in VisDev or prompt library.
-                                </p>
-                              </div>
-                            ) : null}
-
-                            <Label htmlFor="inline-location-image-prompt" className="text-xs sm:text-sm font-medium">
-                              Image Prompt
-                            </Label>
-                            <Textarea
-                              id="inline-location-image-prompt"
-                              value={imagePrompt}
-                              onChange={(e) => {
-                                setImagePrompt(e.target.value)
-                                if (selectedImagePromptId) setSelectedImagePromptId("")
-                              }}
-                              placeholder="e.g., misty riverbank at dawn, wide establishing shot, cinematic atmosphere"
-                              className="bg-input border-border min-h-[80px] text-xs sm:text-sm"
-                            />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Button
-                                variant="default"
-                                size="sm"
-                                onClick={handleQuickGenerateLocationImage}
-                                disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded || !imagePrompt.trim()}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                                title="Generate using your prompt and the locked AI model"
-                              >
-                                {isGeneratingQuickImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Sparkles className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Quick Generate</span>
-                                    <span className="sm:hidden">Quick</span>
-                                  </>
-                                )}
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setIsGenerateImageDialogOpen(true)}
-                                disabled={isGeneratingImage || isGeneratingQuickImage || !imagePrompt.trim()}
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                              >
-                                {isGeneratingImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    <span className="hidden sm:inline">Generating...</span>
-                                    <span className="sm:hidden">Gen...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <ImageIcon className="h-4 w-4" />
-                                    <span className="hidden sm:inline">Generate Image</span>
-                                    <span className="sm:hidden">Generate</span>
-                                  </>
-                                )}
-                              </Button>
-                              <input
-                                id="location-image-import"
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                                disabled={isImportingImage || isUploadingAsset}
-                                onChange={(e) => void handleImportLocationImage(e)}
-                              />
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={isImportingImage || isUploadingAsset}
-                                onClick={() =>
-                                  document.getElementById("location-image-import")?.click()
-                                }
-                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
-                              >
-                                {isImportingImage ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Upload className="h-4 w-4" />
-                                )}
-                                <span className="hidden sm:inline">Import Image</span>
-                                <span className="sm:hidden">Import</span>
-                              </Button>
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              Enter your prompt, then click Quick Generate. Generate Image opens advanced options.
-                            </p>
-                          </div>
-                          
                           {isLoadingAssets ? (
                             <div className="flex items-center gap-2 text-xs sm:text-sm text-muted-foreground py-4">
                               <Loader2 className="h-4 w-4 animate-spin" />
                               Loading assets...
                             </div>
                           ) : locationAssets.length === 0 ? (
-                            <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words">
-                              No assets yet. Enter a prompt and click Quick Generate below.
+                            <div className="text-xs sm:text-sm text-muted-foreground py-4 text-center border border-dashed border-border rounded-lg px-2 break-words space-y-3">
+                              <p>No assets yet. Pick an existing project image, upload, or use Quick Generate below.</p>
+                              <div className="flex items-center justify-center gap-2 flex-wrap">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={openPickExistingAssetDialog}
+                                  disabled={isLinkingExistingAsset || !projectId}
+                                  className="gap-2"
+                                >
+                                  <Link2 className="h-4 w-4" />
+                                  Pick Existing
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    document.getElementById("location-asset-upload")?.click()
+                                  }
+                                  disabled={isUploadingAsset}
+                                  className="gap-2"
+                                >
+                                  <Upload className="h-4 w-4" />
+                                  Upload
+                                </Button>
+                              </div>
                             </div>
                           ) : (() => {
                             const imageAssets = locationAssets.filter(a => a.content_type === 'image' && a.content_url)
@@ -3542,17 +3608,22 @@ export default function LocationsPage() {
 
                                     {userId && selectedLocation ? (
                                       <LocationAngleStudio
+                                        key={selectedLocation.id}
                                         projectId={projectId}
                                         userId={userId}
                                         ready={ready}
                                         location={selectedLocation}
-                                        imageAssets={imageAssets}
+                                        imageAssets={imageAssetsForLocation}
                                         locationAssets={locationAssets}
                                         onLocationAssetsChange={setLocationAssets}
                                         primaryReferenceAsset={
-                                          imageAssets[currentImageIndex] || imageAssets[0] || null
+                                          imageAssetsForLocation[currentImageIndex] ||
+                                          imageAssetsForLocation[0] ||
+                                          null
                                         }
-                                        pickableImageGroups={linkedAssetGroups}
+                                        pickableImageGroups={linkedAssetGroups.filter(
+                                          (group) => group.label === "This location",
+                                        )}
                                         onSetThumbnail={handleSetThumbnailFromUrl}
                                         thumbnailUrl={selectedLocation.image_url}
                                       />
@@ -3697,6 +3768,138 @@ export default function LocationsPage() {
                               </div>
                             )
                           })()}
+
+                          <div className="space-y-2">
+                            {hasSavedPromptOptions ? (
+                              <div className="space-y-2">
+                                <Label htmlFor="location-saved-prompt">Saved prompt</Label>
+                                <Select
+                                  value={selectedImagePromptId || "__none__"}
+                                  onValueChange={(v) => handleSavedPromptSelect(v, "image")}
+                                  disabled={isLoadingSavedPrompts || isGeneratingImage || isGeneratingQuickImage}
+                                >
+                                  <SelectTrigger id="location-saved-prompt" className="bg-input border-border">
+                                    <SelectValue
+                                      placeholder={
+                                        isLoadingSavedPrompts
+                                          ? "Loading prompts…"
+                                          : "Apply a saved prompt…"
+                                      }
+                                    />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="__none__">None (custom prompt)</SelectItem>
+                                    {imagePrompt.trim() ? (
+                                      <SelectItem value="__current_image_prompt__">
+                                        Current image prompt
+                                      </SelectItem>
+                                    ) : null}
+                                    {selectedLoc.visual_description?.trim() ||
+                                    selectedLoc.description?.trim() ? (
+                                      <SelectItem value="__location_visual__">
+                                        Location visual description
+                                      </SelectItem>
+                                    ) : null}
+                                    {savedLocationPrompts.map((prompt) => (
+                                      <SelectItem key={prompt.id} value={prompt.id}>
+                                        {formatSavedPromptOptionLabel(prompt)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  Applies to Quick Generate. Saved in VisDev or prompt library.
+                                </p>
+                              </div>
+                            ) : null}
+
+                            <Label htmlFor="inline-location-image-prompt" className="text-xs sm:text-sm font-medium">
+                              Image Prompt
+                            </Label>
+                            <Textarea
+                              id="inline-location-image-prompt"
+                              value={imagePrompt}
+                              onChange={(e) => {
+                                setImagePrompt(e.target.value)
+                                if (selectedImagePromptId) setSelectedImagePromptId("")
+                              }}
+                              placeholder="e.g., misty riverbank at dawn, wide establishing shot, cinematic atmosphere"
+                              className="bg-input border-border min-h-[80px] text-xs sm:text-sm"
+                            />
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Button
+                                variant="default"
+                                size="sm"
+                                onClick={handleQuickGenerateLocationImage}
+                                disabled={isGeneratingQuickImage || !selectedLocationId || !aiSettingsLoaded || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                                title="Generate using your prompt and the locked AI model"
+                              >
+                                {isGeneratingQuickImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Quick Generate</span>
+                                    <span className="sm:hidden">Quick</span>
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setIsGenerateImageDialogOpen(true)}
+                                disabled={isGeneratingImage || isGeneratingQuickImage || !imagePrompt.trim()}
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isGeneratingImage ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <span className="hidden sm:inline">Generating...</span>
+                                    <span className="sm:hidden">Gen...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <ImageIcon className="h-4 w-4" />
+                                    <span className="hidden sm:inline">Generate Image</span>
+                                    <span className="sm:hidden">Generate</span>
+                                  </>
+                                )}
+                              </Button>
+                              <input
+                                id="location-image-import"
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={isImportingImage || isUploadingAsset}
+                                onChange={(e) => void handleImportLocationImage(e)}
+                              />
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isImportingImage || isUploadingAsset}
+                                onClick={() =>
+                                  document.getElementById("location-image-import")?.click()
+                                }
+                                className="gap-2 flex-1 sm:flex-initial text-xs sm:text-sm"
+                              >
+                                {isImportingImage ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Upload className="h-4 w-4" />
+                                )}
+                                <span className="hidden sm:inline">Import Image</span>
+                                <span className="sm:hidden">Import</span>
+                              </Button>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Enter your prompt, then click Quick Generate. Generate Image opens advanced options.
+                            </p>
+                          </div>
                         </div>
                         
                         <Separator />
@@ -4626,13 +4829,24 @@ export default function LocationsPage() {
 
           {referenceEditAsset?.content_url && (
             <div className="min-w-0 w-full overflow-hidden space-y-4">
-              <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
-                <img
+              <button
+                type="button"
+                className="w-full rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40 cursor-pointer"
+                title="Click to view full size"
+                onClick={() => {
+                  setViewingImage(referenceEditAsset)
+                  setViewImageDialogOpen(true)
+                }}
+              >
+                <StorageThumbImg
                   src={referenceEditAsset.content_url}
                   alt={referenceEditAsset.title}
+                  width={EDIT_PREVIEW_THUMB_WIDTH}
+                  quality={EDIT_THUMB_QUALITY}
+                  resize="contain"
                   className="w-full h-full max-h-40 object-contain"
                 />
-              </div>
+              </button>
               {renderLocationReferenceEdit(
                 referenceEditAsset,
                 "location-reference-edit-dialog",
@@ -4997,6 +5211,66 @@ export default function LocationsPage() {
               </Button>
             </div>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isPickExistingAssetDialogOpen} onOpenChange={setIsPickExistingAssetDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Pick existing image</DialogTitle>
+            <DialogDescription>
+              Choose an image from your project to add to this location&apos;s assets.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+            {isLoadingProjectAssets ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading project images…
+              </div>
+            ) : pickableProjectAssetGroups.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">
+                No other images in this project yet. Generate shots or add images in Assets,
+                Characters, Avatars, or Objects.
+              </p>
+            ) : (
+              pickableProjectAssetGroups.map((group) => (
+                <div key={group.label} className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {group.label}
+                  </p>
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {group.assets.map((asset) => (
+                      <button
+                        key={asset.id}
+                        type="button"
+                        disabled={isLinkingExistingAsset}
+                        onClick={() => void handlePickExistingProjectImage(asset)}
+                        className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary hover:ring-2 hover:ring-primary/30 transition-all group text-left disabled:opacity-50"
+                        title={`${getProjectAssetSourceLabel(asset, locations, projectCharacters, projectStoryObjects)} — ${asset.title.replace(/ - AI Generated Image.*$/, "")}`}
+                      >
+                        <img
+                          src={asset.content_url!}
+                          alt=""
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <p className="text-[10px] text-white line-clamp-2">
+                            {getProjectAssetSourceLabel(
+                              asset,
+                              locations,
+                              projectCharacters,
+                              projectStoryObjects,
+                            )}
+                          </p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

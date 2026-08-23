@@ -6,6 +6,7 @@ import {
   getKlingStatusEndpoint,
   type KlingApiMode,
 } from '@/lib/kling-models'
+import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
 
 function generateKlingToken() {
   const accessKey = process.env.KLING_ACCESS_KEY
@@ -283,6 +284,19 @@ export async function POST(req: NextRequest) {
         throw new Error(`Video generation failed: ${errorMsg}`)
       }
     }
+
+    await logApiCostFromRequest({
+      request: req,
+      userId: user.id,
+      fallbackSource: 'cinema-production',
+      generationType: 'video',
+      provider: 'kling',
+      model: uiModel,
+      prompt,
+      durationSeconds: duration,
+      hasAudio: sound === 'on',
+      metadata: { ratio, sound },
+    })
 
     if (!videoUrl) {
       console.log(

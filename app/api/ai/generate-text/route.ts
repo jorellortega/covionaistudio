@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
+import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage } from '@/lib/api-cost-tracker'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
@@ -94,6 +95,9 @@ export async function POST(request: NextRequest) {
     }
 
     let generatedText = ""
+    let usedModel = model || ""
+    let inputTokens: number | undefined
+    let outputTokens: number | undefined
 
     // New AI text editing functionality
     if (selectedText && fullContent) {
@@ -191,6 +195,10 @@ Generate only the replacement text:`
           
           // Trim the content (same as test page)
           generatedText = typeof content === 'string' ? content.trim() : String(content)
+          usedModel = openaiModel
+          const openaiUsage = extractOpenAIUsage(openaiResponse.data)
+          inputTokens = openaiUsage.inputTokens
+          outputTokens = openaiUsage.outputTokens
           break
 
         case 'anthropic':
@@ -215,6 +223,10 @@ Generate only the replacement text:`
           }
           
           generatedText = claudeResponse.data.content[0].text
+          usedModel = anthropicModel
+          const anthropicUsage = extractAnthropicUsage(claudeResponse.data)
+          inputTokens = anthropicUsage.inputTokens
+          outputTokens = anthropicUsage.outputTokens
           break
 
         default:
@@ -329,6 +341,10 @@ Generate only the replacement text:`
           
           // Trim the content
           generatedText = typeof content === 'string' ? content.trim() : String(content)
+          usedModel = openaiModel
+          const openaiUsage = extractOpenAIUsage(openaiResponse.data)
+          inputTokens = openaiUsage.inputTokens
+          outputTokens = openaiUsage.outputTokens
           break
 
         case 'anthropic':
@@ -353,6 +369,10 @@ Generate only the replacement text:`
           }
           
           generatedText = claudeResponse.data.content[0].text
+          usedModel = anthropicModel
+          const anthropicUsage = extractAnthropicUsage(claudeResponse.data)
+          inputTokens = anthropicUsage.inputTokens
+          outputTokens = anthropicUsage.outputTokens
           break
 
         default:
@@ -440,6 +460,21 @@ Generate only the replacement text:`
       textPreview: generatedText.substring(0, 200) + '...'
     })
     
+    await logApiCostFromRequest({
+      request,
+      userId,
+      fallbackSource: 'screenplay',
+      generationType: 'text',
+      provider: service,
+      model: usedModel || model || service,
+      prompt,
+      inputTokens,
+      outputTokens,
+      inputText: prompt,
+      outputText: generatedText,
+      metadata: { field, contentType },
+    })
+
     return NextResponse.json({ 
       success: true, 
       text: generatedText,

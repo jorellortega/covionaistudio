@@ -5,6 +5,7 @@ import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
 import { isContentPolicyError, CONTENT_BLOCKED_MESSAGE, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT, GPT_IMAGE_MAX_REFERENCE_IMAGES } from '@/lib/image-model-utils'
+import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
 import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
 import {
   buildRunwayReferenceImagesFromFiles,
@@ -166,6 +167,7 @@ export async function POST(request: NextRequest) {
         apiKey: formData.get('apiKey'),
         userId: formData.get('userId'),
         seed: formData.get('seed') ? parseInt(formData.get('seed') as string) : undefined,
+        costSource: formData.get('costSource'),
       }
       file = formData.get('file') as File
       styleReferenceFiles = collectStyleReferenceFiles(formData)
@@ -747,6 +749,19 @@ export async function POST(request: NextRequest) {
       }
     }
     
+    await logApiCostFromRequest({
+      request,
+      userId: typeof userId === 'string' ? userId : undefined,
+      costSource: typeof body?.costSource === 'string' ? body.costSource : undefined,
+      generationType: 'image',
+      provider: String(service || 'openai'),
+      model: String(model || service || 'unknown'),
+      prompt,
+      quantity: 1,
+      size: typeof resolvedImageSize === 'string' ? resolvedImageSize : undefined,
+      metadata: { width, height, service },
+    })
+
     return NextResponse.json({ 
       success: true, 
       imageUrl: finalImageUrl,

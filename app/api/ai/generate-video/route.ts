@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
 import { RunwayML } from '@runwayml/sdk'
 import {
   describeRunwayFailureCode,
@@ -760,6 +761,17 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('🎬 Video generation successful! URL:', videoUrl)
+
+    await logApiCostFromRequest({
+      request,
+      userId: user.id,
+      fallbackSource: 'cinema-production',
+      generationType: 'video',
+      provider: 'runway',
+      model,
+      prompt,
+      durationSeconds: Number(duration) || 5,
+    })
 
     return NextResponse.json({
       success: true,
