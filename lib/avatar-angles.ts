@@ -1,3 +1,5 @@
+import { SINGLE_ANGLE_SHOT_INSTRUCTION } from "@/lib/angle-shot-prompt"
+
 /** Saved multi-angle reference sheet used as a single AI reference image. */
 export const AVATAR_REFERENCE_COLLAGE_ANGLE_ID = "reference_collage"
 
@@ -98,6 +100,7 @@ export function buildAvatarEditPrompt(
     `Change only the shot framing to: ${angle.prompt}.`,
     `Maintain ${style} style.`,
     "Consistent wardrobe and appearance, even lighting, production reference quality.",
+    SINGLE_ANGLE_SHOT_INSTRUCTION,
     "Single character only, no text, no watermark.",
   ].join(" ").slice(0, 990)
 }
@@ -116,6 +119,7 @@ export function buildAvatarPrompt(
     angle.prompt + ".",
     `Style: ${style}.`,
     "Consistent character likeness, cinematic lighting, production-ready reference.",
+    SINGLE_ANGLE_SHOT_INSTRUCTION,
     "Single character only, no text, no watermark.",
   ].join(" ")
 }

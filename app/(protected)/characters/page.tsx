@@ -24,7 +24,7 @@ import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-
 import { CastingService, type CastingSetting } from "@/lib/casting-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
-import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { SavedPromptsService, formatSavedPromptOptionLabel, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { OpenAIService } from "@/lib/ai-services"
@@ -310,9 +310,7 @@ export default function CharactersPage() {
           setIsLoadingCharacterPrompts(true)
           try {
             const savedPrompts = await SavedPromptsService.getSavedPrompts(userId, projectId)
-            // Filter to only character type prompts
-            const charPrompts = savedPrompts.filter(p => p.type === 'character')
-            setCharacterPrompts(charPrompts)
+            setCharacterPrompts(savedPrompts)
           } catch (err) {
             console.error("Failed to load character prompts:", err)
           } finally {
@@ -650,11 +648,10 @@ export default function CharactersPage() {
     return error.message
   }
 
-  const buildCustomCharacterEditPrompt = (userDirection: string, characterName?: string) => {
+  const buildCustomCharacterEditPrompt = (userDirection: string) => {
     let prompt = userDirection.trim()
-    if (characterName) {
-      prompt += ` Character: ${characterName}.`
-    }
+    prompt +=
+      " Edit the attached reference image only. Keep the same character likeness, composition, lighting, and framing — change only what is described above. Photoreal cinematic portrait, no text, no typography, no captions, no labels, no watermark, no written words."
     return prompt.slice(0, 990)
   }
 
@@ -728,7 +725,7 @@ export default function CharactersPage() {
     const config = requireLockedImageConfig({ withReferenceImage: true })
     const prompt =
       options?.promptOverride ??
-      buildCustomCharacterEditPrompt(shotLabel, selectedChar.name)
+      buildCustomCharacterEditPrompt(shotLabel)
 
     const response = await requestLockedImageGeneration(prompt, config, {
       referenceFile: config.supportsReference
@@ -913,7 +910,7 @@ export default function CharactersPage() {
     setShotGenerationProgress("Editing image...")
     try {
       await generateCharacterShotFromReference(referenceAsset, shotLabel, {
-        promptOverride: buildCustomCharacterEditPrompt(direction, selectedChar.name),
+        promptOverride: buildCustomCharacterEditPrompt(direction),
         referenceFile: inlineShotReferenceFile ?? undefined,
         styleReferenceFiles,
         styleAssetIds: inlineStyleLinkAssetIds,
@@ -4808,7 +4805,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                               <SelectItem value="__none__">None (use custom prompt)</SelectItem>
                               {characterPrompts.map((prompt) => (
                                 <SelectItem key={prompt.id} value={prompt.id}>
-                                  {prompt.title}
+                                  {formatSavedPromptOptionLabel(prompt)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -6402,7 +6399,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                     <SelectItem value="__none__">None (use character details instead)</SelectItem>
                     {characterPrompts.map((prompt) => (
                       <SelectItem key={prompt.id} value={prompt.id}>
-                        {prompt.title}
+                        {formatSavedPromptOptionLabel(prompt)}
                       </SelectItem>
                     ))}
                   </SelectContent>

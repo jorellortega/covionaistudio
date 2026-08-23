@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
-import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { SavedPromptsService, formatSavedPromptOptionLabel, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import {
   AvatarImagesService,
@@ -424,9 +424,7 @@ export default function AvatarsPage() {
     setIsLoadingSavedPrompts(true)
     SavedPromptsService.getSavedPrompts(userId, projectId || null)
       .then((prompts) => {
-        setSavedCharacterPrompts(
-          prompts.filter((p) => p.type === "character" || p.type === "style"),
-        )
+        setSavedCharacterPrompts(prompts)
       })
       .catch(() => setSavedCharacterPrompts([]))
       .finally(() => setIsLoadingSavedPrompts(false))
@@ -2216,8 +2214,7 @@ export default function AvatarsPage() {
                         ) : null}
                         {savedCharacterPrompts.map((prompt) => (
                           <SelectItem key={prompt.id} value={prompt.id}>
-                            {prompt.title}
-                            {prompt.type === "style" ? " (style)" : ""}
+                            {formatSavedPromptOptionLabel(prompt)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -3175,8 +3172,7 @@ export default function AvatarsPage() {
                         ) : null}
                         {savedCharacterPrompts.map((prompt) => (
                           <SelectItem key={prompt.id} value={prompt.id}>
-                            {prompt.title}
-                            {prompt.type === "style" ? " (style)" : ""}
+                            {formatSavedPromptOptionLabel(prompt)}
                           </SelectItem>
                         ))}
                       </SelectContent>

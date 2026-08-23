@@ -29,6 +29,12 @@ export interface CreateSavedPromptData {
   image_url?: string | null
 }
 
+/** Label for saved-prompt dropdowns — shows type when it isn't the generic "prompt". */
+export function formatSavedPromptOptionLabel(prompt: SavedPrompt): string {
+  if (prompt.type === "prompt") return prompt.title
+  return `${prompt.title} (${prompt.type})`
+}
+
 export class SavedPromptsService {
   static async getSavedPrompts(userId: string, projectId?: string | null): Promise<SavedPrompt[]> {
     try {

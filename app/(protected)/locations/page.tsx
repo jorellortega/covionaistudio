@@ -37,7 +37,7 @@ import { KlingService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { StoryObjectsService, type StoryObject } from "@/lib/story-objects-service"
-import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { SavedPromptsService, formatSavedPromptOptionLabel, type SavedPrompt } from "@/lib/saved-prompts-service"
 import {
   buildLinkedAssetGroups,
   getProjectAssetSourceLabel,
@@ -49,6 +49,7 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Checkbox } from "@/components/ui/checkbox"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { LocationAngleStudio } from "@/components/location-angle-studio"
 
 const LOCATION_SHOT_PRESETS = [
   "Establishing Shot",
@@ -361,19 +362,30 @@ export default function LocationsPage() {
 
   // Load assets when a location is selected
   useEffect(() => {
+    let cancelled = false
+
+    if (!selectedLocationId) {
+      setLocationAssets([])
+      setCurrentImageIndex(0)
+      return
+    }
+
+    setLocationAssets([])
+    setCurrentImageIndex(0)
+
     const loadAssets = async () => {
-      if (!selectedLocationId) {
-        setLocationAssets([])
-        return
-      }
       try {
         setIsLoadingAssets(true)
         const assets = await AssetService.getAssetsForLocation(selectedLocationId)
-        setLocationAssets(assets)
+        if (!cancelled) {
+          setLocationAssets(assets)
+        }
       } catch (err) {
         console.error('Failed to load location assets:', err)
-        setLocationAssets([])
-        if (err instanceof Error && !err.message.includes('migration')) {
+        if (!cancelled) {
+          setLocationAssets([])
+        }
+        if (!cancelled && err instanceof Error && !err.message.includes('migration')) {
           toast({
             title: "Error",
             description: "Failed to load location assets.",
@@ -381,10 +393,16 @@ export default function LocationsPage() {
           })
         }
       } finally {
-        setIsLoadingAssets(false)
+        if (!cancelled) {
+          setIsLoadingAssets(false)
+        }
       }
     }
     loadAssets()
+
+    return () => {
+      cancelled = true
+    }
   }, [selectedLocationId, toast])
 
   const prevLocationIdRef = useRef<string | null>(null)
@@ -446,14 +464,7 @@ export default function LocationsPage() {
     setIsLoadingSavedPrompts(true)
     SavedPromptsService.getSavedPrompts(userId, projectId || null)
       .then((prompts) => {
-        setSavedLocationPrompts(
-          prompts.filter(
-            (p) =>
-              p.type === "environment" ||
-              p.type === "style" ||
-              p.type === "prompt",
-          ),
-        )
+        setSavedLocationPrompts(prompts)
       })
       .catch(() => setSavedLocationPrompts([]))
       .finally(() => setIsLoadingSavedPrompts(false))
@@ -2389,9 +2400,7 @@ export default function LocationsPage() {
                   ) : null}
                   {savedLocationPrompts.map((prompt) => (
                     <SelectItem key={prompt.id} value={prompt.id}>
-                      {prompt.title}
-                      {prompt.type === "style" ? " (style)" : ""}
-                      {prompt.type === "environment" ? " (environment)" : ""}
+                      {formatSavedPromptOptionLabel(prompt)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2911,6 +2920,16 @@ export default function LocationsPage() {
     }
   }
 
+  const handleSetThumbnailFromUrl = async (imageUrl: string) => {
+    if (!selectedLocationId) return
+    await LocationsService.updateLocation(selectedLocationId, { image_url: imageUrl })
+    setLocations((prev) =>
+      prev.map((loc) =>
+        loc.id === selectedLocationId ? { ...loc, image_url: imageUrl } : loc,
+      ),
+    )
+  }
+
   const handleDeleteAsset = async (assetId: string) => {
     if (!confirm("Delete this asset? This cannot be undone.")) return
     
@@ -3156,9 +3175,7 @@ export default function LocationsPage() {
                                     ) : null}
                                     {savedLocationPrompts.map((prompt) => (
                                       <SelectItem key={prompt.id} value={prompt.id}>
-                                        {prompt.title}
-                                        {prompt.type === "style" ? " (style)" : ""}
-                                        {prompt.type === "environment" ? " (environment)" : ""}
+                                        {formatSavedPromptOptionLabel(prompt)}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>
@@ -3522,6 +3539,24 @@ export default function LocationsPage() {
                                       imageAssetsForLocation[currentImageIndex] || imageAssetsForLocation[0],
                                       "location-inline-edit",
                                     )}
+
+                                    {userId && selectedLocation ? (
+                                      <LocationAngleStudio
+                                        projectId={projectId}
+                                        userId={userId}
+                                        ready={ready}
+                                        location={selectedLocation}
+                                        imageAssets={imageAssets}
+                                        locationAssets={locationAssets}
+                                        onLocationAssetsChange={setLocationAssets}
+                                        primaryReferenceAsset={
+                                          imageAssets[currentImageIndex] || imageAssets[0] || null
+                                        }
+                                        pickableImageGroups={linkedAssetGroups}
+                                        onSetThumbnail={handleSetThumbnailFromUrl}
+                                        thumbnailUrl={selectedLocation.image_url}
+                                      />
+                                    ) : null}
                                   </div>
                                 )}
                                 

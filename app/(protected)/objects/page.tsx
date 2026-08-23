@@ -60,7 +60,7 @@ import {
 } from "@/lib/image-model-utils"
 import { CharactersService, type Character } from "@/lib/characters-service"
 import { LocationsService, type Location } from "@/lib/locations-service"
-import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
+import { SavedPromptsService, formatSavedPromptOptionLabel, type SavedPrompt } from "@/lib/saved-prompts-service"
 import {
   buildLinkedAssetGroups,
   getProjectAssetSourceLabel,
@@ -70,6 +70,7 @@ import { getSupabaseClient } from "@/lib/supabase"
 import { sanitizeFilename } from "@/lib/utils"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { ObjectAngleStudio } from "@/components/object-angle-studio"
 
 function categoryLabel(category: StoryObjectCategory): string {
   return STORY_OBJECT_CATEGORIES.find((item) => item.value === category)?.label ?? category
@@ -316,15 +317,7 @@ export default function ObjectsPage() {
     setIsLoadingSavedPrompts(true)
     SavedPromptsService.getSavedPrompts(userId, projectId || null)
       .then((prompts) => {
-        setSavedObjectPrompts(
-          prompts.filter(
-            (p) =>
-              p.type === "prop" ||
-              p.type === "style" ||
-              p.type === "prompt" ||
-              p.type === "environment",
-          ),
-        )
+        setSavedObjectPrompts(prompts)
       })
       .catch(() => setSavedObjectPrompts([]))
       .finally(() => setIsLoadingSavedPrompts(false))
@@ -598,6 +591,14 @@ export default function ObjectsPage() {
         variant: "destructive",
       })
     }
+  }
+
+  const handleSetThumbnailFromUrl = async (imageUrl: string) => {
+    if (!selectedObject) return
+    const updated = await StoryObjectsService.updateStoryObject(selectedObject.id, {
+      image_url: imageUrl,
+    })
+    setObjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
   }
 
   const handleDeleteAsset = async (assetId: string) => {
@@ -935,9 +936,7 @@ export default function ObjectsPage() {
                     ) : null}
                     {savedObjectPrompts.map((prompt) => (
                       <SelectItem key={prompt.id} value={prompt.id}>
-                        {prompt.title}
-                        {prompt.type === "style" ? " (style)" : ""}
-                        {prompt.type === "prop" ? " (prop)" : ""}
+                        {formatSavedPromptOptionLabel(prompt)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1575,6 +1574,24 @@ export default function ObjectsPage() {
                       )}
                     </div>
 
+                    {userId ? (
+                      <ObjectAngleStudio
+                        projectId={projectId}
+                        userId={userId}
+                        ready={ready}
+                        object={selectedObject}
+                        imageAssets={imageAssets}
+                        objectAssets={objectAssets}
+                        onObjectAssetsChange={setObjectAssets}
+                        primaryReferenceAsset={
+                          imageAssets[currentImageIndex] || imageAssets[0] || null
+                        }
+                        pickableImageGroups={linkedAssetGroups}
+                        onSetThumbnail={handleSetThumbnailFromUrl}
+                        thumbnailUrl={selectedObject.image_url}
+                      />
+                    ) : null}
+
                     <div className="space-y-3 border-t border-border pt-4">
                       {hasSavedPromptOptions ? (
                         <div className="space-y-2">
@@ -1602,9 +1619,7 @@ export default function ObjectsPage() {
                               ) : null}
                               {savedObjectPrompts.map((prompt) => (
                                 <SelectItem key={prompt.id} value={prompt.id}>
-                                  {prompt.title}
-                                  {prompt.type === "style" ? " (style)" : ""}
-                                  {prompt.type === "prop" ? " (prop)" : ""}
+                                  {formatSavedPromptOptionLabel(prompt)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
