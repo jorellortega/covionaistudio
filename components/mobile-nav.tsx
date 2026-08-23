@@ -35,7 +35,6 @@ import {
   Video,
   List,
   AudioWaveform,
-  Receipt,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuthReady } from "@/components/auth-hooks"
@@ -76,7 +75,6 @@ const navigationCategories: NavCategory[] = [
       { name: "Storyboards", href: "/storyboards", icon: ImageIcon },
       { name: "Shot List", href: "/shotlist", icon: List },
       { name: "Cinema Production", href: "/cinema-production", icon: Video },
-      { name: "Tracker", href: "/tracker", icon: Receipt },
       { name: "Lighting Plot", href: "/lighting-plot", icon: Zap },
       { name: "Call Sheet", href: "/call-sheet", icon: FileText },
       { name: "Crew Sheet", href: "/crew-sheet", icon: Users },

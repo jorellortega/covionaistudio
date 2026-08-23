@@ -401,7 +401,11 @@ export async function POST(request: NextRequest) {
 
     let imageUrl = ""
 
-    const imageModelForRequest = model || 'dall-e-3'
+    let imageModelForRequest = model || 'dall-e-3'
+    if (file && normalizedService === 'dalle' && !isGPTImage2ApiModel(imageModelForRequest)) {
+      console.log('🖼️ API ROUTE - Reference image provided; using gpt-image-2 edit instead of', imageModelForRequest)
+      imageModelForRequest = 'gpt-image-2'
+    }
     if (file && isGPTImage2ApiModel(imageModelForRequest)) {
       console.log('🖼️ API ROUTE - GPT Image 2 edit with reference file(s)')
       const additionalFiles =

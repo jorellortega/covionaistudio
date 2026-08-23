@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
 import { CREATIVE_CHAT_SYSTEM_PROMPT } from '@/lib/creative-chat-prompt'
-import { detectImageRequest, buildImagePromptInstruction, buildImagePromptText, detectSceneImportRequest, extractImportedSceneFromThread, parseSceneFields, detectMultiImageRequest, extractScreenplayLocationSluglines, buildLocationImagePromptsFromSluglines, pickSluglinesForImageBatch, type StoryImageContext } from '@/lib/creative-chat-utils'
+import { detectImageRequest, buildImagePromptInstruction, buildImagePromptText, shouldReuseLastGeneratedImageAsReference, detectSceneImportRequest, extractImportedSceneFromThread, parseSceneFields, detectMultiImageRequest, extractScreenplayLocationSluglines, buildLocationImagePromptsFromSluglines, pickSluglinesForImageBatch, type StoryImageContext } from '@/lib/creative-chat-utils'
 import {
   mapDisplayModelToService,
   normalizeDisplayModelToApiId,
+  displayModelSupportsReferenceImage,
   DEFAULT_CINEMATIC_IMAGE_WIDTH,
   DEFAULT_CINEMATIC_IMAGE_HEIGHT,
 } from '@/lib/image-model-utils'
@@ -282,7 +283,17 @@ async function generateImageFromConversation(
     styleReferenceUrls?: string[]
   },
 ): Promise<{ url: string | null; error?: string }> {
-  const { apiModel, service } = await getImageModelSettings(serviceSupabase)
+  const { displayModel, apiModel, service } = await getImageModelSettings(serviceSupabase)
+  let resolvedApiModel = apiModel
+  let resolvedService = service
+  if (
+    options?.referenceImageUrl &&
+    resolvedService !== 'runway' &&
+    !displayModelSupportsReferenceImage(displayModel)
+  ) {
+    resolvedApiModel = 'gpt-image-2'
+    resolvedService = 'dalle'
+  }
 
   const origin = request.nextUrl.origin
   const response = await fetch(`${origin}/api/ai/generate-image`, {
@@ -294,10 +305,10 @@ async function generateImageFromConversation(
     },
     body: JSON.stringify({
       prompt: imagePrompt,
-      service,
+      service: resolvedService,
       apiKey: 'configured',
       userId,
-      model: apiModel,
+      model: resolvedApiModel,
       costSource: 'workspace',
       width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
       height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
@@ -897,10 +908,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       const { data: existingImageArtifacts } = await supabase
         .from('creative_artifacts')
-        .select('metadata')
+        .select('content, metadata, created_at')
         .eq('workspace_id', workspaceId)
         .eq('user_id', user.id)
         .eq('artifact_type', 'image')
+        .order('created_at', { ascending: false })
 
       const usedSluglines = (existingImageArtifacts || [])
         .map((artifact) =>
@@ -928,6 +940,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
         let promptInstruction = buildImagePromptInstruction(historyForAi, trimmedMessage, storyContext ?? undefined)
         if (attachmentContext.imageUrls.length > 0) {
           promptInstruction += `\n\nThe user attached a reference photo. Write the prompt so the generated image uses that person's likeness. If they asked for parents, family, or related people, those people should clearly resemble the person in the photo.`
+        } else if (shouldReuseLastGeneratedImageAsReference(trimmedMessage, historyForAi)) {
+          promptInstruction += `\n\nThe previous generated image will be attached as the reference. Keep that exact art style and the same character identity. If the previous image was 3D, stylized, or animated, do NOT convert it to photoreal live-action. Isolate only the requested person.`
         }
         const imagePromptMessages: AIMessage[] = [
           { role: 'system', content: 'You write cinematic image prompts grounded in the screenplay. Output only the prompt text.' },
@@ -956,13 +970,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
         promptSluglines = [null]
       }
 
-      const referenceImageUrl = attachmentContext.imageUrls[0]
+      const lastGeneratedImageUrl = (existingImageArtifacts || []).find(
+        (artifact) => typeof artifact.content === 'string' && /^https?:\/\//.test(artifact.content),
+      )?.content as string | undefined
+      const reusePreviousImage =
+        attachmentContext.imageUrls.length === 0 &&
+        !!lastGeneratedImageUrl &&
+        shouldReuseLastGeneratedImageAsReference(trimmedMessage, historyForAi)
+      const referenceImageUrl = attachmentContext.imageUrls[0] || (reusePreviousImage ? lastGeneratedImageUrl : undefined)
       const styleReferenceUrls = attachmentContext.imageUrls.slice(1)
 
       for (let i = 0; i < imagePrompts.length; i++) {
         const basePrompt = imagePrompts[i]
         const imagePrompt = referenceImageUrl
-          ? `${basePrompt} Use the attached reference photo for likeness. Keep recognizable facial features, ethnicity, and coloring from the reference.`.slice(0, 990)
+          ? reusePreviousImage
+            ? `${basePrompt} Edit the attached previous image. Keep the exact same art style and the same character. If it was 3D or stylized animation, keep it 3D/stylized — do not make it photoreal or live-action. Isolate only the requested person.`.slice(0, 990)
+            : `${basePrompt} Use the attached reference photo for likeness. Keep recognizable facial features, ethnicity, and coloring from the reference.`.slice(0, 990)
           : basePrompt
         const slugline = promptSluglines[i] ?? null
         const generated = await generateImageFromConversation(

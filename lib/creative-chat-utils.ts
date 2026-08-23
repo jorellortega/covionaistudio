@@ -40,6 +40,34 @@ function hadPriorImageConversation(history: ConversationMessage[]): boolean {
   )
 }
 
+const CHARACTER_SUBJECT_PATTERN =
+  /\b(dad|father|mom|mother|girl|boy|man|woman|kid|child|daughter|son|husband|wife|character|guy|person|him|her|them)\b/i
+
+export function detectIsolateSubjectFromPreviousImage(
+  message: string,
+  conversationHistory: ConversationMessage[] = [],
+): boolean {
+  if (!hadPriorImageConversation(conversationHistory)) return false
+  const trimmed = message.trim()
+  if (
+    /\b(just|only|solo|alone|by himself|by herself|close[-\s]?up of)\b/i.test(trimmed) &&
+    CHARACTER_SUBJECT_PATTERN.test(trimmed)
+  ) {
+    return true
+  }
+  return /\bfrom (the|that|this) (previous |last |same )?(image|picture|photo|shot)\b/i.test(trimmed)
+}
+
+export function shouldReuseLastGeneratedImageAsReference(
+  message: string,
+  conversationHistory: ConversationMessage[] = [],
+): boolean {
+  if (!hadPriorImageConversation(conversationHistory)) return false
+  if (detectIsolateSubjectFromPreviousImage(message, conversationHistory)) return true
+  if (isCharacterImageRequest(message)) return true
+  return detectImageFollowUpRequest(message, conversationHistory)
+}
+
 function detectImageFollowUpRequest(
   message: string,
   conversationHistory: ConversationMessage[] = [],
@@ -48,7 +76,8 @@ function detectImageFollowUpRequest(
 
   return (
     IMAGE_FOLLOW_UP_STYLE_PATTERNS.some((pattern) => pattern.test(message)) ||
-    /\b(her|him|he|she|them|it|this character|the character)\b/i.test(message)
+    /\b(her|him|he|she|them|it|this character|the character)\b/i.test(message) ||
+    detectIsolateSubjectFromPreviousImage(message, conversationHistory)
   )
 }
 
@@ -206,7 +235,30 @@ Rules:
 - Do not say you cannot generate images`
   }
 
+  const reusePreviousLook = shouldReuseLastGeneratedImageAsReference(userMessage, conversationHistory)
+
   if (focus === 'character') {
+    if (reusePreviousLook) {
+      return `You are writing an image EDIT prompt. The previous generated image will be attached as the visual reference.
+
+The user asked: "${userMessage}"${filmLine}
+
+Primary character description:
+${characterSource || 'Use the person visible in the attached previous image.'}
+
+Conversation:
+${context}${storyBlock}
+
+Rules:
+- Output ONLY the image prompt text, nothing else
+- Do NOT say "photoreal", "live-action", or "cinematic film still" unless the previous image was already photoreal
+- Keep the previous image's exact medium and art style (if it was 3D, stylized, or animated, stay that way)
+- Keep the same person: same face, hair, facial hair, wardrobe, body type, and coloring
+- Isolate only the requested subject; no extra people
+- Max 500 characters
+- Do not say you cannot generate images`
+    }
+
     return `You are building a cinematic CHARACTER portrait image prompt.
 
 The user asked: "${userMessage}"${filmLine}
@@ -222,6 +274,23 @@ Rules:
 - Start with "Cinematic film still,"
 - Focus on the character's appearance, wardrobe, expression, and framing
 - Use setting only as subtle background context
+- Max 500 characters
+- Do not say you cannot generate images`
+  }
+
+  if (reusePreviousLook) {
+    return `You are writing an image EDIT prompt. The previous generated image will be attached as the visual reference.
+
+The user asked: "${userMessage}"${filmLine}
+
+Conversation:
+${context}${storyBlock}
+
+Rules:
+- Output ONLY the image prompt text, nothing else
+- Do NOT say "photoreal", "live-action", or "cinematic film still" unless the previous image was already photoreal
+- Keep the previous image's exact medium and art style (if it was 3D, stylized, or animated, stay that way)
+- Keep the same people and design; only change what the user asked for
 - Max 500 characters
 - Do not say you cannot generate images`
   }
@@ -255,7 +324,11 @@ export function detectImageRequestFocus(
   if (isLocationImageRequest(userMessage) || /\bthis location\b/i.test(userMessage)) {
     return 'location'
   }
-  if (isCharacterImageRequest(userMessage) || /\bthis character\b/i.test(userMessage)) {
+  if (
+    isCharacterImageRequest(userMessage) ||
+    /\bthis character\b/i.test(userMessage) ||
+    detectIsolateSubjectFromPreviousImage(userMessage, conversationHistory)
+  ) {
     return 'character'
   }
 
@@ -327,6 +400,12 @@ export function buildImagePromptText(
     )?.content || userMessage
     const parsed = parseCharacterFields(characterSource, 'Untitled')
     const styleDirection = userMessage.trim()
+    if (shouldReuseLastGeneratedImageAsReference(userMessage, conversationHistory)) {
+      return (
+        `Keep the exact same 3D/stylized animated look as the previous image, isolated portrait of ${parsed.name}, ` +
+        `${parsed.description}, same face, hair, wardrobe, and coloring, no other characters, not photoreal, not live-action, ${styleDirection}`
+      ).slice(0, 500)
+    }
     const base = `Cinematic film still, portrait of ${parsed.name}, ${parsed.description}`
     if (styleDirection && styleDirection !== characterSource) {
       return `${base}, ${styleDirection}`.slice(0, 500)
@@ -799,11 +878,13 @@ function isLocationImageRequest(content: string): boolean {
 function isCharacterImageRequest(content: string): boolean {
   if (
     /\b(image|picture|visual|photo|show me|generate|create|draw|portrait|avatar)\b/i.test(content) &&
-    /\b(character|protagonist|avatar|portrait|her|him|them)\b/i.test(content)
+    /\b(character|protagonist|avatar|portrait|her|him|them|dad|father|mom|mother|girl|boy|man|woman|kid|child|daughter|son)\b/i.test(
+      content,
+    )
   ) {
     return true
   }
-  return /\b(generate|create|make)\b[\s\S]{0,40}\b(image|picture|photo|portrait)\b[\s\S]{0,20}\b(of\s+)?(her|him|them)\b/i.test(
+  return /\b(generate|create|make)\b[\s\S]{0,40}\b(image|picture|photo|portrait)\b[\s\S]{0,20}\b(of\s+)?(her|him|them|the dad|the father|the mom)\b/i.test(
     content,
   )
 }
