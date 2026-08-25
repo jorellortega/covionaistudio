@@ -1766,6 +1766,11 @@ export default function CinemaProductionPage() {
     [projectImageAssets],
   )
 
+  const locationImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.location_id && a.content_url),
+    [projectImageAssets],
+  )
+
   const avatarImageAssets = useMemo(
     () =>
       projectAvatarImages.map(
@@ -3655,6 +3660,7 @@ export default function CinemaProductionPage() {
       storyObjects: projectStoryObjects,
       avatarImages: projectAvatarImages,
       characterAssets: characterImageAssets,
+      locationAssets: locationImageAssets,
       objectAssets: objectImageAssets,
       maxImages: limit,
       excludeUrls: layoutRef.url ? [layoutRef.url] : [],

@@ -312,6 +312,43 @@ const STYLE_OPTIONS = [
   { value: "fantasy concept art", label: "Fantasy Concept" },
 ]
 
+type GenerateImageFailure = {
+  status: number
+  statusText: string
+  contentBlocked: boolean
+  error: string
+  details?: string
+  raw: string
+}
+
+async function readGenerateImageFailure(res: Response): Promise<GenerateImageFailure> {
+  const raw = await res.text()
+  let parsed: {
+    error?: unknown
+    details?: unknown
+    contentBlocked?: unknown
+  } | null = null
+  try {
+    parsed = raw ? (JSON.parse(raw) as typeof parsed) : null
+  } catch {
+    parsed = null
+  }
+  const error =
+    (typeof parsed?.error === "string" && parsed.error) ||
+    (typeof parsed?.details === "string" && parsed.details) ||
+    raw.trim() ||
+    res.statusText ||
+    `HTTP ${res.status}`
+  return {
+    status: res.status,
+    statusText: res.statusText,
+    contentBlocked: parsed?.contentBlocked === true,
+    error,
+    details: typeof parsed?.details === "string" ? parsed.details : undefined,
+    raw: raw.slice(0, 800),
+  }
+}
+
 export default function AvatarsPage() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -383,6 +420,7 @@ export default function AvatarsPage() {
   const hydrationKeyRef = useRef<string | null>(null)
   const shotUploadInputRef = useRef<HTMLInputElement>(null)
   const shotUploadAngleIdRef = useRef<string | null>(null)
+  const collageUploadInputRef = useRef<HTMLInputElement>(null)
 
   const updateAvatarsUrl = useCallback(
     (nextProjectId: string, nextCharacterId?: string) => {
@@ -1103,6 +1141,8 @@ export default function AvatarsPage() {
     options?: {
       referenceFile?: File
       styleReferenceFiles?: File[]
+      debugLabel?: string
+      debugAngleId?: string
     },
   ) => {
     const referenceFile = options?.referenceFile
@@ -1119,7 +1159,10 @@ export default function AvatarsPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("autoSaveToBucket", "true")
+      formData.append("costSource", "avatars")
       formData.append("file", referenceFile)
+      if (options?.debugLabel) formData.append("debugLabel", options.debugLabel)
+      if (options?.debugAngleId) formData.append("debugAngleId", options.debugAngleId)
       for (const styleFile of options?.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
@@ -1145,18 +1188,59 @@ export default function AvatarsPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: "avatars",
+        debugLabel: options?.debugLabel,
+        debugAngleId: options?.debugAngleId,
       }),
     })
   }
 
   const generateAngle = async (angle: AvatarAngle) => {
-    if (!userId) return null
+    if (!userId) {
+      console.error("[avatars] generate skipped", {
+        angleId: angle.id,
+        angleLabel: angle.label,
+        reason: "No signed-in user",
+      })
+      return null
+    }
 
     const useReference = generationMode === "from_reference" && !!sourceReference
     const config = await getImageConfig(useReference)
+    const debugPayload = {
+      angleId: angle.id,
+      angleLabel: angle.label,
+      mode: generationMode,
+      model: config.apiModel,
+      service: config.service,
+      hasReference: useReference,
+    }
+    console.log("[avatars] generate start", debugPayload)
+
+    const throwFromFailedResponse = async (res: Response): Promise<never> => {
+      const failure = await readGenerateImageFailure(res)
+      console.error("[avatars] generate failed", {
+        ...debugPayload,
+        status: failure.status,
+        statusText: failure.statusText,
+        contentBlocked: failure.contentBlocked,
+        error: failure.error,
+        details: failure.details,
+        raw: failure.raw,
+      })
+      throw new Error(
+        failure.contentBlocked
+          ? `${angle.label} blocked by safety filters (${failure.status}): ${failure.error}`
+          : `${angle.label} failed (${failure.status}): ${failure.error}`,
+      )
+    }
 
     if (useReference) {
       if (!config.supportsReference) {
+        console.error("[avatars] generate failed", {
+          ...debugPayload,
+          reason: "Locked image model does not support reference editing",
+        })
         throw new Error(
           "Your image model doesn't support reference editing. Lock GPT Image 2 or Runway in AI Settings.",
         )
@@ -1170,16 +1254,30 @@ export default function AvatarsPage() {
           `avatar-source-${sourceReference!.assetId || "upload"}.png`,
         ))
 
-      const res = await requestImageGeneration(prompt, config, { referenceFile })
+      const res = await requestImageGeneration(prompt, config, {
+        referenceFile,
+        debugLabel: angle.label,
+        debugAngleId: angle.id,
+      })
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error || `Failed to generate ${angle.label} from reference`)
+        await throwFromFailedResponse(res)
       }
 
       const data = await res.json()
       const imageUrl = data.bucketUrl || data.imageUrl || data.url
-      if (!imageUrl) throw new Error("No image returned")
+      if (!imageUrl) {
+        console.error("[avatars] generate failed", {
+          ...debugPayload,
+          reason: "API returned 200 but no image URL",
+          keys: Object.keys(data || {}),
+        })
+        throw new Error("No image returned")
+      }
 
+      console.log("[avatars] generate ok", {
+        ...debugPayload,
+        imageUrl: String(imageUrl).slice(0, 120),
+      })
       return {
         imageUrl,
         prompt,
@@ -1188,17 +1286,30 @@ export default function AvatarsPage() {
     }
 
     const prompt = buildAvatarPrompt(characterName, description, angle, style)
-    const res = await requestImageGeneration(prompt, config)
+    const res = await requestImageGeneration(prompt, config, {
+      debugLabel: angle.label,
+      debugAngleId: angle.id,
+    })
 
     if (!res.ok) {
-      const err = await res.json()
-      throw new Error(err.error || `Failed to generate ${angle.label}`)
+      await throwFromFailedResponse(res)
     }
 
     const data = await res.json()
     const imageUrl = data.bucketUrl || data.imageUrl || data.url
-    if (!imageUrl) throw new Error("No image returned")
+    if (!imageUrl) {
+      console.error("[avatars] generate failed", {
+        ...debugPayload,
+        reason: "API returned 200 but no image URL",
+        keys: Object.keys(data || {}),
+      })
+      throw new Error("No image returned")
+    }
 
+    console.log("[avatars] generate ok", {
+      ...debugPayload,
+      imageUrl: String(imageUrl).slice(0, 120),
+    })
     return { imageUrl, prompt, source: "generated" as const }
   }
 
@@ -1526,6 +1637,12 @@ export default function AvatarsPage() {
     setIsBatchGenerating(true)
     const anglesToGenerate = avatarShots.filter((a) => selectedAngles.includes(a.id))
     let created = 0
+    const failed: { angleId: string; angleLabel: string; reason: string }[] = []
+    console.log("[avatars] batch start", {
+      characterId: linkedCharacterId,
+      mode: generationMode,
+      angles: anglesToGenerate.map((a) => ({ id: a.id, label: a.label })),
+    })
 
     try {
       for (const angle of anglesToGenerate) {
@@ -1535,18 +1652,39 @@ export default function AvatarsPage() {
           if (result) {
             await addAvatarImage(angle, result)
             created++
+          } else {
+            failed.push({
+              angleId: angle.id,
+              angleLabel: angle.label,
+              reason: "No image returned (check [avatars] generate skipped)",
+            })
+            console.error("[avatars] generate skipped in batch", {
+              angleId: angle.id,
+              angleLabel: angle.label,
+            })
           }
         } catch (error) {
+          const reason = error instanceof Error ? error.message : "Could not generate this angle."
+          failed.push({ angleId: angle.id, angleLabel: angle.label, reason })
+          console.error("[avatars] batch angle failed", {
+            angleId: angle.id,
+            angleLabel: angle.label,
+            reason,
+          })
           toast({
             title: `${angle.label} failed`,
-            description:
-              error instanceof Error ? error.message : "Could not generate this angle.",
+            description: reason,
             variant: "destructive",
           })
         } finally {
           finishAngleJob(angle.id)
         }
       }
+      console.log("[avatars] batch done", {
+        attempted: anglesToGenerate.length,
+        created,
+        failed,
+      })
       if (created > 0) {
         toast({
           title: "Avatars generated",
@@ -1609,6 +1747,11 @@ export default function AvatarsPage() {
         })
       }
     } catch (error) {
+      console.error("[avatars] single generate failed", {
+        angleId: angle.id,
+        angleLabel: angle.label,
+        error: error instanceof Error ? error.message : error,
+      })
       toast({
         title: "Generation failed",
         description: error instanceof Error ? error.message : "Failed to generate",
@@ -1722,10 +1865,21 @@ export default function AvatarsPage() {
       const response = await requestImageGeneration(prompt, config, {
         referenceFile: primaryReferenceFile,
         styleReferenceFiles: config.supportsReference ? styleReferenceFiles : undefined,
+        debugLabel: `Edit ${angle?.label || angleId}`,
+        debugAngleId: angleId,
       })
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || "Failed to edit image")
+        const failure = await readGenerateImageFailure(response)
+        console.error("[avatars] edit failed", {
+          angleId,
+          angleLabel: angle?.label,
+          status: failure.status,
+          contentBlocked: failure.contentBlocked,
+          error: failure.error,
+          details: failure.details,
+          raw: failure.raw,
+        })
+        throw new Error(failure.error || "Failed to edit image")
       }
       const result = await response.json()
       const imageUrl = result.bucketUrl || result.imageUrl || result.url
@@ -1914,11 +2068,14 @@ export default function AvatarsPage() {
     }
   }
 
-  const handleSaveCollage = async () => {
-    if (!projectId || !collagePreviewBlob) {
+  const persistCollageFile = async (
+    file: File,
+    source: "generated" | "existing",
+  ) => {
+    if (!projectId) {
       toast({
-        title: "Nothing to save",
-        description: "Generate the collage first.",
+        title: "Select a project",
+        description: "Link a movie project to save a collage.",
         variant: "destructive",
       })
       return
@@ -1926,8 +2083,6 @@ export default function AvatarsPage() {
 
     try {
       setIsSavingCollage(true)
-      const fileName = `${(characterName || "character").replace(/\s+/g, "-").toLowerCase()}-avatar-collage.png`
-      const file = new File([collagePreviewBlob], fileName, { type: "image/png" })
       const stored = await StorageService.uploadFile({
         file,
         projectId,
@@ -1980,7 +2135,7 @@ export default function AvatarsPage() {
         angle_label: "Reference Collage",
         image_url: stored.url,
         prompt: "Multi-angle avatar reference collage",
-        source: "generated",
+        source,
         asset_id: assetId ?? null,
         metadata: {
           character_name: characterName || null,
@@ -1993,6 +2148,11 @@ export default function AvatarsPage() {
         record,
       ])
       setSavedCollageUrl(stored.url)
+      if (source === "existing") {
+        if (collagePreviewUrl) URL.revokeObjectURL(collagePreviewUrl)
+        setCollagePreviewUrl(null)
+        setCollagePreviewBlob(null)
+      }
 
       if (linkedCharacterId) {
         const character = characters.find((c) => c.id === linkedCharacterId)
@@ -2031,6 +2191,35 @@ export default function AvatarsPage() {
     } finally {
       setIsSavingCollage(false)
     }
+  }
+
+  const handleSaveCollage = async () => {
+    if (!collagePreviewBlob) {
+      toast({
+        title: "Nothing to save",
+        description: "Generate or upload a collage first.",
+        variant: "destructive",
+      })
+      return
+    }
+    const fileName = `${(characterName || "character").replace(/\s+/g, "-").toLowerCase()}-avatar-collage.png`
+    const file = new File([collagePreviewBlob], fileName, { type: "image/png" })
+    await persistCollageFile(file, "generated")
+  }
+
+  const handleCollageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Choose an image",
+        description: "Collage uploads must be an image file.",
+        variant: "destructive",
+      })
+      return
+    }
+    await persistCollageFile(file, "existing")
   }
 
   const handleDownloadCollage = () => {
@@ -2208,6 +2397,13 @@ export default function AvatarsPage() {
           accept="image/*"
           className="hidden"
           onChange={(event) => void handleShotUpload(event)}
+        />
+        <input
+          ref={collageUploadInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => void handleCollageUpload(event)}
         />
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
@@ -3019,7 +3215,7 @@ export default function AvatarsPage() {
               </div>
             )}
 
-            {hasAnyImages && (
+            {(!linkedCharacterId && characters.length > 0) ? null : (
               <Card className="border-violet-500/20 bg-violet-500/5">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-lg flex items-center gap-2">
@@ -3027,8 +3223,8 @@ export default function AvatarsPage() {
                     Reference Collage Sheet
                   </CardTitle>
                   <CardDescription>
-                    Combine your selected avatar views into one labeled image. Save it to use a
-                    single character reference in storyboards and AI generation instead of many angles.
+                    Combine selected avatar views into one labeled image, or upload a collage you
+                    already have. Storyboards use this as the single character reference.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -3055,10 +3251,7 @@ export default function AvatarsPage() {
                     </button>
                   ) : (
                     <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
-                      {collageSourceItems.length} angle{collageSourceItems.length === 1 ? "" : "s"} ready
-                      {collageSourceItems.length < 2
-                        ? " — add at least one more view to build a collage."
-                        : " — generate a single reference sheet from your selected views."}
+                      Generate a collage from your shots, or upload one you already have.
                     </div>
                   )}
 
@@ -3075,6 +3268,19 @@ export default function AvatarsPage() {
                         <LayoutGrid className="h-4 w-4 mr-2" />
                       )}
                       Generate Collage
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => collageUploadInputRef.current?.click()}
+                      disabled={!projectId || isSavingCollage || isBuildingCollage}
+                    >
+                      {isSavingCollage ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Upload className="h-4 w-4 mr-2" />
+                      )}
+                      Upload Collage
                     </Button>
                     <Button
                       type="button"
@@ -3125,6 +3331,7 @@ export default function AvatarsPage() {
                     {!projectId && " Link a project to save the collage."}
                     {projectId && !linkedCharacterId && " Link a character so storyboards use this as the one reference."}
                     {savedCollageUrl && !collagePreviewUrl && " Showing the last saved collage for this character."}
+                    {" You can also upload a collage you already have instead of generating one."}
                   </p>
                 </CardContent>
               </Card>

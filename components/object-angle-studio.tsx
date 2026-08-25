@@ -236,6 +236,7 @@ export function ObjectAngleStudio({
   const { toast } = useToast()
   const hydrationKeyRef = useRef<string | null>(null)
   const syncedPrimaryAssetIdRef = useRef<string | null>(null)
+  const collageUploadInputRef = useRef<HTMLInputElement>(null)
 
   const [selectedAngles, setSelectedAngles] = useState<string[]>([
     ...OBJECT_TURNAROUND_ANGLE_IDS,
@@ -310,14 +311,6 @@ export function ObjectAngleStudio({
       }),
     [objectShots, angleGalleries, objectAssets, object.id],
   )
-
-  const savedAngleAssetCount = useMemo(
-    () => objectAssets.filter((asset) => isObjectAngleAsset(asset, object.id)).length,
-    [objectAssets, object.id],
-  )
-
-  const hasAnyImages = totalImageCount > 0 || savedAngleAssetCount > 0
-  const showCollageSection = collageSourceItems.length > 0 || Boolean(savedCollageAsset)
 
   const allPickableAssets = useMemo(
     () => pickableImageGroups.flatMap((group) => group.assets),
@@ -1170,20 +1163,9 @@ export function ObjectAngleStudio({
     }
   }
 
-  const handleSaveCollage = async () => {
-    if (!collagePreviewBlob) {
-      toast({
-        title: "Nothing to save",
-        description: "Build the collage first.",
-        variant: "destructive",
-      })
-      return
-    }
-
+  const persistCollageFile = async (file: File) => {
     try {
       setIsSavingCollage(true)
-      const fileName = `${object.name.replace(/\s+/g, "-").toLowerCase()}-object-collage.png`
-      const file = new File([collagePreviewBlob], fileName, { type: "image/png" })
       const stored = await StorageService.uploadFile({
         file,
         projectId,
@@ -1240,6 +1222,35 @@ export function ObjectAngleStudio({
     } finally {
       setIsSavingCollage(false)
     }
+  }
+
+  const handleSaveCollage = async () => {
+    if (!collagePreviewBlob) {
+      toast({
+        title: "Nothing to save",
+        description: "Generate or upload a collage first.",
+        variant: "destructive",
+      })
+      return
+    }
+    const fileName = `${object.name.replace(/\s+/g, "-").toLowerCase()}-object-collage.png`
+    const file = new File([collagePreviewBlob], fileName, { type: "image/png" })
+    await persistCollageFile(file)
+  }
+
+  const handleCollageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    if (!file) return
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Choose an image",
+        description: "Collage uploads must be an image file.",
+        variant: "destructive",
+      })
+      return
+    }
+    await persistCollageFile(file)
   }
 
   const handleDeleteAngleImage = async (angle: ObjectAngle, image: ObjectAngleImage) => {
@@ -1462,18 +1473,7 @@ export function ObjectAngleStudio({
         </Card>
 
         <div className="space-y-4">
-          {!hasAnyImages ? (
-            <Card className="border-dashed">
-              <CardContent className="flex flex-col items-center justify-center py-14 text-center">
-                <ImageIcon className="h-10 w-10 text-muted-foreground/50 mb-3" />
-                <p className="text-sm text-muted-foreground max-w-sm">
-                  Pick a reference image and generate front, side, back, and top views — or
-                  individual angles one at a time.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {objectShots.filter(
                 (angle) =>
                   selectedAngles.includes(angle.id) ||
@@ -1716,18 +1716,16 @@ export function ObjectAngleStudio({
                 )
               })}
             </div>
-          )}
 
-          {showCollageSection ? (
-            <Card className="border-violet-500/20 bg-violet-500/5">
+          <Card className="border-violet-500/20 bg-violet-500/5">
               <CardHeader className="pb-3">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <LayoutGrid className="h-5 w-5 text-violet-400" />
                   Reference Collage Sheet
                 </CardTitle>
                 <CardDescription>
-                  Combine your selected object views into one labeled image for storyboards and AI
-                  generation.
+                  Combine selected object views into one labeled image, or upload a collage you
+                  already have. Storyboards use this as the single object reference.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1778,11 +1776,7 @@ export function ObjectAngleStudio({
                   </div>
                 ) : (
                   <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-10 text-center text-sm text-muted-foreground">
-                    {collageSourceItems.length} angle{collageSourceItems.length === 1 ? "" : "s"}{" "}
-                    ready
-                    {collageSourceItems.length < 2
-                      ? " — add at least one more view to build a collage."
-                      : " — click Generate Collage to combine these shots into one sheet."}
+                    Generate a collage from your shots, or upload one you already have.
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
@@ -1798,6 +1792,19 @@ export function ObjectAngleStudio({
                       <LayoutGrid className="h-4 w-4 mr-2" />
                     )}
                     Generate Collage
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => collageUploadInputRef.current?.click()}
+                    disabled={isSavingCollage || isBuildingCollage}
+                  >
+                    {isSavingCollage ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Upload className="h-4 w-4 mr-2" />
+                    )}
+                    Upload Collage
                   </Button>
                   <Button
                     type="button"
@@ -1847,10 +1854,17 @@ export function ObjectAngleStudio({
                   {savedCollageAsset && !collagePreviewUrl
                     ? " Showing the last saved collage for this object."
                     : null}
+                  {" You can also upload a collage you already have instead of generating one."}
                 </p>
               </CardContent>
             </Card>
-          ) : null}
+            <input
+              ref={collageUploadInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(event) => void handleCollageUpload(event)}
+            />
         </div>
       </div>
 

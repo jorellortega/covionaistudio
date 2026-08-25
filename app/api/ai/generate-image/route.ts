@@ -145,6 +145,7 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
 }
 
 export async function POST(request: NextRequest) {
+  const debugContext: Record<string, unknown> = {}
   try {
     console.log('AI image generation request received')
     
@@ -168,6 +169,8 @@ export async function POST(request: NextRequest) {
         userId: formData.get('userId'),
         seed: formData.get('seed') ? parseInt(formData.get('seed') as string) : undefined,
         costSource: formData.get('costSource'),
+        debugLabel: formData.get('debugLabel'),
+        debugAngleId: formData.get('debugAngleId'),
       }
       file = formData.get('file') as File
       styleReferenceFiles = collectStyleReferenceFiles(formData)
@@ -206,8 +209,26 @@ export async function POST(request: NextRequest) {
     }
     
     console.log('Request body:', { ...body, apiKey: body.apiKey ? `${body.apiKey.substring(0, 10)}...` : 'undefined' })
+
+    debugContext.costSource = body.costSource ?? undefined
+    debugContext.debugLabel = body.debugLabel ?? undefined
+    debugContext.debugAngleId = body.debugAngleId ?? undefined
     
     let { prompt, service, apiKey, userId, model, width, height, autoSaveToBucket = true, seed } = body
+    debugContext.service = service
+    debugContext.model = model
+    debugContext.promptPreview = typeof prompt === 'string' ? prompt.slice(0, 280) : undefined
+    debugContext.hasReferenceFile = !!file
+
+    if (body.debugLabel || body.costSource) {
+      console.log('[generate-image] start', {
+        costSource: body.costSource,
+        debugLabel: body.debugLabel,
+        debugAngleId: body.debugAngleId,
+        service,
+        model,
+      })
+    }
 
     // Set default width and height if not provided (cinematic landscape, not square)
     if (!width) width = DEFAULT_CINEMATIC_IMAGE_WIDTH
@@ -813,14 +834,25 @@ export async function POST(request: NextRequest) {
       isContentPolicyError(errorMessage) ||
       (error instanceof Error && isContentPolicyError(error.message))
 
+    const status = contentBlocked ? 422 : 500
+    console.error('[generate-image] failed', {
+      ...debugContext,
+      status,
+      contentBlocked,
+      error: errorMessage,
+      details: error instanceof Error ? error.message : String(error),
+    })
+
     return NextResponse.json(
       { 
         error: errorMessage,
         success: false,
         contentBlocked,
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: error instanceof Error ? error.message : 'Unknown error',
+        debugLabel: debugContext.debugLabel ?? null,
+        debugAngleId: debugContext.debugAngleId ?? null,
       },
-      { status: contentBlocked ? 422 : 500 }
+      { status }
     )
   }
 }

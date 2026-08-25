@@ -803,6 +803,11 @@ export default function SceneStoryboardsPage() {
     [projectImageAssets],
   )
 
+  const locationImageAssets = useMemo(
+    () => projectImageAssets.filter((a) => a.location_id && a.content_url),
+    [projectImageAssets],
+  )
+
   const linkedProjectImageGroups = useMemo(() => {
     const groups = buildLinkedAssetGroups(linkableImageAssets, locations, characters)
     const avatarOnly = avatarImageAssets.filter(
@@ -1689,6 +1694,7 @@ export default function SceneStoryboardsPage() {
             storyObjects,
             avatarImages: projectAvatarImages,
             characterAssets: characterImageAssets,
+            locationAssets: locationImageAssets,
             objectAssets: objectImageAssets,
             maxImages: storyboardReferenceImageLimit(),
             excludeUrls: layoutRef.url ? [layoutRef.url] : [],
@@ -3172,6 +3178,7 @@ export default function SceneStoryboardsPage() {
             storyObjects,
             avatarImages: projectAvatarImages,
             characterAssets: characterImageAssets,
+            locationAssets: locationImageAssets,
             objectAssets: objectImageAssets,
             maxImages: refLimit,
             excludeUrls: excludeReferenceUrls,

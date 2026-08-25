@@ -12,6 +12,8 @@ import {
   getStoryboardObjectIds,
 } from "./storyboard-assignments"
 import { AVATAR_REFERENCE_COLLAGE_ANGLE_ID } from "./avatar-angles"
+import { LOCATION_REFERENCE_COLLAGE_ANGLE_ID } from "./location-angles"
+import { OBJECT_REFERENCE_COLLAGE_ANGLE_ID } from "./object-angles"
 import { referenceUrlToFile } from "./project-image-linking"
 import { isGPTImage2ApiModel } from "./image-model-utils"
 import { debugStoryboardImage } from "./storyboard-image-debug"
@@ -30,9 +32,13 @@ export type StoryboardReferenceSourceType =
   | "avatar_angle"
   | "location_image"
   | "location_reference"
+  | "location_collage"
+  | "location_angle"
   | "object_image"
   | "object_reference"
   | "object_asset"
+  | "object_collage"
+  | "object_angle"
 
 export interface StoryboardReferenceSource {
   url: string
@@ -70,7 +76,7 @@ export function storyboardReferenceImageLimit(
     (options?.objectCount ?? 0)
 
   if (apiModel && isGPTImage2ApiModel(apiModel)) {
-    // GPT Image 2 edits: one collage per assigned character/location when possible.
+    // GPT Image 2 edits: one collage per assigned character/location/object when possible.
     const needed =
       assignmentCount > 0 ? assignmentCount : STORYBOARD_MAX_REFERENCE_IMAGES
     return Math.min(modelMax, needed)
@@ -180,6 +186,8 @@ export function summarizeObjectReferenceCoverage(
   const finalSources = sources.slice(0, maxImages)
   const droppedSources = sources.slice(maxImages)
   const objectSourceTypes = new Set<StoryboardReferenceSourceType>([
+    "object_collage",
+    "object_angle",
     "object_image",
     "object_reference",
     "object_asset",
@@ -391,6 +399,43 @@ function isCollageAsset(asset: Asset): boolean {
   )
 }
 
+function isLocationCollageAsset(asset: Asset): boolean {
+  return (
+    asset.metadata?.location_angle === LOCATION_REFERENCE_COLLAGE_ANGLE_ID ||
+    asset.metadata?.type === "location_angle_collage" ||
+    asset.metadata?.location_angle_source === "collage"
+  )
+}
+
+function isObjectCollageAsset(asset: Asset): boolean {
+  return (
+    asset.metadata?.object_angle === OBJECT_REFERENCE_COLLAGE_ANGLE_ID ||
+    asset.metadata?.type === "object_angle_collage" ||
+    asset.metadata?.object_angle_source === "collage"
+  )
+}
+
+function pickBestLinkedImageAsset(
+  assets: Asset[],
+  options: {
+    match: (asset: Asset) => boolean
+    preferredAngleIds: string[]
+    readAngleId: (asset: Asset) => string | undefined
+  },
+): Asset | undefined {
+  const candidates = assets.filter(
+    (asset) =>
+      asset.content_type === "image" &&
+      !!asset.content_url &&
+      options.match(asset),
+  )
+  for (const angleId of options.preferredAngleIds) {
+    const found = candidates.find((asset) => options.readAngleId(asset) === angleId)
+    if (found) return found
+  }
+  return candidates.find((asset) => options.readAngleId(asset)) ?? candidates[0]
+}
+
 function resolveCharacterCollageUrl(
   characterId: string,
   character: Character | undefined,
@@ -432,6 +477,60 @@ function resolveCharacterCollageUrl(
   return null
 }
 
+function resolveLocationCollageUrl(
+  locationId: string,
+  location: Location | undefined,
+  locationAssets: Asset[],
+): string | null {
+  for (const asset of locationAssets) {
+    if (asset.location_id !== locationId || !asset.content_url || !isLocationCollageAsset(asset)) {
+      continue
+    }
+    return asset.content_url
+  }
+
+  const knownCollageUrls = new Set(
+    locationAssets
+      .filter(
+        (asset) =>
+          asset.location_id === locationId && asset.content_url && isLocationCollageAsset(asset),
+      )
+      .map((asset) => asset.content_url as string),
+  )
+  if (location?.image_url && knownCollageUrls.has(location.image_url)) return location.image_url
+  for (const ref of location?.reference_images ?? []) {
+    if (ref && knownCollageUrls.has(ref)) return ref
+  }
+  return null
+}
+
+function resolveObjectCollageUrl(
+  objectId: string,
+  object: StoryObject | undefined,
+  objectAssets: Asset[],
+): string | null {
+  for (const asset of objectAssets) {
+    if (asset.story_object_id !== objectId || !asset.content_url || !isObjectCollageAsset(asset)) {
+      continue
+    }
+    return asset.content_url
+  }
+
+  const knownCollageUrls = new Set(
+    objectAssets
+      .filter(
+        (asset) =>
+          asset.story_object_id === objectId && asset.content_url && isObjectCollageAsset(asset),
+      )
+      .map((asset) => asset.content_url as string),
+  )
+  if (object?.image_url && knownCollageUrls.has(object.image_url)) return object.image_url
+  for (const ref of object?.reference_images ?? []) {
+    if (ref && knownCollageUrls.has(ref)) return ref
+  }
+  return null
+}
+
 export type CollectStoryboardReferenceOptions = {
   characterIds: string[]
   locationIds: string[]
@@ -442,6 +541,8 @@ export type CollectStoryboardReferenceOptions = {
   avatarImages: AvatarImageRecord[]
   /** Linked project assets (character_id set) — used when portrait/reference URLs are stale */
   characterAssets?: Asset[]
+  /** Linked project assets (location_id set) */
+  locationAssets?: Asset[]
   /** Linked project assets (story_object_id set) */
   objectAssets?: Asset[]
   maxImages: number
@@ -470,6 +571,7 @@ export function collectStoryboardReferenceSources(
     storyObjects = [],
     avatarImages,
     characterAssets = [],
+    locationAssets = [],
     objectAssets = [],
     maxImages,
     excludeUrls = [],
@@ -586,8 +688,45 @@ export function collectStoryboardReferenceSources(
   for (const locationId of locationIds) {
     const location = locations.find((l) => l.id === locationId)
     const name = location?.name || "Location"
+    const collageUrl = resolveLocationCollageUrl(locationId, location, locationAssets)
 
-    if (location?.image_url) {
+    if (collageUrl) {
+      addSource({
+        url: collageUrl,
+        label: `${name} · Location collage`,
+        sourceType: "location_collage",
+        entityId: locationId,
+        entityName: name,
+      })
+      continue
+    }
+
+    const sourceCountBefore = sources.length
+    const bestAngle = pickBestLinkedImageAsset(locationAssets, {
+      match: (asset) =>
+        asset.location_id === locationId && !isLocationCollageAsset(asset),
+      preferredAngleIds: ["establishing", "eye_level"],
+      readAngleId: (asset) =>
+        typeof asset.metadata?.location_angle === "string"
+          ? asset.metadata.location_angle
+          : undefined,
+    })
+    if (bestAngle?.content_url) {
+      const angleLabel =
+        (typeof bestAngle.metadata?.location_angle_label === "string" &&
+          bestAngle.metadata.location_angle_label) ||
+        bestAngle.title?.trim() ||
+        "Angle"
+      addSource({
+        url: bestAngle.content_url,
+        label: `${name} · ${angleLabel}`,
+        sourceType: "location_angle",
+        entityId: locationId,
+        entityName: name,
+      })
+    }
+
+    if (sources.length === sourceCountBefore && location?.image_url) {
       addSource({
         url: location.image_url,
         label: `${name} · Cover image`,
@@ -597,14 +736,36 @@ export function collectStoryboardReferenceSources(
       })
     }
 
-    for (const [index, ref] of (location?.reference_images ?? []).entries()) {
-      addSource({
-        url: ref,
-        label: `${name} · Reference image ${index + 1}`,
-        sourceType: "location_reference",
-        entityId: locationId,
-        entityName: name,
-      })
+    if (sources.length === sourceCountBefore) {
+      const refUrl = (location?.reference_images ?? []).find((ref) => !!ref?.trim())
+      if (refUrl) {
+        addSource({
+          url: refUrl,
+          label: `${name} · Reference image`,
+          sourceType: "location_reference",
+          entityId: locationId,
+          entityName: name,
+        })
+      }
+    }
+
+    if (sources.length === sourceCountBefore) {
+      const galleryAsset = locationAssets.find(
+        (asset) =>
+          asset.location_id === locationId &&
+          asset.content_type === "image" &&
+          asset.content_url &&
+          !isLocationCollageAsset(asset),
+      )
+      if (galleryAsset?.content_url) {
+        addSource({
+          url: galleryAsset.content_url,
+          label: `${name} · ${galleryAsset.title?.trim() || "Gallery image"}`,
+          sourceType: "location_image",
+          entityId: locationId,
+          entityName: name,
+        })
+      }
     }
   }
 
@@ -613,10 +774,46 @@ export function collectStoryboardReferenceSources(
     const name = object?.name || "Object"
     const categoryLabel = object ? getStoryObjectCategoryLabel(object.category) : "Object"
     const kindLabel = `${name} · ${categoryLabel}`
+    const collageUrl = resolveObjectCollageUrl(objectId, object, objectAssets)
+
+    if (collageUrl) {
+      addSource({
+        url: collageUrl,
+        label: `${kindLabel} · Object collage`,
+        sourceType: "object_collage",
+        entityId: objectId,
+        entityName: name,
+      })
+      continue
+    }
+
     const sourceCountBefore = sources.length
     const coverUrl = object?.image_url?.trim()
+    const bestAngle = pickBestLinkedImageAsset(objectAssets, {
+      match: (asset) =>
+        asset.story_object_id === objectId && !isObjectCollageAsset(asset),
+      preferredAngleIds: ["front", "side"],
+      readAngleId: (asset) =>
+        typeof asset.metadata?.object_angle === "string"
+          ? asset.metadata.object_angle
+          : undefined,
+    })
+    if (bestAngle?.content_url) {
+      const angleLabel =
+        (typeof bestAngle.metadata?.object_angle_label === "string" &&
+          bestAngle.metadata.object_angle_label) ||
+        bestAngle.title?.trim() ||
+        "Angle"
+      addSource({
+        url: bestAngle.content_url,
+        label: `${kindLabel} · ${angleLabel}`,
+        sourceType: "object_angle",
+        entityId: objectId,
+        entityName: name,
+      })
+    }
 
-    if (coverUrl) {
+    if (sources.length === sourceCountBefore && coverUrl) {
       addSource({
         url: coverUrl,
         label: `${kindLabel} (cover)`,
@@ -643,10 +840,11 @@ export function collectStoryboardReferenceSources(
 
     if (sources.length === sourceCountBefore) {
       const galleryAsset = objectAssets.find(
-        (a) =>
-          a.story_object_id === objectId &&
-          a.content_type === "image" &&
-          a.content_url,
+        (asset) =>
+          asset.story_object_id === objectId &&
+          asset.content_type === "image" &&
+          asset.content_url &&
+          !isObjectCollageAsset(asset),
       )
       if (galleryAsset?.content_url) {
         addSource({
@@ -688,6 +886,24 @@ export function collectStoryboardReferenceSources(
       collageAssets: entry.collageAssets,
       collageUrl: entry.collageUrl,
     })),
+    locationCollageResolution: locationIds.map((locationId) => {
+      const location = locations.find((item) => item.id === locationId)
+      const collageUrl = resolveLocationCollageUrl(locationId, location, locationAssets)
+      return {
+        name: location?.name || locationId,
+        usedCollage: Boolean(collageUrl),
+        collageUrl,
+      }
+    }),
+    objectCollageResolution: objectIds.map((objectId) => {
+      const object = storyObjects.find((item) => item.id === objectId)
+      const collageUrl = resolveObjectCollageUrl(objectId, object, objectAssets)
+      return {
+        name: object?.name || objectId,
+        usedCollage: Boolean(collageUrl),
+        collageUrl,
+      }
+    }),
     coverage: {
       refLimit: coverage.refLimit,
       characterRefMapping: coverage.characterRefMapping,
@@ -761,10 +977,18 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
         return `Open Characters, select ${name}, and re-upload or replace the gallery image "${source.label.split("·").pop()?.trim() || "image"}".`
       case "character_collage":
         return `Open Avatar Studio, regenerate the reference collage for ${name}, and save it to the project.`
+      case "location_collage":
+        return `Open Location Views, regenerate the reference collage for ${name}, and save it to the project.`
+      case "location_angle":
+        return `Open Location Views, select ${name}, and re-generate or re-upload the ${source.label.split("·").pop()?.trim() || "angle"}.`
       case "location_image":
         return `Open Locations, select ${name}, and upload or generate a new cover image.`
       case "location_reference":
         return `Open Locations, select ${name}, and replace the broken reference image.`
+      case "object_collage":
+        return `Open Object Views, regenerate the reference collage for ${name}, and save it to the project.`
+      case "object_angle":
+        return `Open Object Views, select ${name}, and re-generate or re-upload the ${source.label.split("·").pop()?.trim() || "angle"}.`
       case "object_image":
         return `Open Objects, select ${name}, and upload or generate a new cover image.`
       case "object_reference":
@@ -777,26 +1001,35 @@ export function getReferenceFixHint(source: StoryboardReferenceSource, error: st
   }
 
   if (error.toLowerCase().includes("text/html") || error.includes("not a valid image")) {
-    const page =
-      source.sourceType.startsWith("location")
-        ? "Locations"
-        : source.sourceType.startsWith("object")
-          ? "Objects"
-          : source.sourceType === "character_collage"
-            ? "Avatar Studio"
-            : source.sourceType === "avatar_angle"
-              ? "Avatars"
-              : "Characters"
+    const page = source.sourceType.startsWith("location")
+      ? source.sourceType === "location_collage" || source.sourceType === "location_angle"
+        ? "Location Views"
+        : "Locations"
+      : source.sourceType.startsWith("object")
+        ? source.sourceType === "object_collage" || source.sourceType === "object_angle"
+          ? "Object Views"
+          : "Objects"
+        : source.sourceType === "character_collage"
+          ? "Avatar Studio"
+          : source.sourceType === "avatar_angle"
+            ? "Avatars"
+            : "Characters"
     return `Replace this link with a direct image file URL on the ${page} page.`
   }
 
   const page = source.sourceType.startsWith("location")
-    ? "Locations"
+    ? source.sourceType === "location_collage" || source.sourceType === "location_angle"
+      ? "Location Views"
+      : "Locations"
     : source.sourceType.startsWith("object")
-      ? "Objects"
-      : source.sourceType === "avatar_angle"
-        ? "Avatars"
-        : "Characters"
+      ? source.sourceType === "object_collage" || source.sourceType === "object_angle"
+        ? "Object Views"
+        : "Objects"
+      : source.sourceType === "character_collage"
+        ? "Avatar Studio"
+        : source.sourceType === "avatar_angle"
+          ? "Avatars"
+          : "Characters"
   return `Check the image on the ${page} page for ${name}.`
 }
 
