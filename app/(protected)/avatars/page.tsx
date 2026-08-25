@@ -366,6 +366,7 @@ export default function AvatarsPage() {
   const [shotFormLabel, setShotFormLabel] = useState("")
   const [shotFormPrompt, setShotFormPrompt] = useState("")
   const [galleriesHydrated, setGalleriesHydrated] = useState(false)
+  const [uploadingAngleId, setUploadingAngleId] = useState<string | null>(null)
   const [collagePreviewUrl, setCollagePreviewUrl] = useState<string | null>(null)
   const [collagePreviewBlob, setCollagePreviewBlob] = useState<Blob | null>(null)
   const [isBuildingCollage, setIsBuildingCollage] = useState(false)
@@ -380,6 +381,8 @@ export default function AvatarsPage() {
   const [selectedDescriptionPromptId, setSelectedDescriptionPromptId] = useState("")
   const [selectedEditPromptId, setSelectedEditPromptId] = useState("")
   const hydrationKeyRef = useRef<string | null>(null)
+  const shotUploadInputRef = useRef<HTMLInputElement>(null)
+  const shotUploadAngleIdRef = useRef<string | null>(null)
 
   const updateAvatarsUrl = useCallback(
     (nextProjectId: string, nextCharacterId?: string) => {
@@ -1369,6 +1372,76 @@ export default function AvatarsPage() {
     setPickDialogAngleId(angleId)
   }
 
+  const openShotUpload = (angleId: string) => {
+    if (!projectId) {
+      toast({
+        title: "Select a project",
+        description: "Link a movie project to upload a shot.",
+        variant: "destructive",
+      })
+      return
+    }
+    shotUploadAngleIdRef.current = angleId
+    shotUploadInputRef.current?.click()
+  }
+
+  const handleShotUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ""
+    const angleId = shotUploadAngleIdRef.current
+    shotUploadAngleIdRef.current = null
+    if (!file || !angleId || !projectId) return
+
+    const angle = avatarShots.find((shot) => shot.id === angleId)
+    if (!angle) return
+
+    if (!file.type.startsWith("image/")) {
+      toast({
+        title: "Choose an image",
+        description: "Shot uploads must be an image file.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setUploadingAngleId(angleId)
+      const stored = await StorageService.uploadFile({
+        file,
+        projectId,
+        fileType: "image",
+        metadata: {
+          type: "avatar",
+          avatar_angle: angle.id,
+          avatar_source: "existing",
+          character_name: characterName || null,
+        },
+      })
+      await addAvatarImage(
+        angle,
+        {
+          imageUrl: stored.url,
+          prompt: `Uploaded image: ${file.name}`,
+          source: "existing",
+        },
+        { selectNew: true },
+      )
+      toast({
+        title: "Shot uploaded",
+        description: `${angle.label} now uses your uploaded image.`,
+      })
+    } catch (error) {
+      console.error("Failed to upload avatar shot:", error)
+      toast({
+        title: "Upload failed",
+        description: error instanceof Error ? error.message : "Could not upload this shot.",
+        variant: "destructive",
+      })
+    } finally {
+      setUploadingAngleId(null)
+    }
+  }
+
   const handleSelectSourceReference = (asset: Asset) => {
     if (!asset.content_url) return
     if (sourceReference?.previewUrl?.startsWith("blob:")) {
@@ -2129,6 +2202,13 @@ export default function AvatarsPage() {
     <div className="min-h-screen bg-background">
       <Header />
       <main className="container mx-auto px-4 py-8 max-w-7xl">
+        <input
+          ref={shotUploadInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => void handleShotUpload(event)}
+        />
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
             <UserCircle className="h-8 w-8 text-primary" />
@@ -2683,16 +2763,6 @@ export default function AvatarsPage() {
                   </p>
                 </CardContent>
               </Card>
-            ) : !hasAnyImages && generatingAngleIds.size === 0 && !isBatchGenerating ? (
-              <Card className="border-dashed">
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <UserCircle className="h-12 w-12 text-muted-foreground/50 mb-4" />
-                  <p className="text-muted-foreground text-sm max-w-sm">
-                    Describe your character or pick a reference image, then generate
-                    production shots — essentials are Front, Side, Back, and Wide full body.
-                  </p>
-                </CardContent>
-              </Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {avatarShots.filter(
@@ -2700,8 +2770,11 @@ export default function AvatarsPage() {
                 ).map((angle) => {
                   const gallery = angleGalleries[angle.id]
                   const avatar = gallery?.images[gallery.selectedIndex]
-                  const isLoading = isAngleGenerating(angle.id)
-                  const loadProgress = angleGenerationProgress(angle.id)
+                  const isUploading = uploadingAngleId === angle.id
+                  const isLoading = isAngleGenerating(angle.id) || isUploading
+                  const loadProgress = isUploading
+                    ? "Uploading…"
+                    : angleGenerationProgress(angle.id)
                   const isDefaultPortrait = Boolean(
                     avatar?.imageUrl &&
                       characters.some((character) => character.image_url === avatar.imageUrl),
@@ -2742,7 +2815,7 @@ export default function AvatarsPage() {
                             size="sm"
                             className="h-8 shrink-0 text-xs"
                             onClick={() => handleGenerateSingle(angle)}
-                            disabled={isLoading || isBatchGenerating}
+                            disabled={isLoading || isBatchGenerating || uploadingAngleId === angle.id}
                             title={
                               avatar
                                 ? "Redo this shot with the same settings. The current image is kept as a variant."
@@ -2801,18 +2874,30 @@ export default function AvatarsPage() {
                             <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4 gap-2">
                               <ImageIcon className="h-8 w-8 opacity-50" />
                               <p className="text-xs text-center">
-                                Use Generate above to create this shot, or pick an existing image.
+                                Generate, upload, or pick an existing image for this shot.
                               </p>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-xs"
-                                onClick={() => openPickDialog(angle.id)}
-                                disabled={isLoading}
-                              >
-                                <Images className="h-3 w-3 mr-1" />
-                                Pick Existing
-                              </Button>
+                              <div className="flex flex-wrap items-center justify-center gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-xs"
+                                  onClick={() => openShotUpload(angle.id)}
+                                  disabled={isLoading}
+                                >
+                                  <Upload className="h-3 w-3 mr-1" />
+                                  Upload
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-xs"
+                                  onClick={() => openPickDialog(angle.id)}
+                                  disabled={isLoading}
+                                >
+                                  <Images className="h-3 w-3 mr-1" />
+                                  Pick Existing
+                                </Button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -2868,6 +2953,16 @@ export default function AvatarsPage() {
                             >
                               <Wand2 className="h-3 w-3 mr-1" />
                               Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="flex-1 min-w-[4.5rem] h-8 text-xs"
+                              onClick={() => openShotUpload(angle.id)}
+                              disabled={isLoading}
+                            >
+                              <Upload className="h-3 w-3 mr-1" />
+                              Upload
                             </Button>
                             <Button
                               variant="ghost"

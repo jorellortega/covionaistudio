@@ -24,16 +24,14 @@ export function getStorageImageUrl(
   if (!transform?.width && !transform?.height) return url
 
   try {
-    const parsed = new URL(url)
-    let { pathname } = parsed
-
-    if (pathname.includes(OBJECT_PUBLIC)) {
-      pathname = pathname.replace(OBJECT_PUBLIC, RENDER_PUBLIC)
-    } else if (!pathname.includes(RENDER_PUBLIC)) {
+    const next = new URL(url)
+    if (next.pathname.includes(OBJECT_PUBLIC)) {
+      next.pathname = next.pathname.replace(OBJECT_PUBLIC, RENDER_PUBLIC)
+    } else if (!next.pathname.includes(RENDER_PUBLIC)) {
       return url
     }
 
-    const next = new URL(`${parsed.origin}${pathname}`)
+    next.search = ""
     if (transform.width) next.searchParams.set("width", String(Math.round(transform.width)))
     if (transform.height) next.searchParams.set("height", String(Math.round(transform.height)))
     if (transform.quality != null) {

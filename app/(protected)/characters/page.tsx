@@ -50,6 +50,7 @@ import {
   referenceUrlToFile,
 } from "@/lib/project-image-linking"
 import { ImageSizeBadge } from "@/components/image-size-badge"
+import { StorageThumbImg } from "@/components/storage-thumb-img"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 
@@ -4188,9 +4189,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                                   setViewImageDialogOpen(true)
                                                 }}
                                               >
-                                                <img
-                                                  src={asset.content_url}
+                                                <StorageThumbImg
+                                                  src={asset.content_url!}
                                                   alt={asset.title}
+                                                  width={720}
+                                                  quality={70}
+                                                  resize="cover"
                                                   className="w-full h-full object-cover object-top pointer-events-none"
                                                 />
                                                 <ImageSizeBadge src={asset.content_url} />
@@ -4308,9 +4312,12 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
                                               }`}
                                               title="Click to navigate to this image"
                                             >
-                                              <img
-                                                src={asset.content_url}
+                                              <StorageThumbImg
+                                                src={asset.content_url!}
                                                 alt={asset.title}
+                                                width={128}
+                                                quality={65}
+                                                resize="cover"
                                                 className="w-full h-full object-cover"
                                               />
                                               {index === currentImageIndex && (

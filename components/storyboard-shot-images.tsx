@@ -31,6 +31,7 @@ function StoryboardThumb({ src }: { src: string }) {
 
   return (
     <img
+      key={displaySrc}
       src={displaySrc}
       alt=""
       loading="lazy"

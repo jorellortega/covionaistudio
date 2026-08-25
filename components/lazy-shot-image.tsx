@@ -84,6 +84,7 @@ export function LazyShotImage({
         </div>
       ) : (
         <img
+          key={displaySrc}
           src={displaySrc}
           alt={alt}
           loading="lazy"
