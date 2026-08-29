@@ -25,6 +25,7 @@ import {
   AVATAR_ANGLES,
   AVATAR_REFERENCE_COLLAGE_ANGLE_ID,
   AVATAR_TURNAROUND_ANGLE_IDS,
+  avatarPromptMaxLength,
   buildAvatarPrompt,
   buildAvatarEditPrompt,
   createCustomAvatarAngle,
@@ -210,9 +211,11 @@ function mergeAngleGalleries(existing: AngleGalleries, incoming: AngleGalleries)
     merged[angleId] = {
       images: nextImages,
       selectedIndex:
-        nextImages.length > 0
-          ? Math.min(current.selectedIndex, nextImages.length - 1)
-          : 0,
+        nextImages.length > current.images.length
+          ? nextImages.length - 1
+          : nextImages.length > 0
+            ? Math.min(current.selectedIndex, nextImages.length - 1)
+            : 0,
     }
   }
 
@@ -311,6 +314,7 @@ const STYLE_OPTIONS = [
   { value: "graphic novel illustration", label: "Graphic Novel" },
   { value: "fantasy concept art", label: "Fantasy Concept" },
 ]
+const EMPTY_STYLE_VALUE = "__none__"
 
 type GenerateImageFailure = {
   status: number
@@ -358,7 +362,8 @@ export default function AvatarsPage() {
   const [projectId, setProjectId] = useState(searchParams.get("projectId") || "")
   const [characterName, setCharacterName] = useState("")
   const [description, setDescription] = useState("")
-  const [style, setStyle] = useState(STYLE_OPTIONS[0].value)
+  const [style, setStyle] = useState("")
+  const [noBackground, setNoBackground] = useState(true)
   const [avatarShots, setAvatarShots] = useState<AvatarAngle[]>([...AVATAR_ANGLES])
   const [selectedAngles, setSelectedAngles] = useState<string[]>(
     [...AVATAR_TURNAROUND_ANGLE_IDS],
@@ -697,7 +702,7 @@ export default function AvatarsPage() {
       const gallery = prev[angleId] ?? { images: [], selectedIndex: 0 }
       const newImage = createAvatarImage(image)
       const nextImages = [...gallery.images, newImage]
-      const selectNew = options?.selectNew ?? false
+      const selectNew = options?.selectNew ?? true
       return {
         ...prev,
         [angleId]: {
@@ -1235,6 +1240,8 @@ export default function AvatarsPage() {
       )
     }
 
+    const promptMaxLength = avatarPromptMaxLength(config.apiModel, config.service)
+
     if (useReference) {
       if (!config.supportsReference) {
         console.error("[avatars] generate failed", {
@@ -1246,7 +1253,10 @@ export default function AvatarsPage() {
         )
       }
 
-      const prompt = buildAvatarEditPrompt(characterName, description, angle, style)
+      const prompt = buildAvatarEditPrompt(characterName, description, angle, style, {
+        maxLength: promptMaxLength,
+        noBackground,
+      })
       const referenceFile =
         sourceReference!.file ??
         (await referenceUrlToFile(
@@ -1285,7 +1295,10 @@ export default function AvatarsPage() {
       }
     }
 
-    const prompt = buildAvatarPrompt(characterName, description, angle, style)
+    const prompt = buildAvatarPrompt(characterName, description, angle, style, {
+      maxLength: promptMaxLength,
+      noBackground,
+    })
     const res = await requestImageGeneration(prompt, config, {
       debugLabel: angle.label,
       debugAngleId: angle.id,
@@ -1458,7 +1471,7 @@ export default function AvatarsPage() {
       source: "existing",
       assetId: asset.id.startsWith("char-") ? undefined : asset.id,
       saved: !!asset.id && !asset.id.startsWith("char-") && !!projectId,
-    })
+    }, { selectNew: true })
     setPickDialogAngleId(null)
     toast({ title: "Image added", description: angle.label })
   }
@@ -1650,7 +1663,7 @@ export default function AvatarsPage() {
         try {
           const result = await generateAngle(angle)
           if (result) {
-            await addAvatarImage(angle, result)
+            await addAvatarImage(angle, result, { selectNew: true })
             created++
           } else {
             failed.push({
@@ -1892,7 +1905,7 @@ export default function AvatarsPage() {
           imageUrl,
           prompt,
           source: "generated",
-        })
+        }, { selectNew: true })
       }
 
       toast({
@@ -2562,12 +2575,16 @@ export default function AvatarsPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Style</Label>
-                  <Select value={style} onValueChange={setStyle}>
+                  <Label>Style (optional)</Label>
+                  <Select
+                    value={style || EMPTY_STYLE_VALUE}
+                    onValueChange={(v) => setStyle(v === EMPTY_STYLE_VALUE ? "" : v)}
+                  >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="None" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value={EMPTY_STYLE_VALUE}>None</SelectItem>
                       {STYLE_OPTIONS.map((s) => (
                         <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
                       ))}
@@ -2701,12 +2718,16 @@ export default function AvatarsPage() {
                     </div>
 
                     <div className="space-y-2">
-                      <Label>Style</Label>
-                      <Select value={style} onValueChange={setStyle}>
+                      <Label>Style (optional)</Label>
+                      <Select
+                        value={style || EMPTY_STYLE_VALUE}
+                        onValueChange={(v) => setStyle(v === EMPTY_STYLE_VALUE ? "" : v)}
+                      >
                         <SelectTrigger>
-                          <SelectValue />
+                          <SelectValue placeholder="None" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value={EMPTY_STYLE_VALUE}>None</SelectItem>
                           {STYLE_OPTIONS.map((s) => (
                             <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
                           ))}
@@ -2715,6 +2736,23 @@ export default function AvatarsPage() {
                     </div>
                   </TabsContent>
                 </Tabs>
+
+                <div className="flex items-start gap-2 pt-1">
+                  <Checkbox
+                    id="avatar-no-background"
+                    checked={noBackground}
+                    onCheckedChange={(v) => setNoBackground(v === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-0.5">
+                    <Label htmlFor="avatar-no-background" className="cursor-pointer leading-none">
+                      No background
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Isolate the character only — no environment or scenery.
+                    </p>
+                  </div>
+                </div>
 
                 {generationMode === "description" && (
                   <div className="space-y-2 pt-2 border-t border-border">

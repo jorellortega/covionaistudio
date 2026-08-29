@@ -271,12 +271,56 @@ export function buildObjectReferenceLabel(object: StoryObject): string {
   return `${object.name} · ${categoryLabel}`
 }
 
+export const STORYBOARD_QUICK_GENERATE_PROMPT_KEY = "quick_generate_prompt"
+
+export function getStoryboardQuickGeneratePrompt(
+  storyboard: { metadata?: Record<string, unknown> | null },
+): string {
+  const value = storyboard.metadata?.[STORYBOARD_QUICK_GENERATE_PROMPT_KEY]
+  return typeof value === "string" ? value.trim() : ""
+}
+
+export function buildStoryboardQuickGeneratePromptMetadataPatch(
+  existingMetadata: Record<string, unknown> | null | undefined,
+  extraPrompt: string | null,
+): Record<string, unknown> {
+  const base = { ...(existingMetadata ?? {}) }
+  const trimmed = extraPrompt?.trim() ?? ""
+  if (!trimmed) {
+    delete base[STORYBOARD_QUICK_GENERATE_PROMPT_KEY]
+    return base
+  }
+  base[STORYBOARD_QUICK_GENERATE_PROMPT_KEY] = trimmed
+  return base
+}
+
+export function getMostCommonQuickGeneratePrompt(
+  storyboards: Array<{ metadata?: Record<string, unknown> | null }>,
+): string {
+  const counts = new Map<string, number>()
+  for (const storyboard of storyboards) {
+    const prompt = getStoryboardQuickGeneratePrompt(storyboard)
+    if (!prompt) continue
+    counts.set(prompt, (counts.get(prompt) ?? 0) + 1)
+  }
+  let best = ""
+  let bestCount = 0
+  for (const [prompt, count] of counts) {
+    if (count > bestCount) {
+      best = prompt
+      bestCount = count
+    }
+  }
+  return best
+}
+
 export function buildQuickShotImagePrompt(
   storyboard: Storyboard,
   options?: {
     characterNames?: string[]
     locationNames?: string[]
     objectNames?: string[]
+    extraPrompt?: string
   },
 ): string {
   const actionText =
@@ -285,7 +329,10 @@ export function buildQuickShotImagePrompt(
       ? storyboard.action.trim()
       : null
 
+  const extra = options?.extraPrompt?.trim() || ""
+
   const parts = [
+    extra || null,
     storyboard.title?.trim() ? `Shot: ${storyboard.title.trim()}` : null,
     options?.characterNames?.length
       ? `Characters: ${options.characterNames.join(", ")}`

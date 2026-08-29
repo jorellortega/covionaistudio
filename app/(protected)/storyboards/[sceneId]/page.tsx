@@ -37,7 +37,7 @@ import {
   migrateGPTImageDisplayLabel,
   normalizeDisplayModelToApiId,
 } from "@/lib/image-model-utils"
-import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video } from "lucide-react"
+import { Plus, Search, Filter, Image as ImageIcon, FileText, Sparkles, Edit, Trash2, Eye, Download, CheckCircle, ArrowLeft, Film, Clock, RefreshCw, Loader2, Play, Edit3, MessageSquare, Copy, Calendar, User, ChevronDown, ChevronLeft, ChevronRight, Link2, Wand2, Upload, X, RectangleHorizontal, Zap, Video, Settings2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { StoryboardsService, Storyboard, CreateStoryboardData } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
@@ -81,6 +81,9 @@ import {
 } from "@/lib/storyboard-assignments"
 import {
   buildQuickShotImagePrompt,
+  buildStoryboardQuickGeneratePromptMetadataPatch,
+  getStoryboardQuickGeneratePrompt,
+  getMostCommonQuickGeneratePrompt,
   collectStoryboardReferenceSources,
   enrichPromptWithAssignments,
   getStoryboardAssignmentContext,
@@ -401,6 +404,13 @@ export default function SceneStoryboardsPage() {
   const [selectedAiImagePromptId, setSelectedAiImagePromptId] = useState("")
   const [isGeneratingShotImage, setIsGeneratingShotImage] = useState(false)
   const [quickGeneratingShotIds, setQuickGeneratingShotIds] = useState<Set<string>>(() => new Set())
+  const [quickGeneratePromptDialogOpen, setQuickGeneratePromptDialogOpen] = useState(false)
+  const [quickGeneratePromptStoryboard, setQuickGeneratePromptStoryboard] = useState<Storyboard | null>(null)
+  const [quickGeneratePromptIsMaster, setQuickGeneratePromptIsMaster] = useState(false)
+  const [quickGeneratePromptDraft, setQuickGeneratePromptDraft] = useState("")
+  const [selectedQuickGeneratePromptId, setSelectedQuickGeneratePromptId] = useState("")
+  const [isSavingQuickGeneratePrompt, setIsSavingQuickGeneratePrompt] = useState(false)
+  const [lastAppliedSceneQuickGeneratePrompt, setLastAppliedSceneQuickGeneratePrompt] = useState("")
   const [quickInsertingKey, setQuickInsertingKey] = useState<string | null>(null)
   const [regeneratingLandscapeId, setRegeneratingLandscapeId] = useState<string | null>(null)
   const [storyboardImages, setStoryboardImages] = useState<Map<string, StoryboardImage[]>>(new Map())
@@ -1858,13 +1868,15 @@ export default function SceneStoryboardsPage() {
       const imageUrlToUse = String(result.bucketUrl || result.imageUrl)
       pushStoryboardImageTrace("ok", "Image generated", imageUrlToUse.slice(0, 80))
 
-      const existingImages = storyboardImages.get(storyboardId) ?? []
-      const hasExisting =
-        existingImages.length > 0 || Boolean(storyboard.image_url)
+      setStoryboards((prev) =>
+        prev.map((sb) =>
+          sb.id === storyboardId ? { ...sb, image_url: imageUrlToUse } : sb,
+        ),
+      )
 
       await traceAsyncStep("Save image to storyboard gallery", () =>
         saveStoryboardImage(storyboardId, imageUrlToUse, {
-          isDefault: !hasExisting,
+          isDefault: true,
           generationPrompt: prompt,
         }),
       )
@@ -1887,8 +1899,8 @@ export default function SceneStoryboardsPage() {
       toast({
         title: isCreateMode ? "Image created" : "Image edited",
         description: isCreateMode
-          ? "Your new shot image was generated and added to the gallery."
-          : "A new version was added to this shot's image gallery.",
+          ? "Your new shot image is now showing on this shot."
+          : "The edited version is now the main shot. Previous versions stay in the gallery.",
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -2498,6 +2510,9 @@ export default function SceneStoryboardsPage() {
       setIsCreating(true)
       
       // Clean up form data - convert empty strings to undefined for optional fields
+      const assignmentPatch = buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds, {
+        objectIds: formObjectIds,
+      })
       const cleanFormData = {
         ...formData,
         title: formData.title.trim(),
@@ -2510,9 +2525,11 @@ export default function SceneStoryboardsPage() {
         image_url: formData.image_url?.trim() || undefined,
         project_id: formData.project_id?.trim() || sceneProjectId,
         scene_id: sceneId,
-        ...buildStoryboardAssignmentPatch(formCharacterIds, formLocationIds, {
-          objectIds: formObjectIds,
-        }),
+        ...assignmentPatch,
+        metadata: buildStoryboardQuickGeneratePromptMetadataPatch(
+          assignmentPatch.metadata,
+          getInheritedSceneQuickGeneratePrompt(),
+        ),
       }
 
       const newStoryboard = await StoryboardsService.createStoryboard(cleanFormData)
@@ -2663,6 +2680,10 @@ export default function SceneStoryboardsPage() {
         status: "draft",
         scene_id: sceneId,
         project_id: sceneProjectId,
+        metadata: buildStoryboardQuickGeneratePromptMetadataPatch(
+          undefined,
+          getInheritedSceneQuickGeneratePrompt(),
+        ),
       })
       setStoryboards((prev) => sortStoryboardRows([...prev, newStoryboard]))
       toast({
@@ -2798,6 +2819,172 @@ export default function SceneStoryboardsPage() {
     }
   }
 
+  const openQuickGeneratePromptDialog = (storyboard: Storyboard) => {
+    setQuickGeneratePromptIsMaster(false)
+    setQuickGeneratePromptStoryboard(storyboard)
+    setQuickGeneratePromptDraft(getStoryboardQuickGeneratePrompt(storyboard))
+    setSelectedQuickGeneratePromptId("")
+    setQuickGeneratePromptDialogOpen(true)
+  }
+
+  const openMasterQuickGeneratePromptDialog = () => {
+    setQuickGeneratePromptIsMaster(true)
+    setQuickGeneratePromptStoryboard(null)
+    setQuickGeneratePromptDraft(
+      lastAppliedSceneQuickGeneratePrompt ||
+        getMostCommonQuickGeneratePrompt(storyboards),
+    )
+    setSelectedQuickGeneratePromptId("")
+    setQuickGeneratePromptDialogOpen(true)
+  }
+
+  const closeQuickGeneratePromptDialog = () => {
+    setQuickGeneratePromptDialogOpen(false)
+    setQuickGeneratePromptStoryboard(null)
+    setQuickGeneratePromptIsMaster(false)
+    setQuickGeneratePromptDraft("")
+    setSelectedQuickGeneratePromptId("")
+  }
+
+  const handleQuickGeneratePromptSelect = (storyboard: Storyboard | null, value: string) => {
+    if (value === "__none__") {
+      setSelectedQuickGeneratePromptId("")
+      return
+    }
+
+    if (value === "__character_master__") {
+      if (!storyboard) return
+      const master = getStoryboardCharacterMasterPrompt(storyboard)
+      if (!master) {
+        toast({
+          title: "No master prompt",
+          description: "Assigned character(s) do not have a master prompt saved yet.",
+          variant: "destructive",
+        })
+        return
+      }
+      setSelectedQuickGeneratePromptId(value)
+      setQuickGeneratePromptDraft(master)
+      toast({
+        title: "Prompt applied",
+        description: "Character master prompt loaded into Quick Generate.",
+      })
+      return
+    }
+
+    const saved = savedPrompts.find((p) => p.id === value)
+    if (!saved) return
+    setSelectedQuickGeneratePromptId(value)
+    setQuickGeneratePromptDraft(saved.prompt)
+    toast({
+      title: "Prompt applied",
+      description: `Loaded: ${saved.title}`,
+    })
+  }
+
+  const getInheritedSceneQuickGeneratePrompt = () =>
+    lastAppliedSceneQuickGeneratePrompt.trim() ||
+    getMostCommonQuickGeneratePrompt(storyboards)
+
+  const saveQuickGeneratePromptForShot = async (
+    storyboard: Storyboard,
+    extraPrompt: string,
+  ): Promise<Storyboard | null> => {
+    const trimmed = extraPrompt.trim()
+    const current = getStoryboardQuickGeneratePrompt(storyboard)
+    if (trimmed === current) return storyboard
+
+    setIsSavingQuickGeneratePrompt(true)
+    try {
+      const metadata = buildStoryboardQuickGeneratePromptMetadataPatch(
+        storyboard.metadata,
+        trimmed,
+      )
+      const updated = await StoryboardsService.updateStoryboard(storyboard.id, { metadata })
+      setStoryboards((prev) =>
+        sortStoryboardRows(
+          prev.map((existing) => (existing.id === storyboard.id ? updated : existing)),
+        ),
+      )
+      setQuickGeneratePromptStoryboard(updated)
+      return updated
+    } catch (error) {
+      console.error("Error saving quick generate prompt:", error)
+      toast({
+        title: "Could not save prompt",
+        description: "Try again in a moment.",
+        variant: "destructive",
+      })
+      return null
+    } finally {
+      setIsSavingQuickGeneratePrompt(false)
+    }
+  }
+
+  const applyMasterQuickGeneratePromptToAllShots = async (extraPrompt: string) => {
+    if (storyboards.length === 0) {
+      toast({
+        title: "No shots",
+        description: "Add storyboard shots before applying a master prompt.",
+        variant: "destructive",
+      })
+      return false
+    }
+
+    const trimmed = extraPrompt.trim()
+    setIsSavingQuickGeneratePrompt(true)
+    try {
+      const results = await Promise.allSettled(
+        storyboards.map(async (storyboard) => {
+          const current = getStoryboardQuickGeneratePrompt(storyboard)
+          if (current === trimmed) return storyboard
+          const metadata = buildStoryboardQuickGeneratePromptMetadataPatch(
+            storyboard.metadata,
+            trimmed,
+          )
+          return StoryboardsService.updateStoryboard(storyboard.id, { metadata })
+        }),
+      )
+
+      const updatedById = new Map<string, Storyboard>()
+      let failed = 0
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          updatedById.set(result.value.id, result.value)
+        } else {
+          failed += 1
+          console.error("Error applying master quick generate prompt:", result.reason)
+        }
+      }
+
+      setStoryboards((prev) =>
+        sortStoryboardRows(prev.map((existing) => updatedById.get(existing.id) ?? existing)),
+      )
+      setLastAppliedSceneQuickGeneratePrompt(trimmed)
+
+      if (failed > 0) {
+        toast({
+          title: `Updated ${updatedById.size} of ${storyboards.length} shots`,
+          description: `${failed} shot${failed === 1 ? "" : "s"} could not be updated. Try again.`,
+          variant: "destructive",
+        })
+        return false
+      }
+
+      return true
+    } catch (error) {
+      console.error("Error applying master quick generate prompt:", error)
+      toast({
+        title: "Could not apply master prompt",
+        description: "Try again in a moment.",
+        variant: "destructive",
+      })
+      return false
+    } finally {
+      setIsSavingQuickGeneratePrompt(false)
+    }
+  }
+
   const saveStoryboardLayoutReference = async (
     storyboardId: string,
     layout: StoryboardLayoutReference | null,
@@ -2812,6 +2999,16 @@ export default function SceneStoryboardsPage() {
       ),
     )
   }
+
+  useEffect(() => {
+    if (lastAppliedSceneQuickGeneratePrompt || storyboards.length === 0) return
+    const common = getMostCommonQuickGeneratePrompt(storyboards)
+    if (!common) return
+    const allMatch = storyboards.every(
+      (storyboard) => getStoryboardQuickGeneratePrompt(storyboard) === common,
+    )
+    if (allMatch) setLastAppliedSceneQuickGeneratePrompt(common)
+  }, [storyboards, lastAppliedSceneQuickGeneratePrompt])
 
 
 
@@ -2956,9 +3153,11 @@ export default function SceneStoryboardsPage() {
     })
 
     const assignmentContext = getStoryboardAssignmentContext(storyboard, characters, locations, storyObjects)
+    const extraPrompt = getStoryboardQuickGeneratePrompt(storyboard)
     const prompt = buildQuickShotImagePrompt(storyboard, {
       characterNames: assignmentContext.characterNames,
       locationNames: assignmentContext.locationNames,
+      extraPrompt,
     })
     if (!prompt.trim()) {
       debugStoryboardImage("validation-failed", {
@@ -2967,7 +3166,7 @@ export default function SceneStoryboardsPage() {
       })
       toast({
         title: "No shot details",
-        description: "Add a description, action, or shot details before generating.",
+        description: "Add a description, action, or apply a Quick Generate prompt first.",
         variant: "destructive",
       })
       return
@@ -3462,15 +3661,19 @@ export default function SceneStoryboardsPage() {
       if (result.success && result.imageUrl) {
         // Use bucket URL if available, otherwise fall back to original URL
         const imageUrlToUse = (result.bucketUrl || result.imageUrl) as string
-        
-        // Add to gallery without replacing the current main image
         const existingImages = storyboardImages.get(storyboardId) ?? []
         const currentStoryboard = storyboards.find((sb) => sb.id === storyboardId)
         const hasExisting =
           existingImages.length > 0 || Boolean(currentStoryboard?.image_url)
 
+        setStoryboards((prev) =>
+          prev.map((sb) =>
+            sb.id === storyboardId ? { ...sb, image_url: imageUrlToUse } : sb,
+          ),
+        )
+
         await saveStoryboardImage(storyboardId, imageUrlToUse, {
-          isDefault: !hasExisting,
+          isDefault: true,
           generationPrompt: enhancedPrompt,
           generationModel: modelToUse,
         })
@@ -3478,7 +3681,7 @@ export default function SceneStoryboardsPage() {
         toast({
           title: "Image Generated!",
           description: hasExisting
-            ? "New image added below. Click a thumbnail to use it as the main shot image."
+            ? "New image is now the main shot. Previous versions stay in the gallery below."
             : referenceFiles.length > 0
               ? `Image generated using ${referenceFiles.length} reference image${referenceFiles.length === 1 ? "" : "s"} (characters & locations).`
               : referenceLoad.failed.length > 0
@@ -3594,20 +3797,22 @@ export default function SceneStoryboardsPage() {
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
-      const existingImages = storyboardImages.get(storyboard.id) ?? []
-      const hasExisting = existingImages.length > 0 || Boolean(storyboard.image_url)
+
+      setStoryboards((prev) =>
+        prev.map((sb) =>
+          sb.id === storyboard.id ? { ...sb, image_url: imageUrlToUse } : sb,
+        ),
+      )
 
       await saveStoryboardImage(storyboard.id, imageUrlToUse, {
-        isDefault: !hasExisting,
+        isDefault: true,
         generationPrompt: prompt,
         imageName: "Landscape redo",
       })
 
       toast({
         title: "Landscape image ready",
-        description: hasExisting
-          ? "New landscape version added below. Click a thumbnail to use it."
-          : "Redid this shot at 1536×1024 widescreen.",
+        description: "New landscape version is now the main shot. Previous versions stay in the gallery.",
       })
     } catch (error) {
       toast({
@@ -3685,15 +3890,33 @@ export default function SceneStoryboardsPage() {
                 )}
                 <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold break-words">{sceneInfo?.name || "Loading Scene..."}</h1>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowDescriptionDialog(true)}
-                className="text-muted-foreground hover:text-foreground text-xs sm:text-sm -ml-2 w-full sm:w-auto"
-              >
-                <FileText className="h-4 w-4 sm:mr-2" />
-                View Description
-              </Button>
+              <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowDescriptionDialog(true)}
+                  className="text-muted-foreground hover:text-foreground text-xs sm:text-sm -ml-2 w-full sm:w-auto"
+                >
+                  <FileText className="h-4 w-4 sm:mr-2" />
+                  View Description
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-full sm:w-auto text-xs sm:text-sm bg-gradient-to-r from-purple-500 to-pink-500 text-white hover:opacity-90"
+                  disabled={storyboards.length === 0}
+                  onClick={openMasterQuickGeneratePromptDialog}
+                  title="Apply one Quick Generate prompt to every shot in this scene"
+                >
+                  <Settings2 className="h-4 w-4 sm:mr-2" />
+                  Master Prompt
+                  {storyboards.some((sb) => getStoryboardQuickGeneratePrompt(sb)) ? (
+                    <Badge variant="secondary" className="ml-2 hidden sm:inline-flex text-[10px] bg-white/20 text-white border-0">
+                      Applied
+                    </Badge>
+                  ) : null}
+                </Button>
+              </div>
             </div>
             
             {/* Scene Navigation */}
@@ -3929,7 +4152,23 @@ export default function SceneStoryboardsPage() {
         <div className="mb-6 sm:mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0 mb-4">
             <h2 className="text-xl sm:text-2xl font-bold">Storyboards</h2>
-            <div className="flex gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={`w-full sm:w-auto text-xs sm:text-sm ${
+                  storyboards.some((sb) => getStoryboardQuickGeneratePrompt(sb))
+                    ? "border-purple-500/50 text-purple-600"
+                    : ""
+                }`}
+                disabled={storyboards.length === 0}
+                onClick={openMasterQuickGeneratePromptDialog}
+                title="Apply one Quick Generate prompt to every shot in this scene"
+              >
+                <Settings2 className="h-4 w-4 sm:mr-2" />
+                Master Prompt
+              </Button>
               {storyboards.length > 0 ? (
                 <Button
                   type="button"
@@ -4915,6 +5154,22 @@ export default function SceneStoryboardsPage() {
                       <Button
                         variant="secondary"
                         size="sm"
+                        className="h-8 w-8 p-0"
+                        title={
+                          getStoryboardQuickGeneratePrompt(storyboard)
+                            ? "Edit prompt applied to Quick Generate"
+                            : "Apply a prompt to Quick Generate"
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openQuickGeneratePromptDialog(storyboard)
+                        }}
+                      >
+                        <Settings2 className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
                         title="Insert an image from a scene shot or project asset"
                         onClick={(e) => {
                           e.stopPropagation()
@@ -4978,16 +5233,39 @@ export default function SceneStoryboardsPage() {
                       </div>
                     ) : (
                       <>
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
-                          disabled={quickGeneratingShotIds.has(storyboard.id)}
-                          onClick={() => void quickGenerateShotImage(storyboard)}
-                        >
-                          <Zap className="h-4 w-4 mr-2" />
-                          Quick Generate
-                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                            disabled={quickGeneratingShotIds.has(storyboard.id)}
+                            onClick={() => void quickGenerateShotImage(storyboard)}
+                          >
+                            <Zap className="h-4 w-4 mr-2" />
+                            Quick Generate
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className={`h-9 w-9 p-0 ${
+                              getStoryboardQuickGeneratePrompt(storyboard)
+                                ? "border-purple-500/50 text-purple-600"
+                                : ""
+                            }`}
+                            title={
+                              getStoryboardQuickGeneratePrompt(storyboard)
+                                ? "Edit prompt applied to Quick Generate"
+                                : "Apply a prompt to Quick Generate"
+                            }
+                            onClick={() => openQuickGeneratePromptDialog(storyboard)}
+                          >
+                            <Settings2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        <p className="text-[11px] text-muted-foreground text-center px-2">
+                          Use the gear to apply a prompt, then Quick Generate.
+                        </p>
                         <button
                           type="button"
                           onClick={() => openLinkImageDialog(storyboard)}
@@ -5151,6 +5429,12 @@ export default function SceneStoryboardsPage() {
                         <span className="sm:hidden">Image</span>
                       </Badge>
                     )}
+                    {getStoryboardQuickGeneratePrompt(storyboard) ? (
+                      <Badge className="text-xs bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/30 flex-shrink-0">
+                        <Settings2 className="h-3 w-3 sm:mr-1" />
+                        <span className="hidden sm:inline">Prompt</span>
+                      </Badge>
+                    ) : null}
                   </div>
                 </div>
 
@@ -5238,6 +5522,27 @@ export default function SceneStoryboardsPage() {
                     </Button>
 
                     {/* Quick one-click AI image generation */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className={`h-8 w-8 p-0 flex-shrink-0 ${
+                        getStoryboardQuickGeneratePrompt(storyboard)
+                          ? "text-purple-600"
+                          : "hover:text-purple-600"
+                      }`}
+                      title={
+                        getStoryboardQuickGeneratePrompt(storyboard)
+                          ? "Edit prompt applied to Quick Generate"
+                          : "Apply a prompt to Quick Generate"
+                      }
+                      disabled={
+                        quickGeneratingShotIds.has(storyboard.id) ||
+                        referenceEditingShotIds.has(storyboard.id)
+                      }
+                      onClick={() => openQuickGeneratePromptDialog(storyboard)}
+                    >
+                      <Settings2 className="h-4 w-4" />
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -5581,6 +5886,307 @@ export default function SceneStoryboardsPage() {
               <ImageSizeBadge src={fullImageUrl} className="bottom-3 left-3 text-[11px] px-2 py-1" />
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {/* Quick Generate prompt settings */}
+      <Dialog
+        open={quickGeneratePromptDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeQuickGeneratePromptDialog()
+        }}
+      >
+        <DialogContent className="cinema-card border-border w-[calc(100vw-2rem)] max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden p-4 sm:p-6">
+          <DialogHeader className="pb-2 min-w-0">
+            <DialogTitle className="text-lg sm:text-xl flex items-center gap-2 min-w-0 pr-8 break-words">
+              <Settings2 className="h-5 w-5 text-purple-500" />
+              {quickGeneratePromptIsMaster ? "Master Quick Generate Prompt" : "Quick Generate Prompt"}
+            </DialogTitle>
+            <DialogDescription className="text-xs sm:text-sm break-words">
+              {quickGeneratePromptIsMaster
+                ? `Apply this prompt to all ${storyboards.length} shot${storyboards.length === 1 ? "" : "s"} in this scene. You can still change any shot afterward with its gear button.`
+                : quickGeneratePromptStoryboard
+                  ? `Apply extra direction or a saved prompt to Shot ${quickGeneratePromptStoryboard.shot_number}${quickGeneratePromptStoryboard.title ? ` · ${quickGeneratePromptStoryboard.title}` : ""}. Quick Generate will include this along with shot details.`
+                  : "Apply extra direction or a saved prompt. Quick Generate will include this along with shot details."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {quickGeneratePromptIsMaster || quickGeneratePromptStoryboard ? (
+            <div className="space-y-4 min-w-0">
+              {!quickGeneratePromptIsMaster && quickGeneratePromptStoryboard?.image_url ? (
+                <div className="rounded-lg overflow-hidden border border-border bg-muted/30 max-h-40">
+                  <img
+                    src={quickGeneratePromptStoryboard.image_url}
+                    alt={quickGeneratePromptStoryboard.title}
+                    className="w-full h-full max-h-40 object-contain"
+                  />
+                </div>
+              ) : null}
+
+              {quickGeneratePromptIsMaster ? (
+                <p className="text-xs text-muted-foreground rounded-md border border-purple-500/20 bg-purple-500/5 p-2.5">
+                  This replaces the Quick Generate prompt on every shot. Shots you edit later keep their own prompt until you apply the master again.
+                </p>
+              ) : null}
+
+              {savedPrompts.length > 0 ||
+              (!quickGeneratePromptIsMaster &&
+                quickGeneratePromptStoryboard &&
+                getStoryboardCharacterMasterPrompt(quickGeneratePromptStoryboard)) ? (
+                <div className="space-y-2">
+                  <Label htmlFor="quick-generate-saved-prompt" className="text-xs sm:text-sm">
+                    Saved prompt
+                  </Label>
+                  <Select
+                    value={selectedQuickGeneratePromptId || "__none__"}
+                    onValueChange={(value) =>
+                      handleQuickGeneratePromptSelect(quickGeneratePromptStoryboard, value)
+                    }
+                    disabled={
+                      isSavingQuickGeneratePrompt ||
+                      Boolean(
+                        quickGeneratePromptStoryboard &&
+                          quickGeneratingShotIds.has(quickGeneratePromptStoryboard.id),
+                      ) ||
+                      isLoadingPrompts
+                    }
+                  >
+                    <SelectTrigger
+                      id="quick-generate-saved-prompt"
+                      className="bg-input border-border text-xs sm:text-sm"
+                    >
+                      <SelectValue
+                        placeholder={
+                          isLoadingPrompts ? "Loading prompts…" : "Apply a saved prompt…"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">None (custom prompt)</SelectItem>
+                      {!quickGeneratePromptIsMaster &&
+                      quickGeneratePromptStoryboard &&
+                      getStoryboardCharacterMasterPrompt(quickGeneratePromptStoryboard) ? (
+                        <SelectItem value="__character_master__">
+                          Character master prompt
+                        </SelectItem>
+                      ) : null}
+                      {savedPrompts.map((prompt) => (
+                        <SelectItem key={prompt.id} value={prompt.id}>
+                          {prompt.title}
+                          {prompt.type === "style" ? " (style)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Loads into the prompt below. Saved in VisDev or character prompts.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No saved prompts for this movie yet — create some in VisDev, or type a custom prompt.
+                </p>
+              )}
+
+              <div className="space-y-2">
+                <Label htmlFor="quick-generate-prompt" className="text-xs sm:text-sm">
+                  {quickGeneratePromptIsMaster ? "Prompt for all shots" : "Prompt for this shot"}
+                </Label>
+                <Textarea
+                  id="quick-generate-prompt"
+                  value={quickGeneratePromptDraft}
+                  onChange={(e) => {
+                    setQuickGeneratePromptDraft(e.target.value)
+                    if (selectedQuickGeneratePromptId) setSelectedQuickGeneratePromptId("")
+                  }}
+                  placeholder="e.g., rainy neon night, wet pavement reflections, cinematic anamorphic look"
+                  className="bg-input border-border min-h-[96px] text-xs sm:text-sm resize-none"
+                  disabled={
+                    isSavingQuickGeneratePrompt ||
+                    Boolean(
+                      quickGeneratePromptStoryboard &&
+                        quickGeneratingShotIds.has(quickGeneratePromptStoryboard.id),
+                    )
+                  }
+                />
+              </div>
+
+              {quickGeneratePromptStoryboard ? (
+                <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2.5">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                    Combined with shot details
+                  </p>
+                  <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words line-clamp-6">
+                    {(() => {
+                      const assignmentContext = getStoryboardAssignmentContext(
+                        quickGeneratePromptStoryboard,
+                        characters,
+                        locations,
+                        storyObjects,
+                      )
+                      return (
+                        buildQuickShotImagePrompt(quickGeneratePromptStoryboard, {
+                          characterNames: assignmentContext.characterNames,
+                          locationNames: assignmentContext.locationNames,
+                          extraPrompt: quickGeneratePromptDraft,
+                        }) || "Add a prompt or shot details to generate."
+                      )
+                    })()}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5 rounded-md border border-border/60 bg-muted/20 p-2.5">
+                  <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                    How this is used
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Each shot still adds its own title, action, camera, dialogue, and assignments. This prompt is applied on top.
+                  </p>
+                  {quickGeneratePromptDraft.trim() ? (
+                    <p className="text-xs text-foreground whitespace-pre-wrap break-words line-clamp-4">
+                      {quickGeneratePromptDraft.trim()}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          <DialogFooter className="flex-col sm:flex-row gap-2 sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              disabled={
+                isSavingQuickGeneratePrompt ||
+                (quickGeneratePromptIsMaster
+                  ? !quickGeneratePromptDraft.trim() &&
+                    !storyboards.some((sb) => getStoryboardQuickGeneratePrompt(sb))
+                  : !quickGeneratePromptStoryboard ||
+                    (!quickGeneratePromptDraft.trim() &&
+                      !getStoryboardQuickGeneratePrompt(quickGeneratePromptStoryboard ?? {})))
+              }
+              onClick={async () => {
+                setQuickGeneratePromptDraft("")
+                setSelectedQuickGeneratePromptId("")
+                if (quickGeneratePromptIsMaster) {
+                  const ok = await applyMasterQuickGeneratePromptToAllShots("")
+                  if (!ok) return
+                  toast({
+                    title: "Master prompt cleared",
+                    description: "All shots will Quick Generate from shot details only.",
+                  })
+                  return
+                }
+                if (!quickGeneratePromptStoryboard) return
+                const updated = await saveQuickGeneratePromptForShot(
+                  quickGeneratePromptStoryboard,
+                  "",
+                )
+                if (!updated) return
+                toast({
+                  title: "Prompt cleared",
+                  description: "Quick Generate will use shot details only.",
+                })
+              }}
+            >
+              {quickGeneratePromptIsMaster ? "Clear all" : "Clear"}
+            </Button>
+            <div className="flex flex-col-reverse sm:flex-row gap-2 w-full sm:w-auto">
+              <Button
+                type="button"
+                variant={quickGeneratePromptIsMaster ? "default" : "outline"}
+                size="sm"
+                className={
+                  quickGeneratePromptIsMaster
+                    ? "bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                    : undefined
+                }
+                disabled={isSavingQuickGeneratePrompt}
+                onClick={async () => {
+                  if (quickGeneratePromptIsMaster) {
+                    const ok = await applyMasterQuickGeneratePromptToAllShots(
+                      quickGeneratePromptDraft,
+                    )
+                    if (!ok) return
+                    toast({
+                      title: quickGeneratePromptDraft.trim()
+                        ? "Master prompt applied"
+                        : "Master prompt cleared",
+                      description: quickGeneratePromptDraft.trim()
+                        ? `Applied to all ${storyboards.length} shots. You can still change any shot individually.`
+                        : "All shots will Quick Generate from shot details only.",
+                    })
+                    closeQuickGeneratePromptDialog()
+                    return
+                  }
+                  if (!quickGeneratePromptStoryboard) return
+                  const updated = await saveQuickGeneratePromptForShot(
+                    quickGeneratePromptStoryboard,
+                    quickGeneratePromptDraft,
+                  )
+                  if (!updated) return
+                  toast({
+                    title: quickGeneratePromptDraft.trim() ? "Prompt applied" : "Prompt cleared",
+                    description: quickGeneratePromptDraft.trim()
+                      ? "Quick Generate will include this prompt."
+                      : "Quick Generate will use shot details only.",
+                  })
+                  closeQuickGeneratePromptDialog()
+                }}
+              >
+                {isSavingQuickGeneratePrompt ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving…
+                  </>
+                ) : quickGeneratePromptIsMaster ? (
+                  `Apply to all ${storyboards.length} shots`
+                ) : (
+                  "Apply"
+                )}
+              </Button>
+              {!quickGeneratePromptIsMaster ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 hover:opacity-90 text-white"
+                  disabled={
+                    !quickGeneratePromptStoryboard ||
+                    isSavingQuickGeneratePrompt ||
+                    Boolean(
+                      quickGeneratePromptStoryboard &&
+                        quickGeneratingShotIds.has(quickGeneratePromptStoryboard.id),
+                    )
+                  }
+                  onClick={async () => {
+                    if (!quickGeneratePromptStoryboard) return
+                    const updated = await saveQuickGeneratePromptForShot(
+                      quickGeneratePromptStoryboard,
+                      quickGeneratePromptDraft,
+                    )
+                    if (!updated) return
+                    closeQuickGeneratePromptDialog()
+                    void quickGenerateShotImage(updated)
+                  }}
+                >
+                  {quickGeneratePromptStoryboard &&
+                  quickGeneratingShotIds.has(quickGeneratePromptStoryboard.id) ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Generating…
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4 mr-2" />
+                      Quick Generate
+                    </>
+                  )}
+                </Button>
+              ) : null}
+            </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
