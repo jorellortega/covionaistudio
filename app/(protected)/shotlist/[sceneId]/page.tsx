@@ -52,6 +52,8 @@ import { parseScriptSelection } from "@/lib/script-selection"
 import { getSupabaseClient } from "@/lib/supabase"
 import Link from "next/link"
 import { ShotListComponent } from "@/components/shot-list"
+import { ShotJumpBar, scrollWindowToShot } from "@/components/shot-jump-bar"
+import { sortShotListRows } from "@/lib/shot-list-order"
 import { ShotListService } from "@/lib/shot-list-service"
 import { GenerateShotListDialog } from "@/components/generate-shot-list-dialog"
 import type { ShotListGenerateOptions } from "@/lib/shot-list-generate-options"
@@ -236,6 +238,8 @@ export default function SceneShotListPage() {
   const [isLoadingLocations, setIsLoadingLocations] = useState(false)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [shots, setShots] = useState<any[]>([])
+  const [jumpedShotId, setJumpedShotId] = useState<string | null>(null)
+  const jumpTimeoutRef = useRef<number | null>(null)
   const [isCreatingAllStoryboards, setIsCreatingAllStoryboards] = useState(false)
   const [formData, setFormData] = useState<CreateStoryboardData>({
     title: "",
@@ -2477,6 +2481,27 @@ export default function SceneShotListPage() {
     return matchesSearch && matchesFilter
   })
 
+  const jumpShots = useMemo(
+    () =>
+      sortShotListRows(shots).map((shot) => ({
+        id: shot.id,
+        label: String(shot.shot_number ?? ""),
+        status: shot.status,
+      })),
+    [shots],
+  )
+
+  const scrollToShot = (shotId: string) => {
+    setJumpedShotId(shotId)
+    if (jumpTimeoutRef.current) window.clearTimeout(jumpTimeoutRef.current)
+    jumpTimeoutRef.current = window.setTimeout(() => {
+      setJumpedShotId((current) => (current === shotId ? null : current))
+      jumpTimeoutRef.current = null
+    }, 1400)
+    window.setTimeout(() => {
+      scrollWindowToShot(`shot-list-shot-${shotId}`)
+    }, 50)
+  }
 
   
   if (!ready || !userId) {
@@ -2847,7 +2872,7 @@ export default function SceneShotListPage() {
   }
   
   return (
-    <div className="min-h-screen bg-background overflow-x-hidden">
+    <div className={`min-h-screen bg-background overflow-x-hidden ${jumpShots.length > 0 ? "pb-14" : ""}`}>
       <Header />
       <div className="container mx-auto px-4 sm:px-6 py-4 sm:py-8">
         {/* Breadcrumb + view switcher */}
@@ -3491,7 +3516,7 @@ export default function SceneShotListPage() {
                   
                   {/* Selection Action Buttons */}
                   {showSelectionActions && (selectedText || lockedSelection) && shotMode && (
-                    <div className="selection-actions fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-background border border-border rounded-lg shadow-lg p-2 z-50">
+                    <div className={`selection-actions fixed ${jumpShots.length > 0 ? "bottom-16" : "bottom-4"} left-1/2 transform -translate-x-1/2 bg-background border border-border rounded-lg shadow-lg p-2 z-50`}>
                       <div className="flex items-center gap-2">
                         <div className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
                           {(selectedText || lockedSelection).length} chars selected
@@ -3649,6 +3674,7 @@ export default function SceneShotListPage() {
                 sceneId={sceneId}
                 projectId={sceneInfo?.project_id}
                 refreshKey={syncRefreshKey + shotListRefreshKey}
+                jumpedShotId={jumpedShotId}
                 onShotsChange={(loadedShots) => {
                   setShots(loadedShots)
                 }}
@@ -3705,6 +3731,7 @@ export default function SceneShotListPage() {
         </AlertDialog>
 
       </div>
+      <ShotJumpBar shots={jumpShots} jumpedShotId={jumpedShotId} onJump={scrollToShot} />
     </div>
   )
 }

@@ -63,6 +63,7 @@ interface ShotListProps {
   storyboardId?: string
   projectId?: string
   refreshKey?: number
+  jumpedShotId?: string | null
   onShotsChange?: (shots: ShotList[]) => void
   onCreateStoryboard?: (shot: ShotList) => void | Promise<void>
   showCreateStoryboardButton?: boolean
@@ -74,6 +75,7 @@ export function ShotListComponent({
   storyboardId,
   projectId,
   refreshKey,
+  jumpedShotId,
   onShotsChange,
   onCreateStoryboard,
   showCreateStoryboardButton = false,
@@ -554,7 +556,11 @@ export function ShotListComponent({
             const shotObjects = getShotObjects(shot)
 
             return (
-            <Card key={shot.id}>
+            <Card
+              key={shot.id}
+              id={`shot-list-shot-${shot.id}`}
+              className={`scroll-mt-24 ${jumpedShotId === shot.id ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+            >
               <CardContent className="p-4">
                 <div className="flex items-start justify-between">
                   <div className="flex-1 space-y-2">

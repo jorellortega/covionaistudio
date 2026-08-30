@@ -69,7 +69,7 @@ export function HomeBelowFold() {
 
         <div className="mt-6 sm:mt-8 md:mt-10 grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-3">
           <Link
-            href="/new"
+            href="/Workspace-promo"
             className="group rounded-lg sm:rounded-xl border border-border/60 bg-background/60 p-4 sm:p-6 backdrop-blur transition-colors hover:border-primary/40 hover:bg-background/80"
           >
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
@@ -81,7 +81,7 @@ export function HomeBelowFold() {
             </p>
           </Link>
           <Link
-            href="/treatments"
+            href="/Preproduction-promo"
             className="group rounded-lg sm:rounded-xl border border-border/60 bg-background/60 p-4 sm:p-6 backdrop-blur transition-colors hover:border-primary/40 hover:bg-background/80"
           >
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">
@@ -93,7 +93,7 @@ export function HomeBelowFold() {
             </p>
           </Link>
           <Link
-            href="/movies"
+            href="/Production-promo"
             className="group rounded-lg sm:rounded-xl border border-border/60 bg-background/60 p-4 sm:p-6 backdrop-blur transition-colors hover:border-primary/40 hover:bg-background/80"
           >
             <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary transition-colors group-hover:bg-primary/15">

@@ -139,7 +139,7 @@ export default function HomePage() {
                   Ai Cinema Studio
                 </span>
               </div>
-              <div className="text-xs sm:text-sm text-muted-foreground text-center md:text-right">© 2025 Ai Cinema Studio. All rights reserved.</div>
+              <div className="text-xs sm:text-sm text-muted-foreground text-center md:text-right">© 2026 Ai Cinema Studio. All rights reserved.</div>
             </div>
           </div>
         </footer>
@@ -334,7 +334,7 @@ export default function HomePage() {
                 Ai Cinema Studio
               </span>
             </div>
-            <div className="text-xs sm:text-sm text-muted-foreground text-center md:text-right">© 2025 Ai Cinema Studio. All rights reserved.</div>
+            <div className="text-xs sm:text-sm text-muted-foreground text-center md:text-right">© 2026 Ai Cinema Studio. All rights reserved.</div>
           </div>
         </div>
       </footer>

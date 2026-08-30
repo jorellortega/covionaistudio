@@ -63,6 +63,7 @@ import { useAuthReady } from "@/components/auth-hooks"
 import { MovieService, getLastMoviesFetchMeta, type Movie, type MoviesFetchMeta } from "@/lib/movie-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { displayShotNumber, sortStoryboardRows } from "@/lib/shot-list-order"
+import { ShotJumpBar, jumpedShotHighlightClass, scrollWindowToShot } from "@/components/shot-jump-bar"
 import { ShotListService, type ShotList } from "@/lib/shot-list-service"
 import { KlingService, ElevenLabsService } from "@/lib/ai-services"
 import {
@@ -1376,6 +1377,8 @@ export default function CinemaProductionPage() {
   const storyboardBatchMsRef = useRef<number | null>(null)
   const [loadingShots, setLoadingShots] = useState(false)
   const [viewMode, setViewMode] = useState<'sequence' | 'grid' | 'detail'>('detail')
+  const [jumpedShotId, setJumpedShotId] = useState<string | null>(null)
+  const jumpTimeoutRef = useRef<number | null>(null)
   const [editShotDialogOpen, setEditShotDialogOpen] = useState(false)
   const [editingStoryboard, setEditingStoryboard] = useState<Storyboard | null>(null)
   
@@ -2819,6 +2822,31 @@ export default function CinemaProductionPage() {
     return storyboards.filter(
       (sb) => !sb.project_id || sb.project_id === selectedProjectId
     )
+  }
+
+  const jumpShots = useMemo(
+    () =>
+      sortStoryboardRows(storyboards).map((storyboard) => ({
+        id: storyboard.id,
+        label: displayShotNumber(storyboard),
+        status: storyboard.status,
+      })),
+    [storyboards],
+  )
+
+  const scrollToShot = (storyboardId: string) => {
+    if (selectedStoryboardId && selectedStoryboardId !== storyboardId) {
+      setSelectedStoryboardId("")
+    }
+    setJumpedShotId(storyboardId)
+    if (jumpTimeoutRef.current) window.clearTimeout(jumpTimeoutRef.current)
+    jumpTimeoutRef.current = window.setTimeout(() => {
+      setJumpedShotId((current) => (current === storyboardId ? null : current))
+      jumpTimeoutRef.current = null
+    }, 1400)
+    window.setTimeout(() => {
+      scrollWindowToShot(`storyboard-${storyboardId}`)
+    }, 50)
   }
 
   const getModelFileRequirement = (
@@ -7872,7 +7900,7 @@ export default function CinemaProductionPage() {
   )
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={`min-h-screen bg-background ${jumpShots.length > 0 ? "pb-14" : ""}`}>
       <Header />
       <div className="container mx-auto px-4 py-8">
         <div className="mb-6">
@@ -8147,7 +8175,7 @@ export default function CinemaProductionPage() {
                           <div
                             key={storyboard.id}
                             id={`storyboard-${storyboard.id}`}
-                            className="relative flex-shrink-0 border-r border-border last:border-r-0 group cursor-pointer hover:bg-muted/50 transition-colors"
+                            className={`relative flex-shrink-0 border-r border-border last:border-r-0 group cursor-pointer hover:bg-muted/50 transition-colors scroll-mt-24 ${jumpedShotHighlightClass(jumpedShotId === storyboard.id)}`}
                             style={{ width: `${clipWidth}px` }}
                             onClick={() => {
                               setViewMode('detail')
@@ -8484,7 +8512,7 @@ export default function CinemaProductionPage() {
                     endFrameImageUrl: null
                   }
                   return (
-                    <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className="cinema-card">
+                    <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className={`cinema-card scroll-mt-24 ${jumpedShotHighlightClass(jumpedShotId === storyboard.id)}`}>
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <Badge variant="outline" className="font-mono text-xs">
@@ -8669,7 +8697,7 @@ export default function CinemaProductionPage() {
               // Detail View - Full cards with all options
               getDisplayedStoryboards().map((storyboard) => {
                 return (
-                  <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className="cinema-card">
+                  <Card key={storyboard.id} id={`storyboard-${storyboard.id}`} className={`cinema-card scroll-mt-24 ${jumpedShotHighlightClass(jumpedShotId === storyboard.id)}`}>
                     <CardHeader>
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
@@ -11747,6 +11775,7 @@ export default function CinemaProductionPage() {
         </DialogContent>
       </Dialog>
       {debugPanel}
+      <ShotJumpBar shots={jumpShots} jumpedShotId={jumpedShotId} onJump={scrollToShot} />
     </div>
   )
 }
