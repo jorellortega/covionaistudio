@@ -211,6 +211,7 @@ export type Database = {
         Row: {
           id: string
           project_id: string
+          timeline_id: string
           user_id: string
           name: string
           description?: string
@@ -218,6 +219,7 @@ export type Database = {
           duration_seconds: number
           scene_type: string
           content_url?: string
+          screenplay_content?: string | null
           metadata: any
           order_index: number
           created_at: string
@@ -233,6 +235,7 @@ export type Database = {
           duration_seconds: number
           scene_type?: string
           content_url?: string
+          screenplay_content?: string | null
           metadata?: any
           order_index?: number
           created_at?: string
@@ -248,6 +251,7 @@ export type Database = {
           duration_seconds?: number
           scene_type?: string
           content_url?: string
+          screenplay_content?: string | null
           metadata?: any
           order_index?: number
           created_at?: string

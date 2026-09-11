@@ -7,6 +7,7 @@ import {
   type KlingApiMode,
 } from '@/lib/kling-models'
 import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
+import { cinemaProductionAccessDeniedResponse } from '@/lib/cinema-production-access'
 
 function generateKlingToken() {
   const accessKey = process.env.KLING_ACCESS_KEY
@@ -81,6 +82,9 @@ export async function POST(req: NextRequest) {
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const upgradeResponse = await cinemaProductionAccessDeniedResponse(supabase, user.id)
+    if (upgradeResponse) return upgradeResponse
 
     const formData = await req.formData()
     const prompt = formData.get('prompt') as string

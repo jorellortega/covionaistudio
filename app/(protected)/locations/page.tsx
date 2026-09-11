@@ -32,7 +32,12 @@ import { sanitizeFilename } from "@/lib/utils"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { useAuthReady } from "@/components/auth-hooks"
-import { OpenAIService } from "@/lib/ai-services"
+import {
+  creditsUsedNote,
+  paidGenerationImageUrl,
+  requirePaidGenerationSuccess,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 import { KlingService } from "@/lib/ai-services"
 import { MovieService } from "@/lib/movie-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
@@ -684,92 +689,48 @@ export default function LocationsPage() {
       return
     }
 
-    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
-      toast({
-        title: "API Key Missing",
-        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
-        variant: "destructive",
-      })
-      return
-    }
-
     setIsEnhancingText(true)
     
     try {
-      const model = textEnhancerSettings.model
+      const model = textEnhancerSettings.model || 'gpt-4o-mini'
       const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
       const fullPrompt = `${prefix}\n\n${text}`
-
-      // Determine which API to use based on model
       const isAnthropic = model.startsWith('claude-')
-      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
 
-      if (!apiKey) {
-        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      const apiResponse = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cost-source': 'locations',
+        },
+        body: JSON.stringify({
+          prompt: fullPrompt,
+          field: 'script',
+          service: isAnthropic ? 'anthropic' : 'openai',
+          model,
+          apiKey: 'configured',
+          userId,
+          maxTokens: 4000,
+          costSource: 'locations',
+        }),
+      })
+
+      const data = await apiResponse.json()
+      if (!apiResponse.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to enhance text')
       }
-
-      let response
-      if (isAnthropic) {
-        // Use Anthropic API
-        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: model,
-            max_tokens: 4000,
-            messages: [
-              { role: 'user', content: fullPrompt }
-            ],
-          }),
-        })
-
-        if (!anthropicResponse.ok) {
-          const errorText = await anthropicResponse.text()
-          throw new Error(`Anthropic API error: ${anthropicResponse.status} - ${errorText}`)
-        }
-
-        const result = await anthropicResponse.json()
-        response = result.content?.[0]?.text || ''
-      } else {
-        // Use OpenAI API
-        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [
-              { role: 'user', content: fullPrompt }
-            ],
-            max_tokens: 4000,
-            temperature: 0.7,
-          }),
-        })
-
-        if (!openaiResponse.ok) {
-          const errorText = await openaiResponse.text()
-          throw new Error(`OpenAI API error: ${openaiResponse.status} - ${errorText}`)
-        }
-
-        const result = await openaiResponse.json()
-        response = result.choices?.[0]?.message?.content || ''
-      }
-
-      if (response) {
-        setter(response.trim())
-        toast({
-          title: "Success",
-          description: "Text enhanced successfully",
-        })
-      } else {
+      const result = requirePaidGenerationSuccess(true, data, 'Failed to enhance text')
+      const enhanced = typeof result.text === 'string' ? result.text.trim() : ''
+      if (!enhanced) {
         throw new Error('No response from AI')
       }
+
+      setter(enhanced)
+      toast({
+        title: "Success",
+        description: `Text enhanced successfully.${creditsUsedNote(result)}`,
+      })
     } catch (error) {
       console.error('Error enhancing text:', error)
       toast({
@@ -850,25 +811,25 @@ export default function LocationsPage() {
         width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
         height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
         autoSaveToBucket: true,
+        costSource: 'locations',
       }
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'locations',
         },
         body: JSON.stringify(requestBody),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
-      }
-
-      const result = await response.json()
-      
-      if (result.success && result.imageUrl) {
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        'Failed to generate image',
+      )
+      const imageUrlToUse = paidGenerationImageUrl(result)
+      if (imageUrlToUse) {
         
         // Save as location asset
         const timestamp = new Date().toISOString()
@@ -909,9 +870,9 @@ export default function LocationsPage() {
         
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
+          description: `${result.savedToBucket 
             ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to location assets.",
+            : "AI image has been generated and added to location assets."}${creditsUsedNote(result)}`,
         })
       } else {
         throw new Error('Failed to generate image')
@@ -1004,15 +965,13 @@ export default function LocationsPage() {
 
       const response = await requestLockedImageGeneration(enhancedPrompt, config)
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
-      }
-
-      const result = await response.json()
-      
-      if (result.success && result.imageUrl) {
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        'Failed to generate image',
+      )
+      const imageUrlToUse = paidGenerationImageUrl(result)
+      if (imageUrlToUse) {
         
         // Save as location asset
         const assetData = {
@@ -1049,9 +1008,9 @@ export default function LocationsPage() {
         
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
+          description: `${result.savedToBucket 
             ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to location assets.",
+            : "AI image has been generated and added to location assets."}${creditsUsedNote(result)}`,
         })
 
         // Close dialog and reset prompt
@@ -1265,6 +1224,8 @@ export default function LocationsPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
+      formData.append("costSource", "locations")
+      formData.append("autoSaveToBucket", "true")
       for (const styleFile of options.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
@@ -1274,6 +1235,7 @@ export default function LocationsPage() {
 
       return fetch("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": "locations" },
         body: formData,
       })
     }
@@ -1282,6 +1244,7 @@ export default function LocationsPage() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-cost-source": "locations",
       },
       body: JSON.stringify({
         prompt,
@@ -1292,6 +1255,7 @@ export default function LocationsPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: "locations",
       }),
     })
   }
@@ -2043,17 +2007,15 @@ export default function LocationsPage() {
       styleReferenceFiles: config.supportsReference ? options?.styleReferenceFiles : undefined,
     })
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.error || "Failed to generate shot from reference")
-    }
-
-    const result = await response.json()
-    if (!result.success || !result.imageUrl) {
+    const result = requirePaidGenerationSuccess(
+      response.ok,
+      await response.json().catch(() => ({})),
+      'Failed to generate shot from reference',
+    )
+    const imageUrlToUse = paidGenerationImageUrl(result)
+    if (!imageUrlToUse) {
       throw new Error("Failed to generate shot from reference")
     }
-
-    const imageUrlToUse = result.bucketUrl || result.imageUrl
     await saveGeneratedLocationShot(
       imageUrlToUse,
       selectedLoc,

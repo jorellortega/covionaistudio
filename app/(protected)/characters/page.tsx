@@ -27,7 +27,6 @@ import { LocationsService, type Location } from "@/lib/locations-service"
 import { SavedPromptsService, formatSavedPromptOptionLabel, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { StoryboardsService, type Storyboard } from "@/lib/storyboards-service"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
-import { OpenAIService } from "@/lib/ai-services"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { sanitizeFilename } from "@/lib/utils"
@@ -35,6 +34,12 @@ import { AssetService, type Asset } from "@/lib/asset-service"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useAuthReady } from "@/components/auth-hooks"
+import {
+  creditsUsedNote,
+  paidGenerationImageUrl,
+  requirePaidGenerationSuccess,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 import {
   displayModelSupportsReferenceImage,
   mapDisplayModelToService,
@@ -612,6 +617,8 @@ export default function CharactersPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
+      formData.append("costSource", "characters")
+      formData.append("autoSaveToBucket", "true")
       for (const styleFile of options.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
@@ -621,13 +628,17 @@ export default function CharactersPage() {
 
       return fetch("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": "characters" },
         body: formData,
       })
     }
 
     return fetch("/api/ai/generate-image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-cost-source": "characters",
+      },
       body: JSON.stringify({
         prompt,
         service: config.service,
@@ -637,6 +648,7 @@ export default function CharactersPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: "characters",
       }),
     })
   }
@@ -647,6 +659,46 @@ export default function CharactersPage() {
       return `${error.message} Add the API key for your locked image model in Settings → AI Settings.`
     }
     return error.message
+  }
+
+  const generatePaidCharacterText = async (params: {
+    prompt: string
+    template: string
+    model: string
+    maxTokens: number
+  }) => {
+    if (!userId) {
+      throw new Error("Please sign in again.")
+    }
+    const isAnthropic = params.model.startsWith("claude-")
+    const fullPrompt = `IMPORTANT: Follow these instructions exactly.\n\n${params.template}\n\n${params.prompt}`
+    const apiResponse = await fetch("/api/ai/generate-text", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-cost-source": "characters",
+      },
+      body: JSON.stringify({
+        prompt: fullPrompt,
+        field: "script",
+        service: isAnthropic ? "anthropic" : "openai",
+        model: params.model,
+        apiKey: "configured",
+        userId,
+        maxTokens: params.maxTokens,
+        costSource: "characters",
+      }),
+    })
+    const data = await apiResponse.json().catch(() => ({}))
+    const result = requirePaidGenerationSuccess(apiResponse.ok, data, "AI generation failed")
+    const text = typeof result.text === "string" ? result.text.trim() : ""
+    if (!text) {
+      throw new Error("AI generation failed")
+    }
+    return {
+      text,
+      creditsCharged: typeof result.creditsCharged === "number" ? result.creditsCharged : undefined,
+    }
   }
 
   const buildCustomCharacterEditPrompt = (userDirection: string) => {
@@ -739,17 +791,15 @@ export default function CharactersPage() {
       styleReferenceFiles: config.supportsReference ? options?.styleReferenceFiles : undefined,
     })
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.error || "Failed to edit image from reference")
-    }
-
-    const result = await response.json()
-    if (!result.success || !result.imageUrl) {
+    const result = requirePaidGenerationSuccess(
+      response.ok,
+      await response.json().catch(() => ({})),
+      "Failed to edit image from reference",
+    )
+    const imageUrlToUse = paidGenerationImageUrl(result)
+    if (!imageUrlToUse) {
       throw new Error("Failed to edit image from reference")
     }
-
-    const imageUrlToUse = result.bucketUrl || result.imageUrl
     await saveGeneratedCharacterShot(
       imageUrlToUse,
       selectedChar,
@@ -1386,20 +1436,8 @@ export default function CharactersPage() {
         return
       }
 
-      // Get user and OpenAI key from users table
-      const { data: { session } } = await getSupabaseClient().auth.getSession()
-      const userId = session?.user?.id
       if (!userId) {
         toast({ title: "Auth required", description: "Please sign in again.", variant: "destructive" })
-        return
-      }
-      const { data: userRow, error: userErr } = await getSupabaseClient()
-        .from('users')
-        .select('openai_api_key')
-        .eq('id', userId)
-        .single()
-      if (userErr || !userRow?.openai_api_key) {
-        toast({ title: "Missing API Key", description: "Set your OpenAI API key in settings.", variant: "destructive" })
         return
       }
 
@@ -1467,24 +1505,13 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       const isGPT5Model = model.startsWith('gpt-5')
       const maxTokens = isGPT5Model ? 4000 : 2000 // GPT-5 needs more tokens (3x for reasoning + output)
 
-      const resp = await OpenAIService.generateScript({
+      const paid = await generatePaidCharacterText({
         prompt,
         template,
-        model, // used by ai-services OpenAIService
-        apiKey: userRow.openai_api_key,
-        maxTokens: maxTokens, // Pass maxTokens for GPT-5 support
-      } as any)
-
-      if (!resp.success) {
-        throw new Error(resp.error || 'AI generation failed')
-      }
-
-      // Extract JSON text from Chat Completions
-      let text = ''
-      try {
-        const choice = resp.data?.choices?.[0]
-        text = choice?.message?.content || resp.data?.text || ''
-      } catch {}
+        model,
+        maxTokens,
+      })
+      const text = paid.text
 
       // Find JSON in text
       const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -1514,7 +1541,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
           }
         }, 100)
         
-        toast({ title: "Character details generated", description: `Basic details for "${selectedChar.name}" have been filled in. Use individual section buttons to generate more details.` })
+        toast({ title: "Character details generated", description: `Basic details for "${selectedChar.name}" have been filled in. Use individual section buttons to generate more details.${creditsUsedNote(paid)}` })
       } else {
         // Create multiple characters
       const list = Array.isArray(parsed?.characters) ? parsed.characters : []
@@ -1543,7 +1570,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       if (created.length > 0) {
         setCharacters(prev => [...created, ...prev])
-        toast({ title: "Characters generated", description: `Added ${created.length} character(s).` })
+        toast({ title: "Characters generated", description: `Added ${created.length} character(s).${creditsUsedNote(paid)}` })
       } else {
         toast({ title: "No characters created", description: "AI returned no valid characters.", variant: "destructive" })
         }
@@ -1578,20 +1605,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         return
       }
 
-      // Get user and OpenAI key
-      const { data: { session } } = await getSupabaseClient().auth.getSession()
-      const userId = session?.user?.id
       if (!userId) {
         toast({ title: "Auth required", description: "Please sign in again.", variant: "destructive" })
-        return
-      }
-      const { data: userRow, error: userErr } = await getSupabaseClient()
-        .from('users')
-        .select('openai_api_key')
-        .eq('id', userId)
-        .single()
-      if (userErr || !userRow?.openai_api_key) {
-        toast({ title: "Missing API Key", description: "Set your OpenAI API key in settings.", variant: "destructive" })
         return
       }
 
@@ -1813,25 +1828,15 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       const isGPT5Model = model.startsWith('gpt-5')
       const maxTokens = isGPT5Model ? 4000 : 2000 // GPT-5 needs more tokens (3x for reasoning + output)
 
-      const resp = await OpenAIService.generateScript({
+      const paid = await generatePaidCharacterText({
         prompt: fullPrompt,
         template: `Return STRICT JSON (no prose) as:\n${config.template}\nGenerate comprehensive details for the ${section} section.`,
         model,
-        apiKey: userRow.openai_api_key,
-        maxTokens: maxTokens, // Pass maxTokens for GPT-5 support
-      } as any)
-
-      if (!resp.success) {
-        throw new Error(resp.error || 'AI generation failed')
-      }
+        maxTokens,
+      })
+      const text = paid.text
 
       // Extract JSON
-      let text = ''
-      try {
-        const choice = resp.data?.choices?.[0]
-        text = choice?.message?.content || resp.data?.text || ''
-      } catch {}
-
       const jsonMatch = text.match(/\{[\s\S]*\}/)
       const jsonText = jsonMatch ? jsonMatch[0] : text
       const parsed = JSON.parse(jsonText)
@@ -1943,7 +1948,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         setNewCharForeshadowingNotes(parsed.foreshadowing_notes || "")
       }
 
-      toast({ title: "Section generated", description: `Generated ${section} content for "${selectedChar.name}".` })
+      toast({ title: "Section generated", description: `Generated ${section} content for "${selectedChar.name}".${creditsUsedNote(paid)}` })
     } catch (error) {
       console.error('AI generation error:', error)
       toast({ title: "AI Error", description: error instanceof Error ? error.message : 'Failed to generate section', variant: "destructive" })
@@ -1967,20 +1972,8 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
     try {
       setGeneratingField(fieldKey)
       
-      // Get user and OpenAI key
-      const { data: { session } } = await getSupabaseClient().auth.getSession()
-      const userId = session?.user?.id
       if (!userId) {
         toast({ title: "Auth required", description: "Please sign in again.", variant: "destructive" })
-        return
-      }
-      const { data: userRow, error: userErr } = await getSupabaseClient()
-        .from('users')
-        .select('openai_api_key')
-        .eq('id', userId)
-        .single()
-      if (userErr || !userRow?.openai_api_key) {
-        toast({ title: "Missing API Key", description: "Set your OpenAI API key in settings.", variant: "destructive" })
         return
       }
 
@@ -2033,27 +2026,13 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       const isGPT5Model = model.startsWith('gpt-5')
       const maxTokens = isGPT5Model ? 500 : 200
 
-      const resp = await OpenAIService.generateScript({
+      const paid = await generatePaidCharacterText({
         prompt: fullPrompt,
         template: `Return ONLY the value for ${fieldLabel}. ${fieldType === 'array' ? 'If multiple values, return as comma-separated list.' : 'No explanation, no additional text, just the value.'}`,
         model,
-        apiKey: userRow.openai_api_key,
         maxTokens,
-      } as any)
-
-      if (!resp.success) {
-        throw new Error(resp.error || 'AI generation failed')
-      }
-
-      // Extract the value
-      let text = ''
-      try {
-        const choice = resp.data?.choices?.[0]
-        text = choice?.message?.content || resp.data?.text || ''
-      } catch {}
-
-      // Clean up the response - remove quotes, extra whitespace, etc.
-      let value = text.trim()
+      })
+      let value = paid.text
       // Remove surrounding quotes if present
       if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1)
@@ -2092,7 +2071,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         setter(value)
         toast({
           title: "Generated",
-          description: `${fieldLabel} generated successfully.`,
+          description: `${fieldLabel} generated successfully.${creditsUsedNote(paid)}`,
         })
       } else {
         throw new Error(`Unknown field: ${fieldKey}`)
@@ -2747,26 +2726,30 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       // Call the analyze API
       const response = await fetch('/api/ai/analyze-character-image', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cost-source': 'characters',
+        },
         body: JSON.stringify({
           imageUrl: asset.content_url,
           characterId: selectedCharacterId,
           characterName: selectedChar.name,
+          costSource: 'characters',
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(errorData.error || `Analysis failed: ${response.status}`)
-      }
-
-      const result = await response.json()
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        'Analysis failed',
+      )
 
       if (!result.success) {
-        throw new Error(result.error || 'Analysis failed')
+        throw new Error(typeof result.error === 'string' ? result.error : 'Analysis failed')
       }
 
-      const { extractedData, rawAnalysis } = result
+      const extractedData = result.extractedData as Record<string, any> | undefined
+      const rawAnalysis = result.rawAnalysis
 
       console.log('📊 Analysis result:', { extractedData, rawAnalysis })
 
@@ -2879,13 +2862,13 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         const fieldCount = Object.keys(extractedData).filter(key => extractedData[key] !== null && extractedData[key] !== undefined).length
         toast({
           title: "Analysis Complete",
-          description: `Extracted ${fieldCount} detail(s) from image. Review and edit the character card below, then click "Update Character" to save.`,
+          description: `Extracted ${fieldCount} detail(s) from image. Review and edit the character card below, then click "Update Character" to save.${creditsUsedNote(result)}`,
         })
       } else {
         console.warn('No extracted data found:', { extractedData, result })
         toast({
           title: "Analysis Complete",
-          description: "Image analyzed but no extractable details were found.",
+          description: `Image analyzed but no extractable details were found.${creditsUsedNote(result)}`,
         })
       }
 
@@ -3028,26 +3011,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
       // Get AI settings for image generation
       const imagesSetting = aiSettings.find(setting => setting.tab_type === 'images')
       const { apiModel: normalizedModel, service: normalizedService } = resolveImageGenerationConfig()
-
-      // Get API key
       const supabase = getSupabaseClient()
-      const { data: userData } = await supabase
-        .from('users')
-        .select('openai_api_key')
-        .eq('id', userId)
-        .single()
-
-      const apiKey = userData?.openai_api_key || process.env.NEXT_PUBLIC_OPENAI_API_KEY
-
-      if (!apiKey) {
-        toast({
-          title: "Missing API Key",
-          description: "Please configure your OpenAI API key in settings.",
-          variant: "destructive",
-        })
-        setGeneratingDetailImage(null)
-        return
-      }
 
       // Build enhanced prompt with character context
       const characterContext = `Character: ${selectedChar.name || 'Character'}. `
@@ -3055,26 +3019,29 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cost-source': 'characters',
+        },
         body: JSON.stringify({
           prompt: fullPrompt,
           service: normalizedService,
           model: normalizedModel,
-          apiKey: apiKey,
+          apiKey: 'configured',
           userId: userId,
-          autoSaveToBucket: true
+          autoSaveToBucket: true,
+          costSource: 'characters',
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(errorData.error || `Failed to generate ${detailLabel}`)
-      }
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        `Failed to generate ${detailLabel}`,
+      )
 
-      const result = await response.json()
-
-      if (result.success && result.imageUrl) {
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const imageUrlToUse = paidGenerationImageUrl(result)
+      if (imageUrlToUse) {
 
         // Save as character asset
         const timestamp = Date.now()
@@ -3151,7 +3118,7 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
 
         toast({
           title: "Success",
-          description: `${detailLabel}${subcategory ? ` (${subcategory})` : ''} reference image generated and saved!`,
+          description: `${detailLabel}${subcategory ? ` (${subcategory})` : ''} reference image generated and saved!${creditsUsedNote(result)}`,
         })
       }
     } catch (err) {
@@ -3271,25 +3238,25 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
         height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
         autoSaveToBucket: true,
+        costSource: 'characters',
       }
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'characters',
         },
         body: JSON.stringify(requestBody),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate image')
-      }
-
-      const result = await response.json()
-      
-      if (result.success && result.imageUrl) {
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        'Failed to generate image',
+      )
+      const imageUrlToUse = paidGenerationImageUrl(result)
+      if (imageUrlToUse) {
         
         // Save as character asset
         const assetData = {
@@ -3328,9 +3295,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
+          description: `${result.savedToBucket 
             ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to character assets.",
+            : "AI image has been generated and added to character assets."}${creditsUsedNote(result)}`,
         })
 
         // Close dialog and reset prompt
@@ -3537,19 +3504,22 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
         height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
         autoSaveToBucket: true,
+        costSource: 'characters',
       }
 
       const response = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'characters',
         },
         body: JSON.stringify(requestBody),
       })
 
+      const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        const errorData = await response.json()
-        const errorMessage = errorData.error || 'Failed to generate image'
+        throwIfInsufficientCredits(payload)
+        const errorMessage = (payload as { error?: string }).error || 'Failed to generate image'
         
         // Check if it's a content policy violation
         if (errorMessage.toLowerCase().includes('copyrighted') || 
@@ -3561,10 +3531,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         throw new Error(errorMessage)
       }
 
-      const result = await response.json()
-      
-      if (result.success && result.imageUrl) {
-        const imageUrlToUse = result.bucketUrl || result.imageUrl
+      const result = requirePaidGenerationSuccess(true, payload, 'Failed to generate image')
+      const imageUrlToUse = paidGenerationImageUrl(result)
+      if (imageUrlToUse) {
         
         // Save as character asset
         const assetData = {
@@ -3604,9 +3573,9 @@ Keep names consistent and useful for casting. Limit to 5-8 strongest characters.
         
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
+          description: `${result.savedToBucket 
             ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to character assets.",
+            : "AI image has been generated and added to character assets."}${creditsUsedNote(result)}`,
         })
       } else {
         throw new Error('Failed to generate image')

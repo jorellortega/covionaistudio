@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
 import type { AIMessage, AISettingsMap } from '@/lib/ai-chat-types'
+import { extractOpenAIUsage, logApiCostFromRequest, resolveCostSource } from '@/lib/api-cost-tracker'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  paidSourceLabel,
+  shouldChargeTextCredits,
+} from '@/lib/studio-credits'
 
 type RouteContext = { params: Promise<{ sceneId: string }> }
 
@@ -21,10 +31,13 @@ function normalizeSceneName(value: string): string {
   return stripWrappingQuotes(value.replace(/\*\*(.*?)\*\*/g, '$1').split('\n')[0].trim())
 }
 
-async function callOpenAI(messages: AIMessage[], settings: AISettingsMap): Promise<string | null> {
+async function callOpenAI(
+  messages: AIMessage[],
+  settings: AISettingsMap,
+): Promise<{ text: string | null; model: string; inputTokens?: number; outputTokens?: number }> {
   const openaiKey = settings['openai_api_key']?.trim()
   const model = settings['openai_model']?.trim() || 'gpt-4o-mini'
-  if (!openaiKey) return null
+  if (!openaiKey) return { text: null, model }
 
   const isGPT5Model = model.startsWith('gpt-5')
   const requestBody: Record<string, unknown> = {
@@ -50,9 +63,15 @@ async function callOpenAI(messages: AIMessage[], settings: AISettingsMap): Promi
     body: JSON.stringify(requestBody),
   })
 
-  if (!response.ok) return null
+  if (!response.ok) return { text: null, model }
   const data = await response.json()
-  return data?.choices?.[0]?.message?.content?.trim() || null
+  const usage = extractOpenAIUsage(data)
+  return {
+    text: data?.choices?.[0]?.message?.content?.trim() || null,
+    model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  }
 }
 
 export async function POST(_request: NextRequest, context: RouteContext) {
@@ -61,6 +80,19 @@ export async function POST(_request: NextRequest, context: RouteContext) {
     const supabase = await createRouteSupabaseClient()
     const user = await getRouteAuthUser(supabase, _request)
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    let costSource: string | null = null
+    const contentType = _request.headers.get('content-type') || ''
+    if (contentType.includes('application/json')) {
+      try {
+        const body = await _request.json()
+        if (typeof body?.costSource === 'string') costSource = body.costSource
+      } catch {
+        // empty body is fine
+      }
+    }
+    const paidSource = resolveCostSource(_request, costSource, 'timeline')
+    const shouldCharge = shouldChargeTextCredits(_request, costSource)
 
     const { data: scene, error: sceneError } = await supabase
       .from('scenes')
@@ -164,27 +196,84 @@ ${projectName ? `Movie: ${projectName}` : ''}
 
 ${contextParts.join('\n\n')}`
 
-    let suggested = await callOpenAI(
+    const systemPrompt = 'You name film scenes for directors and editors. Output only a short scene title.'
+    const estimateModel = settings['openai_model']?.trim() || 'gpt-4o-mini'
+    const requiredCredits = estimateWorkspaceTextCredits(
+      estimateModel,
+      `${systemPrompt}\n${prompt}`,
+      80,
+    )
+    const creditCheck = await hasStudioCredits(user.id, requiredCredits)
+    if (shouldCharge && !creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
+
+    const result = await callOpenAI(
       [
         {
           role: 'system',
-          content: 'You name film scenes for directors and editors. Output only a short scene title.',
+          content: systemPrompt,
         },
         { role: 'user', content: prompt },
       ],
       settings,
     )
 
-    if (!suggested) {
+    if (!result.text) {
       return NextResponse.json({ error: 'AI service unavailable' }, { status: 503 })
     }
 
-    suggested = normalizeSceneName(suggested)
+    let suggested = normalizeSceneName(result.text)
     if (!suggested) {
       return NextResponse.json({ error: 'AI returned an empty name' }, { status: 502 })
     }
 
-    return NextResponse.json({ name: suggested })
+    await logApiCostFromRequest({
+      request: _request,
+      userId: user.id,
+      fallbackSource: 'timeline',
+      generationType: 'text',
+      provider: 'openai',
+      model: result.model,
+      prompt,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      inputText: prompt,
+      outputText: suggested,
+      metadata: { kind: 'suggest_scene_name', sceneId },
+    })
+
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    if (shouldCharge) {
+      try {
+        const charged = await chargeWorkspaceTextCredits({
+          userId: user.id,
+          model: result.model,
+          provider: 'openai',
+          source: paidSource,
+          description: `${paidSourceLabel(paidSource)} scene name`,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          inputText: `${systemPrompt}\n${prompt}`,
+          outputText: suggested,
+          metadata: { kind: 'suggest_scene_name', sceneId },
+        })
+        creditsCharged = charged.amount
+        creditsRemaining = charged.balance
+      } catch (creditError) {
+        console.error('[scene-name-credits] charge failed', creditError)
+      }
+    }
+
+    return NextResponse.json({
+      name: suggested,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
+    })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
+import { cinemaProductionAccessDeniedResponse } from '@/lib/cinema-production-access'
 import { RunwayML } from '@runwayml/sdk'
 import {
   describeRunwayFailureCode,
@@ -52,6 +53,9 @@ export async function POST(request: NextRequest) {
     if (authError || !user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const upgradeResponse = await cinemaProductionAccessDeniedResponse(supabase, user.id)
+    if (upgradeResponse) return upgradeResponse
 
     // Get the request body (handle both JSON and FormData)
     let prompt: string, duration: string | number = 5, width = 1024, height = 576, model = 'gen4_turbo', file: File | null = null

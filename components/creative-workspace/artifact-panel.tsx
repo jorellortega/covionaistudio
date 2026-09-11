@@ -61,6 +61,11 @@ import { useToast } from "@/hooks/use-toast"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { ScreenplayScenesService, type ScreenplayScene } from "@/lib/screenplay-scenes-service"
 import { extractTreatmentActLabels } from "@/lib/creative-chat-utils"
+import {
+  insufficientCreditsDescription,
+  isInsufficientCreditsPayload,
+  notifyStudioCreditsChanged,
+} from "@/lib/studio-credits-client"
 
 const SCREENPLAY_PAGE_QUICK_OPTIONS = [3, 5, 7, 10, 15, 20] as const
 
@@ -454,11 +459,21 @@ export function ArtifactPanel({
       )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
+        if (isInsufficientCreditsPayload(data)) {
+          notifyStudioCreditsChanged(data.balance)
+          throw new Error(`${insufficientCreditsDescription(data)} Add credits in Plans & credits.`)
+        }
         throw new Error(data.error || "Failed to generate screenplay scene")
       }
 
       if (data.pageLengthDebug) {
         console.log("[generate-screenplay-scene:page-length] result", data.pageLengthDebug)
+      }
+
+      if (typeof data.creditsRemaining === "number") {
+        notifyStudioCreditsChanged(data.creditsRemaining)
+      } else if (typeof data.creditsCharged === "number" && data.creditsCharged > 0) {
+        notifyStudioCreditsChanged()
       }
 
       setAssetsTab("screenplay")
@@ -478,7 +493,11 @@ export function ArtifactPanel({
             : data.usedAi
               ? "Formatted screenplay saved to your project."
               : "Screenplay synced to your project editor."
-        }${data.timelineSceneId ? " Added to timeline." : ""} Target: ${data.targetPages ?? targetPages} page${(data.targetPages ?? targetPages) === 1 ? "" : "s"}.${warningText}`,
+        }${data.timelineSceneId ? " Added to timeline." : ""} Target: ${data.targetPages ?? targetPages} page${(data.targetPages ?? targetPages) === 1 ? "" : "s"}.${
+          typeof data.creditsCharged === "number" && data.creditsCharged > 0
+            ? ` ${data.creditsCharged.toLocaleString()} credits used.`
+            : ""
+        }${warningText}`,
       })
     } catch (error) {
       await loadProjectScenes()

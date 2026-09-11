@@ -7,6 +7,12 @@ export type CostSource =
   | 'screenplay'
   | 'workspace'
   | 'cinema-production'
+  | 'timeline'
+  | 'locations'
+  | 'avatars'
+  | 'characters'
+  | 'objects'
+  | 'prompt-create'
   | 'other'
 
 export type GenerationType = 'image' | 'video' | 'text' | 'chat' | 'shot_list' | 'screenplay'
@@ -34,6 +40,12 @@ export const SOURCE_LABELS: Record<string, string> = {
   screenplay: 'Screenplay',
   workspace: 'Workspace',
   'cinema-production': 'Cinema production',
+  timeline: 'Timeline',
+  locations: 'Locations',
+  avatars: 'Avatars',
+  characters: 'Characters',
+  objects: 'Objects',
+  'prompt-create': 'Prompt create',
   other: 'Other',
 }
 
@@ -43,6 +55,12 @@ export const TRACKED_SOURCES: CostSource[] = [
   'screenplay',
   'workspace',
   'cinema-production',
+  'timeline',
+  'locations',
+  'avatars',
+  'characters',
+  'objects',
+  'prompt-create',
   'other',
 ]
 
@@ -53,6 +71,13 @@ const PATH_SOURCES: { match: string; source: CostSource }[] = [
   { match: '/shotlist', source: 'shotlist' },
   { match: '/screenplay', source: 'screenplay' },
   { match: '/cinema-production', source: 'cinema-production' },
+  { match: '/timeline-scene', source: 'timeline' },
+  { match: '/timeline', source: 'timeline' },
+  { match: '/locations', source: 'locations' },
+  { match: '/avatars', source: 'avatars' },
+  { match: '/characters', source: 'characters' },
+  { match: '/objects', source: 'objects' },
+  { match: '/prompt-create', source: 'prompt-create' },
   { match: '/new', source: 'workspace' },
 ]
 
@@ -68,6 +93,8 @@ const TEXT_RATES: Record<string, TextRates> = {
   'gpt-4-turbo': { input: 10, output: 30 },
   'gpt-5-mini': { input: 0.25, output: 2 },
   'gpt-5': { input: 1.25, output: 10 },
+  'gpt-5.1': { input: 1.25, output: 10 },
+  'gpt-5.1-mini': { input: 0.25, output: 2 },
   o3: { input: 2, output: 8 },
   'o4-mini': { input: 1.1, output: 4.4 },
   'claude-3-5-haiku': { input: 0.8, output: 4 },
@@ -146,6 +173,12 @@ export function normalizeCostSource(value?: string | null): CostSource {
   if (key === 'screenplays' || key === 'screenplay') return 'screenplay'
   if (key === 'workspace' || key === 'creative-workspace' || key === 'new') return 'workspace'
   if (key === 'cinema-production' || key === 'cinema-production') return 'cinema-production'
+  if (key === 'timeline' || key === 'timeline-scene') return 'timeline'
+  if (key === 'location' || key === 'locations') return 'locations'
+  if (key === 'avatar' || key === 'avatars') return 'avatars'
+  if (key === 'character' || key === 'characters') return 'characters'
+  if (key === 'object' || key === 'objects' || key === 'props' || key === 'prop') return 'objects'
+  if (key === 'prompt-create' || key === 'promptcreate' || key === 'prompts') return 'prompt-create'
   return KNOWN_SOURCES.has(key) ? (key as CostSource) : 'other'
 }
 

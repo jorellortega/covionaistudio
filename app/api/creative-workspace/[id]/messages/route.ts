@@ -9,6 +9,7 @@ import {
   displayModelSupportsReferenceImage,
   DEFAULT_CINEMATIC_IMAGE_WIDTH,
   DEFAULT_CINEMATIC_IMAGE_HEIGHT,
+  DEFAULT_CINEMATIC_IMAGE_SIZE,
 } from '@/lib/image-model-utils'
 import type { AIMessage, AISettingsMap } from '@/lib/ai-chat-types'
 import {
@@ -17,6 +18,16 @@ import {
 } from '@/lib/creative-workspace-import'
 import { syncSceneTextToProjectAsset, syncSceneTextToScreenplayScene, syncCombinedScreenplayToProjectAsset } from '@/lib/creative-workspace-assets'
 import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  isInsufficientCreditsPayload,
+  workspaceImageCredits,
+  workspaceTextMaxOutputTokens,
+} from '@/lib/studio-credits'
 
 export const maxDuration = 120
 
@@ -282,7 +293,15 @@ async function generateImageFromConversation(
     referenceImageUrl?: string
     styleReferenceUrls?: string[]
   },
-): Promise<{ url: string | null; error?: string }> {
+): Promise<{
+  url: string | null
+  error?: string
+  creditsCharged?: number
+  creditsRemaining?: number
+  insufficientCredits?: boolean
+  required?: number
+  balance?: number
+}> {
   const { displayModel, apiModel, service } = await getImageModelSettings(serviceSupabase)
   let resolvedApiModel = apiModel
   let resolvedService = service
@@ -324,9 +343,22 @@ async function generateImageFromConversation(
 
   const data = await response.json().catch(() => ({}))
   if (!response.ok) {
+    if (response.status === 402 || isInsufficientCreditsPayload(data)) {
+      return {
+        url: null,
+        error: data.error || 'Not enough credits to generate this image',
+        insufficientCredits: true,
+        required: typeof data.required === 'number' ? data.required : undefined,
+        balance: typeof data.balance === 'number' ? data.balance : undefined,
+      }
+    }
     return { url: null, error: data.error || `Image generation failed (${response.status})` }
   }
-  return { url: data.bucketUrl || data.imageUrl || data.url || data.image || null }
+  return {
+    url: data.bucketUrl || data.imageUrl || data.url || data.image || null,
+    creditsCharged: typeof data.creditsCharged === 'number' ? data.creditsCharged : undefined,
+    creditsRemaining: typeof data.creditsRemaining === 'number' ? data.creditsRemaining : undefined,
+  }
 }
 
 async function loadStoryContextForImages(
@@ -400,13 +432,14 @@ async function loadStoryContextForImages(
 }
 
 async function extractCollageImagePrompts(
+  userId: string,
   userMessage: string,
   attachmentContext: AttachmentContext,
   history: { role: string; content: string }[],
   settings: AISettingsMap,
   storyContext: StoryImageContext | null,
   usedSluglines: string[] = [],
-): Promise<{ prompts: string[]; sluglines: (string | null)[] }> {
+): Promise<{ prompts: string[]; sluglines: (string | null)[]; creditsCharged?: number; creditsRemaining?: number }> {
   const isMoreRequest = /\b(more|additional|another|extra)\b/i.test(userMessage)
 
   if (storyContext?.combinedText) {
@@ -466,17 +499,37 @@ Example: ["Cinematic film still, snowy mountain highway...", "Cinematic film sti
 
   if (!('content' in result) || !result.content) return { prompts: [], sluglines: [] }
 
+  let chargedCredits = 0
+  let remaining: number | undefined
+  try {
+    const charged = await chargeWorkspaceTextCredits({
+      userId,
+      model: result.model || settings['openai_model'] || 'gpt-5.1',
+      provider: 'openai',
+      description: 'Workspace collage prompts',
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      inputText: prompt,
+      outputText: result.content,
+      metadata: { kind: 'collage_prompts' },
+    })
+    chargedCredits = charged.amount
+    remaining = charged.balance
+  } catch (creditError) {
+    console.error('[workspace-credits] collage prompt charge failed', creditError)
+  }
+
   try {
     const match = result.content.match(/\[[\s\S]*\]/)
     const parsed = JSON.parse(match?.[0] || result.content)
-    if (!Array.isArray(parsed)) return { prompts: [], sluglines: [] }
+    if (!Array.isArray(parsed)) return { prompts: [], sluglines: [], creditsCharged: chargedCredits, creditsRemaining: remaining }
     const prompts = parsed
       .filter((item): item is string => typeof item === 'string' && item.trim().length > 20)
       .map((item) => item.trim().slice(0, 500))
       .slice(0, 6)
-    return { prompts, sluglines: prompts.map(() => null) }
+    return { prompts, sluglines: prompts.map(() => null), creditsCharged: chargedCredits, creditsRemaining: remaining }
   } catch {
-    return { prompts: [], sluglines: [] }
+    return { prompts: [], sluglines: [], creditsCharged: chargedCredits, creditsRemaining: remaining }
   }
 }
 
@@ -641,6 +694,60 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const wantsImage = detectImageRequest(trimmedMessage, historyForAi)
     const isSceneImport = detectSceneImportRequest(trimmedMessage)
     const hasAttachments = attachmentArtifacts.length > 0
+
+    if (wantsImage) {
+      const { apiModel } = await getImageModelSettings(serviceSupabase)
+      const required = workspaceImageCredits(apiModel, DEFAULT_CINEMATIC_IMAGE_SIZE)
+      const creditCheck = await hasStudioCredits(user.id, required)
+      if (!creditCheck.ok) {
+        await supabase.from('creative_messages').delete().eq('id', userMessage.id)
+        if (attachmentArtifacts.length > 0) {
+          await supabase
+            .from('creative_artifacts')
+            .update({ message_id: null })
+            .in('id', attachmentArtifacts.map((a) => a.id))
+        }
+        return NextResponse.json(
+          insufficientCreditsPayload(new InsufficientCreditsError(required, creditCheck.balance)),
+          { status: 402 },
+        )
+      }
+    }
+
+    const textModel = settings['openai_model']?.trim() || settings['anthropic_model']?.trim() || 'gpt-5.1'
+    const textInputPreview = [
+      ...historyForAi.map((m) => m.content),
+      trimmedMessage,
+      ...attachmentContext.documentTexts.map((doc) => doc.text),
+    ].join('\n')
+    const estimatedTextCredits =
+      estimateWorkspaceTextCredits(
+        textModel,
+        textInputPreview,
+        workspaceTextMaxOutputTokens(textModel),
+      ) + (wantsImage ? estimateWorkspaceTextCredits(textModel, textInputPreview, 800) : 0)
+
+    if (!isSceneImport) {
+      const textCreditCheck = await hasStudioCredits(user.id, estimatedTextCredits)
+      if (!textCreditCheck.ok) {
+        await supabase.from('creative_messages').delete().eq('id', userMessage.id)
+        if (attachmentArtifacts.length > 0) {
+          await supabase
+            .from('creative_artifacts')
+            .update({ message_id: null })
+            .in('id', attachmentArtifacts.map((a) => a.id))
+        }
+        return NextResponse.json(
+          insufficientCreditsPayload(
+            new InsufficientCreditsError(estimatedTextCredits, textCreditCheck.balance),
+          ),
+          { status: 402 },
+        )
+      }
+    }
+
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
 
     let assistantContent: string | null = null
     let aiError: string | null = null
@@ -831,6 +938,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
           inputText: trimmedMessage,
           outputText: openaiResult.content,
         })
+        try {
+          const charged = await chargeWorkspaceTextCredits({
+            userId: user.id,
+            model: openaiResult.model || settings['openai_model'] || 'gpt-5.1',
+            provider: 'openai',
+            description: 'Workspace chat',
+            inputTokens: openaiResult.inputTokens,
+            outputTokens: openaiResult.outputTokens,
+            inputText: trimmedMessage,
+            outputText: openaiResult.content,
+            metadata: { kind: wantsImage ? 'image_chat' : 'chat' },
+          })
+          creditsCharged += charged.amount
+          creditsRemaining = charged.balance
+        } catch (creditError) {
+          if (creditError instanceof InsufficientCreditsError) {
+            await supabase.from('creative_messages').delete().eq('id', userMessage.id)
+            if (attachmentArtifacts.length > 0) {
+              await supabase
+                .from('creative_artifacts')
+                .update({ message_id: null })
+                .in('id', attachmentArtifacts.map((a) => a.id))
+            }
+            return NextResponse.json(insufficientCreditsPayload(creditError), { status: 402 })
+          }
+          console.error('[workspace-credits] chat charge failed', creditError)
+        }
       } else {
         aiError = openaiResult.error
         const anthropicResult = await callAnthropic(aiMessages, settings, systemPrompt)
@@ -850,6 +984,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
             inputText: trimmedMessage,
             outputText: anthropicResult.content,
           })
+          try {
+            const charged = await chargeWorkspaceTextCredits({
+              userId: user.id,
+              model: anthropicResult.model || settings['anthropic_model'] || 'claude-3-5-sonnet-20241022',
+              provider: 'anthropic',
+              description: 'Workspace chat',
+              inputTokens: anthropicResult.inputTokens,
+              outputTokens: anthropicResult.outputTokens,
+              inputText: trimmedMessage,
+              outputText: anthropicResult.content,
+              metadata: { kind: wantsImage ? 'image_chat' : 'chat' },
+            })
+            creditsCharged += charged.amount
+            creditsRemaining = charged.balance
+          } catch (creditError) {
+            if (creditError instanceof InsufficientCreditsError) {
+              await supabase.from('creative_messages').delete().eq('id', userMessage.id)
+              if (attachmentArtifacts.length > 0) {
+                await supabase
+                  .from('creative_artifacts')
+                  .update({ message_id: null })
+                  .in('id', attachmentArtifacts.map((a) => a.id))
+              }
+              return NextResponse.json(insufficientCreditsPayload(creditError), { status: 402 })
+            }
+            console.error('[workspace-credits] chat charge failed', creditError)
+          }
         } else {
           aiError = anthropicResult.error || aiError
         }
@@ -925,6 +1086,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
       if (wantsMultiImage) {
         const collage = await extractCollageImagePrompts(
+          user.id,
           trimmedMessage,
           attachmentContext,
           historyForAi,
@@ -934,6 +1096,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
         )
         imagePrompts = collage.prompts
         promptSluglines = collage.sluglines
+        if (typeof collage.creditsCharged === 'number') {
+          creditsCharged += collage.creditsCharged
+        }
+        if (typeof collage.creditsRemaining === 'number') {
+          creditsRemaining = collage.creditsRemaining
+        }
       }
 
       if (imagePrompts.length === 0) {
@@ -952,6 +1120,36 @@ export async function POST(request: NextRequest, context: RouteContext) {
         const imagePromptOpenAI = await callOpenAI(imagePromptMessages, settings)
         if ('content' in imagePromptOpenAI) {
           imagePrompt = imagePromptOpenAI.content
+          await logApiCostFromRequest({
+            request,
+            userId: user.id,
+            fallbackSource: 'workspace',
+            generationType: 'chat',
+            provider: 'openai',
+            model: imagePromptOpenAI.model || settings['openai_model'] || 'gpt-5.1',
+            prompt: trimmedMessage,
+            inputTokens: imagePromptOpenAI.inputTokens,
+            outputTokens: imagePromptOpenAI.outputTokens,
+            inputText: promptInstruction,
+            outputText: imagePromptOpenAI.content,
+          })
+          try {
+            const charged = await chargeWorkspaceTextCredits({
+              userId: user.id,
+              model: imagePromptOpenAI.model || settings['openai_model'] || 'gpt-5.1',
+              provider: 'openai',
+              description: 'Workspace image prompt',
+              inputTokens: imagePromptOpenAI.inputTokens,
+              outputTokens: imagePromptOpenAI.outputTokens,
+              inputText: promptInstruction,
+              outputText: imagePromptOpenAI.content,
+              metadata: { kind: 'image_prompt' },
+            })
+            creditsCharged += charged.amount
+            creditsRemaining = charged.balance
+          } catch (creditError) {
+            console.error('[workspace-credits] image prompt charge failed', creditError)
+          }
         } else {
           const imagePromptAnthropic = await callAnthropic(
             imagePromptMessages,
@@ -960,6 +1158,23 @@ export async function POST(request: NextRequest, context: RouteContext) {
           )
           if ('content' in imagePromptAnthropic) {
             imagePrompt = imagePromptAnthropic.content
+            try {
+              const charged = await chargeWorkspaceTextCredits({
+                userId: user.id,
+                model: imagePromptAnthropic.model || settings['anthropic_model'] || 'claude-3-5-sonnet-20241022',
+                provider: 'anthropic',
+                description: 'Workspace image prompt',
+                inputTokens: imagePromptAnthropic.inputTokens,
+                outputTokens: imagePromptAnthropic.outputTokens,
+                inputText: promptInstruction,
+                outputText: imagePromptAnthropic.content,
+                metadata: { kind: 'image_prompt' },
+              })
+              creditsCharged += charged.amount
+              creditsRemaining = charged.balance
+            } catch (creditError) {
+              console.error('[workspace-credits] image prompt charge failed', creditError)
+            }
           }
         }
 
@@ -968,6 +1183,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
         }
         imagePrompts = [imagePrompt]
         promptSluglines = [null]
+      }
+
+      const { apiModel } = await getImageModelSettings(serviceSupabase)
+      const batchCredits = workspaceImageCredits(
+        apiModel,
+        DEFAULT_CINEMATIC_IMAGE_SIZE,
+        imagePrompts.length,
+      )
+      const batchCheck = await hasStudioCredits(user.id, batchCredits)
+      if (!batchCheck.ok) {
+        imageGenerationError = new InsufficientCreditsError(batchCredits, batchCheck.balance).message
       }
 
       const lastGeneratedImageUrl = (existingImageArtifacts || []).find(
@@ -980,6 +1206,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       const referenceImageUrl = attachmentContext.imageUrls[0] || (reusePreviousImage ? lastGeneratedImageUrl : undefined)
       const styleReferenceUrls = attachmentContext.imageUrls.slice(1)
 
+      if (!imageGenerationError) {
       for (let i = 0; i < imagePrompts.length; i++) {
         const basePrompt = imagePrompts[i]
         const imagePrompt = referenceImageUrl
@@ -1001,7 +1228,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
         if (!generated.url) {
           imageGenerationError = generated.error || 'Image generation failed'
+          if (generated.insufficientCredits) break
           continue
+        }
+
+        if (typeof generated.creditsCharged === 'number') {
+          creditsCharged += generated.creditsCharged
+        }
+        if (typeof generated.creditsRemaining === 'number') {
+          creditsRemaining = generated.creditsRemaining
         }
 
         const { data: newArtifact } = await supabase
@@ -1034,6 +1269,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           imageGenerated = true
         }
       }
+      }
     }
 
     await supabase
@@ -1054,6 +1290,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
       sceneImported,
       sceneImportArtifact,
       sceneImportDebug,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
   } catch (error) {
     return NextResponse.json(

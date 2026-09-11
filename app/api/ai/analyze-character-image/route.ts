@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { extractOpenAIUsage, logApiCostFromRequest, resolveCostSource } from '@/lib/api-cost-tracker'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeWorkspaceTextCredits,
+  creditsForTextGeneration,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  paidSourceLabel,
+} from '@/lib/studio-credits'
 
 // Helper function to get OpenAI API key (system-wide or env)
 async function getOpenAIApiKey(): Promise<string | null> {
@@ -96,7 +106,7 @@ export async function POST(request: NextRequest) {
   
   try {
     const body = await request.json()
-    const { imageUrl, characterId, characterName } = body
+    const { imageUrl, characterId, characterName, costSource } = body
 
     console.log('📥 Request received:', {
       hasImageUrl: !!imageUrl,
@@ -282,8 +292,33 @@ Return the analysis as a detailed JSON object with the following structure (use 
 
 Be EXTREMELY thorough and extract every possible detail. ${characterName ? `The character's name is "${characterName}".` : ''}`
 
+    const routeSupabase = await createRouteSupabaseClient()
+    const authUser = await getRouteAuthUser(routeSupabase, request)
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const paidSource = resolveCostSource(
+      request,
+      typeof costSource === 'string' ? costSource : null,
+      'characters',
+    )
+    const requiredCredits = creditsForTextGeneration({
+      model: 'gpt-4o',
+      inputTokens: Math.ceil(visionPrompt.length / 4) + 2000,
+      outputTokens: 2000,
+    })
+    const creditCheck = await hasStudioCredits(authUser.id, requiredCredits)
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
+
     let analysisResult: any
     let lastError: Error | null = null
+    let inputTokens: number | undefined
+    let outputTokens: number | undefined
 
     // Try using chat/completions API directly (more reliable for vision tasks)
     try {
@@ -341,6 +376,9 @@ Be EXTREMELY thorough and extract every possible detail. ${characterName ? `The 
 
       const data = await response.json()
       console.log('✅ OpenAI API response received')
+      const openaiUsage = extractOpenAIUsage(data)
+      inputTokens = openaiUsage.inputTokens
+      outputTokens = openaiUsage.outputTokens
       
       analysisResult = data.choices?.[0]?.message?.content || null
       
@@ -524,11 +562,49 @@ Be EXTREMELY thorough and extract every possible detail. ${characterName ? `The 
       }
     }
 
+    await logApiCostFromRequest({
+      request,
+      userId: authUser.id,
+      fallbackSource: 'characters',
+      generationType: 'text',
+      provider: 'openai',
+      model: 'gpt-4o',
+      prompt: visionPrompt,
+      inputTokens,
+      outputTokens,
+      inputText: visionPrompt,
+      outputText: analysisResult,
+      metadata: { kind: 'analyze_character_image', characterId },
+    })
+
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    try {
+      const charged = await chargeWorkspaceTextCredits({
+        userId: authUser.id,
+        model: 'gpt-4o',
+        provider: 'openai',
+        source: paidSource,
+        description: `${paidSourceLabel(paidSource)} image analysis`,
+        inputTokens,
+        outputTokens,
+        inputText: visionPrompt,
+        outputText: analysisResult,
+        metadata: { kind: 'analyze_character_image', characterId },
+      })
+      creditsCharged = charged.amount
+      creditsRemaining = charged.balance
+    } catch (creditError) {
+      console.error('[characters] credit charge failed', creditError)
+    }
+
     return NextResponse.json({
       success: true,
       extractedData,
       rawAnalysis: analysisResult,
-      imageUrl
+      imageUrl,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
 
   } catch (error) {

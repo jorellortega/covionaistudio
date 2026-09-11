@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { isSubscriptionPlanPurchasable } from '@/lib/signup-config'
 
 const plans = [
   { id: 'creator', name: 'Creator', price: 45, credits: 25000 },
@@ -664,6 +665,7 @@ export default function PlansCreditsPage() {
   }
 
   const handleUpgrade = async (planId: string) => {
+    if (!isSubscriptionPlanPurchasable(planId)) return
     setIsProcessing(true)
     try {
       // TODO: Create Stripe checkout session for upgrade
@@ -694,6 +696,7 @@ export default function PlansCreditsPage() {
   }
 
   const handleDowngrade = async (planId: string) => {
+    if (!isSubscriptionPlanPurchasable(planId)) return
     setIsProcessing(true)
     try {
       // TODO: Create Stripe checkout session for downgrade
@@ -770,6 +773,7 @@ export default function PlansCreditsPage() {
   }
 
   const handleStart = async (planId: string) => {
+    if (!isSubscriptionPlanPurchasable(planId)) return
     setIsProcessing(true)
     try {
       // TODO: Create Stripe checkout session for new subscription
@@ -1410,21 +1414,26 @@ export default function PlansCreditsPage() {
                   const planIndex = plans.findIndex(pl => pl.id === p.id)
                   return planIndex > currentIndex
                 })
-                .map((plan) => (
+                .map((plan) => {
+                  const purchasable = isSubscriptionPlanPurchasable(plan.id)
+                  return (
                   <Button
                     key={plan.id}
                     variant="outline"
                     className="w-full justify-between"
                     onClick={() => {
+                      if (!purchasable) return
                       setSelectedPlan(plan.id)
                       handleUpgrade(plan.id)
                     }}
-                    disabled={isProcessing}
+                    disabled={isProcessing || !purchasable}
                   >
                     <div className="text-left">
                       <p className="font-semibold">{plan.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        ${plan.price}/month • {plan.credits.toLocaleString()} credits
+                        {purchasable
+                          ? `$${plan.price}/month • ${plan.credits.toLocaleString()} credits`
+                          : 'Coming soon'}
                       </p>
                     </div>
                     {isProcessing && selectedPlan === plan.id ? (
@@ -1433,7 +1442,8 @@ export default function PlansCreditsPage() {
                       <ArrowUp className="h-4 w-4" />
                     )}
                   </Button>
-                ))}
+                  )
+                })}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowUpgradeDialog(false)}>
@@ -1460,21 +1470,26 @@ export default function PlansCreditsPage() {
                   const planIndex = plans.findIndex(pl => pl.id === p.id)
                   return planIndex < currentIndex
                 })
-                .map((plan) => (
+                .map((plan) => {
+                  const purchasable = isSubscriptionPlanPurchasable(plan.id)
+                  return (
                   <Button
                     key={plan.id}
                     variant="outline"
                     className="w-full justify-between"
                     onClick={() => {
+                      if (!purchasable) return
                       setSelectedPlan(plan.id)
                       handleDowngrade(plan.id)
                     }}
-                    disabled={isProcessing}
+                    disabled={isProcessing || !purchasable}
                   >
                     <div className="text-left">
                       <p className="font-semibold">{plan.name}</p>
                       <p className="text-sm text-muted-foreground">
-                        ${plan.price}/month • {plan.credits.toLocaleString()} credits
+                        {purchasable
+                          ? `$${plan.price}/month • ${plan.credits.toLocaleString()} credits`
+                          : 'Coming soon'}
                       </p>
                     </div>
                     {isProcessing && selectedPlan === plan.id ? (
@@ -1483,7 +1498,8 @@ export default function PlansCreditsPage() {
                       <ArrowDown className="h-4 w-4" />
                     )}
                   </Button>
-                ))}
+                  )
+                })}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowDowngradeDialog(false)}>
@@ -1532,21 +1548,26 @@ export default function PlansCreditsPage() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-2">
-              {plans.map((plan) => (
+              {plans.map((plan) => {
+                const purchasable = isSubscriptionPlanPurchasable(plan.id)
+                return (
                 <Button
                   key={plan.id}
                   variant="outline"
                   className="w-full justify-between"
                   onClick={() => {
+                    if (!purchasable) return
                     setSelectedPlan(plan.id)
                     handleStart(plan.id)
                   }}
-                  disabled={isProcessing}
+                  disabled={isProcessing || !purchasable}
                 >
                   <div className="text-left">
                     <p className="font-semibold">{plan.name}</p>
                     <p className="text-sm text-muted-foreground">
-                      ${plan.price}/month • {plan.credits.toLocaleString()} credits
+                      {purchasable
+                        ? `$${plan.price}/month • ${plan.credits.toLocaleString()} credits`
+                        : 'Coming soon'}
                     </p>
                   </div>
                   {isProcessing && selectedPlan === plan.id ? (
@@ -1555,7 +1576,8 @@ export default function PlansCreditsPage() {
                     <Play className="h-4 w-4" />
                   )}
                 </Button>
-              ))}
+                )
+              })}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setShowStartDialog(false)}>

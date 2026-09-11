@@ -11,7 +11,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/hooks/use-toast';
-import { SIGNUP_DISABLED } from '@/lib/signup-config';
+import { SIGNUP_DISABLED, isSubscriptionPlanPurchasable, subscriptionPlanUnavailableMessage } from '@/lib/signup-config';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -79,7 +79,7 @@ function LoginPageContent() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [selectedPlan, setSelectedPlan] = useState<string>('studio');
+  const [selectedPlan, setSelectedPlan] = useState<string>('creator');
   const [checkoutBilling, setCheckoutBilling] = useState<'monthly' | 'annual'>('monthly');
   const [inviteCode, setInviteCode] = useState<string>('');
   const [inviteLinkToken, setInviteLinkToken] = useState<string>('');
@@ -111,6 +111,9 @@ function LoginPageContent() {
       if (mode === 'signup') {
         // If no invite code, plan is required
         if (!inviteCode && !selectedPlan) return 'Please select a subscription plan or enter an invite code.';
+        if (!inviteCode && selectedPlan && !isSubscriptionPlanPurchasable(selectedPlan)) {
+          return subscriptionPlanUnavailableMessage(selectedPlan);
+        }
         if (password.length < 8) return 'Password must be at least 8 characters.';
         if (password !== confirm) return 'Passwords do not match.';
       }
@@ -165,7 +168,7 @@ function LoginPageContent() {
     if (m === 'signin') setMode('signin');
     const plan = sp.get('plan');
     if (plan === 'creator' || plan === 'studio' || plan === 'production') {
-      setSelectedPlan(plan);
+      setSelectedPlan(isSubscriptionPlanPurchasable(plan) ? plan : 'creator');
     }
     const billing = sp.get('billing');
     if (billing === 'annual' || billing === 'monthly') {
@@ -326,6 +329,9 @@ function LoginPageContent() {
         
         // Redirect to checkout with selected plan (normal flow)
         if (selectedPlan && signUpData.user) {
+          if (!isSubscriptionPlanPurchasable(selectedPlan)) {
+            throw new Error(subscriptionPlanUnavailableMessage(selectedPlan));
+          }
           console.log('🔧 SIGNUP: Creating checkout session...')
           console.log('📋 SIGNUP: Checkout payload:', {
             planId: selectedPlan,
@@ -551,23 +557,37 @@ function LoginPageContent() {
                   <Label className="text-sm font-medium">
                     Select a subscription plan <span className="text-red-500">*</span>
                   </Label>
-                  <RadioGroup value={selectedPlan} onValueChange={setSelectedPlan} className="space-y-2" required>
-                    {plans.map((plan) => (
+                  <RadioGroup
+                    value={selectedPlan}
+                    onValueChange={(value) => {
+                      if (isSubscriptionPlanPurchasable(value)) setSelectedPlan(value);
+                    }}
+                    className="space-y-2"
+                    required
+                  >
+                    {plans.map((plan) => {
+                      const purchasable = isSubscriptionPlanPurchasable(plan.id);
+                      return (
                       <div key={plan.id} className="flex items-center space-x-2">
-                        <RadioGroupItem value={plan.id} id={plan.id} />
+                        <RadioGroupItem value={plan.id} id={plan.id} disabled={!purchasable} />
                         <Label
                           htmlFor={plan.id}
-                          className={`flex-1 rounded-md border-2 p-3 cursor-pointer transition-colors ${
-                            plan.id === selectedPlan 
-                              ? 'border-primary bg-primary/5' 
-                              : 'border-muted hover:bg-accent'
+                          className={`flex-1 rounded-md border-2 p-3 transition-colors ${
+                            !purchasable
+                              ? 'cursor-not-allowed opacity-60 border-muted'
+                              : plan.id === selectedPlan 
+                                ? 'border-primary bg-primary/5 cursor-pointer' 
+                                : 'border-muted hover:bg-accent cursor-pointer'
                           }`}
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
                                 <span className="text-sm font-semibold">{plan.name}</span>
-                                {plan.id === selectedPlan && (
+                                {!purchasable && (
+                                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Coming soon</span>
+                                )}
+                                {purchasable && plan.id === selectedPlan && (
                                   <Check className="h-4 w-4 text-primary" />
                                 )}
                               </div>
@@ -594,7 +614,8 @@ function LoginPageContent() {
                           </div>
                         </Label>
                       </div>
-                    ))}
+                      );
+                    })}
                   </RadioGroup>
                   {['creator', 'studio', 'production'].includes(selectedPlan) && (
                     <div className="space-y-2 pt-1">

@@ -32,6 +32,12 @@ import {
   type SceneSyncData,
 } from "@/lib/scene-shot-sync"
 import type { AISyncPlan } from "@/lib/scene-sync-ai"
+import {
+  insufficientCreditsDescription,
+  isInsufficientCreditsPayload,
+  notifyCreditsFromResult,
+  notifyStudioCreditsChanged,
+} from "@/lib/studio-credits-client"
 
 type SceneSyncControlsProps = {
   sceneId: string
@@ -221,12 +227,30 @@ export function SceneSyncControls({
           const aiRes = await fetch("/api/scene-sync/analyze", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ direction, shots, storyboards }),
+            body: JSON.stringify({
+              direction,
+              shots,
+              storyboards,
+              costSource:
+                typeof window !== "undefined" && window.location.pathname.startsWith("/storyboards")
+                  ? "storyboard"
+                  : typeof window !== "undefined" && window.location.pathname.startsWith("/shotlist")
+                    ? "shotlist"
+                    : undefined,
+            }),
           })
           const aiData = await aiRes.json()
-          if (aiRes.ok && aiData.plan?.operations?.length) {
+          if (isInsufficientCreditsPayload(aiData)) {
+            notifyStudioCreditsChanged(aiData.balance)
+            toast({
+              title: "Not enough credits for AI matching",
+              description: `${insufficientCreditsDescription(aiData)} Using shot-number matching instead. Add credits in Plans & credits.`,
+              variant: "destructive",
+            })
+          } else if (aiRes.ok && aiData.plan?.operations?.length) {
             plan = aiData.plan as AISyncPlan
             aiUsed = true
+            notifyCreditsFromResult(aiData)
           } else if (!aiRes.ok && !aiData.fallback) {
             console.warn("[scene-sync] AI unavailable:", aiData.error)
           }

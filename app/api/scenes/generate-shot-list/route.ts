@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
 import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage } from '@/lib/api-cost-tracker'
 import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+} from '@/lib/studio-credits'
+import {
   applyShotListAssignments,
   formatAssignmentPromptSection,
 } from '@/lib/shot-list-assignment-utils'
@@ -209,6 +216,19 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
     // Check if GPT-5 model - these need higher token limits
     const isGPT5Model = modelToUse.startsWith('gpt-5')
     const maxTokens = isGPT5Model ? 8000 : 4000 // GPT-5 needs more tokens for reasoning + output
+
+    const requiredCredits = estimateWorkspaceTextCredits(
+      modelToUse,
+      `${systemPrompt}\n${userPrompt}`,
+      isGPT5Model ? 12000 : maxTokens,
+    )
+    const creditCheck = await hasStudioCredits(targetUserId, requiredCredits)
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
 
     if (normalizedService === 'openai') {
       const response = await OpenAIService.generateScript({
@@ -629,12 +649,38 @@ Generate a shot list as a JSON array. Each shot should be specific to the screen
       metadata: { sceneId },
     })
 
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    try {
+      const charged = await chargeWorkspaceTextCredits({
+        userId: targetUserId,
+        model: modelToUse,
+        provider: normalizedService,
+        source: 'shotlist',
+        description: 'Shot list generation',
+        inputTokens,
+        outputTokens,
+        inputText: `${systemPrompt}\n${userPrompt}`,
+        outputText: generatedResponse,
+        metadata: { kind: 'shot_list', sceneId },
+      })
+      creditsCharged = charged.amount
+      creditsRemaining = charged.balance
+    } catch (creditError) {
+      console.error('[shotlist-credits] charge failed', creditError)
+    }
+
     return NextResponse.json({
       success: true,
       shots: formattedShots,
-      count: formattedShots.length
+      count: formattedShots.length,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
   } catch (error) {
+    if (error instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+    }
     console.error('Error generating shot list:', error)
     return NextResponse.json(
       { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },

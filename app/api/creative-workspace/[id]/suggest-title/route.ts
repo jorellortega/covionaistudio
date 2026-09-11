@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
 import type { AIMessage, AISettingsMap } from '@/lib/ai-chat-types'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+} from '@/lib/studio-credits'
 
 type RouteContext = { params: Promise<{ id: string }> }
 
@@ -95,6 +102,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (settingsError) return NextResponse.json({ error: 'Failed to load AI configuration' }, { status: 500 })
 
     const settings = mapSettings(settingsData || [])
+    const model = settings['openai_model']?.trim() || 'gpt-5.1'
     const prompt = `You name movie development projects. Based on this conversation, suggest ONE short, professional project title.
 
 Rules:
@@ -107,6 +115,15 @@ Current title: ${workspace.title}
 
 Conversation:
 ${conversation}`
+
+    const requiredCredits = estimateWorkspaceTextCredits(model, prompt, 100)
+    const creditCheck = await hasStudioCredits(user.id, requiredCredits)
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
 
     let title = await callOpenAI(
       [
@@ -122,6 +139,24 @@ ${conversation}`
 
     title = stripWrappingQuotes(title.replace(/\*\*(.*?)\*\*/g, '$1').split('\n')[0].trim())
 
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    try {
+      const charged = await chargeWorkspaceTextCredits({
+        userId: user.id,
+        model,
+        provider: 'openai',
+        description: 'Workspace title suggestion',
+        inputText: prompt,
+        outputText: title,
+        metadata: { kind: 'suggest_title' },
+      })
+      creditsCharged = charged.amount
+      creditsRemaining = charged.balance
+    } catch (creditError) {
+      console.error('[workspace-credits] title charge failed', creditError)
+    }
+
     const { data: updated, error: updateError } = await supabase
       .from('creative_workspaces')
       .update({ title, updated_at: new Date().toISOString() })
@@ -131,7 +166,12 @@ ${conversation}`
 
     if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 })
 
-    return NextResponse.json({ title, workspace: updated })
+    return NextResponse.json({
+      title,
+      workspace: updated,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
+    })
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },

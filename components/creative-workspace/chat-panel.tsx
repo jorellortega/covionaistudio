@@ -88,6 +88,11 @@ import { mapDisplayModelToService, normalizeDisplayModelToApiId, DEFAULT_CINEMAT
 import { ContentViolationDialog } from "@/components/content-violation-dialog"
 import { isContentPolicyError, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import {
+  insufficientCreditsDescription,
+  isInsufficientCreditsPayload,
+  notifyStudioCreditsChanged,
+} from "@/lib/studio-credits-client"
+import {
   CREATIVE_IMPORT_ACCEPT,
   CREATIVE_IMPORT_MAX_BYTES,
   CREATIVE_IMPORT_MAX_FILES,
@@ -556,6 +561,10 @@ export function ChatPanel({
 
       if (!res.ok) {
         const err = await res.json()
+        if (isInsufficientCreditsPayload(err)) {
+          notifyStudioCreditsChanged(err.balance)
+          throw new Error(`${insufficientCreditsDescription(err)} Add credits in Plans & credits.`)
+        }
         throw new Error(err.error || "Failed to send message")
       }
 
@@ -578,11 +587,20 @@ export function ChatPanel({
       if (data.imageGenerated) {
         const assistantContent = data.assistantMessage?.content || ""
         const generatedCount = Array.isArray(data.imageArtifacts) ? data.imageArtifacts.length : 1
+        const creditsNote =
+          typeof data.creditsCharged === "number" && data.creditsCharged > 0
+            ? ` ${data.creditsCharged.toLocaleString()} credits used.`
+            : ""
+        if (typeof data.creditsRemaining === "number") {
+          notifyStudioCreditsChanged(data.creditsRemaining)
+        } else if (typeof data.creditsCharged === "number" && data.creditsCharged > 0) {
+          notifyStudioCreditsChanged()
+        }
         toast({
           title: generatedCount > 1 ? `${generatedCount} images generated` : "Image generated",
-          description: data.imageContextUsed === false
+          description: `${data.imageContextUsed === false
             ? "Images were generated without screenplay context — attach your PDF or link your project for better results."
-            : getImageGeneratedDescription(assistantContent),
+            : getImageGeneratedDescription(assistantContent)}${creditsNote}`,
         })
         if (Array.isArray(data.imageArtifacts) && data.imageArtifacts.length > 0) {
           data.imageArtifacts.forEach((item: CreativeArtifact) => onArtifactCreated(item))
@@ -597,6 +615,10 @@ export function ChatPanel({
             "OpenAI image API did not return an image. Check AI settings and try again.",
           variant: "destructive",
         })
+      } else if (typeof data.creditsCharged === "number" && data.creditsCharged > 0) {
+        notifyStudioCreditsChanged(
+          typeof data.creditsRemaining === "number" ? data.creditsRemaining : undefined,
+        )
       }
 
       if (data.sceneImported && data.sceneImportArtifact) {
@@ -1041,13 +1063,17 @@ export function ChatPanel({
 
       const res = await fetch("/api/ai/generate-image", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-cost-source": "workspace",
+        },
         body: JSON.stringify({
           prompt: imagePrompt,
           service: mapDisplayModelToService(displayModel),
           apiKey: "configured",
           userId,
           model: normalizeDisplayModelToApiId(displayModel),
+          costSource: "workspace",
           width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
           height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
           autoSaveToBucket: true,
@@ -1057,6 +1083,10 @@ export function ChatPanel({
       const err = await res.json().catch(() => ({}))
 
       if (!res.ok) {
+        if (isInsufficientCreditsPayload(err)) {
+          notifyStudioCreditsChanged(err.balance)
+          throw new Error(`${insufficientCreditsDescription(err)} Add credits in Plans & credits.`)
+        }
         if (isContentBlockedResponse(err)) {
           setContentBlockedDialog({ message, prompt: imagePrompt })
           return
@@ -1068,6 +1098,12 @@ export function ChatPanel({
       const imageUrl = data.imageUrl || data.url || data.image
 
       if (!imageUrl) throw new Error("No image returned")
+
+      if (typeof data.creditsRemaining === "number") {
+        notifyStudioCreditsChanged(data.creditsRemaining)
+      } else if (typeof data.creditsCharged === "number" && data.creditsCharged > 0) {
+        notifyStudioCreditsChanged()
+      }
 
       const artifactRes = await fetch(`/api/creative-workspace/${workspaceId}/artifacts`, {
         method: "POST",
@@ -1089,7 +1125,11 @@ export function ChatPanel({
         : undefined
       toast({
         title: "Image generated",
-        description: getImageGeneratedDescription(message.content, ctx),
+        description: `${getImageGeneratedDescription(message.content, ctx)}${
+          typeof data.creditsCharged === "number" && data.creditsCharged > 0
+            ? ` ${data.creditsCharged.toLocaleString()} credits used.`
+            : ""
+        }`,
       })
       onArtifactCreated(artifactData.artifact)
     } catch (error) {

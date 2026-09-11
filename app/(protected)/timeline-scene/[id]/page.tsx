@@ -80,6 +80,14 @@ import { CollaborationService, type CreateCollaborationSessionData } from "@/lib
 import { CharactersService } from "@/lib/characters-service"
 import { LocationsService } from "@/lib/locations-service"
 import {
+  creditsUsedNote,
+  insufficientCreditsDescription,
+  isInsufficientCreditsPayload,
+  notifyCreditsFromResult,
+  notifyStudioCreditsChanged,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -113,7 +121,8 @@ export default function ScenePage() {
 
 function ScenePageClient({ id }: { id: string }) {
   const { toast } = useToast()
-  const { user, userId, ready } = useAuthReady()
+  const { user, userId, ready, session } = useAuthReady()
+  const supabase = getSupabaseClient()
   const router = useRouter()
   const isMobile = false // FORCE DESKTOP VIEW
   console.log('🎬 DEBUG - isMobile value:', isMobile)
@@ -1011,7 +1020,7 @@ ${centerText('AUTHOR NAME')}
         prefix: ''
       }
 
-      data?.forEach((item) => {
+      data?.forEach((item: { setting_key: string; setting_value: string | null }) => {
         if (item.setting_key === 'text_enhancer_model') {
           settings.model = item.setting_value || 'gpt-4o-mini'
         } else if (item.setting_key === 'text_enhancer_prefix') {
@@ -1187,6 +1196,7 @@ ${centerText('AUTHOR NAME')}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           prompt: `Fix grammar and spelling errors in the following text. Keep the exact same format, structure, spacing, line breaks, indentation, and meaning. Only correct grammar and spelling mistakes. Do not change the style, rewrite anything, add explanations, or wrap the text in quotes. Return only the corrected text without any quotes or additional formatting:`,
@@ -1197,16 +1207,17 @@ ${centerText('AUTHOR NAME')}
           apiKey: 'configured',
           userId: userId,
           contentType: 'script',
-          maxTokens: 4000
+          maxTokens: 4000,
+          costSource: 'timeline',
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to fix grammar')
-      }
-
       const result = await response.json()
+      if (!response.ok) {
+        throwIfInsufficientCredits(result)
+        throw new Error(result.error || 'Failed to fix grammar')
+      }
+      notifyCreditsFromResult(result)
       // The API returns { text: string } for text editing
       let fixedText = result.text?.trim()
 
@@ -1228,7 +1239,7 @@ ${centerText('AUTHOR NAME')}
       
       toast({
         title: "Grammar Fixed",
-        description: "Grammar and spelling have been corrected for the entire page.",
+        description: `Grammar and spelling have been corrected for the entire page.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       console.error('Error fixing grammar:', error)
@@ -1278,6 +1289,7 @@ ${centerText('AUTHOR NAME')}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           prompt: `Based on the following screenplay content, create a concise scene description (2-4 sentences) that summarizes what happens in this scene. Focus on the key actions, characters, and events. Write in third person, present tense. Return only the description without quotes or additional formatting:`,
@@ -1288,16 +1300,17 @@ ${centerText('AUTHOR NAME')}
           apiKey: 'configured',
           userId: userId,
           contentType: 'script',
-          maxTokens: 200
+          maxTokens: 200,
+          costSource: 'timeline',
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate description')
-      }
-
       const result = await response.json()
+      if (!response.ok) {
+        throwIfInsufficientCredits(result)
+        throw new Error(result.error || 'Failed to generate description')
+      }
+      notifyCreditsFromResult(result)
       let description = result.text?.trim()
 
       if (!description) {
@@ -1315,7 +1328,7 @@ ${centerText('AUTHOR NAME')}
       
       toast({
         title: "Description Generated",
-        description: "Scene description has been updated based on screenplay content.",
+        description: `Scene description has been updated based on screenplay content.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       console.error('Error generating description:', error)
@@ -1560,7 +1573,7 @@ ${centerText('AUTHOR NAME')}
       
       // Split content into paragraphs
       const lines = content.split('\n')
-      const paragraphs: Paragraph[] = []
+      const paragraphs: InstanceType<typeof Paragraph>[] = []
       
       lines.forEach((line: string) => {
         const trimmedLine = line.trim()
@@ -1795,7 +1808,7 @@ ${centerText('AUTHOR NAME')}
           }
         } else {
           console.log('🔍 ASSET FETCH - Assets found:', sceneAssets?.length || 0)
-          console.log('🔍 ASSET FETCH - Asset types:', sceneAssets?.map(a => ({ id: a.id, type: a.content_type, title: a.title })))
+          console.log('🔍 ASSET FETCH - Asset types:', sceneAssets?.map((a: Asset) => ({ id: a.id, type: a.content_type, title: a.title })))
           
           if (mounted) {
             console.log('🔍 ASSET FETCH - Setting assets in state:', sceneAssets?.length || 0)
@@ -1981,7 +1994,7 @@ ${centerText('AUTHOR NAME')}
         .eq('user_id', userId)
       
       console.log('🔄 REFRESH ASSETS - Assets found:', sceneAssets?.length || 0)
-      console.log('🔄 REFRESH ASSETS - Asset types:', sceneAssets?.map(a => ({ id: a.id, type: a.content_type, title: a.title })))
+      console.log('🔄 REFRESH ASSETS - Asset types:', sceneAssets?.map((a: Asset) => ({ id: a.id, type: a.content_type, title: a.title })))
       
       if (error) {
         console.error('🔄 REFRESH ASSETS - Error:', error)
@@ -2044,7 +2057,7 @@ ${centerText('AUTHOR NAME')}
       type: newNoteType,
       content: newNote,
       created_at: new Date().toISOString(),
-      author: user?.name || "Current User",
+      author: (user as { name?: string } | null)?.name || user?.email?.split('@')[0] || "Current User",
     }
 
     if (scene) {
@@ -2182,6 +2195,7 @@ ${centerText('AUTHOR NAME')}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           sceneId: id,
@@ -2189,17 +2203,18 @@ ${centerText('AUTHOR NAME')}
           service: normalizedService,
           model: modelToUse,
           userId: userId,
+          costSource: 'timeline',
         }),
       })
 
+      const result = await response.json()
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to generate screenplay')
+        throwIfInsufficientCredits(result)
+        throw new Error(result.error || 'Failed to generate screenplay')
       }
 
-      const result = await response.json()
-
       if (result.success && result.screenplay) {
+        notifyCreditsFromResult(result)
         setScreenplayContent(result.screenplay)
         
         // Refresh scene data to get updated screenplay_content
@@ -2210,7 +2225,7 @@ ${centerText('AUTHOR NAME')}
 
         toast({
           title: "Screenplay Generated!",
-          description: "The screenplay has been generated and saved to this scene.",
+          description: `The screenplay has been generated and saved to this scene.${creditsUsedNote(result)}`,
         })
       } else {
         throw new Error('No screenplay content returned')
@@ -2283,6 +2298,10 @@ ${centerText('AUTHOR NAME')}
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || 'Failed to generate shot list')
       }
 
@@ -2295,6 +2314,7 @@ ${centerText('AUTHOR NAME')}
       })
 
       if (result.success && result.shots && result.shots.length > 0) {
+        notifyCreditsFromResult(result)
         console.log('🎬 Shot List Generation - Saving shots to database...')
         
         // Save all generated shots
@@ -2317,7 +2337,7 @@ ${centerText('AUTHOR NAME')}
 
         toast({
           title: "Shot List Generated!",
-          description: `Successfully created ${savedShots.length} shots from page ${currentPage}.`,
+          description: `Successfully created ${savedShots.length} shots from page ${currentPage}.${creditsUsedNote(result)}`,
           duration: 5000,
         })
       } else {
@@ -2401,6 +2421,10 @@ ${centerText('AUTHOR NAME')}
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || 'Failed to generate shot list')
       }
 
@@ -2413,6 +2437,7 @@ ${centerText('AUTHOR NAME')}
       })
 
       if (result.success && result.shots && result.shots.length > 0) {
+        notifyCreditsFromResult(result)
         console.log('🎬 Shot List Generation - Saving shots to database...')
         
         // Save all generated shots
@@ -2435,7 +2460,7 @@ ${centerText('AUTHOR NAME')}
 
         toast({
           title: "Shot List Generated!",
-          description: `Successfully created ${savedShots.length} shots from the entire screenplay.`,
+          description: `Successfully created ${savedShots.length} shots from the entire screenplay.${creditsUsedNote(result)}`,
           duration: 5000,
         })
       } else {
@@ -2764,6 +2789,7 @@ ${centerText('AUTHOR NAME')}
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           prompt: `Fix grammar and spelling errors in the selected text. Keep the exact same format, structure, spacing, line breaks, indentation, and meaning. Only correct grammar and spelling mistakes. Do not change the style, rewrite anything, add explanations, or wrap the text in quotes. Return only the corrected text without any quotes or additional formatting:`,
@@ -2774,16 +2800,17 @@ ${centerText('AUTHOR NAME')}
           apiKey: 'configured',
           userId: userId,
           contentType: 'script',
-          maxTokens: 2000
+          maxTokens: 2000,
+          costSource: 'timeline',
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to fix grammar')
-      }
-
       const result = await response.json()
+      if (!response.ok) {
+        throwIfInsufficientCredits(result)
+        throw new Error(result.error || 'Failed to fix grammar')
+      }
+      notifyCreditsFromResult(result)
       // The API returns { text: string } for text editing
       let fixedText = result.text?.trim()
 
@@ -2834,7 +2861,7 @@ ${centerText('AUTHOR NAME')}
 
       toast({
         title: "Grammar Fixed",
-        description: "Grammar and spelling have been corrected.",
+        description: `Grammar and spelling have been corrected.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       console.error('Error fixing grammar:', error)
@@ -3144,7 +3171,11 @@ ${centerText('AUTHOR NAME')}
 
       const res = await fetch(`/api/timeline/scenes/${id}/suggest-name`, { method: 'POST' })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+      if (!res.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to suggest scene name')
+      }
+      notifyCreditsFromResult(data)
 
       await TimelineService.updateScene(id, { name: data.name })
       setScene((prev) => (prev ? { ...prev, name: data.name } : prev))
@@ -3154,7 +3185,7 @@ ${centerText('AUTHOR NAME')}
 
       toast({
         title: 'Scene renamed',
-        description: data.name,
+        description: `${data.name}${creditsUsedNote(data)}`,
       })
     } catch (error) {
       toast({
@@ -5956,6 +5987,7 @@ ${centerText('AUTHOR NAME')}
                           variant="outline" 
                           className="border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10"
                           onClick={() => {
+                            if (!video.content_url) return
                             const link = document.createElement('a')
                             link.href = video.content_url
                             link.download = `${video.title}.mp4`
@@ -7531,23 +7563,28 @@ ${centerText('AUTHOR NAME')}
                         // Generate image
                         const response = await fetch('/api/ai/generate-scene-image', {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'x-cost-source': 'timeline',
+                          },
                           body: JSON.stringify({
                             prompt: finalPrompt,
                             service: service,
                             apiKey: apiKey,
                             userId: user?.id, // Add userId for bucket storage
                             autoSaveToBucket: true, // Enable automatic bucket storage
+                            costSource: 'timeline',
                           })
                         })
                         
+                        const result = await response.json().catch(() => ({}))
                         if (!response.ok) {
-                          throw new Error(`API error: ${response.status}`)
+                          throwIfInsufficientCredits(result)
+                          throw new Error(result.error || `API error: ${response.status}`)
                         }
                         
-                        const result = await response.json()
-                        
                         if (result.success) {
+                          notifyCreditsFromResult(result)
                           // Save generated image as asset
                           const newAssetData = {
                             project_id: assets.find(a => a.id === selectedScriptForAI)?.project_id || '',
@@ -7581,7 +7618,7 @@ ${centerText('AUTHOR NAME')}
                           
                           toast({
                             title: "Image Generated!",
-                            description: `AI image has been created and saved to your scene.`,
+                            description: `AI image has been created and saved to your scene.${creditsUsedNote(result)}`,
                           })
                           
                           // Refresh assets and close dialog

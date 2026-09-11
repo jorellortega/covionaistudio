@@ -5,6 +5,13 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { TreatmentsService } from '@/lib/treatments-service'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+} from '@/lib/studio-credits'
 
 /**
  * Fixes screenplay formatting issues, particularly excessive spacing in character names
@@ -416,6 +423,19 @@ Generate a full, professional screenplay scene that brings this scene to life. I
     const isGPT5Model = modelToUse.startsWith('gpt-5')
     const maxTokens = isGPT5Model ? 12000 : 8000 // GPT-5 needs more tokens (3x for reasoning + output)
 
+    const requiredCredits = estimateWorkspaceTextCredits(
+      modelToUse,
+      `${systemPrompt}\n${userPrompt}`,
+      isGPT5Model ? 12000 : maxTokens,
+    )
+    const creditCheck = await hasStudioCredits(targetUserId, requiredCredits)
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
+
     if (normalizedService === 'openai') {
       const response = await OpenAIService.generateScript({
         prompt: userPrompt,
@@ -568,7 +588,7 @@ Generate a full, professional screenplay scene that brings this scene to life. I
     await logApiCostFromRequest({
       request,
       userId: targetUserId,
-      fallbackSource: 'screenplay',
+      fallbackSource: 'timeline',
       generationType: 'screenplay',
       provider: normalizedService,
       model: modelToUse,
@@ -580,9 +600,32 @@ Generate a full, professional screenplay scene that brings this scene to life. I
       metadata: { sceneId },
     })
 
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    try {
+      const charged = await chargeWorkspaceTextCredits({
+        userId: targetUserId,
+        model: modelToUse,
+        provider: normalizedService,
+        source: 'timeline',
+        description: 'Timeline screenplay',
+        inputTokens,
+        outputTokens,
+        inputText: `${systemPrompt}\n${userPrompt}`,
+        outputText: generatedScreenplay,
+        metadata: { kind: 'screenplay', sceneId },
+      })
+      creditsCharged = charged.amount
+      creditsRemaining = charged.balance
+    } catch (creditError) {
+      console.error('[timeline-credits] screenplay charge failed', creditError)
+    }
+
     return NextResponse.json({
       success: true,
-      screenplay: generatedScreenplay
+      screenplay: generatedScreenplay,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
   } catch (error) {
     console.error('Error generating screenplay:', error)

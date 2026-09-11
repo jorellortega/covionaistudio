@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Stripe from 'stripe'
+import {
+  isSubscriptionPlanPurchasable,
+  subscriptionPlanUnavailableMessage,
+} from '@/lib/signup-config'
 
 function getStripe() {
   if (!process.env.STRIPE_SECRET_KEY) {
@@ -204,6 +208,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (planId) {
+      if (!isSubscriptionPlanPurchasable(planId)) {
+        const msg = subscriptionPlanUnavailableMessage(String(planId))
+        console.log('❌ CHECKOUT: Plan not available for purchase:', planId)
+        return NextResponse.json({ error: msg }, { status: 403 })
+      }
+
       console.log('🔧 CHECKOUT: Creating subscription checkout session...')
       console.log('📋 CHECKOUT: Plan ID:', planId)
       console.log('📋 CHECKOUT: User ID:', userId)

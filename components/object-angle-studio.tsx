@@ -76,6 +76,11 @@ import {
 } from "@/lib/saved-prompts-service"
 import { cn } from "@/lib/utils"
 import { StorageThumbImg } from "@/components/storage-thumb-img"
+import {
+  creditsUsedNote,
+  paidGenerationImageUrl,
+  requirePaidGenerationSuccess,
+} from "@/lib/studio-credits-client"
 
 /** Resized previews in Edit Image — full URL is used for popup + AI reference. */
 const EDIT_PREVIEW_THUMB_WIDTH = 480
@@ -543,12 +548,17 @@ export function ObjectAngleStudio({
     formData.append("apiKey", "configured")
     formData.append("userId", userId)
     formData.append("autoSaveToBucket", "true")
+    formData.append("costSource", "objects")
     formData.append("file", referenceFile)
     if (config.service === "runway") {
       formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
     }
 
-    return fetch("/api/ai/generate-image", { method: "POST", body: formData })
+    return fetch("/api/ai/generate-image", {
+      method: "POST",
+      headers: { "x-cost-source": "objects" },
+      body: formData,
+    })
   }
 
   const addImageToAngle = (
@@ -638,16 +648,20 @@ export function ObjectAngleStudio({
 
     onProgress?.("Calling image model…")
     const response = await requestImageGeneration(prompt, config, referenceFile)
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.error || `Failed to generate ${angle.label}`)
-    }
-
-    const result = await response.json()
-    const imageUrl = result.bucketUrl || result.imageUrl
+    const result = requirePaidGenerationSuccess(
+      response.ok,
+      await response.json().catch(() => ({})),
+      `Failed to generate ${angle.label}`,
+    )
+    const imageUrl = paidGenerationImageUrl(result)
     if (!imageUrl) throw new Error("No image returned")
 
-    return { imageUrl, prompt, source: "from_reference" as const }
+    return {
+      imageUrl: String(imageUrl),
+      prompt,
+      source: "from_reference" as const,
+      creditsCharged: typeof result.creditsCharged === "number" ? result.creditsCharged : undefined,
+    }
   }
 
   const handlePickExistingImage = (angle: ObjectAngle, asset: Asset) => {
@@ -804,6 +818,7 @@ export function ObjectAngleStudio({
       formData.append("apiKey", "configured")
       formData.append("userId", userId)
       formData.append("autoSaveToBucket", "true")
+      formData.append("costSource", "objects")
       formData.append("file", primaryReferenceFile)
       for (const styleFile of styleReferenceFiles) {
         formData.append("styleFiles", styleFile)
@@ -812,14 +827,17 @@ export function ObjectAngleStudio({
         formData.append("seed", String(Math.floor(Math.random() * 2147483647)))
       }
 
-      const response = await fetch("/api/ai/generate-image", { method: "POST", body: formData })
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || "Failed to edit image")
-      }
-
-      const result = await response.json()
-      const imageUrl = result.bucketUrl || result.imageUrl
+      const response = await fetch("/api/ai/generate-image", {
+        method: "POST",
+        headers: { "x-cost-source": "objects" },
+        body: formData,
+      })
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        "Failed to edit image",
+      )
+      const imageUrl = paidGenerationImageUrl(result)
       if (!imageUrl) throw new Error("Failed to edit image")
 
       if (angle) {
@@ -833,7 +851,7 @@ export function ObjectAngleStudio({
 
       toast({
         title: "Edit added",
-        description: "Edited version added as a new variant for this angle.",
+        description: `Edited version added as a new variant for this angle.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       toast({
@@ -873,7 +891,7 @@ export function ObjectAngleStudio({
       addImageToAngle(angle.id, persisted, { selectNew: true })
       toast({
         title: "Angle generated",
-        description: `${angle.label} added to object views.`,
+        description: `${angle.label} added to object views.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       toast({
@@ -908,6 +926,7 @@ export function ObjectAngleStudio({
 
     setIsBatchGenerating(true)
     let created = 0
+    let creditsCharged = 0
 
     try {
       for (const angle of anglesToGenerate) {
@@ -917,6 +936,7 @@ export function ObjectAngleStudio({
           const persisted = await persistAngleImage(angle, result)
           addImageToAngle(angle.id, persisted, { selectNew: true })
           created++
+          if (typeof result.creditsCharged === "number") creditsCharged += result.creditsCharged
         } catch (error) {
           toast({
             title: `${angle.label} failed`,
@@ -932,7 +952,7 @@ export function ObjectAngleStudio({
       if (created > 0) {
         toast({
           title: "Object views generated",
-          description: `Added ${created} angle${created === 1 ? "" : "s"} from your reference image.`,
+          description: `Added ${created} angle${created === 1 ? "" : "s"} from your reference image.${creditsUsedNote({ creditsCharged })}`,
         })
       }
     } finally {

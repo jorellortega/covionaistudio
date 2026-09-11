@@ -71,6 +71,11 @@ import { sanitizeFilename } from "@/lib/utils"
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel"
 import { ImageSizeBadge } from "@/components/image-size-badge"
 import { ObjectAngleStudio } from "@/components/object-angle-studio"
+import {
+  creditsUsedNote,
+  paidGenerationImageUrl,
+  requirePaidGenerationSuccess,
+} from "@/lib/studio-credits-client"
 
 function categoryLabel(category: StoryObjectCategory): string {
   return STORY_OBJECT_CATEGORIES.find((item) => item.value === category)?.label ?? category
@@ -255,6 +260,8 @@ export default function ObjectsPage() {
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
+      formData.append("costSource", "objects")
+      formData.append("autoSaveToBucket", "true")
       for (const styleFile of options.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
@@ -264,13 +271,17 @@ export default function ObjectsPage() {
 
       return fetch("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": "objects" },
         body: formData,
       })
     }
 
     return fetch("/api/ai/generate-image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-cost-source": "objects",
+      },
       body: JSON.stringify({
         prompt,
         service: config.service,
@@ -280,6 +291,7 @@ export default function ObjectsPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: "objects",
       }),
     })
   }
@@ -743,17 +755,15 @@ export default function ObjectsPage() {
       styleReferenceFiles: config.supportsReference ? options?.styleReferenceFiles : undefined,
     })
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.error || "Failed to edit image from reference")
-    }
-
-    const result = await response.json()
-    if (!result.success || !result.imageUrl) {
+    const result = requirePaidGenerationSuccess(
+      response.ok,
+      await response.json().catch(() => ({})),
+      "Failed to edit image from reference",
+    )
+    const imageUrlToUse = paidGenerationImageUrl(result)
+    if (!imageUrlToUse) {
       throw new Error("Failed to edit image from reference")
     }
-
-    const imageUrlToUse = result.bucketUrl || result.imageUrl
     await saveGeneratedObjectShot(
       imageUrlToUse,
       selectedObject,
@@ -1217,7 +1227,10 @@ export default function ObjectsPage() {
 
       const response = await fetch("/api/ai/generate-image", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-cost-source": "objects",
+        },
         body: JSON.stringify({
           prompt: finalPrompt.slice(0, 990),
           service: mapDisplayModelToService(displayModel),
@@ -1227,20 +1240,19 @@ export default function ObjectsPage() {
           width: DEFAULT_CINEMATIC_IMAGE_WIDTH,
           height: DEFAULT_CINEMATIC_IMAGE_HEIGHT,
           autoSaveToBucket: true,
+          costSource: "objects",
         }),
       })
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.error || "Failed to generate image")
-      }
-
-      const result = await response.json()
-      if (!result.success || !result.imageUrl) {
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        "Failed to generate image",
+      )
+      const imageUrl = paidGenerationImageUrl(result)
+      if (!imageUrl) {
         throw new Error("Failed to generate image")
       }
-
-      const imageUrl = result.bucketUrl || result.imageUrl
       const now = new Date()
       const savedAsset = await AssetService.createAsset({
         project_id: projectId,
@@ -1258,7 +1270,10 @@ export default function ObjectsPage() {
 
       setObjectAssets((prev) => [savedAsset, ...prev])
       setTimeout(() => carouselApi?.scrollTo(0), 100)
-      toast({ title: "Image generated", description: "Added to object assets." })
+      toast({
+        title: "Image generated",
+        description: `Added to object assets.${creditsUsedNote(result)}`,
+      })
     } catch (error) {
       toast({
         title: "Generation failed",

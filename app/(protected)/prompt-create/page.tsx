@@ -7,6 +7,10 @@ import Header from "@/components/header"
 import { ProjectSelector } from "@/components/project-selector"
 import { useAuthReady } from "@/components/auth-hooks"
 import { useToast } from "@/hooks/use-toast"
+import {
+  creditsUsedNote,
+  requirePaidGenerationSuccess,
+} from "@/lib/studio-credits-client"
 import { SavedPromptsService, type SavedPrompt } from "@/lib/saved-prompts-service"
 import { getSupabaseClient } from "@/lib/supabase"
 import { sanitizeFilename } from "@/lib/utils"
@@ -180,24 +184,37 @@ export default function PromptCreatePage() {
     try {
       const response = await fetch("/api/ai/analyze-image-prompt", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageUrl: source }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-cost-source": "prompt-create",
+        },
+        body: JSON.stringify({ imageUrl: source, costSource: "prompt-create" }),
       })
-      const result = await response.json()
-      if (!response.ok || !result.success) {
-        throw new Error(result.error || "Failed to analyze image")
+      const result = requirePaidGenerationSuccess(
+        response.ok,
+        await response.json().catch(() => ({})),
+        "Failed to analyze image",
+      )
+      if (!result.success) {
+        throw new Error(typeof result.error === "string" ? result.error : "Failed to analyze image")
       }
-      const analysis = result.analysis
-      if (analysis.title) setTitle(analysis.title)
-      if (analysis.prompt) setPrompt(analysis.prompt)
-      if (analysis.type && PROMPT_TYPES.includes(analysis.type)) {
+      const analysis = result.analysis as {
+        title?: string
+        prompt?: string
+        type?: string
+        style?: string
+        tags?: string
+      } | undefined
+      if (analysis?.title) setTitle(analysis.title)
+      if (analysis?.prompt) setPrompt(analysis.prompt)
+      if (analysis?.type && PROMPT_TYPES.includes(analysis.type as PromptType)) {
         setType(analysis.type as PromptType)
       }
-      if (analysis.style) setStyle(analysis.style)
-      if (analysis.tags) setTags(analysis.tags)
+      if (analysis?.style) setStyle(analysis.style)
+      if (analysis?.tags) setTags(analysis.tags)
       toast({
         title: "Image analyzed",
-        description: "Prompt fields filled from the image. Review and save.",
+        description: `Prompt fields filled from the image. Review and save.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       toast({

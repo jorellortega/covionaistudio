@@ -13,6 +13,10 @@ import { useAuthReady } from "@/components/auth-hooks"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  isSubscriptionPlanPurchasable,
+  subscriptionPlanUnavailableMessage,
+} from "@/lib/signup-config"
 
 type PricedPlanId = "creator" | "studio" | "production"
 
@@ -137,6 +141,14 @@ export default function SubscriptionsPage() {
 
   const handleSubscribe = async (planId: string) => {
     setFocusedPlanId(planId)
+    if (!isSubscriptionPlanPurchasable(planId)) {
+      toast({
+        title: "Not available yet",
+        description: subscriptionPlanUnavailableMessage(planId),
+        variant: "destructive",
+      })
+      return
+    }
     // New users: sign up first (same page returns them here to finish in-app if needed)
     if (!signedIn) {
       const qs = new URLSearchParams({
@@ -197,14 +209,13 @@ export default function SubscriptionsPage() {
       <Header />
       
       <main className="container mx-auto max-w-7xl px-6 py-12">
-        {/* Warning Banner */}
-        <Alert variant="destructive" className="mb-8 border-orange-500/50 bg-orange-500/10">
-          <AlertTriangle className="h-5 w-5 text-orange-500" />
-          <AlertTitle className="text-lg font-semibold text-orange-600 dark:text-orange-400">
-            Do Not Sign Up Yet
+        <Alert className="mb-8 border-primary/30 bg-primary/5">
+          <AlertTriangle className="h-5 w-5 text-primary" />
+          <AlertTitle className="text-lg font-semibold">
+            Creator is available now
           </AlertTitle>
-          <AlertDescription className="text-base text-orange-700 dark:text-orange-300 mt-1">
-            Please check back—we&apos;ll be open soon.
+          <AlertDescription className="text-base text-muted-foreground mt-1">
+            Studio and Production House plans are not available yet. You can subscribe to Creator today.
           </AlertDescription>
         </Alert>
         {/* Header Section */}
@@ -238,7 +249,8 @@ export default function SubscriptionsPage() {
               hasAnnual && plan.annualPrice != null
                 ? annualDiscountVsMonthly(plan.price, plan.annualPrice)
                 : null
-            
+            const isPurchasable = isSubscriptionPlanPurchasable(plan.id)
+
             return (
               <Card
                 key={plan.id}
@@ -444,22 +456,24 @@ export default function SubscriptionsPage() {
                   {/* CTA Button */}
                   <Button
                     className={`w-full mt-6 ${
-                      isSelected
+                      isPurchasable && isSelected
                         ? "gradient-button text-white"
                         : "border-border hover:bg-primary hover:text-primary-foreground"
                     }`}
-                    variant={isSelected ? "default" : "outline"}
+                    variant={isPurchasable && isSelected ? "default" : "outline"}
                     onClick={(e) => {
                       e.stopPropagation()
                       void handleSubscribe(plan.id)
                     }}
-                    disabled={isLoading || authLoading}
+                    disabled={!isPurchasable || isLoading || authLoading}
                   >
                     {isLoading ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Processing...
                       </>
+                    ) : !isPurchasable ? (
+                      "Coming soon"
                     ) : signedIn ? (
                       "Subscribe Now"
                     ) : (

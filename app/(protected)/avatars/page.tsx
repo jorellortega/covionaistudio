@@ -41,6 +41,12 @@ import {
   DEFAULT_CINEMATIC_IMAGE_WIDTH,
   DEFAULT_CINEMATIC_IMAGE_HEIGHT,
 } from "@/lib/image-model-utils"
+import {
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  requirePaidGenerationSuccess,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -337,6 +343,7 @@ async function readGenerateImageFailure(res: Response): Promise<GenerateImageFai
   } catch {
     parsed = null
   }
+  throwIfInsufficientCredits(parsed)
   const error =
     (typeof parsed?.error === "string" && parsed.error) ||
     (typeof parsed?.details === "string" && parsed.details) ||
@@ -1177,13 +1184,17 @@ export default function AvatarsPage() {
 
       return fetch("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": "avatars" },
         body: formData,
       })
     }
 
     return fetch("/api/ai/generate-image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-cost-source": "avatars",
+      },
       body: JSON.stringify({
         prompt,
         service: config.service,
@@ -1274,6 +1285,7 @@ export default function AvatarsPage() {
       }
 
       const data = await res.json()
+      notifyCreditsFromResult(data)
       const imageUrl = data.bucketUrl || data.imageUrl || data.url
       if (!imageUrl) {
         console.error("[avatars] generate failed", {
@@ -1292,6 +1304,7 @@ export default function AvatarsPage() {
         imageUrl,
         prompt,
         source: "from_reference" as const,
+        creditsCharged: typeof data.creditsCharged === "number" ? data.creditsCharged : undefined,
       }
     }
 
@@ -1309,6 +1322,7 @@ export default function AvatarsPage() {
     }
 
     const data = await res.json()
+    notifyCreditsFromResult(data)
     const imageUrl = data.bucketUrl || data.imageUrl || data.url
     if (!imageUrl) {
       console.error("[avatars] generate failed", {
@@ -1323,7 +1337,12 @@ export default function AvatarsPage() {
       ...debugPayload,
       imageUrl: String(imageUrl).slice(0, 120),
     })
-    return { imageUrl, prompt, source: "generated" as const }
+    return {
+      imageUrl,
+      prompt,
+      source: "generated" as const,
+      creditsCharged: typeof data.creditsCharged === "number" ? data.creditsCharged : undefined,
+    }
   }
 
   const linkedCharacter = useMemo(
@@ -1650,6 +1669,7 @@ export default function AvatarsPage() {
     setIsBatchGenerating(true)
     const anglesToGenerate = avatarShots.filter((a) => selectedAngles.includes(a.id))
     let created = 0
+    let creditsCharged = 0
     const failed: { angleId: string; angleLabel: string; reason: string }[] = []
     console.log("[avatars] batch start", {
       characterId: linkedCharacterId,
@@ -1665,6 +1685,7 @@ export default function AvatarsPage() {
           if (result) {
             await addAvatarImage(angle, result, { selectNew: true })
             created++
+            if (typeof result.creditsCharged === "number") creditsCharged += result.creditsCharged
           } else {
             failed.push({
               angleId: angle.id,
@@ -1701,9 +1722,9 @@ export default function AvatarsPage() {
       if (created > 0) {
         toast({
           title: "Avatars generated",
-          description: generationMode === "from_reference"
+          description: `${generationMode === "from_reference"
             ? `Added ${created} angle${created === 1 ? "" : "s"} from your reference image.`
-            : `Added ${created} angle${created === 1 ? "" : "s"}.`,
+            : `Added ${created} angle${created === 1 ? "" : "s"}.`}${creditsUsedNote({ creditsCharged })}`,
         })
       }
     } finally {
@@ -1754,9 +1775,9 @@ export default function AvatarsPage() {
         toast({
           title: variantCount > 1 ? "Regenerated" : "Generated",
           description:
-            variantCount > 1
+            `${variantCount > 1
               ? `${angle.label} — new shot added as variant ${variantCount}`
-              : angle.label,
+              : angle.label}${creditsUsedNote(result)}`,
         })
       }
     } catch (error) {
@@ -1787,21 +1808,36 @@ export default function AvatarsPage() {
 
     setIsEnhancing(true)
     try {
-      const res = await fetch("/api/ai-chat", {
+      const res = await fetch("/api/ai/generate-text", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-cost-source": "avatars",
+        },
         body: JSON.stringify({
-          message: `Write a detailed visual description for a character avatar (appearance only: face, hair, skin, eyes, clothing, distinguishing features). 3-5 sentences. No backstory. Character name: ${characterName || "unnamed"}. ${description ? `Existing notes: ${description}` : ""}`,
-          conversationHistory: [],
+          prompt: `IMPORTANT: Write a detailed visual description for a character avatar (appearance only: face, hair, skin, eyes, clothing, distinguishing features). 3-5 sentences. No backstory. Character name: ${characterName || "unnamed"}. ${description ? `Existing notes: ${description}` : ""} Return only the description.`,
+          field: "script",
+          service: "openai",
+          model: "gpt-4o-mini",
+          apiKey: "configured",
+          userId,
+          maxTokens: 800,
+          costSource: "avatars",
         }),
       })
-      if (!res.ok) throw new Error("Failed to enhance description")
-      const data = await res.json()
-      setDescription(data.message)
-      toast({ title: "Description enhanced" })
-    } catch {
+      const data = await res.json().catch(() => ({}))
+      const result = requirePaidGenerationSuccess(res.ok, data, "Failed to enhance description")
+      const enhanced = typeof result.text === "string" ? result.text.trim() : ""
+      if (!enhanced) throw new Error("Failed to enhance description")
+      setDescription(enhanced)
+      toast({
+        title: "Description enhanced",
+        description: creditsUsedNote(result).trim() || undefined,
+      })
+    } catch (error) {
       toast({
         title: "Enhancement failed",
+        description: error instanceof Error ? error.message : "Failed to enhance description",
         variant: "destructive",
       })
     } finally {
@@ -1895,6 +1931,7 @@ export default function AvatarsPage() {
         throw new Error(failure.error || "Failed to edit image")
       }
       const result = await response.json()
+      notifyCreditsFromResult(result)
       const imageUrl = result.bucketUrl || result.imageUrl || result.url
       if (!imageUrl) {
         throw new Error("Failed to edit image")
@@ -1910,7 +1947,7 @@ export default function AvatarsPage() {
 
       toast({
         title: "Edit added",
-        description: "Edited version added as a new variant for this angle.",
+        description: `Edited version added as a new variant for this angle.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       toast({

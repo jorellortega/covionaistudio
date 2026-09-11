@@ -45,9 +45,15 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { TimelineService, type SceneWithMetadata, type CreateSceneData } from "@/lib/timeline-service"
+import { getSupabaseClient } from "@/lib/supabase"
 import { useToast } from "@/hooks/use-toast"
 import { useAuthReady } from "@/components/auth-hooks"
 import { analyzeImageUrl } from "@/lib/image-utils"
+import {
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 import { AISettingsService, type AISetting } from "@/lib/ai-settings-service"
 import { AssetService } from "@/lib/asset-service"
 import { ProjectSelector } from "@/components/project-selector"
@@ -62,6 +68,13 @@ const statusColors = {
   "In Progress": "bg-blue-500/20 text-blue-500 border-blue-500/30",
   Completed: "bg-green-500/20 text-green-400 border-green-500/30",
   "On Hold": "bg-red-500/20 text-red-400 border-red-500/30",
+}
+
+type SceneAudioAsset = {
+  id: string
+  scene_id: string | null
+  content_url: string | null
+  metadata: unknown
 }
 
 
@@ -337,7 +350,6 @@ export default function TimelinePage() {
     if (!userId) return
     
     try {
-      const { getSupabaseClient } = await import('@/lib/supabase')
       const supabase = getSupabaseClient()
       
       const sceneIds = scenesData.map(s => s.id)
@@ -359,7 +371,7 @@ export default function TimelinePage() {
       const audioMap = new Map<string, string>()
       if (audioAssets) {
         console.log('🎵 Found', audioAssets.length, 'audio assets')
-        audioAssets.forEach(asset => {
+        ;(audioAssets as SceneAudioAsset[]).forEach((asset) => {
           console.log('🎵 Checking asset:', {
             id: asset.id,
             scene_id: asset.scene_id,
@@ -368,12 +380,15 @@ export default function TimelinePage() {
             metadataType: typeof asset.metadata,
             isObject: typeof asset.metadata === 'object',
             hasAudioType: asset.metadata && typeof asset.metadata === 'object' && 'audioType' in asset.metadata,
-            audioType: asset.metadata && typeof asset.metadata === 'object' ? asset.metadata.audioType : null
+            audioType:
+              asset.metadata && typeof asset.metadata === 'object' && 'audioType' in asset.metadata
+                ? (asset.metadata as { audioType?: unknown }).audioType
+                : null
           })
           
           // Check if this is scene description audio
           // Handle both JSON string and object metadata
-          let metadata = asset.metadata
+          let metadata: unknown = asset.metadata
           if (typeof metadata === 'string') {
             try {
               metadata = JSON.parse(metadata)
@@ -382,7 +397,11 @@ export default function TimelinePage() {
             }
           }
           
-          if (metadata && typeof metadata === 'object' && metadata.audioType === 'scene_description') {
+          const audioType =
+            metadata && typeof metadata === 'object' && 'audioType' in metadata
+              ? (metadata as { audioType?: unknown }).audioType
+              : null
+          if (audioType === 'scene_description') {
             if (asset.scene_id && asset.content_url) {
               audioMap.set(asset.scene_id, asset.content_url)
               console.log('🎵 ✅ Added scene description audio for scene:', asset.scene_id)
@@ -594,13 +613,17 @@ export default function TimelinePage() {
         method: 'POST',
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+      if (!res.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to suggest scene name')
+      }
+      notifyCreditsFromResult(data)
 
       if (options?.formOnly) {
         setNewScene((prev) => ({ ...prev, title: data.name }))
         toast({
           title: 'Scene name suggested',
-          description: data.name,
+          description: `${data.name}${creditsUsedNote(data)}`,
         })
         return
       }
@@ -614,7 +637,7 @@ export default function TimelinePage() {
       }
       toast({
         title: 'Scene renamed',
-        description: data.name,
+        description: `${data.name}${creditsUsedNote(data)}`,
       })
     } catch (error) {
       toast({
@@ -980,7 +1003,7 @@ export default function TimelinePage() {
     } catch (error) {
       console.error('🎬 DEBUG - Error sanitizing prompt:', error)
       // Fallback to a simple description
-      return `A cinematic movie scene: ${scene.name}`
+      return `A cinematic movie scene: ${scriptContent.substring(0, 80)}`
     }
   }
 
@@ -1159,6 +1182,7 @@ export default function TimelinePage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           prompt: scenePrompt,
@@ -1167,11 +1191,14 @@ export default function TimelinePage() {
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
+          costSource: 'timeline',
         })
       })
       
       // If the first attempt fails, try with a simpler prompt
       if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throwIfInsufficientCredits(errorData)
         console.log('🎬 DEBUG - First attempt failed, trying with simpler prompt...')
         const simplePrompt = `A cinematic movie scene: ${scene.name}`
         
@@ -1179,6 +1206,7 @@ export default function TimelinePage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'x-cost-source': 'timeline',
           },
           body: JSON.stringify({
             prompt: simplePrompt,
@@ -1187,6 +1215,7 @@ export default function TimelinePage() {
             apiKey: apiKey,
             userId: user?.id,
             autoSaveToBucket: true,
+            costSource: 'timeline',
           })
         })
       }
@@ -1198,21 +1227,23 @@ export default function TimelinePage() {
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        console.log('🎬 DEBUG - API error response:', errorText)
-        throw new Error('Failed to generate image')
+        const errorData = await response.json().catch(() => ({}))
+        throwIfInsufficientCredits(errorData)
+        console.log('🎬 DEBUG - API error response:', errorData)
+        throw new Error(typeof errorData.error === 'string' ? errorData.error : 'Failed to generate image')
       }
 
       const result = await response.json()
       console.log('🎬 DEBUG - API result:', result)
       
       if (result.success && result.imageUrl) {
+        notifyCreditsFromResult(result)
         // Save the generated image to the scene
         await saveGeneratedImageToScene(scene.id, result.imageUrl, scenePrompt)
         
         toast({
           title: "Image generated successfully!",
-          description: "The scene image has been updated",
+          description: `The scene image has been updated.${creditsUsedNote(result)}`,
         })
         
         // Refresh scenes to show the new image
@@ -1599,6 +1630,7 @@ export default function TimelinePage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'timeline',
         },
         body: JSON.stringify({
           prompt: aiPrompt,
@@ -1607,11 +1639,13 @@ export default function TimelinePage() {
           apiKey: apiKey,
           userId: user?.id, // Add userId for bucket storage
           autoSaveToBucket: true, // Enable automatic bucket storage
+          costSource: 'timeline',
         }),
       })
 
       if (!response.ok) {
         const errorData = await response.json()
+        throwIfInsufficientCredits(errorData)
         throw new Error(errorData.error || 'Failed to generate image')
       }
 
@@ -1619,10 +1653,11 @@ export default function TimelinePage() {
       console.log('AI image generated:', result)
 
       if (result.success && result.imageUrl) {
+        notifyCreditsFromResult(result)
         setGeneratedImageUrl(result.imageUrl)
         toast({
           title: "Image Generated",
-          description: "AI has generated your scene image!",
+          description: `AI has generated your scene image!${creditsUsedNote(result)}`,
         })
       } else {
         throw new Error('No image URL received from AI service')

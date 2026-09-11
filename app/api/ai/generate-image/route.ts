@@ -5,7 +5,17 @@ import { OpenAIService, OpenArtService } from '@/lib/ai-services'
 import { sanitizeFilename } from '@/lib/utils'
 import { isContentPolicyError, CONTENT_BLOCKED_MESSAGE, isContentBlockedResponse } from "@/lib/content-policy-utils"
 import { isGPTImageApiModel, isGPTImage2ApiModel, resolveOpenAIImageSize, DEFAULT_CINEMATIC_IMAGE_WIDTH, DEFAULT_CINEMATIC_IMAGE_HEIGHT, GPT_IMAGE_MAX_REFERENCE_IMAGES } from '@/lib/image-model-utils'
-import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
+import { logApiCostFromRequest, resolveCostSource } from '@/lib/api-cost-tracker'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeStudioCredits,
+  insufficientCreditsPayload,
+  InsufficientCreditsError,
+  paidSourceLabel,
+  refundStudioCredits,
+  shouldChargeImageCredits,
+  workspaceImageCredits,
+} from '@/lib/studio-credits'
 import { RUNWAY, getRunwayHeaders } from '@/lib/runway-config'
 import {
   buildRunwayReferenceImagesFromFiles,
@@ -146,6 +156,7 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
 
 export async function POST(request: NextRequest) {
   const debugContext: Record<string, unknown> = {}
+  let reservedCredits: { userId: string; amount: number; source?: string } | null = null
   try {
     console.log('AI image generation request received')
     
@@ -427,6 +438,44 @@ export async function POST(request: NextRequest) {
       console.log('🖼️ API ROUTE - Reference image provided; using gpt-image-2 edit instead of', imageModelForRequest)
       imageModelForRequest = 'gpt-image-2'
     }
+    if (shouldChargeImageCredits(request, typeof body?.costSource === 'string' ? body.costSource : null)) {
+      const routeSupabase = await createRouteSupabaseClient()
+      const authUser = await getRouteAuthUser(routeSupabase, request)
+      const chargeUserId = authUser?.id || (typeof userId === 'string' ? userId : null)
+      if (!chargeUserId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+
+      const paidSource = resolveCostSource(
+        request,
+        typeof body?.costSource === 'string' ? body.costSource : null,
+        'other',
+      )
+      const creditAmount = workspaceImageCredits(imageModelForRequest, resolvedImageSize)
+      try {
+        const charged = await chargeStudioCredits({
+          userId: chargeUserId,
+          amount: creditAmount,
+          description: `${paidSourceLabel(paidSource)} image (${imageModelForRequest})`,
+          usageType: 'image_generation',
+          service: String(service || 'openai'),
+          metadata: {
+            source: paidSource,
+            model: imageModelForRequest,
+            size: resolvedImageSize,
+          },
+        })
+        reservedCredits = { userId: chargeUserId, amount: charged.amount, source: paidSource }
+        debugContext.creditsCharged = charged.amount
+        debugContext.creditsRemaining = charged.balance
+      } catch (creditError) {
+        if (creditError instanceof InsufficientCreditsError) {
+          return NextResponse.json(insufficientCreditsPayload(creditError), { status: 402 })
+        }
+        throw creditError
+      }
+    }
+
     if (file && isGPTImage2ApiModel(imageModelForRequest)) {
       console.log('🖼️ API ROUTE - GPT Image 2 edit with reference file(s)')
       const additionalFiles =
@@ -793,10 +842,23 @@ export async function POST(request: NextRequest) {
       originalUrl: imageUrl, // Keep original URL for reference
       bucketUrl: bucketUrl, // Include bucket URL if available
       service: service.toUpperCase(),
-      savedToBucket: !!bucketUrl
+      savedToBucket: !!bucketUrl,
+      creditsCharged: reservedCredits?.amount ?? 0,
+      creditsRemaining: typeof debugContext.creditsRemaining === 'number'
+        ? debugContext.creditsRemaining
+        : undefined,
     })
 
   } catch (error) {
+    if (reservedCredits) {
+      await refundStudioCredits({
+        userId: reservedCredits.userId,
+        amount: reservedCredits.amount,
+        description: 'Refund: image generation failed',
+        metadata: { source: reservedCredits.source || 'other', reason: 'generation_failed' },
+      })
+      reservedCredits = null
+    }
     console.error('AI image generation error:', error)
     console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace')
     

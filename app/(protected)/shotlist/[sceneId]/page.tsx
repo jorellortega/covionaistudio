@@ -62,6 +62,11 @@ import { SceneSyncControls } from "@/components/scene-sync-controls"
 import { ShotCameraAngleSelect, ShotMovementSelect } from "@/components/shot-field-selects"
 import { resolveCameraAngleValue, resolveMovementValue } from "@/lib/shot-options"
 import { resolveSceneScreenplayContent } from "@/lib/resolve-scene-screenplay-content"
+import {
+  insufficientCreditsDescription,
+  isInsufficientCreditsPayload,
+  notifyStudioCreditsChanged,
+} from "@/lib/studio-credits-client"
 
 // Extended scene type with additional properties we need
 type SceneInfo = SceneWithMetadata & {
@@ -764,15 +769,28 @@ export default function SceneShotListPage() {
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || "Failed to generate shot list")
       }
 
       const result = await response.json()
       if (result.success && result.shots?.length > 0) {
         const savedShots = await saveGeneratedShots(result.shots)
+        if (typeof result.creditsRemaining === "number") {
+          notifyStudioCreditsChanged(result.creditsRemaining)
+        } else if (typeof result.creditsCharged === "number" && result.creditsCharged > 0) {
+          notifyStudioCreditsChanged()
+        }
         toast({
           title: "Shot List Generated!",
-          description: `Created ${savedShots.length} shots from page ${currentScriptPage}.`,
+          description: `Created ${savedShots.length} shots from page ${currentScriptPage}.${
+            typeof result.creditsCharged === "number" && result.creditsCharged > 0
+              ? ` ${result.creditsCharged.toLocaleString()} credits used.`
+              : ""
+          }`,
         })
       } else {
         throw new Error(result.error || "No shots returned from AI")
@@ -836,15 +854,28 @@ export default function SceneShotListPage() {
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || "Failed to generate shot list")
       }
 
       const result = await response.json()
       if (result.success && result.shots?.length > 0) {
         const savedShots = await saveGeneratedShots(result.shots)
+        if (typeof result.creditsRemaining === "number") {
+          notifyStudioCreditsChanged(result.creditsRemaining)
+        } else if (typeof result.creditsCharged === "number" && result.creditsCharged > 0) {
+          notifyStudioCreditsChanged()
+        }
         toast({
           title: "Shot List Generated!",
-          description: `Created ${savedShots.length} shots from the screenplay.`,
+          description: `Created ${savedShots.length} shots from the screenplay.${
+            typeof result.creditsCharged === "number" && result.creditsCharged > 0
+              ? ` ${result.creditsCharged.toLocaleString()} credits used.`
+              : ""
+          }`,
         })
       } else {
         throw new Error(result.error || "No shots returned from AI")
@@ -1261,6 +1292,7 @@ export default function SceneShotListPage() {
       formData.append("height", String(height))
       formData.append("apiKey", "configured")
       formData.append("userId", userId!)
+      formData.append("costSource", "shotlist")
       formData.append("file", options.referenceFile)
       if (options.styleReferenceFile) {
         formData.append("styleFile", options.styleReferenceFile)
@@ -1271,13 +1303,17 @@ export default function SceneShotListPage() {
 
       return fetch("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": "shotlist" },
         body: formData,
       })
     }
 
     return fetch("/api/ai/generate-image", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-cost-source": "shotlist",
+      },
       body: JSON.stringify({
         prompt,
         service: config.service,
@@ -1287,6 +1323,7 @@ export default function SceneShotListPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: "shotlist",
       }),
     })
   }
@@ -1410,12 +1447,22 @@ export default function SceneShotListPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || "Failed to edit image from reference")
       }
 
       const result = await response.json()
       if (!result.success || !result.imageUrl) {
         throw new Error("Failed to edit image from reference")
+      }
+
+      if (typeof result.creditsRemaining === "number") {
+        notifyStudioCreditsChanged(result.creditsRemaining)
+      } else if (typeof result.creditsCharged === "number" && result.creditsCharged > 0) {
+        notifyStudioCreditsChanged()
       }
 
       const imageUrlToUse = result.bucketUrl || result.imageUrl
@@ -2794,7 +2841,8 @@ export default function SceneShotListPage() {
         service: serviceToUse,
         apiKey: apiKey,
         userId: userId,
-        autoSaveToBucket: true
+        autoSaveToBucket: true,
+        costSource: "shotlist",
       }
       
       // Add model parameter if we have one (for GPT Image support)
@@ -2810,16 +2858,27 @@ export default function SceneShotListPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'shotlist',
         },
         body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
         const errorData = await response.json()
+        if (isInsufficientCreditsPayload(errorData)) {
+          notifyStudioCreditsChanged(errorData.balance)
+          throw new Error(`${insufficientCreditsDescription(errorData)} Add credits in Plans & credits.`)
+        }
         throw new Error(errorData.error || 'Failed to generate image')
       }
 
       const result = await response.json()
+
+      if (typeof result.creditsRemaining === "number") {
+        notifyStudioCreditsChanged(result.creditsRemaining)
+      } else if (typeof result.creditsCharged === "number" && result.creditsCharged > 0) {
+        notifyStudioCreditsChanged()
+      }
       
       if (result.success && result.imageUrl) {
         // Use bucket URL if available, otherwise fall back to original URL
@@ -2843,9 +2902,13 @@ export default function SceneShotListPage() {
 
         toast({
           title: "Image Generated!",
-          description: result.savedToBucket 
+          description: `${result.savedToBucket 
             ? "AI image has been generated and saved to your bucket!" 
-            : "AI image has been generated and added to the storyboard shot.",
+            : "AI image has been generated and added to the storyboard shot."}${
+            typeof result.creditsCharged === "number" && result.creditsCharged > 0
+              ? ` ${result.creditsCharged.toLocaleString()} credits used.`
+              : ""
+          }`,
         })
 
         // Clear the prompt

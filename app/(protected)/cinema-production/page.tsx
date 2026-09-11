@@ -78,6 +78,8 @@ import {
 import { RUNWAY_GEN4_RATIOS, resolveRunwayOutputRatio } from "@/lib/runway-video-utils"
 import { TimelineService, type SceneWithMetadata } from "@/lib/timeline-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import { fetchCinemaProductionAccess } from "@/lib/cinema-production-access"
+import { CinemaProductionUpgradeRequired } from "@/components/cinema-production-upgrade"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import { CharactersService, type Character } from "@/lib/characters-service"
@@ -1342,6 +1344,9 @@ export default function CinemaProductionPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { ready, userId } = useAuthReady()
+  const [productionAccess, setProductionAccess] = useState<"loading" | "allowed" | "upgrade">(
+    "loading",
+  )
   const { getLoadTracker, loadDebug, authDebug, loadCompleteMs } =
     usePageLoadDebug("Cinema production")
   const [lastApiMeta, setLastApiMeta] = useState<MoviesFetchMeta | null>(null)
@@ -1635,13 +1640,29 @@ export default function CinemaProductionPage() {
   )
 
   useEffect(() => {
-    if (!userId) return
+    if (!ready || !userId) return
+    let cancelled = false
+    fetchCinemaProductionAccess(userId)
+      .then((access) => {
+        if (!cancelled) setProductionAccess(access.allowed ? "allowed" : "upgrade")
+      })
+      .catch((error) => {
+        console.error("Error checking cinema production access:", error)
+        if (!cancelled) setProductionAccess("upgrade")
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ready, userId])
+
+  useEffect(() => {
+    if (!userId || productionAccess !== "allowed") return
     const cached = readMoviesCache(userId)
     if (cached?.length) {
       setProjects(cached)
       getLoadTracker().addNote(`Showing ${cached.length} cached projects while refreshing`)
     }
-  }, [userId])
+  }, [userId, productionAccess])
 
   useEffect(() => {
     if (!ready) return
@@ -1663,14 +1684,14 @@ export default function CinemaProductionPage() {
       setSelectedProjectId(projectParam)
     }
 
-    if (ready && userId) {
+    if (ready && userId && productionAccess === "allowed") {
       loadProjects()
       loadLeonardoApiKey()
     }
-  }, [authLoading, session?.user, ready, userId, router, searchParams])
+  }, [authLoading, session?.user, ready, userId, productionAccess, router, searchParams])
 
   useEffect(() => {
-    if (selectedProjectId && ready) {
+    if (selectedProjectId && ready && productionAccess === "allowed") {
       loadScenes()
       loadProjectVoiceData()
     } else {
@@ -1685,7 +1706,7 @@ export default function CinemaProductionPage() {
       setProjectVoices([])
       setDialogueVoiceByStoryboard(new Map())
     }
-  }, [selectedProjectId, ready])
+  }, [selectedProjectId, ready, productionAccess])
 
   // Project images + locations for Edit Image linking (same as storyboards)
   useEffect(() => {
@@ -7898,6 +7919,22 @@ export default function CinemaProductionPage() {
       onMeasureMedia={storyboards.length > 0 ? () => void measureShotMedia() : undefined}
     />
   )
+
+  if (productionAccess === "upgrade") {
+    return <CinemaProductionUpgradeRequired />
+  }
+
+  if (productionAccess === "loading") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <div className="flex items-center justify-center py-24 text-muted-foreground">
+          <Loader2 className="h-6 w-6 animate-spin mr-2" />
+          Checking plan access...
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className={`min-h-screen bg-background ${jumpShots.length > 0 ? "pb-14" : ""}`}>

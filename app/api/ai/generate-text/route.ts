@@ -1,16 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { OpenAIService, AnthropicService } from '@/lib/ai-services'
-import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage } from '@/lib/api-cost-tracker'
+import { logApiCostFromRequest, extractOpenAIUsage, extractAnthropicUsage, resolveCostSource } from '@/lib/api-cost-tracker'
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  paidSourceLabel,
+  shouldChargeTextCredits,
+} from '@/lib/studio-credits'
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     console.log('Received request body:', JSON.stringify(body, null, 2))
     
-    const { prompt, field, service, apiKey, model, selectedText, fullContent, sceneContext, contentType, userId, maxTokens } = body
+    const { prompt, field, service, apiKey, model, selectedText, fullContent, sceneContext, contentType, userId, maxTokens, costSource } = body
 
     // Handle both old format (field-based) and new format (AI text editing)
     if (!prompt || !service) {
@@ -92,6 +102,46 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       )
+    }
+
+    const shouldChargeText = shouldChargeTextCredits(
+      request,
+      typeof costSource === 'string' ? costSource : null,
+    )
+    let chargeUserId = typeof userId === 'string' ? userId : null
+    const paidTextSource = resolveCostSource(
+      request,
+      typeof costSource === 'string' ? costSource : null,
+      'other',
+    )
+    if (shouldChargeText) {
+      const routeSupabase = await createRouteSupabaseClient()
+      const authUser = await getRouteAuthUser(routeSupabase, request)
+      chargeUserId = authUser?.id || chargeUserId
+      if (!chargeUserId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+
+      const modelForEstimate =
+        model || (service === 'anthropic' ? 'claude-3-5-sonnet-20241022' : 'gpt-4o-mini')
+      const estimateInput =
+        selectedText && fullContent
+          ? `${fullContent}\n${selectedText}\n${prompt}`
+          : String(prompt || '')
+      const requiredCredits = estimateWorkspaceTextCredits(
+        modelForEstimate,
+        estimateInput,
+        typeof maxTokens === 'number' && maxTokens > 0 ? maxTokens : 1000,
+      )
+      const creditCheck = await hasStudioCredits(chargeUserId, requiredCredits)
+      if (!creditCheck.ok) {
+        return NextResponse.json(
+          insufficientCreditsPayload(
+            new InsufficientCreditsError(requiredCredits, creditCheck.balance),
+          ),
+          { status: 402 },
+        )
+      }
     }
 
     let generatedText = ""
@@ -341,7 +391,7 @@ Generate only the replacement text:`
           
           // Trim the content
           generatedText = typeof content === 'string' ? content.trim() : String(content)
-          usedModel = openaiModel
+          usedModel = legacyOpenaiModel
           const openaiUsage = extractOpenAIUsage(openaiResponse.data)
           inputTokens = openaiUsage.inputTokens
           outputTokens = openaiUsage.outputTokens
@@ -369,7 +419,7 @@ Generate only the replacement text:`
           }
           
           generatedText = claudeResponse.data.content[0].text
-          usedModel = anthropicModel
+          usedModel = legacyAnthropicModel
           const anthropicUsage = extractAnthropicUsage(claudeResponse.data)
           inputTokens = anthropicUsage.inputTokens
           outputTokens = anthropicUsage.outputTokens
@@ -462,7 +512,8 @@ Generate only the replacement text:`
     
     await logApiCostFromRequest({
       request,
-      userId,
+      userId: chargeUserId || userId,
+      costSource: typeof costSource === 'string' ? costSource : undefined,
       fallbackSource: 'screenplay',
       generationType: 'text',
       provider: service,
@@ -475,10 +526,35 @@ Generate only the replacement text:`
       metadata: { field, contentType },
     })
 
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    if (shouldChargeText && chargeUserId) {
+      try {
+        const charged = await chargeWorkspaceTextCredits({
+          userId: chargeUserId,
+          model: usedModel || model || service,
+          provider: service,
+          source: paidTextSource,
+          description: `${paidSourceLabel(paidTextSource)} text`,
+          inputTokens,
+          outputTokens,
+          inputText: prompt,
+          outputText: generatedText,
+          metadata: { field, contentType },
+        })
+        creditsCharged = charged.amount
+        creditsRemaining = charged.balance
+      } catch (creditError) {
+        console.error('[generate-text] credit charge failed', creditError)
+      }
+    }
+
     return NextResponse.json({ 
       success: true, 
       text: generatedText,
-      service: service.toUpperCase()
+      service: service.toUpperCase(),
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
 
   } catch (error) {

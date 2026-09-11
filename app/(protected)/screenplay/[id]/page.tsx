@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, type ReactElement } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -54,7 +54,7 @@ import { MovieService, type Movie } from "@/lib/movie-service"
 import FileImport from "@/components/file-import"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { ScreenplayScenesService, type ScreenplayScene, type CreateScreenplaySceneData } from "@/lib/screenplay-scenes-service"
-import { TimelineService, type CreateSceneData } from "@/lib/timeline-service"
+import { TimelineService, type CreateSceneData, type Scene } from "@/lib/timeline-service"
 import { AISettingsService } from "@/lib/ai-settings-service"
 import { CharactersService } from "@/lib/characters-service"
 import { LocationsService } from "@/lib/locations-service"
@@ -77,10 +77,41 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
+import {
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 
 // Screenplay page number calculation (standard: ~55 lines per page)
 const LINES_PER_PAGE = 55
 const FULL_SCREENPLAY_ID = "all"
+
+type ScreenplayTimelineScene = Pick<
+  Scene,
+  "id" | "name" | "metadata" | "order_index" | "screenplay_content" | "created_at" | "updated_at"
+> & {
+  scene_number?: string | null
+}
+
+type AssetIdRow = { id: string }
+
+type SystemSettingRow = {
+  setting_key: string
+  setting_value: string | null
+}
+
+type GeneratedSceneDraft = {
+  name?: string
+  scene_number?: string
+  description?: string
+}
+
+function sceneNumberFromMetadata(metadata: ScreenplayTimelineScene["metadata"]): string {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return ""
+  const sceneNumber = (metadata as { sceneNumber?: unknown }).sceneNumber
+  return typeof sceneNumber === "string" ? sceneNumber : ""
+}
 
 // Helper function to parse scene number for sorting (same logic as TimelineService)
 function parseSceneNumber(sceneNumber: string): number {
@@ -169,7 +200,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
   const [selectionStart, setSelectionStart] = useState<number>(0)
   const [selectionEnd, setSelectionEnd] = useState<number>(0)
   const [toolbarPosition, setToolbarPosition] = useState<{ top: number; left: number } | null>(null)
-  const textareaRef = useRef<HTMLTextAreaElement | HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorDivRef = useRef<HTMLDivElement>(null)
   const cursorPositionRef = useRef<number | null>(null)
   
   // Active script asset
@@ -502,7 +534,9 @@ function ScreenplayPageClient({ id }: { id: string }) {
         return
       }
 
-      if (!scenes || scenes.length === 0) {
+      const timelineScenes = (scenes ?? []) as ScreenplayTimelineScene[]
+
+      if (timelineScenes.length === 0) {
         console.log('❌ fetchScriptsFromScenes: No scenes found for timeline')
         setFullScript("")
         setScriptAssets([])
@@ -510,19 +544,19 @@ function ScreenplayPageClient({ id }: { id: string }) {
         return
       }
 
-      console.log(`✅ fetchScriptsFromScenes: Found ${scenes.length} scenes`)
+      console.log(`✅ fetchScriptsFromScenes: Found ${timelineScenes.length} scenes`)
       
       // Log which scenes have screenplay_content
-      const scenesWithScreenplayContent = scenes.filter(s => s.screenplay_content && s.screenplay_content.trim().length > 0)
+      const scenesWithScreenplayContent = timelineScenes.filter((s) => s.screenplay_content && s.screenplay_content.trim().length > 0)
       console.log(`📄 fetchScriptsFromScenes: ${scenesWithScreenplayContent.length} scenes have screenplay_content`)
-      scenesWithScreenplayContent.forEach(scene => {
-        console.log(`   - Scene "${scene.name}" (${scene.metadata?.sceneNumber || 'no number'}): ${scene.screenplay_content?.length || 0} chars`)
+      scenesWithScreenplayContent.forEach((scene) => {
+        console.log(`   - Scene "${scene.name}" (${sceneNumberFromMetadata(scene.metadata) || 'no number'}): ${scene.screenplay_content?.length || 0} chars`)
       })
 
       // Sort scenes by scene number (using the same logic as TimelineService)
-      const sortedScenes = scenes.sort((a, b) => {
-        const aNumber = parseSceneNumber(a.metadata?.sceneNumber || '')
-        const bNumber = parseSceneNumber(b.metadata?.sceneNumber || '')
+      const sortedScenes = timelineScenes.sort((a, b) => {
+        const aNumber = parseSceneNumber(sceneNumberFromMetadata(a.metadata))
+        const bNumber = parseSceneNumber(sceneNumberFromMetadata(b.metadata))
         
         if (aNumber !== bNumber) {
           return aNumber - bNumber
@@ -544,7 +578,7 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
       // Get scripts for each scene (as fallback)
       // RLS policy will handle access control for shared users
-      const sceneIds = sortedScenes.map(s => s.id)
+      const sceneIds = sortedScenes.map((s) => s.id)
       const { data: sceneScripts, error: scriptsError } = await getSupabaseClient()
         .from('assets')
         .select('*')
@@ -558,10 +592,12 @@ function ScreenplayPageClient({ id }: { id: string }) {
         // Continue anyway - we might have screenplay_content on scenes
       }
 
+      const scriptAssetsForScenes = (sceneScripts ?? []) as Asset[]
+
       // Combine scripts in scene order, prioritizing screenplay_content from scenes
-      const scenesWithContent = sortedScenes.filter(scene => {
+      const scenesWithContent = sortedScenes.filter((scene) => {
         const hasScreenplayContent = scene.screenplay_content && scene.screenplay_content.trim().length > 0
-        const hasScriptAsset = sceneScripts?.some(s => s.scene_id === scene.id)
+        const hasScriptAsset = scriptAssetsForScenes.some((s) => s.scene_id === scene.id)
         if (hasScreenplayContent || hasScriptAsset) {
           console.log(`✅ Scene "${scene.name}" has content (screenplay: ${hasScreenplayContent}, asset: ${hasScriptAsset})`)
         }
@@ -571,9 +607,9 @@ function ScreenplayPageClient({ id }: { id: string }) {
       if (scenesWithContent.length === 0) {
         console.log('❌ fetchScriptsFromScenes: No screenplay content found in any scenes')
         console.log('   Checking scenes:')
-        sortedScenes.forEach(scene => {
+        sortedScenes.forEach((scene) => {
           const hasContent = scene.screenplay_content && scene.screenplay_content.trim().length > 0
-          const hasAsset = sceneScripts?.some(s => s.scene_id === scene.id)
+          const hasAsset = scriptAssetsForScenes.some((s) => s.scene_id === scene.id)
           console.log(`   - "${scene.name}": screenplay_content=${hasContent}, script_asset=${hasAsset}`)
         })
         setFullScript("")
@@ -589,13 +625,13 @@ function ScreenplayPageClient({ id }: { id: string }) {
       const charBoundaries: Array<{sceneId: string, sceneNumber: string, sceneName: string, startChar: number, endChar: number}> = []
       let currentCharPosition = 0
       const combinedScript = scenesWithContent
-        .map(scene => {
+        .map((scene) => {
           // Prioritize screenplay_content from scene, fall back to script asset
           let content = ''
           if (scene.screenplay_content && scene.screenplay_content.trim().length > 0) {
             content = scene.screenplay_content
-          } else if (sceneScripts) {
-            const sceneScript = sceneScripts.find(s => s.scene_id === scene.id)
+          } else {
+            const sceneScript = scriptAssetsForScenes.find((s) => s.scene_id === scene.id)
             if (sceneScript) {
               content = sceneScript.content || ""
             }
@@ -610,7 +646,7 @@ function ScreenplayPageClient({ id }: { id: string }) {
           const endChar = currentCharPosition + content.length
           
           // Store scene info for visual separators
-          const sceneNumber = scene.metadata?.sceneNumber || scene.scene_number || ''
+          const sceneNumber = sceneNumberFromMetadata(scene.metadata) || scene.scene_number || ''
           sceneInfo.push({
             sceneNumber: sceneNumber,
             sceneName: scene.name || '',
@@ -708,15 +744,15 @@ function ScreenplayPageClient({ id }: { id: string }) {
       setFullScript(combinedScript)
       
       // Create virtual assets for screenplay_content if needed
-      const virtualAssets: Asset[] = scenesWithContent.map(scene => {
-        const sceneNumber = scene.metadata?.sceneNumber || ''
+      const virtualAssets: Asset[] = scenesWithContent.map((scene) => {
+        const sceneNumber = sceneNumberFromMetadata(scene.metadata)
         return {
           id: `scene-${scene.id}`,
           project_id: id,
           scene_id: scene.id,
           user_id: userId!,
           title: `Scene ${sceneNumber || scene.name}`,
-          content: scene.screenplay_content || sceneScripts?.find(s => s.scene_id === scene.id)?.content || '',
+          content: scene.screenplay_content || scriptAssetsForScenes.find((s) => s.scene_id === scene.id)?.content || '',
           content_type: 'script',
           created_at: scene.created_at || new Date().toISOString(),
           updated_at: scene.updated_at || new Date().toISOString(),
@@ -837,8 +873,8 @@ function ScreenplayPageClient({ id }: { id: string }) {
 
   // Restore cursor position after content updates
   useEffect(() => {
-    if (cursorPositionRef.current !== null && textareaRef.current) {
-      const target = textareaRef.current as HTMLElement
+    if (cursorPositionRef.current !== null && (editorDivRef.current || textareaRef.current)) {
+      const target = (editorDivRef.current ?? textareaRef.current) as HTMLElement
       const cursorPos = cursorPositionRef.current
       
       // Use requestAnimationFrame to ensure DOM is updated
@@ -1303,7 +1339,7 @@ ${centerText('AUTHOR NAME')}
           await getSupabaseClient()
             .from('assets')
             .update({ is_latest_version: false })
-            .in('id', oldProjectScripts.map(s => s.id))
+            .in('id', oldProjectScripts.map((s: AssetIdRow) => s.id))
         }
         
         // Create new project-level asset
@@ -1336,7 +1372,7 @@ ${centerText('AUTHOR NAME')}
           await getSupabaseClient()
             .from('assets')
             .update({ is_latest_version: false })
-            .in('id', otherProjectScripts.map(s => s.id))
+            .in('id', otherProjectScripts.map((s: AssetIdRow) => s.id))
         }
         
         await AssetService.updateAsset(activeScriptAsset.id, {
@@ -1645,7 +1681,7 @@ ${centerText('AUTHOR NAME')}
         prefix: ''
       }
 
-      data?.forEach((item) => {
+      data?.forEach((item: SystemSettingRow) => {
         if (item.setting_key === 'text_enhancer_model') {
           settings.model = item.setting_value || 'gpt-4o-mini'
         } else if (item.setting_key === 'text_enhancer_prefix') {
@@ -1697,94 +1733,50 @@ ${centerText('AUTHOR NAME')}
       return
     }
 
-    if (!userApiKeys.openai_api_key && !userApiKeys.anthropic_api_key) {
-      toast({
-        title: "API Key Missing",
-        description: "Please add your OpenAI or Anthropic API key in Settings → Profile",
-        variant: "destructive",
-      })
-      return
-    }
-
     setIsEnhancingText(true)
     
     try {
-      const model = textEnhancerSettings.model
+      const model = textEnhancerSettings.model || 'gpt-4o-mini'
       const prefix = textEnhancerSettings.prefix || 'You are a professional text enhancer. Fix grammar, spelling, and enhance the writing while keeping the same context and meaning. Return only the enhanced text without explanations.\n\nEnhance the following text:'
       const fullPrompt = `${prefix}\n\n${currentPageContent}`
-
-      // Determine which API to use based on model
       const isAnthropic = model.startsWith('claude-')
-      const apiKey = isAnthropic ? userApiKeys.anthropic_api_key : userApiKeys.openai_api_key
 
-      if (!apiKey) {
-        throw new Error(`API key missing for ${isAnthropic ? 'Anthropic' : 'OpenAI'}`)
+      const apiResponse = await fetch('/api/ai/generate-text', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cost-source': 'screenplay',
+        },
+        body: JSON.stringify({
+          prompt: fullPrompt,
+          field: 'script',
+          service: isAnthropic ? 'anthropic' : 'openai',
+          model,
+          apiKey: 'configured',
+          userId,
+          maxTokens: 4096,
+          costSource: 'screenplay',
+        }),
+      })
+
+      const data = await apiResponse.json()
+      if (!apiResponse.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to enhance text')
       }
 
-      let response
-      if (isAnthropic) {
-        // Use Anthropic API
-        const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: model,
-            max_tokens: 4096,
-            messages: [{
-              role: 'user',
-              content: fullPrompt
-            }]
-          })
-        })
-
-        if (!anthropicResponse.ok) {
-          const errorData = await anthropicResponse.json().catch(() => ({}))
-          throw new Error(errorData.error?.message || `Anthropic API error: ${anthropicResponse.status}`)
-        }
-
-        const data = await anthropicResponse.json()
-        response = data.content[0]?.text || ''
-      } else {
-        // Use OpenAI API
-        const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: model,
-            messages: [{
-              role: 'user',
-              content: fullPrompt
-            }],
-            temperature: 0.7
-          })
-        })
-
-        if (!openaiResponse.ok) {
-          const errorData = await openaiResponse.json().catch(() => ({}))
-          throw new Error(errorData.error?.message || `OpenAI API error: ${openaiResponse.status}`)
-        }
-
-        const data = await openaiResponse.json()
-        response = data.choices[0]?.message?.content || ''
-      }
-
-      if (!response || !response.trim()) {
+      notifyCreditsFromResult(data)
+      const enhanced = typeof data.text === 'string' ? data.text.trim() : ''
+      if (!enhanced) {
         throw new Error('Empty response from AI')
       }
 
       // Update the current page with enhanced text
-      saveCurrentPageEdit(response.trim())
+      saveCurrentPageEdit(enhanced)
       
       toast({
         title: "Text Enhanced",
-        description: "The current page has been enhanced by AI.",
+        description: `The current page has been enhanced by AI.${creditsUsedNote(data)}`,
       })
     } catch (error: any) {
       console.error('Error enhancing text:', error)
@@ -2556,6 +2548,7 @@ Return ONLY the JSON array, no other text:`
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'screenplay',
         },
         body: JSON.stringify({
           prompt: aiPrompt,
@@ -2565,15 +2558,17 @@ Return ONLY the JSON array, no other text:`
           apiKey: 'configured',
           userId: userId,
           maxTokens: 8000, // Increased for scene generation
+          costSource: 'screenplay',
         }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to generate scenes')
-      }
-
       const data = await response.json()
-      let scenes: any[] = []
+      if (!response.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to generate scenes')
+      }
+      notifyCreditsFromResult(data)
+      let scenes: GeneratedSceneDraft[] = []
 
       // Parse the response (same logic as treatment scenes)
       try {
@@ -2608,16 +2603,18 @@ Return ONLY the JSON array, no other text:`
               }
             }
             try {
-              scenes = JSON.parse(arrayText)
+              scenes = JSON.parse(arrayText) as GeneratedSceneDraft[]
             } catch (arrayError) {
-              const objects = jsonText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) || []
-              scenes = objects.map(obj => {
+              const objects = (jsonText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) ?? []) as string[]
+              const parsedScenes: GeneratedSceneDraft[] = []
+              for (const obj of objects) {
                 try {
-                  return JSON.parse(obj)
+                  parsedScenes.push(JSON.parse(obj) as GeneratedSceneDraft)
                 } catch {
-                  return null
+                  // skip invalid scene objects
                 }
-              }).filter(Boolean)
+              }
+              scenes = parsedScenes
             }
           }
         }
@@ -2626,7 +2623,7 @@ Return ONLY the JSON array, no other text:`
           scenes = [scenes]
         }
         
-        scenes = scenes.filter(s => s && (s.name || s.scene_number || s.description))
+        scenes = scenes.filter((s) => Boolean(s && (s.name || s.scene_number || s.description)))
         
       } catch (parseError) {
         console.error('Error parsing scenes JSON:', parseError)
@@ -2721,13 +2718,13 @@ Return ONLY the JSON array, no other text:`
 
       toast({
         title: "Success",
-        description: `Generated ${createdScenes.length} scenes from screenplay`,
+        description: `Generated ${createdScenes.length} scenes from screenplay.${creditsUsedNote(data)}`,
       })
     } catch (error) {
       console.error('Error generating scenes:', error)
       toast({
         title: "Error",
-        description: "Failed to generate scenes. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to generate scenes. Please try again.",
         variant: "destructive",
       })
     } finally {
@@ -2868,9 +2865,18 @@ Return ONLY the JSON array, no other text:`
 
       const res = await fetch(`/api/timeline/scenes/${timelineSceneId}/suggest-name`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-cost-source': 'screenplay',
+        },
+        body: JSON.stringify({ costSource: 'screenplay' }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to suggest scene name')
+      if (!res.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to suggest scene name')
+      }
+      notifyCreditsFromResult(data)
 
       await TimelineService.updateScene(timelineSceneId, { name: data.name })
 
@@ -2886,7 +2892,7 @@ Return ONLY the JSON array, no other text:`
 
       toast({
         title: 'Scene renamed',
-        description: data.name,
+        description: `${data.name}${creditsUsedNote(data)}`,
       })
     } catch (error) {
       toast({
@@ -3015,6 +3021,7 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'screenplay',
         },
         body: JSON.stringify({
           prompt: aiPrompt,
@@ -3024,14 +3031,16 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
           apiKey: 'configured',
           userId: userId,
           maxTokens: 4000, // Increased for detailed scene descriptions
+          costSource: 'screenplay',
         }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to regenerate scene')
-      }
-
       const data = await response.json()
+      if (!response.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to regenerate scene')
+      }
+      notifyCreditsFromResult(data)
       let regeneratedScene: any = {}
 
       try {
@@ -3147,7 +3156,7 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
 
         toast({
           title: "Success",
-          description: "Scene details generated successfully",
+          description: `Scene details generated successfully.${creditsUsedNote(data)}`,
         })
       } else {
         toast({
@@ -3160,7 +3169,7 @@ CRITICAL REQUIREMENT: The description field MUST contain at least 3-5 full sente
       console.error('Error regenerating scene:', error)
       toast({
         title: "Error",
-        description: "Failed to regenerate scene. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to regenerate scene. Please try again.",
         variant: "destructive",
       })
     } finally {
@@ -3262,6 +3271,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-cost-source': 'screenplay',
         },
         body: JSON.stringify({
           prompt: aiPrompt,
@@ -3271,14 +3281,16 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           apiKey: 'configured',
           userId: userId,
           maxTokens: 8000, // Increased for multiple scene details
+          costSource: 'screenplay',
         }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to generate scene details')
-      }
-
       const data = await response.json()
+      if (!response.ok) {
+        throwIfInsufficientCredits(data)
+        throw new Error(data.error || 'Failed to generate scene details')
+      }
+      notifyCreditsFromResult(data)
       let sceneDetails: any[] = []
 
       // Parse the response (same logic as treatment scenes)
@@ -3400,13 +3412,13 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
 
       toast({
         title: "Success",
-        description: `Generated details for ${updatedCount} scene${updatedCount !== 1 ? 's' : ''}${skippedCount > 0 ? `. ${skippedCount} scene${skippedCount !== 1 ? 's' : ''} still need details - run again to continue.` : ''}`,
+        description: `Generated details for ${updatedCount} scene${updatedCount !== 1 ? 's' : ''}${skippedCount > 0 ? `. ${skippedCount} scene${skippedCount !== 1 ? 's' : ''} still need details - run again to continue.` : ''}${creditsUsedNote(data)}`,
       })
     } catch (error) {
       console.error('Error generating scene details:', error)
       toast({
         title: "Error",
-        description: "Failed to generate scene details. Please try generating individually.",
+        description: error instanceof Error ? error.message : "Failed to generate scene details. Please try generating individually.",
         variant: "destructive",
       })
     } finally {
@@ -3658,7 +3670,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
         await getSupabaseClient()
           .from('assets')
           .update({ is_latest_version: false })
-          .in('id', oldProjectScripts.map(s => s.id))
+          .in('id', oldProjectScripts.map((s: AssetIdRow) => s.id))
       }
       
       // Refresh scripts - only get the latest project-level script
@@ -3855,7 +3867,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
       
       // Split content into paragraphs
       const lines = fullScript.split('\n')
-      const paragraphs: Paragraph[] = []
+      const paragraphs: InstanceType<typeof Paragraph>[] = []
       
       lines.forEach((line: string) => {
         const trimmedLine = line.trim()
@@ -4754,7 +4766,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         ]
                         
                         // Build content: DIVIDER + SCENE for scenes that appear on current page
-                        const elements: JSX.Element[] = []
+                        const elements: ReactElement[] = []
                         
                         // Use screenplayScenes array (sorted in order) - this is the actual fetched scenes
                         screenplayScenes.forEach((scene, sceneIndex) => {
@@ -4866,7 +4878,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
                         
                         return (
                           <div
-                            ref={textareaRef}
+                            ref={editorDivRef}
                             contentEditable
                             suppressContentEditableWarning
                             onInput={(e) => {

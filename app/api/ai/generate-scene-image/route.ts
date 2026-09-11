@@ -5,6 +5,17 @@ import { createServerClient } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 import { DEFAULT_CINEMATIC_IMAGE_HEIGHT, DEFAULT_CINEMATIC_IMAGE_WIDTH } from '@/lib/image-model-utils'
+import { logApiCostFromRequest, resolveCostSource } from '@/lib/api-cost-tracker'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeStudioCredits,
+  insufficientCreditsPayload,
+  InsufficientCreditsError,
+  paidSourceLabel,
+  refundStudioCredits,
+  shouldChargeImageCredits,
+  workspaceImageCredits,
+} from '@/lib/studio-credits'
 
 // Function to download and store image in bucket
 async function downloadAndStoreImage(imageUrl: string, fileName: string, userId: string): Promise<string> {
@@ -114,11 +125,12 @@ async function downloadAndStoreImage(imageUrl: string, fileName: string, userId:
 }
 
 export async function POST(request: NextRequest) {
+  let reservedCredits: { userId: string; amount: number; source?: string; remaining?: number } | null = null
   try {
     console.log('🎬 DEBUG - Timeline scene image generation request received')
     
     const body = await request.json()
-    const { prompt, service, model, apiKey, userId, autoSaveToBucket = true } = body
+    const { prompt, service, model, apiKey, userId, autoSaveToBucket = true, costSource } = body
 
     console.log('🎬 DEBUG - Request body received:', {
       hasPrompt: !!prompt,
@@ -314,6 +326,46 @@ export async function POST(request: NextRequest) {
     const normalizedService = (service === 'GPT Image' || service?.toLowerCase().includes('gpt image')) ? 'dalle' : service
     const imageModel = model || (normalizedService === 'dalle' ? 'dall-e-3' : undefined)
     const isGPTImageModel = imageModel === 'gpt-image-1' || imageModel?.startsWith('gpt-') || service === 'GPT Image' || service?.toLowerCase().includes('gpt image')
+
+    if (shouldChargeImageCredits(request, typeof costSource === 'string' ? costSource : null)) {
+      const routeSupabase = await createRouteSupabaseClient()
+      const authUser = await getRouteAuthUser(routeSupabase, request)
+      const chargeUserId = authUser?.id || (typeof userId === 'string' ? userId : null)
+      if (!chargeUserId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+
+      const paidSource = resolveCostSource(
+        request,
+        typeof costSource === 'string' ? costSource : null,
+        'timeline',
+      )
+      const imageModelForCredits = imageModel || 'gpt-image-2'
+      try {
+        const charged = await chargeStudioCredits({
+          userId: chargeUserId,
+          amount: workspaceImageCredits(imageModelForCredits),
+          description: `${paidSourceLabel(paidSource)} image (${imageModelForCredits})`,
+          usageType: 'image_generation',
+          service: String(service || 'openai'),
+          metadata: {
+            source: paidSource,
+            model: imageModelForCredits,
+          },
+        })
+        reservedCredits = {
+          userId: chargeUserId,
+          amount: charged.amount,
+          source: paidSource,
+          remaining: charged.balance,
+        }
+      } catch (creditError) {
+        if (creditError instanceof InsufficientCreditsError) {
+          return NextResponse.json(insufficientCreditsPayload(creditError), { status: 402 })
+        }
+        throw creditError
+      }
+    }
     
     console.log('🎬 DEBUG - Model normalization:', {
       receivedModel: model,
@@ -476,16 +528,40 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    await logApiCostFromRequest({
+      request,
+      userId: typeof userId === 'string' ? userId : undefined,
+      costSource: typeof costSource === 'string' ? costSource : undefined,
+      fallbackSource: 'timeline',
+      generationType: 'image',
+      provider: String(service || 'openai'),
+      model: String(imageModel || service || 'unknown'),
+      prompt,
+      quantity: 1,
+      metadata: { service },
+    })
+
     return NextResponse.json({
       success: true,
       imageUrl: finalImageUrl,
       originalUrl: imageUrl, // Keep original URL for reference
       bucketUrl: bucketUrl, // Include bucket URL if available
       service: service,
-      savedToBucket: !!bucketUrl
+      savedToBucket: !!bucketUrl,
+      creditsCharged: reservedCredits?.amount ?? 0,
+      creditsRemaining: reservedCredits?.remaining,
     })
 
   } catch (error) {
+    if (reservedCredits) {
+      await refundStudioCredits({
+        userId: reservedCredits.userId,
+        amount: reservedCredits.amount,
+        description: 'Refund: image generation failed',
+        metadata: { source: reservedCredits.source || 'timeline', reason: 'generation_failed' },
+      })
+      reservedCredits = null
+    }
     console.error('🎬 DEBUG - Scene image generation failed:', error)
     return NextResponse.json(
       { 

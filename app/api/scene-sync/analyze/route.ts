@@ -12,6 +12,20 @@ import {
 } from '@/lib/scene-sync-ai'
 import type { ShotList } from '@/lib/shot-list-service'
 import type { Storyboard } from '@/lib/storyboards-service'
+import {
+  extractOpenAIUsage,
+  logApiCostFromRequest,
+  resolveCostSource,
+} from '@/lib/api-cost-tracker'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  paidSourceLabel,
+  shouldChargeTextCredits,
+} from '@/lib/studio-credits'
 
 async function getAuthenticatedUser() {
   const cookieStore = await cookies()
@@ -100,6 +114,37 @@ export async function POST(request: NextRequest) {
     const compactStoryboards = compactStoryboardsForAI(storyboards)
     const prompt = buildSceneSyncPrompt(direction, compactShots, compactStoryboards)
     const model = 'gpt-4o-mini'
+    const systemPrompt =
+      'You match film shot lists to storyboards. Output only valid JSON matching the requested schema.'
+    const paidSource = resolveCostSource(
+      request,
+      typeof body?.costSource === 'string' ? body.costSource : null,
+      'storyboard',
+    )
+    const shouldCharge = shouldChargeTextCredits(
+      request,
+      typeof body?.costSource === 'string' ? body.costSource : null,
+    )
+
+    if (shouldCharge) {
+      const requiredCredits = estimateWorkspaceTextCredits(
+        model,
+        `${systemPrompt}\n${prompt}`,
+        4000,
+      )
+      const creditCheck = await hasStudioCredits(user.id, requiredCredits)
+      if (!creditCheck.ok) {
+        return NextResponse.json(
+          {
+            ...insufficientCreditsPayload(
+              new InsufficientCreditsError(requiredCredits, creditCheck.balance),
+            ),
+            fallback: true,
+          },
+          { status: 402 },
+        )
+      }
+    }
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -115,8 +160,7 @@ export async function POST(request: NextRequest) {
         messages: [
           {
             role: 'system',
-            content:
-              'You match film shot lists to storyboards. Output only valid JSON matching the requested schema.',
+            content: systemPrompt,
           },
           { role: 'user', content: prompt },
         ],
@@ -149,8 +193,52 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const openaiUsage = extractOpenAIUsage(data)
+    await logApiCostFromRequest({
+      request,
+      userId: user.id,
+      fallbackSource: 'storyboard',
+      generationType: 'text',
+      provider: 'openai',
+      model,
+      prompt,
+      inputTokens: openaiUsage.inputTokens,
+      outputTokens: openaiUsage.outputTokens,
+      inputText: prompt,
+      outputText: content,
+      metadata: { kind: 'scene_sync', direction },
+    })
+
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    if (shouldCharge) {
+      try {
+        const charged = await chargeWorkspaceTextCredits({
+          userId: user.id,
+          model,
+          provider: 'openai',
+          source: paidSource,
+          description: `${paidSourceLabel(paidSource)} sync matching`,
+          inputTokens: openaiUsage.inputTokens,
+          outputTokens: openaiUsage.outputTokens,
+          inputText: `${systemPrompt}\n${prompt}`,
+          outputText: content,
+          metadata: { kind: 'scene_sync', direction },
+        })
+        creditsCharged = charged.amount
+        creditsRemaining = charged.balance
+      } catch (creditError) {
+        console.error('[scene-sync] credit charge failed', creditError)
+      }
+    }
+
     const payload: AISyncPlan = { ...plan, model }
-    return NextResponse.json({ plan: payload, ai: true })
+    return NextResponse.json({
+      plan: payload,
+      ai: true,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
+    })
   } catch (error) {
     console.error('[scene-sync/analyze]', error)
     return NextResponse.json(

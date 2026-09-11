@@ -113,9 +113,15 @@ import {
   type StoryboardLayoutReference,
 } from "@/lib/storyboard-layout-reference"
 import { parseScriptSelection, getStoryboardDialogueText } from "@/lib/script-selection"
+import {
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 
 const MAX_LINKED_REFERENCE_IMAGES = 5
 const IMAGE_GENERATION_FETCH_TIMEOUT_MS = 240_000
+const STORYBOARD_COST_SOURCE = "storyboard"
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -1194,6 +1200,7 @@ export default function SceneStoryboardsPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-cost-source": STORYBOARD_COST_SOURCE,
         },
         body: JSON.stringify({
           prompt,
@@ -1204,6 +1211,7 @@ export default function SceneStoryboardsPage() {
           width,
           height,
           autoSaveToBucket: true,
+          costSource: STORYBOARD_COST_SOURCE,
           referenceImageUrl: options.referenceImageUrl,
           styleReferenceUrls:
             options.styleReferenceUrls && options.styleReferenceUrls.length > 0
@@ -1228,6 +1236,7 @@ export default function SceneStoryboardsPage() {
       formData.append("userId", userId!)
       formData.append("file", options.referenceFile)
       formData.append("autoSaveToBucket", "true")
+      formData.append("costSource", STORYBOARD_COST_SOURCE)
       for (const styleFile of options.styleReferenceFiles ?? []) {
         formData.append("styleFiles", styleFile)
       }
@@ -1237,6 +1246,7 @@ export default function SceneStoryboardsPage() {
 
       return fetchWithTimeout("/api/ai/generate-image", {
         method: "POST",
+        headers: { "x-cost-source": STORYBOARD_COST_SOURCE },
         body: formData,
       })
     }
@@ -1245,6 +1255,7 @@ export default function SceneStoryboardsPage() {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "x-cost-source": STORYBOARD_COST_SOURCE,
       },
       body: JSON.stringify({
         prompt,
@@ -1255,6 +1266,7 @@ export default function SceneStoryboardsPage() {
         width,
         height,
         autoSaveToBucket: true,
+        costSource: STORYBOARD_COST_SOURCE,
       }),
     })
   }
@@ -1835,6 +1847,7 @@ export default function SceneStoryboardsPage() {
       }
 
       if (!response.ok) {
+        throwIfInsufficientCredits(result)
         const apiError =
           (typeof result.error === "string" && result.error) ||
           "Failed to edit image from reference"
@@ -1858,6 +1871,7 @@ export default function SceneStoryboardsPage() {
       })
 
       if (!result.success || !result.imageUrl) {
+        throwIfInsufficientCredits(result)
         const apiError =
           (typeof result.error === "string" && result.error) ||
           "Failed to edit image from reference"
@@ -1865,6 +1879,7 @@ export default function SceneStoryboardsPage() {
         throw new Error(apiError)
       }
 
+      notifyCreditsFromResult(result)
       const imageUrlToUse = String(result.bucketUrl || result.imageUrl)
       pushStoryboardImageTrace("ok", "Image generated", imageUrlToUse.slice(0, 80))
 
@@ -1898,9 +1913,11 @@ export default function SceneStoryboardsPage() {
       pushStoryboardImageTrace("ok", "Edit complete")
       toast({
         title: isCreateMode ? "Image created" : "Image edited",
-        description: isCreateMode
-          ? "Your new shot image is now showing on this shot."
-          : "The edited version is now the main shot. Previous versions stay in the gallery.",
+        description: `${
+          isCreateMode
+            ? "Your new shot image is now showing on this shot."
+            : "The edited version is now the main shot. Previous versions stay in the gallery."
+        }${creditsUsedNote(result)}`,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -3610,6 +3627,7 @@ export default function SceneStoryboardsPage() {
           autoSaveToBucket: true,
           width: 1536,
           height: 1024,
+          costSource: STORYBOARD_COST_SOURCE,
         }
 
         if (modelToUse) {
@@ -3620,6 +3638,7 @@ export default function SceneStoryboardsPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'x-cost-source': STORYBOARD_COST_SOURCE,
           },
           body: JSON.stringify(requestBody),
         })
@@ -3645,6 +3664,7 @@ export default function SceneStoryboardsPage() {
       })
 
       if (!response.ok) {
+        throwIfInsufficientCredits(result)
         const errorMessage =
           typeof result.error === "string" ? result.error : "Failed to generate image"
         if (isContentBlockedResponse(result)) {
@@ -3659,6 +3679,7 @@ export default function SceneStoryboardsPage() {
       }
       
       if (result.success && result.imageUrl) {
+        notifyCreditsFromResult(result)
         // Use bucket URL if available, otherwise fall back to original URL
         const imageUrlToUse = (result.bucketUrl || result.imageUrl) as string
         const existingImages = storyboardImages.get(storyboardId) ?? []
@@ -3680,15 +3701,17 @@ export default function SceneStoryboardsPage() {
 
         toast({
           title: "Image Generated!",
-          description: hasExisting
-            ? "New image is now the main shot. Previous versions stay in the gallery below."
-            : referenceFiles.length > 0
-              ? `Image generated using ${referenceFiles.length} reference image${referenceFiles.length === 1 ? "" : "s"} (characters & locations).`
-              : referenceLoad.failed.length > 0
-                ? "Image generated without valid reference images. See the warning on this shot to fix broken links."
-              : result.savedToBucket
-                ? "Image generated and saved to your bucket!"
-                : "Image added to this shot.",
+          description: `${
+            hasExisting
+              ? "New image is now the main shot. Previous versions stay in the gallery below."
+              : referenceFiles.length > 0
+                ? `Image generated using ${referenceFiles.length} reference image${referenceFiles.length === 1 ? "" : "s"} (characters & locations).`
+                : referenceLoad.failed.length > 0
+                  ? "Image generated without valid reference images. See the warning on this shot to fix broken links."
+                  : result.savedToBucket
+                    ? "Image generated and saved to your bucket!"
+                    : "Image added to this shot."
+          }${creditsUsedNote(result)}`,
         })
 
         if (!isQuick) {
@@ -3788,14 +3811,17 @@ export default function SceneStoryboardsPage() {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
+        throwIfInsufficientCredits(errorData)
         throw new Error(errorData.error || "Failed to regenerate landscape image")
       }
 
       const result = await response.json()
       if (!result.success || !result.imageUrl) {
+        throwIfInsufficientCredits(result)
         throw new Error("Failed to regenerate landscape image")
       }
 
+      notifyCreditsFromResult(result)
       const imageUrlToUse = result.bucketUrl || result.imageUrl
 
       setStoryboards((prev) =>
@@ -3812,7 +3838,7 @@ export default function SceneStoryboardsPage() {
 
       toast({
         title: "Landscape image ready",
-        description: "New landscape version is now the main shot. Previous versions stay in the gallery.",
+        description: `New landscape version is now the main shot. Previous versions stay in the gallery.${creditsUsedNote(result)}`,
       })
     } catch (error) {
       toast({

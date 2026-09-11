@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { extractOpenAIUsage, logApiCostFromRequest, resolveCostSource } from '@/lib/api-cost-tracker'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeWorkspaceTextCredits,
+  creditsForTextGeneration,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+  paidSourceLabel,
+} from '@/lib/studio-credits'
 
 // Helper function to get OpenAI API key (system-wide or env)
 async function getOpenAIApiKey(): Promise<string | null> {
@@ -66,7 +76,7 @@ async function imageUrlToBase64(imageUrl: string): Promise<string> {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { imageUrl } = body
+    const { imageUrl, costSource } = body
 
     if (!imageUrl) {
       return NextResponse.json(
@@ -143,6 +153,29 @@ IMPORTANT: You MUST return ONLY valid JSON, no markdown, no code blocks, no addi
 
 Return ONLY the JSON object, nothing else.`
 
+    const routeSupabase = await createRouteSupabaseClient()
+    const authUser = await getRouteAuthUser(routeSupabase, request)
+    if (!authUser) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const paidSource = resolveCostSource(
+      request,
+      typeof costSource === 'string' ? costSource : null,
+      'prompt-create',
+    )
+    const requiredCredits = creditsForTextGeneration({
+      model: 'gpt-4o',
+      inputTokens: Math.ceil(visionPrompt.length / 4) + 2000,
+      outputTokens: 2000,
+    })
+    const creditCheck = await hasStudioCredits(authUser.id, requiredCredits)
+    if (!creditCheck.ok) {
+      return NextResponse.json(
+        insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+        { status: 402 },
+      )
+    }
+
     // Use GPT-4 Vision API
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -189,6 +222,7 @@ Return ONLY the JSON object, nothing else.`
 
     const data = await response.json()
     const analysisText = data.choices?.[0]?.message?.content || ''
+    const openaiUsage = extractOpenAIUsage(data)
 
     if (!analysisText) {
       return NextResponse.json(
@@ -254,9 +288,47 @@ Return ONLY the JSON object, nothing else.`
       }
     }
 
+    await logApiCostFromRequest({
+      request,
+      userId: authUser.id,
+      fallbackSource: 'prompt-create',
+      generationType: 'text',
+      provider: 'openai',
+      model: 'gpt-4o',
+      prompt: visionPrompt,
+      inputTokens: openaiUsage.inputTokens,
+      outputTokens: openaiUsage.outputTokens,
+      inputText: visionPrompt,
+      outputText: analysisText,
+      metadata: { kind: 'analyze_image_prompt' },
+    })
+
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
+    try {
+      const charged = await chargeWorkspaceTextCredits({
+        userId: authUser.id,
+        model: 'gpt-4o',
+        provider: 'openai',
+        source: paidSource,
+        description: `${paidSourceLabel(paidSource)} image analysis`,
+        inputTokens: openaiUsage.inputTokens,
+        outputTokens: openaiUsage.outputTokens,
+        inputText: visionPrompt,
+        outputText: analysisText,
+        metadata: { kind: 'analyze_image_prompt' },
+      })
+      creditsCharged = charged.amount
+      creditsRemaining = charged.balance
+    } catch (creditError) {
+      console.error('[prompt-create] credit charge failed', creditError)
+    }
+
     return NextResponse.json({
       success: true,
-      analysis: analysisResult
+      analysis: analysisResult,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
   } catch (error: any) {
     console.error('Error analyzing image:', error)

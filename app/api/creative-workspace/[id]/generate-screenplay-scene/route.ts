@@ -6,6 +6,14 @@ import { buildTreatmentContextForScreenplay } from '@/lib/build-treatment-contex
 import { resolveUserAiApiKey } from '@/lib/resolve-user-ai-api-key'
 import { isCompleteScreenplayFormat } from '@/lib/screenplay-format-utils'
 import { resolveScreenplaySceneForGeneration } from '@/lib/resolve-workspace-screenplay-scene'
+import { extractAnthropicUsage, extractOpenAIUsage, logApiCostFromRequest } from '@/lib/api-cost-tracker'
+import {
+  chargeWorkspaceTextCredits,
+  estimateWorkspaceTextCredits,
+  hasStudioCredits,
+  InsufficientCreditsError,
+  insufficientCreditsPayload,
+} from '@/lib/studio-credits'
 
 export const maxDuration = 300
 
@@ -161,6 +169,10 @@ async function generateScreenplayText({
   maxLineCount: number
   truncated: boolean
   originalLineCount?: number
+  inputTokens?: number
+  outputTokens?: number
+  inputText: string
+  outputText: string
 }> {
   const targetLineCount = targetPages * SCREENPLAY_LINES_PER_PAGE
   const maxLineCount = Math.round(targetLineCount * 1.08)
@@ -195,6 +207,7 @@ TARGET LENGTH (STRICT): ${targetPages} page${targetPages === 1 ? '' : 's'} = abo
 Write the full screenplay scene now. Stay faithful to the treatment's story while expanding this scene into proper screenplay format with character dialogue where characters speak.`
 
   const maxTokens = maxTokensForTargetPages(targetPages, model)
+  const inputText = `${systemPrompt}\n\n${userPrompt}`
 
   if (service === 'anthropic') {
       const response = await AnthropicService.generateScript({
@@ -207,7 +220,15 @@ Write the full screenplay scene now. Stay faithful to the treatment's story whil
     if (!response.success) {
       throw new Error(response.error || 'Failed to generate screenplay')
     }
-    return finalizeScreenplay(cleanGeneratedScreenplay(response.data.content[0].text), maxLineCount)
+    const screenplayText = cleanGeneratedScreenplay(response.data.content[0].text)
+    const usage = extractAnthropicUsage(response.data)
+    return {
+      ...finalizeScreenplay(screenplayText, maxLineCount),
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      inputText,
+      outputText: screenplayText,
+    }
   }
 
   const response = await OpenAIService.generateScript({
@@ -228,10 +249,15 @@ Write the full screenplay scene now. Stay faithful to the treatment's story whil
     throw new Error('No screenplay content returned from AI')
   }
 
-  return finalizeScreenplay(
-    cleanGeneratedScreenplay(typeof content === 'string' ? content : String(content)),
-    maxLineCount,
-  )
+  const screenplayText = cleanGeneratedScreenplay(typeof content === 'string' ? content : String(content))
+  const usage = extractOpenAIUsage(response.data)
+  return {
+    ...finalizeScreenplay(screenplayText, maxLineCount),
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    inputText,
+    outputText: screenplayText,
+  }
 }
 
 function finalizeScreenplay(
@@ -320,6 +346,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
       truncated: boolean
       originalLineCount?: number
     } | null = null
+    let creditsCharged = 0
+    let creditsRemaining: number | undefined
     const skippedBecauseAlreadyFormatted = isAlreadyScreenplayFormat(sourceContent)
     if (skippedBecauseAlreadyFormatted) {
       screenplay = sourceContent
@@ -345,6 +373,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
         )
       }
 
+      const estimateInput = `${sourceContent}\n${treatmentResult.context || ''}`
+      const maxTokens = maxTokensForTargetPages(targetPages, aiConfig.model)
+      const requiredCredits = estimateWorkspaceTextCredits(aiConfig.model, estimateInput, maxTokens)
+      const creditCheck = await hasStudioCredits(user.id, requiredCredits)
+      if (!creditCheck.ok) {
+        return NextResponse.json(
+          insufficientCreditsPayload(new InsufficientCreditsError(requiredCredits, creditCheck.balance)),
+          { status: 402 },
+        )
+      }
+
       const generated = await generateScreenplayText({
         sourceContent,
         sceneName: scene.name,
@@ -362,6 +401,38 @@ export async function POST(request: NextRequest, context: RouteContext) {
         maxLineCount: generated.maxLineCount,
         truncated: generated.truncated,
         originalLineCount: generated.originalLineCount,
+      }
+
+      await logApiCostFromRequest({
+        request,
+        userId: user.id,
+        fallbackSource: 'workspace',
+        generationType: 'screenplay',
+        provider: aiConfig.service,
+        model: aiConfig.model,
+        prompt: scene.name,
+        inputTokens: generated.inputTokens,
+        outputTokens: generated.outputTokens,
+        inputText: generated.inputText,
+        outputText: generated.outputText,
+      })
+
+      try {
+        const charged = await chargeWorkspaceTextCredits({
+          userId: user.id,
+          model: aiConfig.model,
+          provider: aiConfig.service,
+          description: `Workspace screenplay (${targetPages} page${targetPages === 1 ? '' : 's'})`,
+          inputTokens: generated.inputTokens,
+          outputTokens: generated.outputTokens,
+          inputText: generated.inputText,
+          outputText: generated.outputText,
+          metadata: { kind: 'screenplay_scene', targetPages, sceneId: scene.id },
+        })
+        creditsCharged = charged.amount
+        creditsRemaining = charged.balance
+      } catch (creditError) {
+        console.error('[workspace-credits] screenplay charge failed', creditError)
       }
     }
 
@@ -401,9 +472,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       targetPages,
       warnings: syncResult.warnings,
       pageLengthDebug,
+      creditsCharged: creditsCharged || undefined,
+      creditsRemaining,
     })
   } catch (error) {
     console.error('[generate-screenplay-scene]', error)
+    if (error instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 },

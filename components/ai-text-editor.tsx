@@ -12,6 +12,12 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/components/AuthProvider"
 import { AISettingsService, AISetting } from "@/lib/ai-settings-service"
+import {
+  clientCostSourceFromPath,
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  throwIfInsufficientCredits,
+} from "@/lib/studio-credits-client"
 
 interface AITextEditorProps {
   isOpen: boolean
@@ -190,7 +196,6 @@ export default function AITextEditor({
       
       // Update the AI settings with new suggestions
       await AISettingsService.updateQuickSuggestions(
-        userId,
         'scripts',
         editingSuggestions
       )
@@ -305,26 +310,34 @@ export default function AITextEditor({
         hasApiKey: !!request.apiKey
       })
 
+      const costSource = clientCostSourceFromPath()
       const response = await fetch('/api/ai/generate-text', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(costSource ? { 'x-cost-source': costSource } : {}),
         },
-        body: JSON.stringify(request),
+        body: JSON.stringify({
+          ...request,
+          userId,
+          costSource,
+        }),
       })
 
       const result = await response.json()
 
       if (!response.ok) {
+        throwIfInsufficientCredits(result)
         throw new Error(result.error || 'Failed to generate text')
       }
 
       if (result.success && result.text) {
+        notifyCreditsFromResult(result)
         setGeneratedText(result.text)
         setShowPreview(true)
         toast({
           title: "Text Generated!",
-          description: `AI has generated new text using ${result.service}.`,
+          description: `AI has generated new text using ${result.service}.${creditsUsedNote(result)}`,
         })
       } else {
         throw new Error('No text was generated')
