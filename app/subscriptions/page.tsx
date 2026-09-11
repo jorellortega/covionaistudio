@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
-import { Check, Video, Mic, Image, HardDrive, Users, Zap, Shield, Building2, RefreshCw, Loader2, AlertTriangle, FileText, Film, Camera, BookOpen, LayoutGrid, Palette } from "lucide-react"
+import { Check, Video, Mic, Image, Users, Zap, Shield, Building2, RefreshCw, Loader2, AlertTriangle, FileText, Film, X, Sparkles, UserCircle, ScanFace, MapPin, Box, Type, Play, FolderOpen, Package, List } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/components/AuthProvider"
 import { useAuthReady } from "@/components/auth-hooks"
@@ -35,6 +35,69 @@ function annualDiscountVsMonthly(priceMonthly: number, priceAnnual: number) {
   return { fullYearAtMonthly, dollarsSaved, pct }
 }
 
+type FeatureGroup = { title: string; items: string[] }
+
+const WRITE_FEATURES = ["Workspace", "Treatments", "Screenplay"]
+const WORLD_FEATURES = [
+  "Characters",
+  "Avatars",
+  "Locations",
+  "Objects",
+  "Create Cover",
+  "Create Voice",
+  "Create Titles",
+  "Prompt Create",
+]
+const BOARD_FEATURES = ["Movies", "Timeline", "Storyboards", "Shot List", "Assets"]
+const PAPERWORK_FEATURES = [
+  "Casting",
+  "Lighting Plot",
+  "Call Sheet",
+  "Crew Sheet",
+  "Equipment List",
+  "Props List",
+]
+
+function featureGroupsForPlan(includeCinemaProduction: boolean): FeatureGroup[] {
+  return [
+    { title: "Write & develop", items: WRITE_FEATURES },
+    { title: "World & assets", items: WORLD_FEATURES },
+    {
+      title: "Board & produce",
+      items: includeCinemaProduction
+        ? [...BOARD_FEATURES, "Cinema Production"]
+        : BOARD_FEATURES,
+    },
+    { title: "Set paperwork", items: PAPERWORK_FEATURES },
+  ]
+}
+
+const FEATURE_ICONS: Record<string, { Icon: typeof Check; className: string }> = {
+  Workspace: { Icon: Sparkles, className: "text-blue-400" },
+  Treatments: { Icon: FileText, className: "text-blue-400" },
+  Screenplay: { Icon: FileText, className: "text-orange-400" },
+  Characters: { Icon: UserCircle, className: "text-purple-400" },
+  Avatars: { Icon: ScanFace, className: "text-fuchsia-400" },
+  Locations: { Icon: MapPin, className: "text-emerald-400" },
+  Objects: { Icon: Box, className: "text-amber-400" },
+  "Create Cover": { Icon: Image, className: "text-pink-400" },
+  "Create Voice": { Icon: Mic, className: "text-cyan-400" },
+  "Create Titles": { Icon: Type, className: "text-sky-400" },
+  "Prompt Create": { Icon: Sparkles, className: "text-violet-400" },
+  Movies: { Icon: Film, className: "text-green-400" },
+  Timeline: { Icon: Play, className: "text-green-400" },
+  Storyboards: { Icon: Image, className: "text-indigo-400" },
+  "Shot List": { Icon: List, className: "text-pink-400" },
+  Assets: { Icon: FolderOpen, className: "text-teal-400" },
+  "Cinema Production": { Icon: Video, className: "text-rose-400" },
+  Casting: { Icon: Users, className: "text-cyan-400" },
+  "Lighting Plot": { Icon: Zap, className: "text-yellow-400" },
+  "Call Sheet": { Icon: FileText, className: "text-orange-400" },
+  "Crew Sheet": { Icon: Users, className: "text-lime-400" },
+  "Equipment List": { Icon: Package, className: "text-slate-400" },
+  "Props List": { Icon: Box, className: "text-amber-400" },
+}
+
 const plans = [
   {
     id: "creator",
@@ -53,13 +116,9 @@ const plans = [
     castingPosts: 1,
     storage: "250 GB",
     seats: 1,
-    features: [
-      "Treatments",
-      "Synopsis",
-      "Scenes",
-      "Screenplay",
-      "Shotlist",
-    ],
+    featureGroups: featureGroupsForPlan(false),
+    excludedFeatures: ["Cinema Production"],
+    cinemaProduction: false,
     icon: Video,
     color: "from-purple-500 to-pink-500",
   },
@@ -79,16 +138,9 @@ const plans = [
     castingPosts: 3,
     storage: "1 TB",
     seats: 5,
-    features: [
-      "Treatments",
-      "Synopsis",
-      "Scenes",
-      "Screenplay",
-      "Shotlist",
-      "Casting",
-      "Storyboards",
-      "Mood boards",
-    ],
+    featureGroups: featureGroupsForPlan(true),
+    excludedFeatures: [] as string[],
+    cinemaProduction: true,
     icon: Users,
     color: "from-green-500 to-emerald-400",
   },
@@ -108,17 +160,9 @@ const plans = [
     castingPosts: 10,
     storage: "3 TB",
     seats: 15,
-    features: [
-      "Treatments",
-      "Synopsis",
-      "Scenes",
-      "Screenplay",
-      "Shotlist",
-      "Casting",
-      "Storyboards",
-      "Mood boards",
-      "Visual development",
-    ],
+    featureGroups: featureGroupsForPlan(true),
+    excludedFeatures: [] as string[],
+    cinemaProduction: true,
     icon: Building2,
     color: "from-orange-500 to-red-500",
   },
@@ -337,61 +381,34 @@ export default function SubscriptionsPage() {
                 </CardHeader>
 
                 <CardContent className="space-y-4">
-                  {/* Features with Icons */}
-                  {plan.features.map((feature, index) => {
-                    let Icon
-                    let iconColor = "text-primary"
-                    
-                    switch(feature) {
-                      case "Treatments":
-                        Icon = FileText
-                        iconColor = "text-blue-400"
-                        break
-                      case "Synopsis":
-                        Icon = BookOpen
-                        iconColor = "text-purple-400"
-                        break
-                      case "Scenes":
-                        Icon = Film
-                        iconColor = "text-green-400"
-                        break
-                      case "Screenplay":
-                        Icon = FileText
-                        iconColor = "text-orange-400"
-                        break
-                      case "Shotlist":
-                        Icon = Camera
-                        iconColor = "text-pink-400"
-                        break
-                      case "Casting":
-                        Icon = Users
-                        iconColor = "text-cyan-400"
-                        break
-                      case "Storyboards":
-                        Icon = Image
-                        iconColor = "text-indigo-400"
-                        break
-                      case "Mood boards":
-                        Icon = LayoutGrid
-                        iconColor = "text-yellow-400"
-                        break
-                      case "Visual development":
-                        Icon = Palette
-                        iconColor = "text-teal-400"
-                        break
-                      default:
-                        Icon = Check
-                    }
-                    
-                    return (
-                      <div key={index} className="flex items-start gap-2">
-                        <Icon className={`h-4 w-4 ${iconColor} mt-0.5 flex-shrink-0`} />
-                        <div>
-                          <p className="text-sm font-medium">{feature}</p>
-                        </div>
+                  {plan.featureGroups.map((group) => (
+                    <div key={group.title} className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {group.title}
+                      </p>
+                      {group.items.map((feature) => {
+                        const meta = FEATURE_ICONS[feature]
+                        const Icon = meta?.Icon || Check
+                        const iconColor = meta?.className || "text-primary"
+                        return (
+                          <div key={feature} className="flex items-start gap-2">
+                            <Icon className={`h-4 w-4 ${iconColor} mt-0.5 flex-shrink-0`} />
+                            <p className="text-sm font-medium">{feature}</p>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
+
+                  {plan.excludedFeatures.map((feature) => (
+                    <div key={feature} className="flex items-start gap-2">
+                      <X className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">{feature}</p>
+                        <p className="text-xs text-muted-foreground">Not included — no access to the video production page</p>
                       </div>
-                    )
-                  })}
+                    </div>
+                  ))}
 
                   {/* Additional Features with Checkmarks */}
                   <div className="pt-4 border-t border-border">
@@ -401,14 +418,23 @@ export default function SubscriptionsPage() {
                       <p className="text-sm text-muted-foreground">{plan.credits}</p>
                     </div>
 
-                    {/* Video Renders */}
-                    <div className="flex items-center gap-2 mb-2">
-                      <Check className="h-4 w-4 text-primary flex-shrink-0" />
-                      <p className="text-sm text-muted-foreground">
-                        <span className="font-medium">Video renders:</span>{" "}
-                        {plan.videoStandard} Standard + {plan.videoCinematic} Cinematic
-                      </p>
-                    </div>
+                    {/* Video Renders / Cinema Production */}
+                    {plan.cinemaProduction ? (
+                      <div className="flex items-center gap-2 mb-2">
+                        <Check className="h-4 w-4 text-primary flex-shrink-0" />
+                        <p className="text-sm text-muted-foreground">
+                          <span className="font-medium">Video renders:</span>{" "}
+                          {plan.videoStandard} Standard + {plan.videoCinematic} Cinematic
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mb-2">
+                        <X className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <p className="text-sm text-muted-foreground">
+                          <span className="font-medium">Cinema Production page:</span> not included
+                        </p>
+                      </div>
+                    )}
 
                     {/* AI Voice */}
                     <div className="flex items-center gap-2 mb-2">
