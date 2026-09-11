@@ -53,7 +53,7 @@ export const metadata: Metadata = {
 const featureCategories = [
   {
     name: "Workspace",
-    description: "Start in one creative space: chat with AI, draft the story, and save characters, locations, and scenes to a project.",
+    description: "Start in one creative space: chat with AI, draft the story, write the screenplay, and save characters, locations, and scenes to a project.",
     icon: Sparkles,
     color: "from-blue-500 to-cyan-400",
     features: [
@@ -70,6 +70,12 @@ const featureCategories = [
         href: "/treatments",
       },
       {
+        name: "Screenplay",
+        description: "Write and revise the script from a treatment or movie, then push scenes onto the timeline.",
+        icon: FileText,
+        href: "/treatments",
+      },
+      {
         name: "Movies",
         description: "Each film is a hub for timeline, storyboards, shot lists, production tools, and the shared asset library.",
         icon: Film,
@@ -79,7 +85,7 @@ const featureCategories = [
   },
   {
     name: "Preproduction",
-    description: "Scene-level prep: people, places, objects, and the covers, voices, and titles you need before cameras roll.",
+    description: "Scene-level prep: people, places, objects, casting, and the covers, voices, and titles you need before cameras roll.",
     icon: Palette,
     color: "from-green-500 to-emerald-400",
     features: [
@@ -88,6 +94,12 @@ const featureCategories = [
         description: "Build character profiles, references, and casting-ready roles for each project.",
         icon: UserCircle,
         href: "/characters",
+      },
+      {
+        name: "Casting",
+        description: "Post casting calls from a movie, share roles, and manage submissions.",
+        icon: Users,
+        href: "/movies",
       },
       {
         name: "Avatars",
@@ -153,7 +165,8 @@ const featureCategories = [
       },
       {
         name: "Cinema Production",
-        description: "Generate stills and video for shots—image-to-video, lip sync, and motion tools in one production view.",
+        description:
+          "Generate stills and video for shots—image-to-video, lip sync, and motion tools in one production view. Included with Studio and Production House, not Creator.",
         icon: Video,
         href: "/cinema-production",
       },
@@ -208,9 +221,15 @@ const featureCategories = [
         href: null,
       },
       {
-        name: "Prompt Create & List",
-        description: "Write reusable prompts and keep a library for consistent image, video, and writing output.",
+        name: "Prompt Create",
+        description: "Extract or write reusable style prompts from a reference image for later generations.",
         icon: Wand2,
+        href: "/prompt-create",
+      },
+      {
+        name: "Prompts List",
+        description: "Keep a library of saved prompts for consistent image, video, and writing output.",
+        icon: List,
         href: "/prompts-list",
       },
       {
