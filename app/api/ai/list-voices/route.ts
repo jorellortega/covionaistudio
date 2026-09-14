@@ -1,17 +1,14 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { ElevenLabsService } from '@/lib/ai-services'
 import { getElevenLabsApiKeyForUser } from '@/lib/elevenlabs-api-key'
-import { createRouteSupabaseClient } from '@/lib/supabase-route'
+import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
 
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
     const supabase = await createRouteSupabaseClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
+    const user = await getRouteAuthUser(supabase, request)
 
-    if (authError || !user) {
+    if (!user) {
       return NextResponse.json({ error: 'Not signed in.' }, { status: 401 })
     }
 

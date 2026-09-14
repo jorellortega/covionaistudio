@@ -26,6 +26,7 @@ import {
   MapPin,
   Zap,
   Users,
+  ClipboardList,
   Package,
   ScanFace,
   Sparkles,
@@ -81,6 +82,8 @@ const navigationCategories: NavCategory[] = [
       { name: "Equipment List", href: "/equipment-list", icon: Package },
       { name: "Props List", href: "/props-list", icon: Box },
       { name: "Assets", href: "/assets", icon: FolderOpen },
+      { name: "Casting", href: "/casting", icon: Users },
+      { name: "Submissions", href: "/manage-submissions", icon: ClipboardList },
     ],
   },
   {

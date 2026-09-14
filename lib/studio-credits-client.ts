@@ -65,6 +65,7 @@ export function clientCostSourceFromPath(pathname?: string): string | undefined 
   if (path.startsWith('/characters')) return 'characters'
   if (path.startsWith('/objects')) return 'objects'
   if (path.startsWith('/prompt-create')) return 'prompt-create'
+  if (path.startsWith('/create-voice')) return 'create-voice'
   if (path.startsWith('/new')) return 'workspace'
   return undefined
 }

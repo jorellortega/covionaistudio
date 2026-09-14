@@ -1,9 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import {
+  calculateAudioCost,
   calculateImageCost,
   calculateTextCost,
   resolveCostSource,
   SOURCE_LABELS,
+  type AudioCostKind,
   type CostSource,
 } from '@/lib/api-cost-tracker'
 import { DEFAULT_CINEMATIC_IMAGE_SIZE } from '@/lib/image-model-utils'
@@ -12,8 +14,8 @@ import { DEFAULT_CINEMATIC_IMAGE_SIZE } from '@/lib/image-model-utils'
 export const WORST_PACK_CREDITS_PER_USD = 750
 
 /**
- * Markup over worst-pack break-even so image sales stay profitable
- * even after Stripe. $0.075 cinematic GPT Image 2 → 80 credits.
+ * Markup over worst-pack break-even so generations stay profitable
+ * even after Stripe. Applied to tracker USD (images, text, and audio).
  */
 export const CREDIT_PROFIT_MARKUP = 1.42
 
@@ -63,6 +65,36 @@ export function creditsForTextGeneration(params: {
   outputText?: string | null
 }): number {
   return creditsForApiCostUsd(calculateTextCost(params))
+}
+
+export function creditsForAudio(kind: AudioCostKind, characterCount?: number | null): number {
+  return creditsForApiCostUsd(calculateAudioCost(kind, characterCount))
+}
+
+export async function chargeCreateVoiceCredits(input: {
+  userId: string
+  kind: AudioCostKind
+  characterCount?: number | null
+  description: string
+  metadata?: Record<string, unknown>
+}): Promise<ChargeCreditsResult & { costUsd: number }> {
+  const costUsd = calculateAudioCost(input.kind, input.characterCount)
+  const amount = creditsForApiCostUsd(costUsd)
+  const charged = await chargeStudioCredits({
+    userId: input.userId,
+    amount,
+    description: input.description,
+    usageType: 'audio_generation',
+    service: 'elevenlabs',
+    metadata: {
+      source: 'create-voice',
+      kind: input.kind,
+      costUsd,
+      characterCount: input.characterCount ?? null,
+      ...input.metadata,
+    },
+  })
+  return { ...charged, costUsd }
 }
 
 export function estimateWorkspaceTextCredits(
@@ -158,6 +190,13 @@ export function shouldChargeTextCredits(
   costSource?: string | null,
 ): boolean {
   return PAID_TEXT_SOURCES.has(resolveCostSource(request, costSource, 'other'))
+}
+
+export function shouldChargeAudioCredits(
+  request?: Request | null,
+  costSource?: string | null,
+): boolean {
+  return resolveCostSource(request, costSource, 'other') === 'create-voice'
 }
 
 export function shouldChargeWorkspaceCredits(

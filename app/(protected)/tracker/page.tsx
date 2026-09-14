@@ -32,6 +32,7 @@ import {
   FileText,
   Image as ImageIcon,
   Loader2,
+  Mic,
   Receipt,
   RefreshCw,
   Sparkles,
@@ -39,7 +40,7 @@ import {
 } from "lucide-react"
 
 type DateRange = "today" | "7d" | "30d" | "all"
-type SourceFilter = "all" | "storyboard" | "shotlist" | "screenplay" | "workspace" | "cinema-production" | "other"
+type SourceFilter = "all" | "storyboard" | "shotlist" | "screenplay" | "workspace" | "cinema-production" | "create-voice" | "other"
 
 const SOURCE_FILTERS: { value: SourceFilter; label: string }[] = [
   { value: "all", label: "All pages" },
@@ -48,6 +49,7 @@ const SOURCE_FILTERS: { value: SourceFilter; label: string }[] = [
   { value: "screenplay", label: "Screenplay" },
   { value: "workspace", label: "Workspace" },
   { value: "cinema-production", label: "Cinema production" },
+  { value: "create-voice", label: "Create voice" },
   { value: "other", label: "Other" },
 ]
 
@@ -75,6 +77,8 @@ function generationLabel(type: string): string {
       return "Screenplay"
     case "chat":
       return "Chat"
+    case "audio":
+      return "Audio"
     default:
       return "Text"
   }
@@ -93,6 +97,8 @@ function sourceIcon(source: string) {
       return <Sparkles className={className} />
     case "cinema-production":
       return <Video className={className} />
+    case "create-voice":
+      return <Mic className={className} />
     default:
       return <Receipt className={className} />
   }
@@ -196,7 +202,7 @@ export default function TrackerPage() {
               </span>
             </h1>
             <p className="max-w-2xl text-muted-foreground">
-              See how much each generation costs from Storyboard, Shot List, Screenplay, Workspace, and Cinema Production — including the model used.
+              See how much each generation costs from Storyboard, Shot List, Screenplay, Workspace, Cinema Production, and Create Voice — including the model used.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -315,7 +321,7 @@ export default function TrackerPage() {
           <CardHeader>
             <CardTitle>Generation history</CardTitle>
             <CardDescription>
-              Estimated USD from public list prices. Actual invoices from OpenAI, Anthropic, Kling, and Runway can differ.
+              Estimated USD from public list prices. Actual invoices from OpenAI, Anthropic, Kling, Runway, and ElevenLabs can differ. Credits charged to users use this cost plus markup.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -326,7 +332,7 @@ export default function TrackerPage() {
               </div>
             ) : events.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">
-                No generations recorded yet. Create an image, video, screenplay, shot list, or workspace reply and it will show up here.
+                No generations recorded yet. Create an image, video, voice, screenplay, shot list, or workspace reply and it will show up here.
               </div>
             ) : (
               <Table>
@@ -362,13 +368,25 @@ export default function TrackerPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {event.input_tokens || event.output_tokens
-                          ? `${event.input_tokens || 0} in / ${event.output_tokens || 0} out`
-                          : event.duration_seconds
-                            ? `${event.duration_seconds}s`
-                            : event.prompt_preview
-                              ? event.prompt_preview.slice(0, 48) + (event.prompt_preview.length > 48 ? "…" : "")
-                              : "—"}
+                        {event.generation_type === "audio"
+                          ? [
+                              event.input_tokens ? `${event.input_tokens} chars` : null,
+                              typeof event.metadata?.creditsCharged === "number"
+                                ? `${event.metadata.creditsCharged.toLocaleString()} credits charged`
+                                : null,
+                              !event.input_tokens && event.prompt_preview
+                                ? event.prompt_preview.slice(0, 40) + (event.prompt_preview.length > 40 ? "…" : "")
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ") || "Audio"
+                          : event.input_tokens || event.output_tokens
+                            ? `${event.input_tokens || 0} in / ${event.output_tokens || 0} out`
+                            : event.duration_seconds
+                              ? `${event.duration_seconds}s`
+                              : event.prompt_preview
+                                ? event.prompt_preview.slice(0, 48) + (event.prompt_preview.length > 48 ? "…" : "")
+                                : "—"}
                       </TableCell>
                       <TableCell className="text-right tabular-nums font-semibold">
                         {formatUsd(Number(event.cost_usd || 0))}

@@ -641,28 +641,26 @@ Treatment:`
   }
 
   useEffect(() => {
-    if (treatment?.id) {
-      // Load scenes from timeline if treatment is linked to a project, otherwise show empty
-      if (treatment.project_id) {
-        loadTimelineScenes(treatment.project_id)
-      } else {
-        // Load treatment scenes directly if no project_id
-        const loadTreatmentScenes = async () => {
-          try {
-            setIsLoadingScenes(true)
-            const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
-            setTreatmentScenes(scenes)
-          } catch (error) {
-            console.error('Error loading treatment scenes:', error)
-            setTreatmentScenes([])
-          } finally {
-            setIsLoadingScenes(false)
-          }
+    if (!treatment?.id || !ready || !userId) return
+
+    if (treatment.project_id) {
+      void loadTimelineScenes(treatment.project_id)
+    } else {
+      const loadTreatmentScenes = async () => {
+        try {
+          setIsLoadingScenes(true)
+          const scenes = await TreatmentScenesService.getTreatmentScenes(treatment.id)
+          setTreatmentScenes(scenes)
+        } catch (error) {
+          console.error('Error loading treatment scenes:', error)
+          setTreatmentScenes([])
+        } finally {
+          setIsLoadingScenes(false)
         }
-        loadTreatmentScenes()
       }
+      void loadTreatmentScenes()
     }
-  }, [treatment?.id, treatment?.project_id])
+  }, [treatment?.id, treatment?.project_id, ready, userId])
 
 
   // Load cover image assets when treatment is loaded
@@ -2775,7 +2773,7 @@ Treatment:`
       }
       
       // Load scenes from timeline (same as timeline and screenplay pages use)
-      const scenes = await TimelineService.getScenesForTimeline(timeline.id)
+      const scenes = await TimelineService.getScenesForTimeline(timeline.id, { skipThumbnails: true })
       
       // Convert timeline scenes to treatment scene format for display
       const treatmentScenesData = scenes.map(scene => ({
@@ -4030,7 +4028,7 @@ IMPORTANT: Only include scenes from the list above. Return ONLY the JSON array, 
           const updatedCharacters = scene.characters.map(c => c === oldName ? newName : c)
           if (treatment?.project_id) {
             // Update timeline scenes
-            const timelineScenes = await TimelineService.getScenesForTimeline(treatment.project_id)
+            const timelineScenes = await TimelineService.getMovieScenes(treatment.project_id, { skipThumbnails: true })
             const matchingScene = timelineScenes.find(s => s.metadata?.characters?.includes(oldName))
             if (matchingScene) {
               await TimelineService.updateScene(matchingScene.id, {

@@ -60,6 +60,7 @@ export default function SetupAIPage() {
     mirelo: false,
     stability: false,
   })
+  const [platformElevenLabs, setPlatformElevenLabs] = useState(false)
 
 
   // Load API keys from database
@@ -90,6 +91,23 @@ export default function SetupAIPage() {
         mirelo: data?.mirelo_api_key || '',
         stability: data?.stability_api_key || '',
       })
+
+      const hasPersonalElevenLabs = !!data?.elevenlabs_api_key?.trim()
+      if (!hasPersonalElevenLabs) {
+        try {
+          const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
+          if (response.ok) {
+            const systemData = await response.json()
+            setPlatformElevenLabs(!!systemData.apiKey?.trim())
+          } else {
+            setPlatformElevenLabs(false)
+          }
+        } catch {
+          setPlatformElevenLabs(false)
+        }
+      } else {
+        setPlatformElevenLabs(false)
+      }
     } catch (error) {
       console.error('Error loading API keys:', error)
     }
@@ -463,8 +481,14 @@ export default function SetupAIPage() {
                 Create music, voice, and sound effects with AI
               </CardDescription>
               <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-green-500" />
-                <span className="text-sm text-green-500">ElevenLabs Ready</span>
+                {apiKeys.elevenlabs || platformElevenLabs ? (
+                  <CheckCircle className="h-4 w-4 text-green-500" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-orange-500" />
+                )}
+                <span className={`text-sm ${apiKeys.elevenlabs || platformElevenLabs ? "text-green-500" : "text-orange-500"}`}>
+                  {apiKeys.elevenlabs || platformElevenLabs ? "ElevenLabs Ready" : "ElevenLabs Not Configured"}
+                </span>
               </div>
               <div className="flex items-center gap-2 mt-1">
                 <CheckCircle className="h-4 w-4 text-green-500" />
@@ -1078,7 +1102,11 @@ export default function SetupAIPage() {
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-medium">ElevenLabs</h4>
                     <Badge variant="outline" className="text-xs">
-                      {apiKeys.elevenlabs ? "Configured" : "Not Configured"}
+                      {apiKeys.elevenlabs
+                        ? "Configured"
+                        : platformElevenLabs
+                          ? "Configured (platform)"
+                          : "Not Configured"}
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground mb-3">

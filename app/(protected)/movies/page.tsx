@@ -31,14 +31,12 @@ import {
   Calendar,
   Film,
   Sparkles,
-  FolderOpen,
   Loader2,
   Download,
   CheckCircle,
   User,
   FileText,
   Eye,
-  Users,
   MapPin,
   Share2,
   Shield,
@@ -2112,26 +2110,6 @@ export default function MoviesPage() {
                               Screenplay
                             </Button>
                           </Link>
-                          <Link href={`/assets?project=${movie.id}`}>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="w-full border-orange-500/30 bg-transparent hover:bg-orange-500/10 text-orange-400 hover:text-orange-300 text-xs h-8"
-                            >
-                              <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                              Assets
-                            </Button>
-                          </Link>
-                          <Link href={`/casting/${movie.id}`}>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
-                            >
-                              <Users className="mr-2 h-3.5 w-3.5" />
-                              Casting
-                            </Button>
-                          </Link>
                           <Link href={`/characters?movie=${movie.id}`}>
                             <Button
                               variant="outline"
@@ -2149,16 +2127,6 @@ export default function MoviesPage() {
                             >
                               <MapPin className="mr-2 h-3.5 w-3.5" />
                               Locations
-                          </Button>
-                        </Link>
-                        <Link href="/manage-submissions">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
-                          >
-                            <Users className="mr-2 h-3.5 w-3.5" />
-                            Submissions
                           </Button>
                         </Link>
                         <Link href={`/cinema-production?project=${movie.id}`}>
@@ -2464,26 +2432,6 @@ export default function MoviesPage() {
                       Screenplay
                     </Button>
                   </Link>
-                  <Link href={`/assets?project=${movie.id}`}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full border-orange-500/30 bg-transparent hover:bg-orange-500/10 text-orange-400 hover:text-orange-300 text-xs h-8"
-                    >
-                      <FolderOpen className="mr-2 h-3.5 w-3.5" />
-                      Assets
-                    </Button>
-                  </Link>
-                  <Link href={`/casting/${movie.id}`}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full border-green-500/30 bg-transparent hover:bg-green-500/10 text-green-400 hover:text-green-300 text-xs h-8"
-                    >
-                      <Users className="mr-2 h-3.5 w-3.5" />
-                      Casting
-                    </Button>
-                  </Link>
                   <Link href={`/characters?movie=${movie.id}`}>
                     <Button
                       variant="outline"
@@ -2521,16 +2469,6 @@ export default function MoviesPage() {
                     >
                       <MapPin className="mr-2 h-3.5 w-3.5" />
                       Locations
-                    </Button>
-                  </Link>
-                  <Link href="/manage-submissions">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full border-blue-500/30 bg-transparent hover:bg-blue-500/10 text-blue-400 hover:text-blue-300 text-xs h-8"
-                    >
-                      <Users className="mr-2 h-3.5 w-3.5" />
-                      Submissions
                     </Button>
                   </Link>
                   <Link href={`/cinema-production?project=${movie.id}`}>

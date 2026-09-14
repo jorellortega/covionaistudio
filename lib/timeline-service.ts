@@ -1,5 +1,10 @@
 import { getSupabaseClient } from './supabase'
 import { Database } from './supabase'
+import { withRetry } from './fetch-retry'
+
+/** List query columns — omit screenplay_content (can be huge and trips Safari "Load failed"). */
+export const SCENE_LIST_COLUMNS =
+  'id, timeline_id, user_id, name, description, start_time_seconds, duration_seconds, scene_type, content_url, metadata, order_index, created_at, updated_at'
 
 export type Timeline = Database['public']['Tables']['timelines']['Row']
 export type Scene = Database['public']['Tables']['scenes']['Row']
@@ -139,12 +144,38 @@ export class TimelineService {
 
   static async getScenesForTimeline(
     timelineId: string,
-    options?: { skipThumbnails?: boolean },
+    options?: { skipThumbnails?: boolean; includeScreenplay?: boolean },
   ): Promise<SceneWithMetadata[]> {
     try {
       const user = await this.ensureAuthenticated()
       console.log('Fetching scenes for timeline:', timelineId, 'user:', user.id)
-      
+
+      // Browser → Supabase direct fetch fails intermittently (TypeError: Load failed),
+      // especially when scenes include large screenplay_content. Use the server route.
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams()
+        if (options?.skipThumbnails) params.set('skipThumbnails', '1')
+        if (options?.includeScreenplay) params.set('includeScreenplay', '1')
+        const qs = params.toString()
+        return await withRetry(
+          'getScenesForTimeline (API)',
+          async () => {
+            const response = await fetch(
+              `/api/timelines/${encodeURIComponent(timelineId)}/scenes${qs ? `?${qs}` : ''}`,
+              { credentials: 'include' },
+            )
+            if (!response.ok) {
+              const body = await response.json().catch(() => ({}))
+              const message = (body as { error?: string }).error || `Scenes API HTTP ${response.status}`
+              throw new Error(message)
+            }
+            const body = await response.json()
+            return (body.scenes || []) as SceneWithMetadata[]
+          },
+          { retries: 3, baseDelayMs: 800 },
+        )
+      }
+
       // Get timeline to find the project and owner
       const { data: timeline, error: timelineError } = await getSupabaseClient()
         .from('timelines')
@@ -173,18 +204,28 @@ export class TimelineService {
 
       console.log('User has access to project, fetching scenes for timeline:', timelineId, 'owner user_id:', timeline.user_id)
 
-      // Get scenes - RLS policy will handle access control for shared users
-      // We filter by timeline_id only, and RLS ensures user has access to the project
-      const { data, error } = await getSupabaseClient()
-        .from('scenes')
-        .select('*')
-        .eq('timeline_id', timelineId)
+      const selectColumns = options?.includeScreenplay
+        ? `${SCENE_LIST_COLUMNS}, screenplay_content`
+        : SCENE_LIST_COLUMNS
 
-      if (error) {
-        console.error('Error fetching scenes:', error)
-        console.error('Scene query error details:', JSON.stringify(error, null, 2))
-        throw error
-      }
+      const data = await withRetry<Scene[]>(
+        'getScenesForTimeline (direct)',
+        async () => {
+          const { data: rows, error } = await getSupabaseClient()
+            .from('scenes')
+            .select(selectColumns)
+            .eq('timeline_id', timelineId)
+
+          if (error) {
+            console.error('Error fetching scenes:', error)
+            console.error('Scene query error details:', JSON.stringify(error, null, 2))
+            throw error
+          }
+
+          return (rows || []) as Scene[]
+        },
+        { retries: 3, baseDelayMs: 800 },
+      )
 
       console.log('Scenes query successful - found', data?.length || 0, 'scenes')
 

@@ -8,7 +8,6 @@ import { Input } from '@/components/ui/input'
 import { Loader2, Play, Pause, Volume2, Download, RefreshCw, Headphones, Edit, Check, X as XIcon, Trash2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 import { useAuthReady } from '@/components/auth-hooks'
-import { AISettingsService } from '@/lib/ai-settings-service'
 import { getSupabaseClient } from '@/lib/supabase'
 
 interface Voice {
@@ -30,6 +29,63 @@ interface TextToSpeechProps {
   metadata?: Record<string, any>
 }
 
+type VoicesCache = { voices: Voice[] } | { missing: true }
+
+let voicesCache: VoicesCache | null = null
+let voicesPromise: Promise<VoicesCache> | null = null
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  try {
+    const supabase = getSupabaseClient()
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    if (session?.access_token) {
+      headers.Authorization = `Bearer ${session.access_token}`
+    }
+  } catch {
+    // Cookie auth still works for same-origin requests.
+  }
+  return headers
+}
+
+async function loadElevenLabsVoicesShared(): Promise<VoicesCache> {
+  if (voicesCache) return voicesCache
+  if (voicesPromise) return voicesPromise
+
+  voicesPromise = (async () => {
+    const response = await fetch('/api/ai/list-voices', {
+      method: 'POST',
+      headers: await getAuthHeaders(),
+    })
+
+    if (response.status === 403) {
+      return { missing: true }
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || 'Failed to load voices')
+    }
+
+    const data = await response.json()
+    voicesCache = { voices: data.voices || [] }
+    return voicesCache
+  })()
+
+  try {
+    const result = await voicesPromise
+    if ('missing' in result) {
+      voicesPromise = null
+    }
+    return result
+  } catch (error) {
+    voicesPromise = null
+    throw error
+  }
+}
+
 export default function TextToSpeech({ text, title = "Script", className = "", projectId, sceneId, treatmentId, onAudioSaved, metadata }: TextToSpeechProps) {
   const { toast } = useToast()
   const { user, userId, ready } = useAuthReady()
@@ -49,7 +105,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   const [editingAudioName, setEditingAudioName] = useState("")
   const [isDeletingAudio, setIsDeletingAudio] = useState<string | null>(null)
   const [isRenamingAudio, setIsRenamingAudio] = useState<string | null>(null)
-  const [elevenLabsApiKey, setElevenLabsApiKey] = useState<string | null>(null)
+  const [hasApiKey, setHasApiKey] = useState<boolean | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
   const [isPreviewingVoice, setIsPreviewingVoice] = useState(false)
   const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null)
@@ -59,16 +115,9 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   // Load available voices when component mounts
   useEffect(() => {
     if (ready && userId) {
-      loadApiKey()
+      void loadVoices()
     }
   }, [ready, userId])
-
-  // Load voices when API key is available
-  useEffect(() => {
-    if (elevenLabsApiKey) {
-      loadVoices()
-    }
-  }, [elevenLabsApiKey])
 
   // Load saved audio files when component mounts
   // Allow loading even without projectId if treatmentId or sceneId is provided
@@ -87,70 +136,20 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }, [voices, selectedVoice])
 
-  const loadApiKey = async () => {
-    if (!userId) return
-
-    try {
-      const supabase = getSupabaseClient()
-
-      const { data: userData, error: userError } = await supabase
-        .from('users')
-        .select('elevenlabs_api_key')
-        .eq('id', userId)
-        .maybeSingle()
-
-      if (!userError && userData?.elevenlabs_api_key?.trim()) {
-        setElevenLabsApiKey(userData.elevenlabs_api_key.trim())
-        return
-      }
-
-      try {
-        const response = await fetch('/api/ai/get-system-api-key?type=elevenlabs_api_key')
-
-        if (response.ok) {
-          const data = await response.json()
-          if (data.apiKey?.trim()) {
-            setElevenLabsApiKey(data.apiKey.trim())
-            return
-          }
-        } else {
-          const errorData = await response.json().catch(() => ({}))
-          console.error('ElevenLabs system key route error:', response.status, errorData)
-        }
-      } catch (apiError) {
-        console.error('Error fetching system-wide ElevenLabs API key:', apiError)
-      }
-    } catch (error) {
-      console.error('Error loading ElevenLabs API key:', error)
-    }
-  }
-
   const loadVoices = async () => {
-    if (!elevenLabsApiKey) {
-      toast({
-        title: "API Key Required",
-        description: "Please configure your ElevenLabs API key first.",
-        variant: "destructive",
-      })
-      return
-    }
-
     setIsLoadingVoices(true)
     try {
-      const response = await fetch('/api/ai/get-voices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: elevenLabsApiKey })
-      })
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch voices')
+      const result = await loadElevenLabsVoicesShared()
+      if ('missing' in result) {
+        setHasApiKey(false)
+        setVoices([])
+        return
       }
-
-      const data = await response.json()
-      setVoices(data.voices || [])
+      setHasApiKey(true)
+      setVoices(result.voices)
     } catch (error) {
       console.error('Error loading voices:', error)
+      setHasApiKey(true)
       toast({
         title: "Error",
         description: "Failed to load available voices.",
@@ -171,7 +170,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       return
     }
 
-    if (!elevenLabsApiKey) {
+    if (!hasApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -202,11 +201,10 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     try {
       const response = await fetch('/api/ai/text-to-speech', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
         body: JSON.stringify({
           text: text.trim(),
           voiceId: selectedVoice,
-          apiKey: elevenLabsApiKey,
         }),
       })
 
@@ -735,7 +733,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
   }
 
   const generateVoicePreviewById = async (voiceId: string) => {
-    if (!elevenLabsApiKey) {
+    if (!hasApiKey) {
       toast({
         title: "API Key Required",
         description: "Please configure your ElevenLabs API key first.",
@@ -749,7 +747,7 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
       // Get voice preview from API
       const response = await fetch('/api/ai/voice-preview', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getAuthHeaders(),
         body: JSON.stringify({ voiceId })
       })
 
@@ -934,7 +932,18 @@ export default function TextToSpeech({ text, title = "Script", className = "", p
     }
   }
 
-  if (!elevenLabsApiKey) {
+  if (!ready || hasApiKey === null) {
+    return (
+      <div className={`w-full p-2 bg-muted/40 rounded border border-border ${className}`}>
+        <p className="text-xs text-muted-foreground flex items-center gap-2">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Checking ElevenLabs…
+        </p>
+      </div>
+    )
+  }
+
+  if (!hasApiKey) {
     return (
       <div className={`w-full p-2 bg-orange-500/10 rounded border border-orange-500/20 ${className}`}>
         <p className="text-xs text-orange-400 mb-2">

@@ -58,18 +58,32 @@ const PAPERWORK_FEATURES = [
   "Props List",
 ]
 
-function featureGroupsForPlan(includeCinemaProduction: boolean): FeatureGroup[] {
+function featureGroupsForPlan(options: {
+  includeCinemaProduction: boolean
+  includeStoryboardsAndShotList?: boolean
+}): FeatureGroup[] {
+  const boardFeatures =
+    options.includeStoryboardsAndShotList === false
+      ? BOARD_FEATURES.filter((item) => item !== "Storyboards" && item !== "Shot List")
+      : BOARD_FEATURES
+
   return [
     { title: "Write & develop", items: WRITE_FEATURES },
     { title: "World & assets", items: WORLD_FEATURES },
     {
       title: "Board & produce",
-      items: includeCinemaProduction
-        ? [...BOARD_FEATURES, "Cinema Production"]
-        : BOARD_FEATURES,
+      items: options.includeCinemaProduction
+        ? [...boardFeatures, "Cinema Production"]
+        : boardFeatures,
     },
     { title: "Set paperwork", items: PAPERWORK_FEATURES },
   ]
+}
+
+const EXCLUDED_FEATURE_NOTES: Record<string, string> = {
+  "Cinema Production": "Not included — no access to the video production page",
+  Storyboards: "Not included — no access to the storyboards page",
+  "Shot List": "Not included — no access to the shot list page",
 }
 
 const FEATURE_ICONS: Record<string, { Icon: typeof Check; className: string }> = {
@@ -116,8 +130,11 @@ const plans = [
     castingPosts: 1,
     storage: "250 GB",
     seats: 1,
-    featureGroups: featureGroupsForPlan(false),
-    excludedFeatures: ["Cinema Production"],
+    featureGroups: featureGroupsForPlan({
+      includeCinemaProduction: false,
+      includeStoryboardsAndShotList: false,
+    }),
+    excludedFeatures: ["Storyboards", "Shot List", "Cinema Production"],
     cinemaProduction: false,
     icon: Video,
     color: "from-purple-500 to-pink-500",
@@ -138,7 +155,7 @@ const plans = [
     castingPosts: 3,
     storage: "1 TB",
     seats: 5,
-    featureGroups: featureGroupsForPlan(true),
+    featureGroups: featureGroupsForPlan({ includeCinemaProduction: true }),
     excludedFeatures: [] as string[],
     cinemaProduction: true,
     icon: Users,
@@ -160,7 +177,7 @@ const plans = [
     castingPosts: 10,
     storage: "3 TB",
     seats: 15,
-    featureGroups: featureGroupsForPlan(true),
+    featureGroups: featureGroupsForPlan({ includeCinemaProduction: true }),
     excludedFeatures: [] as string[],
     cinemaProduction: true,
     icon: Building2,
@@ -256,10 +273,10 @@ export default function SubscriptionsPage() {
         <Alert className="mb-8 border-primary/30 bg-primary/5">
           <AlertTriangle className="h-5 w-5 text-primary" />
           <AlertTitle className="text-lg font-semibold">
-            Creator is available now
+            Creator and Studio are available now
           </AlertTitle>
           <AlertDescription className="text-base text-muted-foreground mt-1">
-            Studio and Production House plans are not available yet. You can subscribe to Creator today.
+            Production House is not available yet. You can subscribe to Creator or Studio today.
           </AlertDescription>
         </Alert>
         {/* Header Section */}
@@ -405,7 +422,9 @@ export default function SubscriptionsPage() {
                       <X className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">{feature}</p>
-                        <p className="text-xs text-muted-foreground">Not included — no access to the video production page</p>
+                        <p className="text-xs text-muted-foreground">
+                          {EXCLUDED_FEATURE_NOTES[feature] || "Not included"}
+                        </p>
                       </div>
                     </div>
                   ))}

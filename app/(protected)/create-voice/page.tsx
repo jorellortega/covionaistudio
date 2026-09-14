@@ -13,6 +13,17 @@ import { TreatmentsService, type Treatment } from "@/lib/treatments-service"
 import { AssetService, type Asset } from "@/lib/asset-service"
 import type { ProjectVoice } from "@/lib/project-voices-service"
 import { getSupabaseClient } from "@/lib/supabase"
+import {
+  creditsUsedNote,
+  notifyCreditsFromResult,
+  requirePaidGenerationSuccess,
+} from "@/lib/studio-credits-client"
+import { creditsForAudio } from "@/lib/studio-credits"
+import {
+  calculateAudioCost,
+  formatUsd,
+  voiceDesignPreviewCharacterCount,
+} from "@/lib/api-cost-tracker"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -21,6 +32,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import {
   Dialog,
   DialogContent,
@@ -729,27 +748,36 @@ export default function CreateVoicePage() {
 
     setIsGeneratingPreview(true)
     try {
-      const supabase = getSupabaseClient()
-      const { data } = await supabase.from("users").select("elevenlabs_api_key").eq("id", userId).maybeSingle()
-      const apiKey = data?.elevenlabs_api_key?.trim()
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key not configured")
-      }
-
+      const authHeaders = await getAuthFetchHeaders()
+      const apiKey = await resolveElevenLabsApiKey()
       const response = await fetch("/api/ai/text-to-speech", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+          "x-cost-source": "create-voice",
+        },
         body: JSON.stringify({
           text: previewLine,
           voiceId: selectedVoiceId,
-          apiKey,
+          apiKey: apiKey || undefined,
+          costSource: "create-voice",
         }),
       })
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({}))
-        throw new Error(err.error || "Speech generation failed")
+        requirePaidGenerationSuccess(false, err, "Speech generation failed")
       }
+
+      const chargedHeader = Number(response.headers.get("X-Credits-Charged") || 0)
+      const remainingRaw = response.headers.get("X-Credits-Remaining")
+      const remainingHeader = remainingRaw != null && remainingRaw !== "" ? Number(remainingRaw) : NaN
+      notifyCreditsFromResult({
+        creditsCharged: chargedHeader > 0 ? chargedHeader : undefined,
+        creditsRemaining: Number.isFinite(remainingHeader) ? remainingHeader : undefined,
+      })
 
       const blob = await response.blob()
       const audioUrl = URL.createObjectURL(blob)
@@ -760,7 +788,10 @@ export default function CreateVoicePage() {
       setIsPreviewPlaying(true)
       await audio.play()
 
-      toast({ title: "Preview ready", description: "Playing your test line." })
+      toast({
+        title: "Preview ready",
+        description: `Playing your test line.${chargedHeader > 0 ? creditsUsedNote({ creditsCharged: chargedHeader }) : ""}`,
+      })
     } catch (error) {
       toast({
         title: "Preview failed",
@@ -833,16 +864,15 @@ export default function CreateVoicePage() {
         const response = await fetch("/api/ai/clone-voice", {
           method: "POST",
           credentials: "include",
-          headers: authHeaders,
+          headers: {
+            ...authHeaders,
+            "x-cost-source": "create-voice",
+          },
           body: formData,
         })
 
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({}))
-          throw new Error(err.error || "Voice creation failed")
-        }
-
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        requirePaidGenerationSuccess(response.ok, data, "Voice creation failed")
         if (data.voice_id) {
           await loadProjectVoices()
           setSelectedVoiceId(data.voice_id)
@@ -851,7 +881,7 @@ export default function CreateVoicePage() {
           } else {
             toast({
               title: "Voice created",
-              description: `"${data.name || voiceName}" was added${projectVoicesTableReady ? " to this project" : " in ElevenLabs"}.`,
+              description: `"${data.name || voiceName}" was added${projectVoicesTableReady ? " to this project" : " in ElevenLabs"}.${creditsUsedNote(data)}`,
             })
           }
         }
@@ -865,6 +895,7 @@ export default function CreateVoicePage() {
         headers: {
           ...authHeaders,
           "Content-Type": "application/json",
+          "x-cost-source": "create-voice",
         },
         body: JSON.stringify({
           action: "preview",
@@ -874,15 +905,12 @@ export default function CreateVoicePage() {
           characterId: character.id,
           previewText: previewLine.trim() || undefined,
           apiKey: apiKey || undefined,
+          costSource: "create-voice",
         }),
       })
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}))
-        throw new Error(err.error || "Voice preview generation failed")
-      }
-
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
+      requirePaidGenerationSuccess(response.ok, data, "Voice preview generation failed")
       const previews = Array.isArray(data.previews) ? data.previews : []
       if (previews.length === 0) {
         throw new Error("ElevenLabs did not return any voice options")
@@ -898,7 +926,7 @@ export default function CreateVoicePage() {
       setVoicePreviewDialogOpen(true)
       toast({
         title: "Voice options ready",
-        description: "Listen to each preview and pick the one you want to save.",
+        description: `Listen to each preview and pick the one you want to save.${creditsUsedNote(data)}`,
       })
     } catch (error) {
       toast({
@@ -973,6 +1001,7 @@ export default function CreateVoicePage() {
         headers: {
           ...authHeaders,
           "Content-Type": "application/json",
+          "x-cost-source": "create-voice",
         },
         body: JSON.stringify({
           action: "confirm",
@@ -982,15 +1011,12 @@ export default function CreateVoicePage() {
           projectId: pendingVoiceDesign.projectId,
           characterId: pendingVoiceDesign.characterId,
           apiKey: apiKey || undefined,
+          costSource: "create-voice",
         }),
       })
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}))
-        throw new Error(err.error || "Failed to save selected voice")
-      }
-
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
+      requirePaidGenerationSuccess(response.ok, data, "Failed to save selected voice")
       if (data.voice_id) {
         await loadProjectVoices()
         setSelectedVoiceId(data.voice_id)
@@ -1003,7 +1029,7 @@ export default function CreateVoicePage() {
         } else {
           toast({
             title: "Voice saved",
-            description: `"${data.name || pendingVoiceDesign.name}" was added to your project library.`,
+            description: `"${data.name || pendingVoiceDesign.name}" was added to your project library.${creditsUsedNote(data)}`,
           })
         }
       }
@@ -1035,6 +1061,43 @@ export default function CreateVoicePage() {
 
   const canCreateVoice =
     !!cloneVoiceName.trim() && (cloneFiles.length > 0 || !!(cloneDescription || voiceProfile).trim())
+
+  const previewChars = voiceDesignPreviewCharacterCount(previewLine)
+  const testChars = previewLine.trim().length || 1
+  const cloneCostUsd = calculateAudioCost("instant-voice-clone")
+  const designPreviewCostUsd = calculateAudioCost("voice-design-preview", previewChars)
+  const saveVoiceCostUsd = calculateAudioCost("voice-design-confirm")
+  const testLineCostUsd = calculateAudioCost("tts", testChars)
+  const cloneCredits = creditsForAudio("instant-voice-clone")
+  const designPreviewCredits = creditsForAudio("voice-design-preview", previewChars)
+  const saveVoiceCredits = creditsForAudio("voice-design-confirm")
+  const testLineCredits = creditsForAudio("tts", testChars)
+  const voiceCreditRows = [
+    {
+      action: "Voice Design previews",
+      detail: `${previewChars.toLocaleString()} chars × 3 samples`,
+      costUsd: designPreviewCostUsd,
+      credits: designPreviewCredits,
+    },
+    {
+      action: "Save designed voice",
+      detail: "Custom voice slot",
+      costUsd: saveVoiceCostUsd,
+      credits: saveVoiceCredits,
+    },
+    {
+      action: "Instant clone",
+      detail: "Clone from audio samples",
+      costUsd: cloneCostUsd,
+      credits: cloneCredits,
+    },
+    {
+      action: "Test line",
+      detail: `${testChars.toLocaleString()} characters`,
+      costUsd: testLineCostUsd,
+      credits: testLineCredits,
+    },
+  ]
 
   const applyVoiceProfileSearch = () => {
     const terms = [character?.gender, character?.voice_pitch, character?.voice_tone, character?.voice_accent]
@@ -1286,6 +1349,41 @@ export default function CreateVoicePage() {
             </div>
 
             <div className="lg:col-span-2">
+              <Card className="mb-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Credit prices</CardTitle>
+                  <CardDescription>
+                    Studio credits are the tracker&apos;s ElevenLabs cost plus a 42% markup over the
+                    cheapest credit pack, so each run stays profitable. Tracker logs the USD; you are
+                    charged the credit column.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Action</TableHead>
+                        <TableHead>Provider cost</TableHead>
+                        <TableHead className="text-right">Credits</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {voiceCreditRows.map((row) => (
+                        <TableRow key={row.action}>
+                          <TableCell>
+                            <p className="font-medium">{row.action}</p>
+                            <p className="text-xs text-muted-foreground">{row.detail}</p>
+                          </TableCell>
+                          <TableCell className="tabular-nums">{formatUsd(row.costUsd)}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {row.credits.toLocaleString()}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
               <Tabs defaultValue="create">
                 <TabsList className="grid w-full grid-cols-5">
                   <TabsTrigger value="create">Create Voice</TabsTrigger>
@@ -1304,7 +1402,8 @@ export default function CreateVoicePage() {
                       </CardTitle>
                       <CardDescription>
                         Create a voice two ways: describe it below (ElevenLabs Voice Design), or upload
-                        speech samples to clone. Saved to <strong>{movie?.name || "this project"}</strong>{" "}
+                        speech samples to clone. Credits come from your studio balance with a markup over
+                        ElevenLabs cost. Saved to <strong>{movie?.name || "this project"}</strong>{" "}
                         under your account only.
                       </CardDescription>
                     </CardHeader>
@@ -1382,7 +1481,9 @@ export default function CreateVoicePage() {
                         ) : (
                           <>
                             <Sparkles className="h-4 w-4 mr-2" />
-                            {isDesignMode ? "Generate voice options" : "Create voice"}
+                            {isDesignMode
+                              ? `Generate voice options · ${designPreviewCredits.toLocaleString()} credits`
+                              : `Create voice · ${cloneCredits.toLocaleString()} credits`}
                           </>
                         )}
                       </Button>
@@ -1541,6 +1642,7 @@ export default function CreateVoicePage() {
                       <CardTitle className="text-base">Test dialogue line</CardTitle>
                       <CardDescription>
                         Hear how the selected voice sounds with a line from your character.
+                        Playing a test line uses studio credits.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -1588,7 +1690,7 @@ export default function CreateVoicePage() {
                           ) : (
                             <Play className="h-4 w-4 mr-2" />
                           )}
-                          Play test line
+                          Play test line · {testLineCredits.toLocaleString()} credits
                         </Button>
                         {selectedVoiceId && (
                           <Button
@@ -1623,7 +1725,8 @@ export default function CreateVoicePage() {
             <DialogDescription>
               ElevenLabs generated {voiceDesignPreviews.length} option
               {voiceDesignPreviews.length !== 1 ? "s" : ""} for{" "}
-              <strong>{pendingVoiceDesign?.name}</strong>. Play each one, then save your favorite.
+              <strong>{pendingVoiceDesign?.name}</strong>. Play each one, then save your favorite
+              ({saveVoiceCredits.toLocaleString()} credits).
             </DialogDescription>
           </DialogHeader>
 
@@ -1670,7 +1773,7 @@ export default function CreateVoicePage() {
                       ) : (
                         <>
                           <CheckCircle2 className="h-4 w-4 mr-1" />
-                          Use this
+                          Use this · {saveVoiceCredits.toLocaleString()}
                         </>
                       )}
                     </Button>

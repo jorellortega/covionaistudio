@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ElevenLabsService } from '@/lib/ai-services'
 import { getElevenLabsApiKeyForUser } from '@/lib/elevenlabs-api-key'
+import { logApiCostFromRequest, voiceDesignPreviewCharacterCount } from '@/lib/api-cost-tracker'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeCreateVoiceCredits,
+  insufficientCreditsPayload,
+  InsufficientCreditsError,
+  refundStudioCredits,
+} from '@/lib/studio-credits'
 
 async function saveProjectVoice(
   supabase: Awaited<ReturnType<typeof createRouteSupabaseClient>>,
@@ -122,82 +129,184 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'generatedVoiceId is required' }, { status: 400 })
       }
 
-      const createResult = await ElevenLabsService.createVoiceFromDesignPreview(
-        apiKey,
-        name,
-        description,
-        generatedVoiceId,
-      )
+      let reserved: { userId: string; amount: number } | null = null
+      try {
+        const charged = await chargeCreateVoiceCredits({
+          userId: user.id,
+          kind: 'voice-design-confirm',
+          description: 'Create voice (save designed voice)',
+          metadata: { projectId, characterId, name, generatedVoiceId },
+        })
+        reserved = { userId: user.id, amount: charged.amount }
 
-      if (!createResult.success) {
+        const createResult = await ElevenLabsService.createVoiceFromDesignPreview(
+          apiKey,
+          name,
+          description,
+          generatedVoiceId,
+        )
+
+        if (!createResult.success) {
+          throw new Error(createResult.error || 'Failed to create voice from design')
+        }
+
+        const voiceId = createResult.data?.voice_id as string | undefined
+        const voiceName = (createResult.data?.name as string | undefined) || name
+
+        if (voiceId) {
+          try {
+            await saveProjectVoice(supabase, user.id, {
+              projectId,
+              voiceId,
+              name: voiceName,
+              description,
+              category: 'generated',
+              characterId,
+            })
+          } catch (saveError) {
+            console.error('Failed to save project voice record:', saveError)
+          }
+        }
+
+        await logApiCostFromRequest({
+          request,
+          userId: user.id,
+          costSource: 'create-voice',
+          fallbackSource: 'create-voice',
+          generationType: 'audio',
+          provider: 'elevenlabs',
+          model: 'eleven_ttv_v3',
+          audioKind: 'voice-design-confirm',
+          costUsd: charged.costUsd,
+          prompt: description,
+          metadata: {
+            kind: 'voice-design-confirm',
+            creditsCharged: charged.amount,
+            projectId,
+          },
+        })
+
+        return NextResponse.json({
+          success: true,
+          action: 'confirm',
+          voice_id: voiceId,
+          name: voiceName,
+          method: 'design',
+          creditsCharged: charged.amount,
+          creditsRemaining: charged.balance,
+        })
+      } catch (error) {
+        if (reserved) {
+          await refundStudioCredits({
+            userId: reserved.userId,
+            amount: reserved.amount,
+            description: 'Refund: save designed voice failed',
+            metadata: { source: 'create-voice', kind: 'voice-design-confirm' },
+          })
+        }
+        if (error instanceof InsufficientCreditsError) {
+          return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+        }
         return NextResponse.json(
-          { error: createResult.error || 'Failed to create voice from design' },
+          { error: error instanceof Error ? error.message : 'Failed to create voice from design' },
           { status: 502 },
         )
       }
+    }
 
-      const voiceId = createResult.data?.voice_id as string | undefined
-      const voiceName = (createResult.data?.name as string | undefined) || name
+    const previewChars = voiceDesignPreviewCharacterCount(previewText)
+    let reserved: { userId: string; amount: number } | null = null
+    try {
+      const charged = await chargeCreateVoiceCredits({
+        userId: user.id,
+        kind: 'voice-design-preview',
+        characterCount: previewChars,
+        description: 'Create voice (Voice Design previews)',
+        metadata: { projectId, characterId, name, previewChars },
+      })
+      reserved = { userId: user.id, amount: charged.amount }
 
-      if (voiceId) {
-        try {
-          await saveProjectVoice(supabase, user.id, {
-            projectId,
-            voiceId,
-            name: voiceName,
-            description,
-            category: 'generated',
-            characterId,
-          })
-        } catch (saveError) {
-          console.error('Failed to save project voice record:', saveError)
-        }
+      const designResult = await ElevenLabsService.designVoicePreviews(
+        apiKey,
+        description,
+        previewText,
+      )
+
+      if (!designResult.success || !designResult.data?.previews?.length) {
+        const message = designResult.error || 'Failed to generate voice previews'
+        throw new Error(message)
       }
+
+      const previews = (designResult.data.previews as Array<Record<string, unknown>>).map(
+        (preview, index) => ({
+          generated_voice_id: String(preview.generated_voice_id || ''),
+          audio_base64:
+            typeof preview.audio_base_64 === 'string'
+              ? preview.audio_base_64
+              : typeof preview.audio_base64 === 'string'
+                ? preview.audio_base64
+                : undefined,
+          duration_secs:
+            typeof preview.duration_secs === 'number' ? preview.duration_secs : undefined,
+          language: typeof preview.language === 'string' ? preview.language : null,
+          label: `Option ${index + 1}`,
+        }),
+      )
+
+      const billedPreviews = previews.filter((p) => p.generated_voice_id)
+      if (billedPreviews.length === 0) {
+        throw new Error('ElevenLabs did not return any voice previews')
+      }
+
+      await logApiCostFromRequest({
+        request,
+        userId: user.id,
+        costSource: 'create-voice',
+        fallbackSource: 'create-voice',
+        generationType: 'audio',
+        provider: 'elevenlabs',
+        model: 'eleven_ttv_v3',
+        audioKind: 'voice-design-preview',
+        costUsd: charged.costUsd,
+        inputTokens: previewChars,
+        prompt: description,
+        metadata: {
+          kind: 'voice-design-preview',
+          creditsCharged: charged.amount,
+          previewChars,
+          previewCount: billedPreviews.length,
+          projectId,
+        },
+      })
 
       return NextResponse.json({
         success: true,
-        action: 'confirm',
-        voice_id: voiceId,
-        name: voiceName,
-        method: 'design',
+        action: 'preview',
+        previews: billedPreviews,
+        creditsCharged: charged.amount,
+        creditsRemaining: charged.balance,
       })
-    }
-
-    const designResult = await ElevenLabsService.designVoicePreviews(
-      apiKey,
-      description,
-      previewText,
-    )
-
-    if (!designResult.success || !designResult.data?.previews?.length) {
-      const message = designResult.error || 'Failed to generate voice previews'
+    } catch (error) {
+      if (reserved) {
+        await refundStudioCredits({
+          userId: reserved.userId,
+          amount: reserved.amount,
+          description: 'Refund: Voice Design preview failed',
+          metadata: { source: 'create-voice', kind: 'voice-design-preview' },
+        })
+      }
+      if (error instanceof InsufficientCreditsError) {
+        return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+      }
+      const message = error instanceof Error ? error.message : 'Failed to generate voice previews'
       const status = message.includes('401') || message.includes('403') ? 403 : 502
       return NextResponse.json({ error: message }, { status })
     }
-
-    const previews = (designResult.data.previews as Array<Record<string, unknown>>).map(
-      (preview, index) => ({
-        generated_voice_id: String(preview.generated_voice_id || ''),
-        audio_base64:
-          typeof preview.audio_base_64 === 'string'
-            ? preview.audio_base_64
-            : typeof preview.audio_base64 === 'string'
-              ? preview.audio_base64
-              : undefined,
-        duration_secs:
-          typeof preview.duration_secs === 'number' ? preview.duration_secs : undefined,
-        language: typeof preview.language === 'string' ? preview.language : null,
-        label: `Option ${index + 1}`,
-      }),
-    )
-
-    return NextResponse.json({
-      success: true,
-      action: 'preview',
-      previews: previews.filter((p) => p.generated_voice_id),
-    })
   } catch (error) {
     console.error('Design voice error:', error)
+    if (error instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 },

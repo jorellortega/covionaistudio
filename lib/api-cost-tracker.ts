@@ -13,9 +13,16 @@ export type CostSource =
   | 'characters'
   | 'objects'
   | 'prompt-create'
+  | 'create-voice'
   | 'other'
 
-export type GenerationType = 'image' | 'video' | 'text' | 'chat' | 'shot_list' | 'screenplay'
+export type GenerationType = 'image' | 'video' | 'text' | 'chat' | 'shot_list' | 'screenplay' | 'audio'
+
+export type AudioCostKind =
+  | 'tts'
+  | 'voice-design-preview'
+  | 'voice-design-confirm'
+  | 'instant-voice-clone'
 
 export type ApiCostEvent = {
   id: string
@@ -46,6 +53,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   characters: 'Characters',
   objects: 'Objects',
   'prompt-create': 'Prompt create',
+  'create-voice': 'Create voice',
   other: 'Other',
 }
 
@@ -61,6 +69,7 @@ export const TRACKED_SOURCES: CostSource[] = [
   'characters',
   'objects',
   'prompt-create',
+  'create-voice',
   'other',
 ]
 
@@ -78,6 +87,7 @@ const PATH_SOURCES: { match: string; source: CostSource }[] = [
   { match: '/characters', source: 'characters' },
   { match: '/objects', source: 'objects' },
   { match: '/prompt-create', source: 'prompt-create' },
+  { match: '/create-voice', source: 'create-voice' },
   { match: '/new', source: 'workspace' },
 ]
 
@@ -136,6 +146,29 @@ const VIDEO_RATES: Record<string, number> = {
   'kling-motion-control': 0.07,
 }
 
+/**
+ * ElevenLabs provider cost estimates (USD). Credits charged to users are this
+ * cost × worst-pack rate × CREDIT_PROFIT_MARKUP in studio-credits.
+ * TTS is official API list ($0.10 / 1k chars, Multilingual v2/v3).
+ * Voice Design returns 3 billed preview samples and may enhance text.
+ * Clone/confirm fill a custom-voice slot (no public per-call USD).
+ */
+export const AUDIO_RATES = {
+  /** TTS Multilingual v2/v3 API list price. */
+  ttsUsdPer1kChars: 0.1,
+  /**
+   * 3 preview samples × 1.25 for should_enhance / auto-generated text.
+   * Stays above break-even if ElevenLabs meters stricter than list TTS.
+   */
+  voiceDesignPreviewMultiplier: 3.75,
+  /** API max preview length; used when ElevenLabs auto-generates the sample line. */
+  voiceDesignAutoPreviewChars: 1000,
+  /** Saving a designed voice occupies a custom-voice slot. */
+  voiceDesignConfirmUsd: 1,
+  /** Instant Voice Clone: slot + sample processing. */
+  instantVoiceCloneUsd: 1.25,
+} as const
+
 export type LogApiCostInput = {
   request?: NextRequest | Request
   userId?: string | null
@@ -153,6 +186,9 @@ export type LogApiCostInput = {
   quantity?: number
   hasAudio?: boolean
   size?: string | null
+  /** When set, logged as-is instead of recalculating from rates. */
+  costUsd?: number | null
+  audioKind?: AudioCostKind
   metadata?: Record<string, unknown>
 }
 
@@ -179,6 +215,7 @@ export function normalizeCostSource(value?: string | null): CostSource {
   if (key === 'character' || key === 'characters') return 'characters'
   if (key === 'object' || key === 'objects' || key === 'props' || key === 'prop') return 'objects'
   if (key === 'prompt-create' || key === 'promptcreate' || key === 'prompts') return 'prompt-create'
+  if (key === 'create-voice' || key === 'createvoice' || key === 'voice') return 'create-voice'
   return KNOWN_SOURCES.has(key) ? (key as CostSource) : 'other'
 }
 
@@ -259,12 +296,46 @@ export function calculateVideoCost(
   return roundUsd(rate * seconds * audioMultiplier)
 }
 
+export function voiceDesignPreviewCharacterCount(previewText?: string | null): number {
+  const trimmed = previewText?.trim() || ''
+  if (trimmed.length >= 100 && trimmed.length <= 1000) return trimmed.length
+  return AUDIO_RATES.voiceDesignAutoPreviewChars
+}
+
+export function calculateAudioCost(
+  kind: AudioCostKind,
+  characterCount?: number | null,
+): number {
+  if (kind === 'voice-design-confirm') return AUDIO_RATES.voiceDesignConfirmUsd
+  if (kind === 'instant-voice-clone') return AUDIO_RATES.instantVoiceCloneUsd
+
+  const chars =
+    kind === 'voice-design-preview'
+      ? characterCount && characterCount > 0
+        ? characterCount
+        : AUDIO_RATES.voiceDesignAutoPreviewChars
+      : Math.max(1, Number(characterCount) || 1)
+  const ttsUsd = (chars / 1000) * AUDIO_RATES.ttsUsdPer1kChars
+  if (kind === 'voice-design-preview') {
+    return roundUsd(ttsUsd * AUDIO_RATES.voiceDesignPreviewMultiplier)
+  }
+  return roundUsd(ttsUsd)
+}
+
 export function calculateGenerationCost(input: LogApiCostInput): number {
+  if (typeof input.costUsd === 'number' && Number.isFinite(input.costUsd) && input.costUsd >= 0) {
+    return roundUsd(input.costUsd)
+  }
   if (input.generationType === 'image') {
     return calculateImageCost(input.model, input.size, input.quantity)
   }
   if (input.generationType === 'video') {
     return calculateVideoCost(input.model, input.durationSeconds, { hasAudio: input.hasAudio })
+  }
+  if (input.generationType === 'audio') {
+    const kind = input.audioKind || 'tts'
+    const chars = input.inputTokens ?? (input.prompt || input.inputText || '').length
+    return calculateAudioCost(kind, chars)
   }
   return calculateTextCost({
     model: input.model,
@@ -308,6 +379,10 @@ export async function logApiCostFromRequest(input: LogApiCostInput): Promise<voi
     const model = (input.model || 'unknown').trim() || 'unknown'
     const provider = inferProvider(input.provider || '', model)
     const costUsd = calculateGenerationCost(input)
+    const metadata = {
+      ...(input.metadata || {}),
+      ...(input.audioKind ? { audioKind: input.audioKind } : {}),
+    }
     const promptPreview = (input.prompt || input.inputText || '').replace(/\s+/g, ' ').trim().slice(0, 400)
 
     const { error } = await admin.from('api_cost_events').insert({
@@ -322,7 +397,7 @@ export async function logApiCostFromRequest(input: LogApiCostInput): Promise<voi
       duration_seconds: input.durationSeconds ?? null,
       quantity: input.quantity ?? 1,
       prompt_preview: promptPreview || null,
-      metadata: input.metadata || {},
+      metadata,
     })
 
     if (error) {

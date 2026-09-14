@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ElevenLabsService } from '@/lib/ai-services'
 import { getElevenLabsApiKeyForUser } from '@/lib/elevenlabs-api-key'
+import { logApiCostFromRequest } from '@/lib/api-cost-tracker'
 import { createRouteSupabaseClient, getRouteAuthUser } from '@/lib/supabase-route'
+import {
+  chargeCreateVoiceCredits,
+  insufficientCreditsPayload,
+  InsufficientCreditsError,
+  refundStudioCredits,
+} from '@/lib/studio-credits'
 
 async function saveProjectVoice(
   supabase: Awaited<ReturnType<typeof createRouteSupabaseClient>>,
@@ -109,32 +116,82 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'At least one audio sample is required' }, { status: 400 })
     }
 
-    const result = await ElevenLabsService.cloneVoice(apiKey, name, description, files)
-    if (!result.success) {
-      return NextResponse.json({ error: result.error || 'Failed to clone voice' }, { status: 500 })
-    }
+    let reserved: { userId: string; amount: number } | null = null
+    try {
+      const charged = await chargeCreateVoiceCredits({
+        userId: user.id,
+        kind: 'instant-voice-clone',
+        description: 'Create voice (instant clone)',
+        metadata: { projectId, characterId, name },
+      })
+      reserved = { userId: user.id, amount: charged.amount }
 
-    const voiceId = result.data?.voice_id as string | undefined
-    const voiceName = (result.data?.name as string | undefined) || name
-
-    if (voiceId) {
-      try {
-        await saveProjectVoice(supabase, user.id, {
-          projectId,
-          voiceId,
-          name: voiceName,
-          description,
-          category: 'cloned',
-          characterId,
-        })
-      } catch (saveError) {
-        console.error('Failed to save project voice record:', saveError)
+      const result = await ElevenLabsService.cloneVoice(apiKey, name, description, files)
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to clone voice')
       }
-    }
 
-    return NextResponse.json({ success: true, ...result.data })
+      const voiceId = result.data?.voice_id as string | undefined
+      const voiceName = (result.data?.name as string | undefined) || name
+
+      if (voiceId) {
+        try {
+          await saveProjectVoice(supabase, user.id, {
+            projectId,
+            voiceId,
+            name: voiceName,
+            description,
+            category: 'cloned',
+            characterId,
+          })
+        } catch (saveError) {
+          console.error('Failed to save project voice record:', saveError)
+        }
+      }
+
+      await logApiCostFromRequest({
+        request,
+        userId: user.id,
+        costSource: 'create-voice',
+        fallbackSource: 'create-voice',
+        generationType: 'audio',
+        provider: 'elevenlabs',
+        model: 'instant-voice-clone',
+        audioKind: 'instant-voice-clone',
+        costUsd: charged.costUsd,
+        prompt: description || name,
+        metadata: {
+          kind: 'instant-voice-clone',
+          creditsCharged: charged.amount,
+          projectId,
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        ...result.data,
+        creditsCharged: charged.amount,
+        creditsRemaining: charged.balance,
+      })
+    } catch (error) {
+      if (reserved) {
+        await refundStudioCredits({
+          userId: reserved.userId,
+          amount: reserved.amount,
+          description: 'Refund: voice clone failed',
+          metadata: { source: 'create-voice', kind: 'instant-voice-clone' },
+        })
+      }
+      if (error instanceof InsufficientCreditsError) {
+        return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+      }
+      throw error
+    }
   } catch (error) {
     console.error('Clone voice error:', error)
+    if (error instanceof InsufficientCreditsError) {
+      return NextResponse.json(insufficientCreditsPayload(error), { status: 402 })
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 },
